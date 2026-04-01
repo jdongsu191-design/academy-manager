@@ -720,6 +720,10 @@
           <input placeholder="연락처 (선택)" class="sr-phone" type="tel" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:#fff">
           <input placeholder="학교명 (선택)" class="sr-school" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:#fff">
           <input placeholder="학년 (예: 고3)" class="sr-grade" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:#fff">
+          <div style="grid-column:1/-1">
+            <div style="font-size:11px;color:#6b7280;margin-bottom:4px">입학일 (선택)</div>
+            <input type="date" class="sr-enrolled" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:#fff">
+          </div>
         </div>
         <button onclick="removeStudentRow(this)" style="font-size:12px;color:var(--danger);background:none;border:none;cursor:pointer;padding:0">✕ 삭제</button>
       </div>
@@ -761,7 +765,16 @@
         <label>연락처</label>
         <input id="edit-student-phone" placeholder="연락처" type="tel">
       </div>
+      <div class="form-group" style="margin:0">
+        <label>입학일</label>
+        <input type="date" id="edit-student-enrolled">
+      </div>
+      <div class="form-group" style="margin:0" id="edit-withdrawn-group">
+        <label>퇴원일</label>
+        <input type="date" id="edit-student-withdrawn">
+      </div>
     </div>
+    <div id="edit-student-status-row" style="margin-top:10px;padding:10px;background:#f5f6fa;border-radius:10px;font-size:13px;color:#4b5563"></div>
     <div style="display:flex;gap:8px;margin-top:16px">
       <button class="btn btn-full" onclick="closeModal('editStudent')">취소</button>
       <button class="btn btn-primary btn-full" onclick="saveEditStudent()">저장</button>
@@ -1216,7 +1229,11 @@ function renderStudents(){
       <div class="avatar student">${s.name[0]}</div>
       <div class="user-info">
         <div class="user-name">${s.name} ${cls?`<span class="badge badge-blue">${cls.name}</span>`:''}${schoolGrade?`<span class="badge" style="background:#f5f6fa;color:#4b5563;margin-left:4px">${schoolGrade}</span>`:''}</div>
-        <div class="user-meta">${s.phone||'연락처 없음'}</div>
+        <div class="user-meta">
+          ${s.phone||'연락처 없음'}
+          ${s.enrolled_at?` · 입학 ${s.enrolled_at}`:''}
+          ${s.withdrawn_at?` · <span style="color:var(--danger)">퇴원 ${s.withdrawn_at}</span>`:''}
+        </div>
       </div>
       <div class="user-actions">
         <button class="btn btn-sm" onclick="openEditStudentModal('${s.id}')">수정</button>
@@ -1249,6 +1266,10 @@ function addStudentRow(){
       <input placeholder="연락처 (선택)" class="sr-phone" type="tel" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:#fff">
       <input placeholder="학교명 (선택)" class="sr-school" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:#fff">
       <input placeholder="학년 (예: 고3)" class="sr-grade" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:#fff">
+      <div style="grid-column:1/-1">
+        <div style="font-size:11px;color:#6b7280;margin-bottom:4px">입학일 (선택)</div>
+        <input type="date" class="sr-enrolled" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:#fff">
+      </div>
     </div>
     <button onclick="removeStudentRow(this)" style="font-size:12px;color:var(--danger);background:none;border:none;cursor:pointer;padding:0">✕ 삭제</button>`;
   document.getElementById('studentRows').appendChild(row);
@@ -1269,7 +1290,8 @@ async function addStudentsBulk(){
     const phone=(row.querySelector('.sr-phone')?.value||'').trim();
     const school=(row.querySelector('.sr-school')?.value||'').trim();
     const grade=(row.querySelector('.sr-grade')?.value||'').trim();
-    if(name) entries.push({name,phone,school,grade});
+    const enrolled=(row.querySelector('.sr-enrolled')?.value||'').trim();
+    if(name) entries.push({name,phone,school,grade,enrolled});
   }
   if(!entries.length){alert('학생 이름을 한 명 이상 입력하세요');return;}
   const btn=document.querySelector('#modal-addStudent .btn-primary');
@@ -1279,6 +1301,7 @@ async function addStudentsBulk(){
     const{error}=await db.from('users').insert({
       name:e.name, class_id:classId, role:'student',
       phone:e.phone||null, school:e.school||null, grade:e.grade||null,
+      enrolled_at:e.enrolled||null,
       status:'active', teacher_id:currentUser.id
     });
     if(error) fail.push(e.name);
@@ -1295,8 +1318,14 @@ async function addStudentsBulk(){
 }
 
 async function removeStudent(id){
+  const today = new Date().toISOString().split('T')[0];
+  const withdrawnDate = prompt('퇴원일을 입력하세요 (YYYY-MM-DD)', today);
+  if(withdrawnDate === null) return; // 취소
   if(!confirm('퇴원 처리할까요?\n학생 데이터는 보존되며 목록에서 숨겨집니다.'))return;
-  await db.from('users').update({status:'inactive'}).eq('id',id);
+  await db.from('users').update({
+    status:'inactive',
+    withdrawn_at: withdrawnDate || today
+  }).eq('id',id);
   await loadTeacherData();
 }
 
@@ -1309,12 +1338,21 @@ function openEditStudentModal(id){
   document.getElementById('edit-student-school').value = s.school||'';
   document.getElementById('edit-student-grade').value = s.grade||'';
   document.getElementById('edit-student-phone').value = s.phone||'';
+  document.getElementById('edit-student-enrolled').value = s.enrolled_at||'';
+  document.getElementById('edit-student-withdrawn').value = s.withdrawn_at||'';
   // 반 셀렉트 채우기
   const sel = document.getElementById('edit-student-class');
   sel.innerHTML = '<option value="">반 선택</option>';
   classes.forEach(c=>{
     sel.innerHTML += `<option value="${c.id}" ${c.id===s.class_id?'selected':''}>${c.name}</option>`;
   });
+  // 상태 안내
+  const statusRow = document.getElementById('edit-student-status-row');
+  if(s.status==='inactive'){
+    statusRow.innerHTML = `<span style="color:var(--danger);font-weight:600">⚠️ 퇴원 상태</span>${s.withdrawn_at?' · 퇴원일: '+s.withdrawn_at:''} &nbsp;<button class="btn btn-sm btn-primary" onclick="reEnrollStudent('${s.id}')">재입학 처리</button>`;
+  } else {
+    statusRow.innerHTML = `<span style="color:var(--success);font-weight:600">✅ 재학 중</span>${s.enrolled_at?' · 입학일: '+s.enrolled_at:''}`;
+  }
   openModal('editStudent');
 }
 
@@ -1326,18 +1364,57 @@ async function saveEditStudent(){
   const school = document.getElementById('edit-student-school').value.trim();
   const grade = document.getElementById('edit-student-grade').value.trim();
   const phone = document.getElementById('edit-student-phone').value.trim();
+  const enrolled_at = document.getElementById('edit-student-enrolled').value || null;
+  const withdrawn_at = document.getElementById('edit-student-withdrawn').value || null;
   if(!name){alert('이름을 입력하세요');return;}
+
+  // 퇴원일 입력 시 자동으로 status='inactive' 처리
+  const s = students.find(s=>s.id===id);
+  let status = s?.status || 'active';
+  if(withdrawn_at && status === 'active'){
+    if(confirm(`퇴원일(${withdrawn_at})이 입력됐습니다.
+퇴원 처리할까요?`)){
+      status = 'inactive';
+    }
+  }
+  // 퇴원일 삭제 시 active로 복구
+  if(!withdrawn_at && status === 'inactive'){
+    if(confirm('퇴원일이 삭제됐습니다.
+재학 상태로 변경할까요?')){
+      status = 'active';
+    }
+  }
+
   const btn = document.querySelector('#modal-editStudent .btn-primary');
   btn.textContent='저장 중...';btn.disabled=true;
   const{error} = await db.from('users').update({
     name, class_id:classId||null,
-    school:school||null, grade:grade||null, phone:phone||null
+    school:school||null, grade:grade||null, phone:phone||null,
+    enrolled_at, withdrawn_at, status
   }).eq('id',id);
   btn.textContent='저장';btn.disabled=false;
   if(error){alert('오류: '+error.message);return;}
   closeModal('editStudent');
   await loadTeacherData();
   alert('✅ 학생 정보가 수정됐습니다!');
+}
+
+// 재입학 처리
+async function reEnrollStudent(id){
+  const today = new Date().toISOString().split('T')[0];
+  const newDate = prompt('재입학일을 입력하세요 (YYYY-MM-DD)', today);
+  if(!newDate) return;
+  if(!confirm(`${newDate}로 재입학 처리할까요?
+퇴원일이 초기화되고 재학 상태로 변경됩니다.`)) return;
+  const{error} = await db.from('users').update({
+    status: 'active',
+    enrolled_at: newDate,
+    withdrawn_at: null
+  }).eq('id', id);
+  if(error){alert('오류: '+error.message);return;}
+  closeModal('editStudent');
+  await loadTeacherData();
+  alert(`✅ 재입학 처리 완료! (입학일: ${newDate})`);
 }
 
 // ===== 선생님 숙제 (자기 반만) =====
@@ -1921,7 +1998,11 @@ function renderWlStudentTable(students, studentLogs){
     const disabled = s._isDeleted ? 'disabled' : '';
     return `<tr style="border-bottom:1px solid var(--border);${rowBg}">
       <td style="padding:8px 10px;font-size:12px;color:#6b7280;white-space:nowrap">${[s.school,s.grade].filter(Boolean).join(' ')||'-'}</td>
-      <td style="padding:8px 10px;font-weight:600;white-space:nowrap">${s.name}${badge}</td>
+      <td style="padding:8px 10px;font-weight:600;white-space:nowrap">
+        ${s.name}${badge}
+        ${s.enrolled_at&&!s._isInactive?`<div style="font-size:10px;color:#6b7280;margin-top:1px">입학 ${s.enrolled_at}</div>`:''}
+        ${s.withdrawn_at&&s._isInactive?`<div style="font-size:10px;color:var(--danger);margin-top:1px">퇴원 ${s.withdrawn_at}</div>`:''}
+      </td>
       <td style="padding:8px 4px;text-align:center">
         <select data-sid="${s.id}" data-field="attendance" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:#fff">
           <option value="present" ${(sl.attendance||'present')==='present'?'selected':''}>정시</option>
