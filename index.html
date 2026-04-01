@@ -1746,11 +1746,6 @@ async function loadWorkLog(){
   document.getElementById('wl-main').style.display = 'block';
   document.getElementById('wl-empty').style.display = 'none';
 
-  // 해당 반 학생 목록
-  const{data:studs} = await db.from('users').select('*')
-    .eq('role','student').eq('class_id',classId).eq('status','active').order('name');
-  wlStudents = studs || [];
-
   // 기존 업무일지 조회
   const{data:log} = await db.from('work_logs').select('*')
     .eq('teacher_id',currentUser.id).eq('class_id',classId).eq('log_date',date).single();
@@ -1768,9 +1763,26 @@ async function loadWorkLog(){
   // 학생별 기존 데이터
   let studentLogs = [];
   if(wlCurrentLogId){
-    const{data:sl} = await db.from('work_log_students').select('*').eq('log_id',wlCurrentLogId);
+    const{data:sl} = await db.from('work_log_students')
+      .select('*, users!work_log_students_student_id_fkey(id,name,phone,email)')
+      .eq('log_id',wlCurrentLogId);
     studentLogs = sl || [];
   }
+
+  // 현재 활성 학생 조회
+  const{data:activeStuds} = await db.from('users').select('*')
+    .eq('role','student').eq('class_id',classId).eq('status','active').order('name');
+
+  // 과거 기록에 있는 학생 중 현재 활성이 아닌 학생 병합
+  // (퇴원/비활성 학생도 그날 기록이 있으면 표시)
+  const activeIds = new Set((activeStuds||[]).map(s=>s.id));
+  const pastStudents = studentLogs
+    .filter(sl => !activeIds.has(sl.student_id) && sl.users)
+    .map(sl => ({...sl.users, _isInactive: true}));
+
+  // 활성 학생 + 과거 기록 학생 합치기 (이름순)
+  wlStudents = [...(activeStuds||[]), ...pastStudents]
+    .sort((a,b) => a.name.localeCompare(b.name, 'ko'));
 
   // 학생 테이블 렌더
   renderWlStudentTable(wlStudents, studentLogs);
@@ -1785,10 +1797,11 @@ function renderWlStudentTable(students, studentLogs){
   }
   tbody.innerHTML = students.map(s => {
     const sl = studentLogs.find(l => l.student_id === s.id) || {};
-    const schoolGrade = s.phone ? '' : ''; // 학교/학년 정보가 있으면 사용
-    return `<tr style="border-bottom:1px solid var(--border)">
-      <td style="padding:8px 10px;font-size:12px;color:#6b7280;white-space:nowrap">${s.class_id ? '' : ''}</td>
-      <td style="padding:8px 10px;font-weight:600;white-space:nowrap">${s.name}</td>
+    const rowBg = s._isInactive ? 'background:#fafafa;opacity:0.7' : '';
+    const inactiveBadge = s._isInactive ? '<span style="font-size:10px;background:#fecaca;color:#991b1b;padding:1px 5px;border-radius:4px;margin-left:4px">퇴원</span>' : '';
+    return `<tr style="border-bottom:1px solid var(--border);${rowBg}">
+      <td style="padding:8px 10px;font-size:12px;color:#6b7280;white-space:nowrap"></td>
+      <td style="padding:8px 10px;font-weight:600;white-space:nowrap">${s.name}${inactiveBadge}</td>
       <td style="padding:8px 4px;text-align:center">
         <select data-sid="${s.id}" data-field="attendance" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:#fff">
           <option value="present" ${(sl.attendance||'present')==='present'?'selected':''}>정시</option>
