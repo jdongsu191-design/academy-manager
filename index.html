@@ -1076,7 +1076,7 @@ function renderAdminStudents(){
 async function approveUser(id){await db.from('users').update({status:'active'}).eq('id',id);await loadAdminData();}
 async function rejectUser(id){if(!confirm('거절하고 삭제할까요?'))return;await db.from('users').delete().eq('id',id);await loadAdminData();}
 async function deactivateUser(id){if(!confirm('비활성화할까요?'))return;await db.from('users').update({status:'inactive'}).eq('id',id);await loadAdminData();}
-async function deleteStudent(id){if(!confirm('삭제할까요?'))return;await db.from('users').delete().eq('id',id);await loadAdminData();}
+async function deleteStudent(id){if(!confirm('퇴원 처리할까요?\n학생 데이터는 보존되며 목록에서 숨겨집니다.'))return;await db.from('users').update({status:'inactive'}).eq('id',id);await loadAdminData();}
 
 async function addTeacherAccount(){
   const username=document.getElementById('inp-tuser').value.trim();
@@ -1772,16 +1772,24 @@ async function loadWorkLog(){
     .eq('role','student').eq('class_id',classId).eq('status','active').order('name');
   const activeIds = new Set((activeStuds||[]).map(s=>s.id));
 
-  // 과거 기록에 있는 비활성 학생 ID 추출 후 직접 조회
-  const pastIds = studentLogs.map(sl=>sl.student_id).filter(id=>!activeIds.has(id));
+  // 과거 기록에 있는 비활성(퇴원) 학생 ID 추출 후 직접 조회
+  const pastIds = studentLogs
+    .map(sl=>sl.student_id)
+    .filter(id => id && !activeIds.has(id)); // null 제외
   let pastStudents = [];
   if(pastIds.length > 0){
     const{data:pastData} = await db.from('users').select('*').in('id', pastIds);
     pastStudents = (pastData||[]).map(s=>({...s, _isInactive: true}));
   }
 
-  // 활성 학생 + 과거 기록 학생 합치기 (이름순)
-  wlStudents = [...(activeStuds||[]), ...pastStudents]
+  // student_id가 null인 기록(완전삭제된 학생) → 이름 "삭제된 학생"으로 표시
+  const deletedLogs = studentLogs.filter(sl => !sl.student_id);
+  const deletedPlaceholders = deletedLogs.map((sl, i) => ({
+    id: `deleted_${sl.id}`, name: '삭제된 학생', _isDeleted: true, _logId: sl.id
+  }));
+
+  // 활성 학생 + 퇴원 학생 + 삭제된 학생 합치기 (이름순)
+  wlStudents = [...(activeStuds||[]), ...pastStudents, ...deletedPlaceholders]
     .sort((a,b) => a.name.localeCompare(b.name, 'ko'));
 
   // 학생 테이블 렌더
@@ -1796,12 +1804,21 @@ function renderWlStudentTable(students, studentLogs){
     return;
   }
   tbody.innerHTML = students.map(s => {
-    const sl = studentLogs.find(l => l.student_id === s.id) || {};
-    const rowBg = s._isInactive ? 'background:#fafafa;opacity:0.7' : '';
-    const inactiveBadge = s._isInactive ? '<span style="font-size:10px;background:#fecaca;color:#991b1b;padding:1px 5px;border-radius:4px;margin-left:4px">퇴원</span>' : '';
+    const rowBg = s._isInactive ? 'background:#fafafa;opacity:0.75' : s._isDeleted ? 'background:#fafafa;opacity:0.5' : '';
+    const badge = s._isInactive
+      ? '<span style="font-size:10px;background:#fecaca;color:#991b1b;padding:1px 5px;border-radius:4px;margin-left:4px">퇴원</span>'
+      : s._isDeleted
+      ? '<span style="font-size:10px;background:#e5e7eb;color:#6b7280;padding:1px 5px;border-radius:4px;margin-left:4px">삭제됨</span>'
+      : '';
+    // 삭제된 학생은 student_id 대신 _logId 기반으로 기록 찾기
+    const sl = s._isDeleted
+      ? studentLogs.find(l => l.id === s._logId) || {}
+      : studentLogs.find(l => l.student_id === s.id) || {};
+    // 삭제된 학생은 입력 불가 (읽기 전용)
+    const disabled = s._isDeleted ? 'disabled' : '';
     return `<tr style="border-bottom:1px solid var(--border);${rowBg}">
       <td style="padding:8px 10px;font-size:12px;color:#6b7280;white-space:nowrap"></td>
-      <td style="padding:8px 10px;font-weight:600;white-space:nowrap">${s.name}${inactiveBadge}</td>
+      <td style="padding:8px 10px;font-weight:600;white-space:nowrap">${s.name}${badge}</td>
       <td style="padding:8px 4px;text-align:center">
         <select data-sid="${s.id}" data-field="attendance" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:#fff">
           <option value="present" ${(sl.attendance||'present')==='present'?'selected':''}>정시</option>
