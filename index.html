@@ -371,6 +371,16 @@
           <div class="card-title">✏️ 새 질문 작성</div>
           <div class="form-group"><label>제목</label><input id="q-title" placeholder="질문 제목을 입력하세요"></div>
           <div class="form-group"><label>내용</label><textarea id="q-content" placeholder="질문 내용을 자세히 적어주세요" style="width:100%;padding:11px 13px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;min-height:100px;resize:vertical;font-family:inherit"></textarea></div>
+          <div class="form-group">
+            <label>사진 첨부 (선택)</label>
+            <div class="upload-area" onclick="document.getElementById('q-photo-input').click()">
+              <div class="ua-icon">📷</div>
+              <p><strong style="color:var(--primary)">사진을 선택하세요</strong></p>
+              <p style="font-size:13px;color:#6b7280;margin-top:4px">1장까지 첨부 가능</p>
+            </div>
+            <input type="file" id="q-photo-input" accept="image/*" style="display:none" onchange="handleQPhotoSelect(event)">
+            <div id="q-photo-preview" style="margin-top:8px"></div>
+          </div>
           <button class="btn btn-primary btn-full" onclick="submitQuestion()">질문 제출</button>
         </div>
         <div style="font-size:14px;font-weight:600;margin-bottom:10px;color:#1a1a2e">내 질문 목록</div>
@@ -487,6 +497,15 @@
     <div class="form-group">
       <label>답변 내용</label>
       <textarea id="inp-answer" placeholder="답변을 입력하세요" style="width:100%;padding:11px 13px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;min-height:100px;resize:vertical;font-family:inherit"></textarea>
+    </div>
+    <div class="form-group">
+      <label>사진 첨부 (선택)</label>
+      <div class="upload-area" onclick="document.getElementById('a-photo-input').click()">
+        <div class="ua-icon">📷</div>
+        <p><strong style="color:var(--primary)">사진을 선택하세요</strong></p>
+      </div>
+      <input type="file" id="a-photo-input" accept="image/*" style="display:none" onchange="handleAPhotoSelect(event)">
+      <div id="a-photo-preview" style="margin-top:8px"></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-full" onclick="closeModal('answerQuestion')">취소</button>
@@ -1090,27 +1109,88 @@ function closeImgViewer(){document.getElementById('imgViewer').classList.remove(
 
 // ===== 질문 기능 =====
 let currentAnswerQId = null;
+let qPendingPhoto = null;  // 학생 질문 사진
+let aPendingPhoto = null;  // 선생님 답변 사진
+
+// 사진 선택 핸들러 - 학생 질문
+function handleQPhotoSelect(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  qPendingPhoto = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById('q-photo-preview').innerHTML = `
+      <div style="position:relative;display:inline-block;margin-top:4px">
+        <img src="${ev.target.result}" style="width:100%;max-height:180px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">
+        <button onclick="removeQPhoto()" style="position:absolute;top:4px;right:4px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,0.6);color:#fff;border:none;cursor:pointer;font-size:12px">✕</button>
+      </div>`;
+  };
+  reader.readAsDataURL(file);
+  e.target.value = '';
+}
+function removeQPhoto(){
+  qPendingPhoto = null;
+  document.getElementById('q-photo-preview').innerHTML = '';
+}
+
+// 사진 선택 핸들러 - 선생님 답변
+function handleAPhotoSelect(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  aPendingPhoto = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById('a-photo-preview').innerHTML = `
+      <div style="position:relative;display:inline-block;margin-top:4px">
+        <img src="${ev.target.result}" style="width:100%;max-height:180px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">
+        <button onclick="removeAPhoto()" style="position:absolute;top:4px;right:4px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,0.6);color:#fff;border:none;cursor:pointer;font-size:12px">✕</button>
+      </div>`;
+  };
+  reader.readAsDataURL(file);
+  e.target.value = '';
+}
+function removeAPhoto(){
+  aPendingPhoto = null;
+  document.getElementById('a-photo-preview').innerHTML = '';
+}
+
+// Storage에 사진 업로드 후 URL 반환
+async function uploadQuestionPhoto(file, folder){
+  const fn = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
+  const{error} = await db.storage.from('homework-photos').upload(fn, file, {contentType: file.type});
+  if(error) throw error;
+  const{data} = db.storage.from('homework-photos').getPublicUrl(fn);
+  return data.publicUrl;
+}
 
 // 학생: 질문 제출
 async function submitQuestion(){
   const title = document.getElementById('q-title').value.trim();
-  const content = document.getElementById('q-content').value.trim();
+  const qContent = document.getElementById('q-content').value.trim();
   if(!title){alert('제목을 입력하세요');return;}
-  if(!content){alert('내용을 입력하세요');return;}
+  if(!qContent){alert('내용을 입력하세요');return;}
   const btn = document.querySelector('#spanel-question .btn-primary');
   btn.textContent='제출 중...';btn.disabled=true;
-  const{error}=await db.from('questions').insert({
-    student_id:currentUser.id,
-    teacher_id:currentUser.teacher_id,
-    class_id:currentUser.class_id,
-    title,content
-  });
+  try{
+    let question_image_url = null;
+    if(qPendingPhoto){
+      question_image_url = await uploadQuestionPhoto(qPendingPhoto, `questions/${currentUser.id}`);
+    }
+    const{error}=await db.from('questions').insert({
+      student_id:currentUser.id,
+      teacher_id:currentUser.teacher_id,
+      class_id:currentUser.class_id,
+      title, content:qContent, question_image_url
+    });
+    if(error) throw error;
+    document.getElementById('q-title').value='';
+    document.getElementById('q-content').value='';
+    qPendingPhoto=null;
+    document.getElementById('q-photo-preview').innerHTML='';
+    alert('✅ 질문이 제출됐습니다!');
+    loadMyQuestions();
+  }catch(err){alert('오류: '+err.message);}
   btn.textContent='질문 제출';btn.disabled=false;
-  if(error){alert('오류: '+error.message);return;}
-  document.getElementById('q-title').value='';
-  document.getElementById('q-content').value='';
-  alert('✅ 질문이 제출됐습니다!');
-  loadMyQuestions();
 }
 
 // 학생: 내 질문 목록 로드
@@ -1129,11 +1209,13 @@ function renderMyQuestions(list){
         <div style="font-size:14px;font-weight:700;color:#1a1a2e">${q.title}</div>
         <span style="font-size:11px;padding:3px 10px;border-radius:100px;font-weight:600;${q.answer?'background:#EAF3DE;color:#3B6D11':'background:#FEF3C7;color:#92400E'}">${q.answer?'답변완료':'답변대기'}</span>
       </div>
-      <div style="font-size:13px;color:#6b7280;margin-bottom:${q.answer?'10px':'0'}">${q.content}</div>
+      <div style="font-size:13px;color:#6b7280;margin-bottom:8px">${q.content}</div>
+      ${q.question_image_url?`<div style="margin-bottom:8px"><img src="${q.question_image_url}" onclick="openImgViewer('${q.question_image_url}')" style="max-width:100%;max-height:200px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:pointer"></div>`:''}
       ${q.answer?`
         <div style="background:#f0f4f8;border-radius:10px;padding:12px;margin-top:8px">
           <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:4px">✅ 선생님 답변</div>
-          <div style="font-size:13px;color:#1a1a2e">${q.answer}</div>
+          <div style="font-size:13px;color:#1a1a2e;margin-bottom:${q.answer_image_url?'8px':'0'}">${q.answer}</div>
+          ${q.answer_image_url?`<img src="${q.answer_image_url}" onclick="openImgViewer('${q.answer_image_url}')" style="max-width:100%;max-height:200px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:pointer">`:''} 
         </div>`:''}
       <div style="font-size:11px;color:#9ca3af;margin-top:8px">${new Date(q.created_at).toLocaleDateString('ko-KR')}</div>
     </div>`).join('');
@@ -1166,11 +1248,13 @@ function renderTeacherQuestions(list){
         </div>
         <span style="font-size:11px;padding:3px 10px;border-radius:100px;font-weight:600;flex-shrink:0;${q.answer?'background:#EAF3DE;color:#3B6D11':'background:#FEF3C7;color:#92400E'}">${q.answer?'답변완료':'미답변'}</span>
       </div>
-      <div style="font-size:13px;color:#4b5563;background:#f5f6fa;padding:10px;border-radius:8px;margin-bottom:10px">${q.content}</div>
+      <div style="font-size:13px;color:#4b5563;background:#f5f6fa;padding:10px;border-radius:8px;margin-bottom:8px">${q.content}</div>
+      ${q.question_image_url?`<div style="margin-bottom:10px"><img src="${q.question_image_url}" onclick="openImgViewer('${q.question_image_url}')" style="max-width:100%;max-height:200px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:pointer"></div>`:''}
       ${q.answer?`
         <div style="background:#EAF3DE;border-radius:10px;padding:10px;margin-bottom:10px">
           <div style="font-size:11px;font-weight:600;color:#3B6D11;margin-bottom:4px">내 답변</div>
-          <div style="font-size:13px;color:#1a1a2e">${q.answer}</div>
+          <div style="font-size:13px;color:#1a1a2e;margin-bottom:${q.answer_image_url?'8px':'0'}">${q.answer}</div>
+          ${q.answer_image_url?`<img src="${q.answer_image_url}" onclick="openImgViewer('${q.answer_image_url}')" style="max-width:100%;max-height:200px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:pointer">`:''} 
         </div>`:''}
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div style="font-size:11px;color:#9ca3af">${new Date(q.created_at).toLocaleDateString('ko-KR')}</div>
@@ -1182,10 +1266,12 @@ function renderTeacherQuestions(list){
   el.innerHTML=html;
 }
 
-function openAnswerModal(qId, title, content, existingAnswer){
+function openAnswerModal(qId, title, qContent, existingAnswer){
   currentAnswerQId=qId;
-  document.getElementById('answerQuestionContent').innerHTML=`<strong>${title}</strong><br><span style="color:#6b7280">${content}</span>`;
+  document.getElementById('answerQuestionContent').innerHTML=`<strong>${title}</strong><br><span style="color:#6b7280">${qContent}</span>`;
   document.getElementById('inp-answer').value=existingAnswer||'';
+  aPendingPhoto=null;
+  document.getElementById('a-photo-preview').innerHTML='';
   openModal('answerQuestion');
 }
 
@@ -1194,13 +1280,22 @@ async function submitAnswer(){
   if(!answer){alert('답변 내용을 입력하세요');return;}
   const btn=document.querySelector('#modal-answerQuestion .btn-primary');
   btn.textContent='등록 중...';btn.disabled=true;
-  const{error}=await db.from('questions').update({
-    answer,answered_at:new Date().toISOString()
-  }).eq('id',currentAnswerQId);
+  try{
+    let answer_image_url = null;
+    if(aPendingPhoto){
+      answer_image_url = await uploadQuestionPhoto(aPendingPhoto, `answers/${currentUser.id}`);
+    }
+    const updateData = {answer, answered_at:new Date().toISOString()};
+    if(answer_image_url) updateData.answer_image_url = answer_image_url;
+    const{error}=await db.from('questions').update(updateData).eq('id',currentAnswerQId);
+    if(error) throw error;
+    aPendingPhoto=null;
+    document.getElementById('a-photo-preview').innerHTML='';
+    document.getElementById('inp-answer').value='';
+    closeModal('answerQuestion');
+    loadTeacherQuestions();
+  }catch(err){alert('오류: '+err.message);}
   btn.textContent='답변 등록';btn.disabled=false;
-  if(error){alert('오류: '+error.message);return;}
-  closeModal('answerQuestion');
-  loadTeacherQuestions();
 }
 
 selectRole('teacher');
