@@ -6,6 +6,7 @@
   <title>학원 관리 시스템</title>
   <meta name="theme-color" content="#178EF5">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f6fa;color:#1a1a2e;min-height:100vh}
@@ -485,6 +486,7 @@
               <input type="date" id="wl-date" onchange="loadWorkLog()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
             </div>
             <button class="btn btn-primary btn-sm" onclick="saveWorkLog()">💾 저장</button>
+            <button class="btn btn-sm" id="wl-copy-btn" onclick="copyWorkLogImage()" style="display:none;background:#25D366;color:#fff;border-color:#25D366">📋 카톡 복사</button>
           </div>
         </div>
 
@@ -1978,6 +1980,166 @@ async function tryAutoLogin(){
 }
 tryAutoLogin();
 
+// ===== 업무일지 이미지 복사 =====
+async function copyWorkLogImage(){
+  const btn = document.getElementById('wl-copy-btn');
+  btn.textContent = '⏳ 생성 중...'; btn.disabled = true;
+
+  try{
+    // 1. 현재 업무일지 데이터 수집
+    const classId = document.getElementById('wl-class-select').value;
+    const date = document.getElementById('wl-date').value;
+    const cls = classes.find(c=>c.id===classId);
+    const className = cls?.name || '';
+    const classInfo = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
+
+    // 날짜 포맷
+    const d = new Date(date);
+    const dayNames = ['일','월','화','수','목','금','토'];
+    const dateStr = `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} (${dayNames[d.getDay()]})`;
+
+    // 학생 데이터 수집
+    const rows = document.querySelectorAll('#wl-student-tbody tr');
+    const studentData = [];
+    rows.forEach(row=>{
+      const cells = row.querySelectorAll('td');
+      if(cells.length < 7) return;
+      const nameCell = cells[1].textContent.replace('퇴원','').replace('삭제됨','').trim();
+      // 첫 줄만 (이름)
+      const name = nameCell.split('\n')[0].trim();
+      const schoolGrade = cells[0].textContent.trim();
+      const attendance = cells[2].querySelector('select')?.value || '';
+      const nCount = cells[3].querySelector('input')?.value || '';
+      const hwDone = cells[4].querySelector('select')?.value === 'true' ? '완료' : '미완료';
+      const testScore = cells[5].querySelector('input')?.value || '';
+      const note = cells[6].querySelector('input')?.value || '';
+      const isInactive = cells[1].innerHTML.includes('퇴원') || cells[1].innerHTML.includes('삭제됨');
+      studentData.push({name, schoolGrade, attendance: attendance==='present'?'정시':attendance==='late'?'지각':'결석', nCount, hwDone, testScore, note, isInactive});
+    });
+
+    const progress = document.getElementById('wl-progress').value;
+    const homework = document.getElementById('wl-homework').value;
+    const trial = document.getElementById('wl-trial').value;
+    const newStudent = document.getElementById('wl-new-student').value;
+    const dropout = document.getElementById('wl-dropout').value;
+    const memo = document.getElementById('wl-memo').value;
+    const teacherName = currentUser.name;
+
+    // 2. 이미지 렌더링 HTML 구성
+    const renderEl = document.getElementById('wl-image-render');
+    renderEl.innerHTML = `
+      <div style="background:#fff;padding:16px;min-width:660px">
+        <!-- 헤더 -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #178EF5">
+          <div>
+            <div style="font-size:20px;font-weight:700;color:#178EF5">📋 업무일지</div>
+            <div style="font-size:13px;color:#6b7280;margin-top:2px">${teacherName} 선생님${classInfo?' · '+classInfo:''}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:18px;font-weight:700;color:#1a1a2e">${className}</div>
+            <div style="font-size:13px;color:#6b7280;margin-top:2px">${dateStr}</div>
+          </div>
+        </div>
+
+        <!-- 학생 테이블 -->
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px">
+          <thead>
+            <tr style="background:#E6F1FB">
+              <th style="padding:7px 8px;text-align:left;border:1px solid #d0e4f7;color:#185FA5">학교/학년</th>
+              <th style="padding:7px 8px;text-align:left;border:1px solid #d0e4f7;color:#185FA5">이름</th>
+              <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">출석</th>
+              <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">N제</th>
+              <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">숙제</th>
+              <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">TEST</th>
+              <th style="padding:7px 8px;text-align:left;border:1px solid #d0e4f7;color:#185FA5">특이사항</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${studentData.map((s,i)=>`
+            <tr style="background:${s.isInactive?'#f9fafb':i%2===0?'#fff':'#f8fbff'}">
+              <td style="padding:6px 8px;border:1px solid #e5e7eb;color:#6b7280">${s.schoolGrade}</td>
+              <td style="padding:6px 8px;border:1px solid #e5e7eb;font-weight:600;${s.isInactive?'color:#9ca3af':''}">${s.name}${s.isInactive?'<span style="font-size:10px;color:#ef4444;margin-left:3px">(퇴원)</span>':''}</td>
+              <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;${s.attendance==='결석'?'color:#ef4444;font-weight:600':s.attendance==='지각'?'color:#f97316':''}">${s.attendance}</td>
+              <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">${s.nCount}</td>
+              <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;${s.hwDone==='완료'?'color:#3B6D11':'color:#ef4444'}">${s.hwDone}</td>
+              <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">${s.testScore}</td>
+              <td style="padding:6px 8px;border:1px solid #e5e7eb;color:#4b5563">${s.note}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+
+        <!-- 진도/숙제 -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px">
+            <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:5px">📖 진도</div>
+            <div style="font-size:13px;color:#1a1a2e;white-space:pre-wrap">${progress||'-'}</div>
+          </div>
+          <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px">
+            <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:5px">📝 숙제</div>
+            <div style="font-size:13px;color:#1a1a2e;white-space:pre-wrap">${homework||'-'}</div>
+          </div>
+        </div>
+
+        <!-- 기타 -->
+        ${(trial||newStudent||dropout||memo)?`
+        <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px">
+          <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:6px">기타</div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px">
+            ${trial?`<span><span style="color:#6b7280">시범수업</span> <strong>${trial}</strong></span>`:''}
+            ${newStudent?`<span><span style="color:#6b7280">신입생</span> <strong>${newStudent}</strong></span>`:''}
+            ${dropout?`<span><span style="color:#6b7280">퇴원생</span> <strong>${dropout}</strong></span>`:''}
+          </div>
+          ${memo?`<div style="margin-top:6px;font-size:12px;color:#4b5563"><span style="color:#6b7280">메모</span> ${memo}</div>`:''}
+        </div>`:''}
+
+        <!-- 하단 -->
+        <div style="margin-top:12px;text-align:right;font-size:11px;color:#9ca3af">
+          학원 관리 시스템 · ${new Date().toLocaleString('ko-KR')}
+        </div>
+      </div>`;
+
+    // 3. html2canvas로 이미지 생성
+    const canvas = await html2canvas(renderEl, {
+      backgroundColor: '#ffffff',
+      scale: 2,
+      useCORS: true,
+      allowTaint: true,
+      logging: false
+    });
+
+    // 4. 클립보드에 복사
+    canvas.toBlob(async (blob) => {
+      try{
+        await navigator.clipboard.write([
+          new ClipboardItem({'image/png': blob})
+        ]);
+        btn.textContent = '✅ 복사됨!';
+        btn.style.background = '#128c7e';
+        setTimeout(()=>{
+          btn.textContent = '📋 카톡 복사';
+          btn.style.background = '#25D366';
+          btn.disabled = false;
+        }, 2500);
+      }catch(clipErr){
+        // 클립보드 API 미지원 시 다운로드로 대체
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL('image/png');
+        const dateStr = date.replace(/-/g,'');
+        a.download = `업무일지_${className}_${dateStr}.png`;
+        a.click();
+        btn.textContent = '📋 카톡 복사';
+        btn.disabled = false;
+        alert('클립보드 복사가 지원되지 않아 이미지를 다운로드했습니다.\n다운로드된 이미지를 카톡에 공유하세요!');
+      }
+    }, 'image/png');
+
+  }catch(err){
+    alert('이미지 생성 오류: ' + err.message);
+    btn.textContent = '📋 카톡 복사';
+    btn.disabled = false;
+  }
+}
+
 // ===== 업무일지 =====
 let wlStudents = [];
 let wlCurrentLogId = null;
@@ -2164,6 +2326,9 @@ async function saveWorkLog(){
     }
 
     alert('✅ 업무일지가 저장됐습니다!');
+  // 저장 완료 후 복사 버튼 표시
+  const copyBtn = document.getElementById('wl-copy-btn');
+  if(copyBtn) copyBtn.style.display = 'inline-flex';
   }catch(err){
     alert('저장 오류: ' + err.message);
   }
@@ -2205,5 +2370,8 @@ async function uploadProfilePhoto(e){
   e.target.value = '';
 }
 </script>
+<!-- 업무일지 이미지 렌더링용 숨김 영역 -->
+<div id="wl-image-render" style="position:fixed;left:-9999px;top:0;background:#fff;padding:20px;width:700px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"></div>
+
 </body>
 </html>
