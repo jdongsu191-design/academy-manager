@@ -249,6 +249,9 @@
           <div id="homeworkList"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
         </div>
       </div>
+      <div class="panel" id="panel-questions">
+        <div id="teacherQuestionList"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
+      </div>
     </div>
 
     <!-- 학생 앱 -->
@@ -262,6 +265,7 @@
   <nav class="bottom-nav" id="teacherNav" style="display:none">
     <button class="nav-tab active" onclick="switchTab('students',this,'teacherApp')"><span class="nav-icon">👥</span>학생 관리</button>
     <button class="nav-tab" onclick="switchTab('homework',this,'teacherApp');loadHomework()"><span class="nav-icon">📝</span>숙제 관리</button>
+    <button class="nav-tab" onclick="switchTab('questions',this,'teacherApp');loadTeacherQuestions()"><span class="nav-icon">💬</span>질문</button>
   </nav>
 </div>
 
@@ -336,11 +340,14 @@
       <div id="spanel-question" class="spanel" style="display:none">
         <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a2e">💬 질문</div>
         <div style="font-size:13px;color:#6b7280;margin-bottom:20px">선생님께 질문을 남겨보세요</div>
-        <div class="card" style="text-align:center;padding:48px 20px;color:#6b7280">
-          <div style="font-size:48px;margin-bottom:12px">🚧</div>
-          <div style="font-size:15px;font-weight:600;margin-bottom:6px">준비 중</div>
-          <div style="font-size:13px">질문 기능이 곧 추가됩니다</div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-title">✏️ 새 질문 작성</div>
+          <div class="form-group"><label>제목</label><input id="q-title" placeholder="질문 제목을 입력하세요"></div>
+          <div class="form-group"><label>내용</label><textarea id="q-content" placeholder="질문 내용을 자세히 적어주세요" style="width:100%;padding:11px 13px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;min-height:100px;resize:vertical;font-family:inherit"></textarea></div>
+          <button class="btn btn-primary btn-full" onclick="submitQuestion()">질문 제출</button>
         </div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:10px;color:#1a1a2e">내 질문 목록</div>
+        <div id="myQuestionList"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
       </div>
 
       <!-- 진도 계획서 패널 -->
@@ -440,6 +447,23 @@
     <div style="display:flex;gap:8px;margin-top:16px">
       <button class="btn btn-full" onclick="closeModal('submitPhoto')">취소</button>
       <button class="btn btn-primary btn-full" onclick="submitPhotos()">제출 완료</button>
+    </div>
+  </div>
+</div>
+
+<!-- 모달: 질문 답변 (선생님) -->
+<div class="modal-backdrop" id="modal-answerQuestion">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>💬 질문 답변</h3>
+    <div id="answerQuestionContent" style="background:#f5f6fa;border-radius:10px;padding:12px;margin-bottom:14px;font-size:14px;color:#1a1a2e"></div>
+    <div class="form-group">
+      <label>답변 내용</label>
+      <textarea id="inp-answer" placeholder="답변을 입력하세요" style="width:100%;padding:11px 13px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;min-height:100px;resize:vertical;font-family:inherit"></textarea>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn btn-full" onclick="closeModal('answerQuestion')">취소</button>
+      <button class="btn btn-primary btn-full" onclick="submitAnswer()">답변 등록</button>
     </div>
   </div>
 </div>
@@ -961,6 +985,7 @@ function switchStudentMenu(menu, el){
   el.classList.add('active');
   document.querySelectorAll('.spanel').forEach(p=>p.style.display='none');
   document.getElementById('spanel-'+menu).style.display='block';
+  if(menu==='question') loadMyQuestions();
 }
 
 function toggleMobileSidebar(){
@@ -1013,6 +1038,121 @@ function closeModal(id){document.getElementById(`modal-${id}`).classList.remove(
 document.querySelectorAll('.modal-backdrop').forEach(m=>{m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');});});
 function openImgViewer(src){document.getElementById('viewerImg').src=src;document.getElementById('imgViewer').classList.add('open');}
 function closeImgViewer(){document.getElementById('imgViewer').classList.remove('open');}
+
+// ===== 질문 기능 =====
+let currentAnswerQId = null;
+
+// 학생: 질문 제출
+async function submitQuestion(){
+  const title = document.getElementById('q-title').value.trim();
+  const content = document.getElementById('q-content').value.trim();
+  if(!title){alert('제목을 입력하세요');return;}
+  if(!content){alert('내용을 입력하세요');return;}
+  const btn = document.querySelector('#spanel-question .btn-primary');
+  btn.textContent='제출 중...';btn.disabled=true;
+  const{error}=await db.from('questions').insert({
+    student_id:currentUser.id,
+    teacher_id:currentUser.teacher_id,
+    class_id:currentUser.class_id,
+    title,content
+  });
+  btn.textContent='질문 제출';btn.disabled=false;
+  if(error){alert('오류: '+error.message);return;}
+  document.getElementById('q-title').value='';
+  document.getElementById('q-content').value='';
+  alert('✅ 질문이 제출됐습니다!');
+  loadMyQuestions();
+}
+
+// 학생: 내 질문 목록 로드
+async function loadMyQuestions(){
+  const{data}=await db.from('questions').select('*')
+    .eq('student_id',currentUser.id).order('created_at',{ascending:false});
+  renderMyQuestions(data||[]);
+}
+
+function renderMyQuestions(list){
+  const el=document.getElementById('myQuestionList');
+  if(!list.length){el.innerHTML='<div class="empty-state"><div class="ei">💬</div><p>아직 질문이 없습니다</p></div>';return;}
+  el.innerHTML=list.map(q=>`
+    <div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:10px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div style="font-size:14px;font-weight:700;color:#1a1a2e">${q.title}</div>
+        <span style="font-size:11px;padding:3px 10px;border-radius:100px;font-weight:600;${q.answer?'background:#EAF3DE;color:#3B6D11':'background:#FEF3C7;color:#92400E'}">${q.answer?'답변완료':'답변대기'}</span>
+      </div>
+      <div style="font-size:13px;color:#6b7280;margin-bottom:${q.answer?'10px':'0'}">${q.content}</div>
+      ${q.answer?`
+        <div style="background:#f0f4f8;border-radius:10px;padding:12px;margin-top:8px">
+          <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:4px">✅ 선생님 답변</div>
+          <div style="font-size:13px;color:#1a1a2e">${q.answer}</div>
+        </div>`:''}
+      <div style="font-size:11px;color:#9ca3af;margin-top:8px">${new Date(q.created_at).toLocaleDateString('ko-KR')}</div>
+    </div>`).join('');
+}
+
+// 선생님: 질문 목록 로드
+async function loadTeacherQuestions(){
+  const{data}=await db.from('questions')
+    .select('*, users!questions_student_id_fkey(name), classes(name)')
+    .eq('teacher_id',currentUser.id)
+    .order('created_at',{ascending:false});
+  renderTeacherQuestions(data||[]);
+}
+
+function renderTeacherQuestions(list){
+  const el=document.getElementById('teacherQuestionList');
+  const unanswered=list.filter(q=>!q.answer).length;
+  let html='';
+  if(unanswered>0) html+=`<div class="alert alert-warning">⚠️ 미답변 질문이 <strong>${unanswered}개</strong> 있습니다!</div>`;
+  if(!list.length){el.innerHTML='<div class="empty-state"><div class="ei">💬</div><p>아직 질문이 없습니다</p></div>';return;}
+  html+=list.map(q=>`
+    <div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:10px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:#1a1a2e">${q.title}</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px">
+            <span class="badge badge-blue">${q.users?.name||'학생'}</span>
+            ${q.classes?.name?`<span class="badge badge-orange" style="margin-left:4px">${q.classes.name}</span>`:''}
+          </div>
+        </div>
+        <span style="font-size:11px;padding:3px 10px;border-radius:100px;font-weight:600;flex-shrink:0;${q.answer?'background:#EAF3DE;color:#3B6D11':'background:#FEF3C7;color:#92400E'}">${q.answer?'답변완료':'미답변'}</span>
+      </div>
+      <div style="font-size:13px;color:#4b5563;background:#f5f6fa;padding:10px;border-radius:8px;margin-bottom:10px">${q.content}</div>
+      ${q.answer?`
+        <div style="background:#EAF3DE;border-radius:10px;padding:10px;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#3B6D11;margin-bottom:4px">내 답변</div>
+          <div style="font-size:13px;color:#1a1a2e">${q.answer}</div>
+        </div>`:''}
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:11px;color:#9ca3af">${new Date(q.created_at).toLocaleDateString('ko-KR')}</div>
+        <button class="btn btn-primary btn-sm" onclick="openAnswerModal('${q.id}','${(q.title||'').replace(/'/g,"\\'")}','${(q.content||'').replace(/'/g,"\\'")}','${(q.answer||'').replace(/'/g,"\\'")}')">
+          ${q.answer?'답변 수정':'답변하기'}
+        </button>
+      </div>
+    </div>`).join('');
+  el.innerHTML=html;
+}
+
+function openAnswerModal(qId, title, content, existingAnswer){
+  currentAnswerQId=qId;
+  document.getElementById('answerQuestionContent').innerHTML=`<strong>${title}</strong><br><span style="color:#6b7280">${content}</span>`;
+  document.getElementById('inp-answer').value=existingAnswer||'';
+  openModal('answerQuestion');
+}
+
+async function submitAnswer(){
+  const answer=document.getElementById('inp-answer').value.trim();
+  if(!answer){alert('답변 내용을 입력하세요');return;}
+  const btn=document.querySelector('#modal-answerQuestion .btn-primary');
+  btn.textContent='등록 중...';btn.disabled=true;
+  const{error}=await db.from('questions').update({
+    answer,answered_at:new Date().toISOString()
+  }).eq('id',currentAnswerQId);
+  btn.textContent='답변 등록';btn.disabled=false;
+  if(error){alert('오류: '+error.message);return;}
+  closeModal('answerQuestion');
+  loadTeacherQuestions();
+}
 
 selectRole('teacher');
 </script>
