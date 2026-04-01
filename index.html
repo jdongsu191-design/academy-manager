@@ -1234,7 +1234,7 @@ async function addStudentsBulk(){
 }
 
 async function removeStudent(id){
-  if(!confirm('삭제할까요?'))return;await db.from('users').delete().eq('id',id);await loadTeacherData();
+  if(!confirm('퇴원 처리할까요?\n학생 데이터는 보존되며 목록에서 숨겨집니다.'))return;await db.from('users').update({status:'inactive'}).eq('id',id);await loadTeacherData();
 }
 
 // ===== 선생님 숙제 (자기 반만) =====
@@ -1763,22 +1763,22 @@ async function loadWorkLog(){
   // 학생별 기존 데이터
   let studentLogs = [];
   if(wlCurrentLogId){
-    const{data:sl} = await db.from('work_log_students')
-      .select('*, users!work_log_students_student_id_fkey(id,name,phone,email)')
-      .eq('log_id',wlCurrentLogId);
+    const{data:sl} = await db.from('work_log_students').select('*').eq('log_id',wlCurrentLogId);
     studentLogs = sl || [];
   }
 
   // 현재 활성 학생 조회
   const{data:activeStuds} = await db.from('users').select('*')
     .eq('role','student').eq('class_id',classId).eq('status','active').order('name');
-
-  // 과거 기록에 있는 학생 중 현재 활성이 아닌 학생 병합
-  // (퇴원/비활성 학생도 그날 기록이 있으면 표시)
   const activeIds = new Set((activeStuds||[]).map(s=>s.id));
-  const pastStudents = studentLogs
-    .filter(sl => !activeIds.has(sl.student_id) && sl.users)
-    .map(sl => ({...sl.users, _isInactive: true}));
+
+  // 과거 기록에 있는 비활성 학생 ID 추출 후 직접 조회
+  const pastIds = studentLogs.map(sl=>sl.student_id).filter(id=>!activeIds.has(id));
+  let pastStudents = [];
+  if(pastIds.length > 0){
+    const{data:pastData} = await db.from('users').select('*').in('id', pastIds);
+    pastStudents = (pastData||[]).map(s=>({...s, _isInactive: true}));
+  }
 
   // 활성 학생 + 과거 기록 학생 합치기 (이름순)
   wlStudents = [...(activeStuds||[]), ...pastStudents]
