@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#178EF5">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f6fa;color:#1a1a2e;min-height:100vh}
@@ -585,6 +586,9 @@
           <!-- STEP 1: 기본 정보 + PDF 업로드 -->
           <div id="naje-step1" class="card">
             <div class="card-title">📄 문제 등록</div>
+            <div class="alert alert-info" style="margin-bottom:12px;font-size:12px">
+              💡 PDF를 업로드하면 <strong>줄칸을 제외한 문제 영역</strong>을 자동으로 인식하고 <strong>QR 해설 영상</strong>도 자동 연결됩니다.
+            </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
               <div class="form-group" style="margin:0;grid-column:1/-1">
                 <label>제목 *</label>
@@ -616,7 +620,7 @@
               style="margin-bottom:0;transition:all 0.2s">
               <div class="ua-icon">📎</div>
               <p><strong style="color:var(--primary)">PDF 파일을 선택하거나 드래그하세요</strong></p>
-              <p style="font-size:12px;color:#6b7280;margin-top:4px">업로드 후 페이지별로 문제 영역을 직접 선택합니다</p>
+              <p style="font-size:12px;color:#6b7280;margin-top:4px">줄칸 자동 감지 · QR 해설 영상 자동 인식</p>
             </div>
             <input type="file" id="naje-pdf-input" accept=".pdf" style="display:none" onchange="handleNajePdfUpload(event)">
           </div>
@@ -848,6 +852,15 @@
           </div>
         </div>
         <div class="card">
+          <!-- QR 해설 영상 버튼 -->
+          <a id="naje-qr-btn" href="#" target="_blank" rel="noopener noreferrer"
+            style="display:none;align-items:center;gap:6px;padding:10px 14px;
+            background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;
+            border-radius:10px;text-decoration:none;font-size:13px;font-weight:700;
+            margin-bottom:12px;justify-content:center">
+            📹 해설 영상 보기
+          </a>
+
           <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#1a1a2e">✏️ 내 풀이</div>
           <!-- 수학 기호 버튼 모음 -->
           <div style="margin-bottom:8px">
@@ -2346,25 +2359,29 @@ async function loadNajeSets(){
 }
 
 // 파일명에서 제목 생성
-// ── 일일N제 PDF 드래그 선택 방식 ────────────────────────────
+// ── 일일N제 PDF 자동 분석 방식 (v2) ──────────────────────────
+// 설정
+const NJ = {
+  PDF_SCALE: 2.5,
+  HEADER_RATIO: 0.08,
+  LEFT_COL_RATIO: 0.50,
+  LINE: {
+    BRIGHT_THRESHOLD: 220,
+    MIN_BRIGHT_RATIO: 0.88,
+    MIN_CONSECUTIVE: 3,
+  },
+  MIN_H: 50,
+  BUCKET: 'homework-photos',
+  PATH: 'naje',
+};
 
-// 전역 상태
-let najePages = [];          // [{canvas, pageNum}] - 렌더링된 페이지들
-let najeCurrentPage = 0;     // 현재 보고 있는 페이지 인덱스
-let najeSelections = {};     // {pageIdx: [{x,y,w,h,id}]} - 페이지별 선택 영역
-let najeExtractedProblems = []; // 최종 추출된 문제 이미지들
-let najeDragging = false;
-let najeDragStart = {x:0, y:0};
-let najeCurrentRect = null;  // 현재 드래그 중인 임시 rect
-let najeRectIdCounter = 0;
-let najeScale = 1;           // 캔버스 표시 스케일
+let najeExtractedProblems = []; // { number, canvas, qrUrl, dataUrl, level_name, level_type }
 
 // PDF 드래그 드롭
 function handleNajePdfDrop(e){
   const file = e.dataTransfer.files[0];
   if(!file || !file.name.toLowerCase().endsWith('.pdf')){
-    alert('PDF 파일만 업로드 가능합니다.');
-    return;
+    alert('PDF 파일만 업로드 가능합니다.'); return;
   }
   startNajePdfLoad(file);
 }
@@ -2377,7 +2394,7 @@ async function handleNajePdfUpload(e){
   e.target.value = '';
 }
 
-// PDF 로드 + 페이지 렌더링
+// PDF 로드 + 자동 분석
 async function startNajePdfLoad(file){
   // 제목 자동 설정
   const titleEl = document.getElementById('naje-title');
@@ -2385,11 +2402,10 @@ async function startNajePdfLoad(file){
     titleEl.value = file.name.replace(/\.pdf$/i,'').replace(/[_-]/g,' ').trim();
   }
 
-  // 업로드 영역 업데이트
   document.getElementById('naje-upload-area').innerHTML = `
     <div class="ua-icon">✅</div>
     <p><strong style="color:var(--primary)">${file.name}</strong></p>
-    <p style="font-size:12px;color:#6b7280;margin-top:4px">${(file.size/1024/1024).toFixed(1)}MB · 페이지 렌더링 중...</p>`;
+    <p style="font-size:12px;color:#6b7280;margin-top:4px">${(file.size/1024/1024).toFixed(1)}MB · 분석 중...</p>`;
 
   document.getElementById('naje-step1').style.display = 'none';
   document.getElementById('naje-step2').style.display = 'block';
@@ -2399,257 +2415,127 @@ async function startNajePdfLoad(file){
   const progressText = document.getElementById('naje-progress-text');
   progressEl.style.display = 'block';
 
+  najeExtractedProblems = [];
+
   try{
     if(typeof pdfjsLib === 'undefined'){
       progressText.textContent = 'PDF.js 로드 중...';
       await new Promise((res,rej)=>{
         const s=document.createElement('script');
-        s.src='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
-        s.onload=res; s.onerror=rej;
+        s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        s.onload=()=>{
+          pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          res();
+        };
+        s.onerror=rej;
         document.head.appendChild(s);
       });
-      pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
-    const scale = 2.0;
-    najePages = [];
-    najeSelections = {};
-    najeCurrentPage = 0;
-    najeExtractedProblems = [];
+    const ab = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({data: ab}).promise;
+    let num = 1;
 
-    for(let i=1; i<=pdf.numPages; i++){
-      progressText.textContent = `${i}/${pdf.numPages} 페이지 렌더링 중...`;
-      progressBar.style.width = (i/pdf.numPages*100)+'%';
-      const page = await pdf.getPage(i);
-      const viewport = page.getViewport({scale});
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      await page.render({canvasContext:canvas.getContext('2d'), viewport}).promise;
-      najePages.push({canvas, pageNum:i});
-      najeSelections[i-1] = [];
+    for(let p = 1; p <= pdf.numPages; p++){
+      progressText.textContent = `${p}/${pdf.numPages} 페이지 분석 중...`;
+      progressBar.style.width = Math.round((p-1)/pdf.numPages * 85) + '%';
+
+      const page = await pdf.getPage(p);
+      const isFirst = p === 1;
+      const vp = page.getViewport({scale: NJ.PDF_SCALE});
+      const cvs = document.createElement('canvas');
+      cvs.width = vp.width; cvs.height = vp.height;
+      await page.render({canvasContext: cvs.getContext('2d'), viewport: vp}).promise;
+
+      const W = cvs.width, H = cvs.height;
+      const midX = Math.floor(W * NJ.LEFT_COL_RATIO);
+      const hdrY = isFirst ? Math.floor(H * NJ.HEADER_RATIO) : 0;
+      const imgData = cvs.getContext('2d').getImageData(0, 0, W, H);
+
+      // 좌열: 줄칸 시작점 감지 → 그 위까지만 자름
+      const leftEndY = njFindLineStart(imgData, W, 0, midX, hdrY, H);
+      if(leftEndY - hdrY >= NJ.MIN_H){
+        const c = njCrop(cvs, 0, midX, hdrY, leftEndY);
+        const qrUrl = await njDecodeQR(c);
+        const dataUrl = c.toDataURL('image/jpeg', 0.92);
+        najeExtractedProblems.push({number:num++, canvas:c, qrUrl, dataUrl, pageNum:p, side:'left', ...getLevelInfo(num-1)});
+      }
+
+      // 우열
+      const rightEndY = njFindLineStart(imgData, W, midX, W, hdrY, H);
+      if(rightEndY - hdrY >= NJ.MIN_H){
+        const c = njCrop(cvs, midX, W, hdrY, rightEndY);
+        const qrUrl = await njDecodeQR(c);
+        const dataUrl = c.toDataURL('image/jpeg', 0.92);
+        najeExtractedProblems.push({number:num++, canvas:c, qrUrl, dataUrl, pageNum:p, side:'right', ...getLevelInfo(num-1)});
+      }
     }
 
-    progressEl.style.display = 'none';
-    najeRenderCurrentPage();
-    najeUpdatePageStatus();
+    progressBar.style.width = '95%';
+    progressText.textContent = '미리보기 생성 중...';
+
+    // 미리보기로 이동
+    setTimeout(()=>{
+      progressEl.style.display = 'none';
+      document.getElementById('naje-step2').style.display = 'none';
+      document.getElementById('naje-step3').style.display = 'block';
+      showNajePreview(najeExtractedProblems);
+    }, 500);
 
   }catch(err){
     progressEl.style.display = 'none';
-    alert('PDF 처리 오류: '+err.message);
+    alert('PDF 처리 오류: ' + err.message);
     console.error(err);
     resetNajeUpload();
   }
 }
 
-// 현재 페이지를 캔버스에 렌더링
-function najeRenderCurrentPage(){
-  if(!najePages.length) return;
-  const {canvas} = najePages[najeCurrentPage];
-  const displayCanvas = document.getElementById('naje-page-canvas');
-  const container = displayCanvas.parentElement;
+// 줄칸 시작 Y 감지: 밝은 행이 연속 MIN_CONSECUTIVE줄 이상이면 줄칸 확정
+function njFindLineStart(imgData, W, x1, x2, startY, endY){
+  const {data} = imgData;
+  const cfg = NJ.LINE;
+  const margin = 10;
+  const scanLeft = x1 + margin, scanRight = x2 - margin;
+  const colW = scanRight - scanLeft;
+  if(colW <= 0) return endY;
 
-  // 컨테이너 너비에 맞게 스케일 계산
-  const maxW = Math.min(container.clientWidth - 2, 800);
-  najeScale = maxW / canvas.width;
-  displayCanvas.width = Math.round(canvas.width * najeScale);
-  displayCanvas.height = Math.round(canvas.height * najeScale);
-  displayCanvas.style.width = displayCanvas.width + 'px';
-  displayCanvas.style.height = displayCanvas.height + 'px';
-
-  // SVG 크기도 맞춤
-  const svg = document.getElementById('naje-selection-svg');
-  svg.style.width = displayCanvas.width + 'px';
-  svg.style.height = displayCanvas.height + 'px';
-  svg.setAttribute('viewBox', `0 0 ${displayCanvas.width} ${displayCanvas.height}`);
-
-  // 원본 이미지를 스케일에 맞게 그리기
-  displayCanvas.getContext('2d').drawImage(canvas, 0, 0, displayCanvas.width, displayCanvas.height);
-
-  // 페이지 레이블 업데이트
-  document.getElementById('naje-page-label').textContent = `${najeCurrentPage+1} / ${najePages.length} 페이지`;
-
-  // 기존 선택 박스 다시 그리기
-  najeRedrawSelections();
-}
-
-// 선택 박스 SVG 다시 그리기
-function najeRedrawSelections(){
-  const svg = document.getElementById('naje-selection-svg');
-  const rects = najeSelections[najeCurrentPage] || [];
-  svg.innerHTML = rects.map((r,i) => `
-    <g onclick="najeRemoveRect(${najeCurrentPage},${i})" style="cursor:pointer">
-      <rect x="${r.dispX}" y="${r.dispY}" width="${r.dispW}" height="${r.dispH}"
-        fill="rgba(23,142,245,0.15)" stroke="#178EF5" stroke-width="2" rx="2"/>
-      <rect x="${r.dispX+r.dispW-18}" y="${r.dispY+2}" width="16" height="16"
-        fill="#ef4444" rx="3"/>
-      <text x="${r.dispX+r.dispW-10}" y="${r.dispY+14}" fill="white" font-size="12"
-        text-anchor="middle" style="pointer-events:none">×</text>
-      <text x="${r.dispX+4}" y="${r.dispY+16}" fill="#178EF5" font-size="12"
-        font-weight="700" style="pointer-events:none">${i+1}</text>
-    </g>`).join('');
-  najeUpdateSelectionSummary();
-}
-
-// 드래그 시작
-function najeStartDrag(e){
-  const rect = e.currentTarget.getBoundingClientRect();
-  najeDragStart = {x: e.clientX - rect.left, y: e.clientY - rect.top};
-  najeDragging = true;
-  najeCurrentRect = null;
-}
-
-// 드래그 중
-function najeDragMove(e){
-  if(!najeDragging) return;
-  const rect = e.currentTarget.getBoundingClientRect();
-  const cx = e.clientX - rect.left;
-  const cy = e.clientY - rect.top;
-  const x = Math.min(najeDragStart.x, cx);
-  const y = Math.min(najeDragStart.y, cy);
-  const w = Math.abs(cx - najeDragStart.x);
-  const h = Math.abs(cy - najeDragStart.y);
-
-  // 임시 드래그 박스 표시
-  const svg = document.getElementById('naje-selection-svg');
-  const existing = svg.innerHTML;
-  const tempId = 'naje-drag-temp';
-  // 기존 temp 제거 후 추가
-  const parser = new DOMParser();
-  const rects = najeSelections[najeCurrentPage] || [];
-  svg.innerHTML = rects.map((r,i) => `
-    <g onclick="najeRemoveRect(${najeCurrentPage},${i})" style="cursor:pointer">
-      <rect x="${r.dispX}" y="${r.dispY}" width="${r.dispW}" height="${r.dispH}"
-        fill="rgba(23,142,245,0.15)" stroke="#178EF5" stroke-width="2" rx="2"/>
-      <rect x="${r.dispX+r.dispW-18}" y="${r.dispY+2}" width="16" height="16"
-        fill="#ef4444" rx="3"/>
-      <text x="${r.dispX+r.dispW-10}" y="${r.dispY+14}" fill="white" font-size="12"
-        text-anchor="middle" style="pointer-events:none">×</text>
-      <text x="${r.dispX+4}" y="${r.dispY+16}" fill="#178EF5" font-size="12"
-        font-weight="700" style="pointer-events:none">${i+1}</text>
-    </g>`).join('') +
-    `<rect id="${tempId}" x="${x}" y="${y}" width="${w}" height="${h}"
-      fill="rgba(23,142,245,0.1)" stroke="#178EF5" stroke-width="2" stroke-dasharray="6,3" rx="2"/>`;
-  najeCurrentRect = {x, y, w, h};
-}
-
-// 드래그 종료
-function najeEndDrag(e){
-  if(!najeDragging) return;
-  najeDragging = false;
-  if(!najeCurrentRect || najeCurrentRect.w < 20 || najeCurrentRect.h < 20){
-    najeCurrentRect = null;
-    najeRedrawSelections();
-    return;
-  }
-  // 원본 좌표로 역변환
-  const r = najeCurrentRect;
-  const origX = Math.round(r.x / najeScale);
-  const origY = Math.round(r.y / najeScale);
-  const origW = Math.round(r.w / najeScale);
-  const origH = Math.round(r.h / najeScale);
-
-  if(!najeSelections[najeCurrentPage]) najeSelections[najeCurrentPage] = [];
-  najeSelections[najeCurrentPage].push({
-    origX, origY, origW, origH,
-    dispX: r.x, dispY: r.y, dispW: r.w, dispH: r.h,
-    id: ++najeRectIdCounter
-  });
-  najeCurrentRect = null;
-  najeRedrawSelections();
-  najeUpdatePageStatus();
-}
-
-// 선택 박스 삭제
-function najeRemoveRect(pageIdx, rectIdx){
-  if(najeSelections[pageIdx]) najeSelections[pageIdx].splice(rectIdx, 1);
-  najeRedrawSelections();
-  najeUpdatePageStatus();
-}
-
-// 선택 요약 업데이트
-function najeUpdateSelectionSummary(){
-  let total = 0;
-  Object.values(najeSelections).forEach(arr => total += arr.length);
-  document.getElementById('naje-selection-summary').textContent = `선택된 영역: 총 ${total}개`;
-}
-
-// 페이지별 선택 현황 업데이트
-function najeUpdatePageStatus(){
-  const el = document.getElementById('naje-page-status');
-  el.innerHTML = najePages.map((_,i) => {
-    const count = (najeSelections[i]||[]).length;
-    const isCurrent = i === najeCurrentPage;
-    return `<button onclick="najeGoToPage(${i})" style="
-      padding:4px 10px;border-radius:6px;border:1.5px solid ${isCurrent?'var(--primary)':count>0?'#10b981':'var(--border)'};
-      background:${isCurrent?'var(--primary)':count>0?'#d1fae5':'#fff'};
-      color:${isCurrent?'#fff':count>0?'#065f46':'#6b7280'};
-      cursor:pointer;font-size:12px;font-weight:600">
-      ${i+1}p ${count>0?'('+count+')'+'✓':''}
-    </button>`;
-  }).join('');
-}
-
-// 페이지 이동
-function najeGoPage(dir){
-  najeGoToPage(najeCurrentPage + dir);
-}
-
-function najeGoToPage(idx){
-  if(idx < 0 || idx >= najePages.length) return;
-  najeCurrentPage = idx;
-  najeRenderCurrentPage();
-  najeUpdatePageStatus();
-}
-
-// 현재 페이지 초기화
-function najeClearPage(){
-  najeSelections[najeCurrentPage] = [];
-  najeRedrawSelections();
-  najeUpdatePageStatus();
-}
-
-// 선택 완료 → 미리보기 생성
-function najeFinishSelection(){
-  let total = 0;
-  Object.values(najeSelections).forEach(arr => total += arr.length);
-  if(total === 0){ alert('최소 1개 이상의 영역을 선택하세요.'); return; }
-
-  // 페이지 순서 × 선택 순서대로 문제 이미지 추출
-  najeExtractedProblems = [];
-  let num = 1;
-  for(let pi = 0; pi < najePages.length; pi++){
-    const rects = najeSelections[pi] || [];
-    const {canvas} = najePages[pi];
-    for(const r of rects){
-      const cropC = document.createElement('canvas');
-      cropC.width = r.origW;
-      cropC.height = r.origH;
-      cropC.getContext('2d').drawImage(canvas, r.origX, r.origY, r.origW, r.origH, 0, 0, r.origW, r.origH);
-      najeExtractedProblems.push({
-        canvas: cropC,
-        dataUrl: cropC.toDataURL('image/jpeg', 0.92),
-        number: num,
-        pageNum: pi + 1,
-        ...getLevelInfo(num)
-      });
-      num++;
+  let consecutive = 0, firstRow = -1;
+  for(let y = startY; y < endY; y++){
+    let brightCnt = 0;
+    for(let x = scanLeft; x < scanRight; x++){
+      const i = (y * W + x) * 4;
+      if((data[i] + data[i+1] + data[i+2]) / 3 >= cfg.BRIGHT_THRESHOLD) brightCnt++;
+    }
+    const ratio = brightCnt / colW;
+    if(ratio >= cfg.MIN_BRIGHT_RATIO){
+      if(consecutive === 0) firstRow = y;
+      consecutive++;
+      if(consecutive >= cfg.MIN_CONSECUTIVE) return firstRow;
+    } else {
+      consecutive = 0; firstRow = -1;
     }
   }
-
-  // 미리보기 표시
-  document.getElementById('naje-step2').style.display = 'none';
-  document.getElementById('naje-step3').style.display = 'block';
-  showNajePreview(najeExtractedProblems);
+  return endY;
 }
 
-// 미리보기로 돌아가기
-function najeBackToSelection(){
-  document.getElementById('naje-step3').style.display = 'none';
-  document.getElementById('naje-step2').style.display = 'block';
-  najeRenderCurrentPage();
+// QR 코드 디코딩
+async function njDecodeQR(canvas){
+  if(typeof jsQR === 'undefined') return null;
+  try{
+    const ctx = canvas.getContext('2d');
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(d.data, canvas.width, canvas.height, {inversionAttempts:'dontInvert'});
+    return code ? code.data : null;
+  }catch(e){ return null; }
+}
+
+// 이미지 크롭
+function njCrop(src, x1, x2, y1, y2){
+  const w = x2-x1, h = Math.max(y2-y1, 1);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(src, x1, y1, w, h, 0, 0, w, h);
+  return c;
 }
 
 // 문제번호로 단계 정보 조회
@@ -2660,29 +2546,30 @@ function getLevelInfo(num){
 
 // 초기화
 function resetNajeUpload(){
-  najePages = [];
-  najeSelections = {};
   najeExtractedProblems = [];
-  najeCurrentPage = 0;
   document.getElementById('naje-step1').style.display = 'block';
   document.getElementById('naje-step2').style.display = 'none';
   document.getElementById('naje-step3').style.display = 'none';
   document.getElementById('naje-upload-area').innerHTML = `
     <div class="ua-icon">📎</div>
     <p><strong style="color:var(--primary)">PDF 파일을 선택하거나 드래그하세요</strong></p>
-    <p style="font-size:12px;color:#6b7280;margin-top:4px">업로드 후 페이지별로 문제 영역을 직접 선택합니다</p>`;
+    <p style="font-size:12px;color:#6b7280;margin-top:4px">줄칸 자동 감지 · QR 해설 영상 자동 인식</p>`;
 }
 
 // ── 미리보기 표시 ──────────────────────────────────────────
 function showNajePreview(problems){
   const infoEl = document.getElementById('naje-preview-info');
   const gridEl = document.getElementById('naje-problem-grid');
-  infoEl.textContent = `총 ${problems.length}개 문제. 순서를 확인하고 저장하세요.`;
+  const qrCount = problems.filter(p=>p.qrUrl).length;
+  infoEl.innerHTML = `총 ${problems.length}개 문제${qrCount>0?' · <span style="color:#10b981">📹 QR 해설 '+qrCount+'개 감지</span>':''}. 순서를 확인하고 저장하세요.`;
   gridEl.innerHTML = problems.map((p,i) => `
     <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
-      <div style="background:#f5f6fa;padding:6px 8px;display:flex;justify-content:space-between;align-items:center">
+      <div style="background:#f5f6fa;padding:6px 8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
         <span style="font-size:12px;font-weight:700;color:#1a1a2e">${p.number}번</span>
-        <span style="font-size:10px;color:#6b7280;background:#fff;padding:2px 6px;border-radius:100px">${p.level_name||''}</span>
+        <div style="display:flex;gap:4px;align-items:center">
+          ${p.level_name?`<span style="font-size:10px;color:#6b7280;background:#fff;padding:2px 6px;border-radius:100px">${p.level_name}</span>`:''}
+          ${p.qrUrl?`<span style="font-size:10px;color:#10b981;background:#d1fae5;padding:2px 6px;border-radius:100px">📹 QR</span>`:''}
+        </div>
       </div>
       <img src="${p.dataUrl}" style="width:100%;display:block;cursor:zoom-in" onclick="openImgViewer('${p.dataUrl}')">
     </div>`).join('');
@@ -2738,7 +2625,8 @@ async function saveNajeSet(){
         level_name: p.level_name || null,
         level_type: p.level_type || null,
         image_url: urlData.publicUrl,
-        page_number: p.pageNum
+        page_number: p.pageNum,
+        qr_url: p.qrUrl || null
       });
     }
 
@@ -3453,6 +3341,16 @@ function showNajeProblem(idx){
   document.getElementById('naje-prev-btn').disabled = idx === 0;
   document.getElementById('naje-next-btn').disabled = idx === studentNajeProblems.length - 1;
   document.getElementById('naje-answer-input').value = studentNajeAnswers[p.id] || '';
+  // QR 해설 영상 버튼
+  const qrBtnEl = document.getElementById('naje-qr-btn');
+  if(qrBtnEl){
+    if(p.qr_url && (p.qr_url.startsWith('http')||p.qr_url.startsWith('https'))){
+      qrBtnEl.href = p.qr_url;
+      qrBtnEl.style.display = 'inline-flex';
+    } else {
+      qrBtnEl.style.display = 'none';
+    }
+  }
   studentNajeProblems.forEach((_, i) => {
     const btn = document.getElementById('naje-nav-' + i);
     if(!btn) return;
