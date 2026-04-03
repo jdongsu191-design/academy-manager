@@ -3311,6 +3311,15 @@ async function openStudentNajeViewer(setId, title){
     .select('*').eq('set_id', setId).order('problem_number');
   studentNajeProblems = problems || [];
   if(!studentNajeProblems.length){ alert('문제가 없습니다.'); return; }
+  // 기존 저장된 답안 불러오기
+  const{data: savedAnswers} = await db.from('naje_answers')
+    .select('problem_id, answer')
+    .eq('student_id', currentUser.id)
+    .eq('set_id', setId);
+  if(savedAnswers){
+    savedAnswers.forEach(a => { studentNajeAnswers[a.problem_id] = a.answer; });
+  }
+
   document.getElementById('student-naje-list').style.display = 'none';
   document.getElementById('student-naje-viewer').style.display = 'block';
   renderNajeProblemNav();
@@ -3368,15 +3377,42 @@ function navigateNajeProblem(dir){
   showNajeProblem(studentNajeCurrentIdx + dir);
 }
 
-function saveNajeAnswer(e){
+async function saveNajeAnswer(e){
   const p = studentNajeProblems[studentNajeCurrentIdx];
   if(!p) return;
-  studentNajeAnswers[p.id] = document.getElementById('naje-answer-input').value;
-  renderNajeProblemNav();
-  showNajeProblem(studentNajeCurrentIdx);
+  const answer = document.getElementById('naje-answer-input').value.trim();
   const btn = e.target;
-  btn.textContent = '✅ 저장됨';
-  setTimeout(() => { btn.textContent = '💾 저장'; }, 1200);
+  btn.textContent = '저장 중...'; btn.disabled = true;
+
+  // 로컬에도 저장
+  studentNajeAnswers[p.id] = answer;
+
+  try{
+    // DB에 upsert (같은 학생+문제면 업데이트)
+    const{error} = await db.from('naje_answers').upsert({
+      student_id: currentUser.id,
+      problem_id: p.id,
+      set_id: studentNajeSetId,
+      answer: answer,
+      answered_at: new Date().toISOString()
+    }, {onConflict: 'student_id,problem_id'});
+
+    if(error) throw error;
+
+    renderNajeProblemNav();
+    showNajeProblem(studentNajeCurrentIdx);
+    btn.textContent = '✅ 저장됨!';
+    btn.style.background = '#10b981';
+    setTimeout(() => {
+      btn.textContent = '💾 저장';
+      btn.style.background = '#f5f6fa';
+      btn.disabled = false;
+    }, 1500);
+  }catch(err){
+    btn.textContent = '💾 저장';
+    btn.disabled = false;
+    alert('저장 오류: ' + err.message);
+  }
 }
 
 function closeStudentNajeViewer(){
