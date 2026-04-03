@@ -753,6 +753,42 @@
       <div id="myQuestionList"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
     </div>
 
+    <!-- 일일N제 패널 -->
+    <div id="spanel-naje" class="spanel">
+      <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a2e">📄 일일N제</div>
+      <div style="font-size:13px;color:#6b7280;margin-bottom:16px">선생님이 등록한 문제를 풀어보세요</div>
+      <div id="student-naje-list"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
+      <div id="student-naje-viewer" style="display:none">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+          <button onclick="closeStudentNajeViewer()" class="btn btn-sm">← 목록으로</button>
+          <div id="student-naje-viewer-title" style="font-size:15px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+          <span id="naje-problem-counter" style="font-size:13px;color:#6b7280;font-weight:600"></span>
+          <div style="display:flex;gap:8px">
+            <button id="naje-prev-btn" onclick="navigateNajeProblem(-1)" class="btn btn-sm">◀ 이전</button>
+            <button id="naje-next-btn" onclick="navigateNajeProblem(1)" class="btn btn-sm">다음 ▶</button>
+          </div>
+        </div>
+        <div id="naje-problem-nav" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px"></div>
+        <div class="card" style="padding:8px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding:0 4px">
+            <span id="naje-current-label" style="font-size:13px;font-weight:700;color:#1a1a2e"></span>
+            <span id="naje-current-level" style="font-size:11px;color:#6b7280;background:#f5f6fa;padding:2px 8px;border-radius:100px"></span>
+          </div>
+          <img id="naje-problem-img" src="" style="width:100%;border-radius:8px;cursor:zoom-in" onclick="openImgViewer(this.src)">
+        </div>
+        <div class="card">
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px;color:#1a1a2e">✏️ 내 풀이</div>
+          <textarea id="naje-answer-input" placeholder="풀이 과정이나 답을 입력하세요..." style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:13px;outline:none;min-height:80px;resize:vertical;font-family:inherit;margin-bottom:10px"></textarea>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-full" onclick="saveNajeAnswer(event)" style="background:#f5f6fa">💾 저장</button>
+            <button class="btn btn-primary btn-full" onclick="navigateNajeProblem(1)">다음 문제 →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="spanel-plan" class="spanel">
       <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a2e">📅 진도 계획서</div>
       <div class="card" style="text-align:center;padding:48px 20px;color:#6b7280">
@@ -3074,6 +3110,118 @@ async function uploadProfilePhoto(e){
   }
   e.target.value = '';
 }
+
+// ===== 학생 일일N제 =====
+let studentNajeProblems = [];
+let studentNajeCurrentIdx = 0;
+let studentNajeAnswers = {};
+
+async function loadStudentNaje(){
+  const el = document.getElementById('student-naje-list');
+  if(!el) return;
+  el.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+  el.style.display = 'block';
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  const{data, error} = await db.from('naje_sets')
+    .select('*').eq('teacher_id', currentUser.teacher_id)
+    .order('created_at', {ascending: false});
+  if(error || !data || !data.length){
+    el.innerHTML = '<div class="empty-state"><div class="ei">📄</div><p>등록된 N제가 없습니다</p></div>';
+    return;
+  }
+  el.innerHTML = data.map(s => `
+    <div class="card" style="margin-bottom:10px;cursor:pointer" onclick="openStudentNajeViewer('${s.id}','${(s.title||'').replace(/'/g,"\\'")}')">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:4px">${s.title}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${s.subject ? `<span class="badge badge-blue">${s.subject}</span>` : ''}
+            ${s.target_grade ? `<span class="badge" style="background:#f5f6fa;color:#4b5563">${s.target_grade}</span>` : ''}
+            ${s.week_number ? `<span class="badge" style="background:#EAF3DE;color:#3B6D11">${s.week_number}주차</span>` : ''}
+            <span class="badge" style="background:#f5f6fa;color:#4b5563">${s.total_problems||0}문제</span>
+          </div>
+        </div>
+        <div style="color:#9ca3af;font-size:20px">›</div>
+      </div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:6px">${new Date(s.created_at).toLocaleDateString('ko-KR')} 등록</div>
+    </div>`).join('');
+}
+
+async function openStudentNajeViewer(setId, title){
+  studentNajeProblems = [];
+  studentNajeCurrentIdx = 0;
+  studentNajeAnswers = {};
+  document.getElementById('student-naje-viewer-title').textContent = title;
+  const{data: problems} = await db.from('naje_problems')
+    .select('*').eq('set_id', setId).order('problem_number');
+  studentNajeProblems = problems || [];
+  if(!studentNajeProblems.length){ alert('문제가 없습니다.'); return; }
+  document.getElementById('student-naje-list').style.display = 'none';
+  document.getElementById('student-naje-viewer').style.display = 'block';
+  renderNajeProblemNav();
+  showNajeProblem(0);
+}
+
+function renderNajeProblemNav(){
+  const nav = document.getElementById('naje-problem-nav');
+  if(!nav) return;
+  nav.innerHTML = studentNajeProblems.map((p, i) => {
+    const done = studentNajeAnswers[p.id] ? 'background:var(--primary);color:#fff;border-color:var(--primary)' : '';
+    return `<button id="naje-nav-${i}" onclick="showNajeProblem(${i})"
+      style="width:36px;height:36px;border-radius:8px;border:1.5px solid var(--border);background:#fff;cursor:pointer;font-size:13px;font-weight:600;${done}">${p.problem_number}</button>`;
+  }).join('');
+}
+
+function showNajeProblem(idx){
+  if(idx < 0 || idx >= studentNajeProblems.length) return;
+  const prev = studentNajeProblems[studentNajeCurrentIdx];
+  const ansEl = document.getElementById('naje-answer-input');
+  if(prev && ansEl) studentNajeAnswers[prev.id] = ansEl.value;
+  studentNajeCurrentIdx = idx;
+  const p = studentNajeProblems[idx];
+  document.getElementById('naje-problem-img').src = p.image_url;
+  document.getElementById('naje-current-label').textContent = p.problem_number + '번 문제';
+  document.getElementById('naje-current-level').textContent = p.level_name || '';
+  document.getElementById('naje-problem-counter').textContent = (idx+1) + ' / ' + studentNajeProblems.length;
+  document.getElementById('naje-prev-btn').disabled = idx === 0;
+  document.getElementById('naje-next-btn').disabled = idx === studentNajeProblems.length - 1;
+  document.getElementById('naje-answer-input').value = studentNajeAnswers[p.id] || '';
+  studentNajeProblems.forEach((_, i) => {
+    const btn = document.getElementById('naje-nav-' + i);
+    if(!btn) return;
+    const isCurrent = i === idx;
+    const isDone = !!studentNajeAnswers[studentNajeProblems[i].id];
+    btn.style.background = isCurrent ? '#1070C2' : isDone ? 'var(--primary)' : '#fff';
+    btn.style.color = (isCurrent || isDone) ? '#fff' : '#1a1a2e';
+    btn.style.borderColor = (isCurrent || isDone) ? 'var(--primary)' : 'var(--border)';
+  });
+}
+
+function navigateNajeProblem(dir){
+  const curr = studentNajeProblems[studentNajeCurrentIdx];
+  if(curr) studentNajeAnswers[curr.id] = document.getElementById('naje-answer-input').value;
+  showNajeProblem(studentNajeCurrentIdx + dir);
+}
+
+function saveNajeAnswer(e){
+  const p = studentNajeProblems[studentNajeCurrentIdx];
+  if(!p) return;
+  studentNajeAnswers[p.id] = document.getElementById('naje-answer-input').value;
+  renderNajeProblemNav();
+  showNajeProblem(studentNajeCurrentIdx);
+  const btn = e.target;
+  btn.textContent = '✅ 저장됨';
+  setTimeout(() => { btn.textContent = '💾 저장'; }, 1200);
+}
+
+function closeStudentNajeViewer(){
+  studentNajeProblems = [];
+  studentNajeCurrentIdx = 0;
+  studentNajeAnswers = {};
+  document.getElementById('student-naje-list').style.display = 'block';
+  document.getElementById('student-naje-viewer').style.display = 'none';
+}
+
 </script>
 <!-- 업무일지 이미지 렌더링용 숨김 영역 -->
 <div id="wl-image-render" style="position:fixed;left:-9999px;top:0;background:#fff;padding:20px;width:700px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"></div>
