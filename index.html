@@ -610,10 +610,15 @@
             </div>
 
             <!-- PDF 업로드 영역 -->
-            <div id="naje-upload-area" class="upload-area" onclick="document.getElementById('naje-pdf-input').click()" style="margin-bottom:12px">
+            <div id="naje-upload-area" class="upload-area"
+              onclick="document.getElementById('naje-pdf-input').click()"
+              ondragover="event.preventDefault();this.style.borderColor='var(--primary)';this.style.background='#E6F1FB'"
+              ondragleave="this.style.borderColor='';this.style.background='#fafafa'"
+              ondrop="event.preventDefault();this.style.borderColor='';this.style.background='#fafafa';handleNajePdfDrop(event)"
+              style="margin-bottom:12px;transition:all 0.2s">
               <div class="ua-icon">📎</div>
-              <p><strong style="color:var(--primary)">PDF 파일을 선택하세요</strong></p>
-              <p style="font-size:12px;color:#6b7280;margin-top:4px">클릭하여 파일 선택</p>
+              <p><strong style="color:var(--primary)">PDF 파일을 선택하거나 드래그하세요</strong></p>
+              <p style="font-size:12px;color:#6b7280;margin-top:4px">클릭 또는 드래그 앤 드롭</p>
             </div>
             <input type="file" id="naje-pdf-input" accept=".pdf" style="display:none" onchange="handleNajePdf(event)">
 
@@ -2291,24 +2296,85 @@ async function loadNajeSets(){
     </div>`).join('');
 }
 
-// PDF 업로드 처리
+// 파일명에서 제목 생성
+function filenameToTitle(filename){
+  return filename.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ').trim();
+}
+
+// 드래그 앤 드롭 처리
+function handleNajePdfDrop(e){
+  const file = e.dataTransfer.files[0];
+  if(!file || !file.name.toLowerCase().endsWith('.pdf')){
+    alert('PDF 파일만 업로드 가능합니다.');
+    return;
+  }
+  startNajePdfProcess(file);
+}
+
+// PDF 업로드 처리 (파일 입력)
 async function handleNajePdf(e){
   const file = e.target.files[0];
   if(!file) return;
-  najeCurrentPdfFile = file;
-
-  // 업로드 영역 업데이트
-  document.getElementById('naje-upload-area').innerHTML = `
-    <div class="ua-icon">📎</div>
-    <p><strong style="color:var(--primary)">${file.name}</strong></p>
-    <p style="font-size:12px;color:#6b7280;margin-top:4px">${(file.size/1024/1024).toFixed(1)}MB</p>`;
-
-  // PDF 처리 시작
-  await processNajePdf(file);
+  await startNajePdfProcess(file);
   e.target.value = '';
 }
 
+async function startNajePdfProcess(file){
+  najeCurrentPdfFile = file;
+
+  // 파일명을 제목으로 자동 설정 (제목이 비어있을 때만)
+  const titleEl = document.getElementById('naje-title');
+  if(titleEl && !titleEl.value.trim()){
+    titleEl.value = filenameToTitle(file.name);
+  }
+
+  // 업로드 영역 업데이트
+  document.getElementById('naje-upload-area').innerHTML = `
+    <div class="ua-icon">✅</div>
+    <p><strong style="color:var(--primary)">${file.name}</strong></p>
+    <p style="font-size:12px;color:#6b7280;margin-top:4px">${(file.size/1024/1024).toFixed(1)}MB · 처리 중...</p>`;
+
+  await processNajePdf(file);
+}
+
 // PDF를 페이지 이미지로 변환 → 문제 단위로 분리
+// 캔버스 특정 영역 자르기
+function cropCanvas(srcCanvas, x, y, w, h){
+  const dst = document.createElement('canvas');
+  dst.width = Math.max(1, Math.round(w));
+  dst.height = Math.max(1, Math.round(h));
+  dst.getContext('2d').drawImage(srcCanvas, Math.round(x), Math.round(y), Math.round(w), Math.round(h), 0, 0, dst.width, dst.height);
+  return dst;
+}
+
+// 문제번호로 단계 정보 조회
+function getLevelInfo(num){
+  const info = NAJE_LEVEL_MAP[num];
+  return info ? {level_name: info.name, level_type: info.type, step: info.step} : {level_name:'기타', level_type:'기타', step:0};
+}
+
+// 텍스트 아이템에서 문제 번호 패턴 찾기 (1) 2) 3)... 또는 1. 2. 3. ...)
+function findProblemPositions(textItems, scale, canvasHeight){
+  // "숫자)" 또는 "숫자." 패턴 - 문제 번호
+  const pattern = /^(\d{1,2})[).)]\s*$/;
+  const positions = [];
+  for(const item of textItems){
+    const str = item.str.trim();
+    const match = str.match(pattern);
+    if(match){
+      const num = parseInt(match[1]);
+      if(num >= 1 && num <= 30){
+        // PDF 좌표는 하단 기준 → 상단 기준으로 변환
+        const yOnCanvas = canvasHeight - (item.transform[5] * scale);
+        positions.push({num, y: yOnCanvas, x: item.transform[4] * scale});
+      }
+    }
+  }
+  // 번호 순서로 정렬
+  positions.sort((a,b) => a.num - b.num);
+  return positions;
+}
+
 async function processNajePdf(file){
   const progressEl = document.getElementById('naje-progress');
   const progressBar = document.getElementById('naje-progress-bar');
@@ -2321,7 +2387,6 @@ async function processNajePdf(file){
 
   try{
     if(typeof pdfjsLib === 'undefined'){
-      // PDF.js 동적 로드
       await new Promise((res,rej)=>{
         const s=document.createElement('script');
         s.src='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
@@ -2337,37 +2402,42 @@ async function processNajePdf(file){
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
     const totalPages = pdf.numPages;
+    const scale = 2.5;
 
-    progressText.textContent = `총 ${totalPages}페이지 렌더링 중...`;
+    progressText.textContent = '페이지 분석 중...';
 
-    // 각 페이지를 고해상도 이미지로 변환
-    const pageCanvases = [];
+    // 각 페이지를 렌더링 + 텍스트 추출
+    const pages = [];
     for(let i=1; i<=totalPages; i++){
       progressText.textContent = `${i}/${totalPages} 페이지 처리 중...`;
-      progressBar.style.width = (10 + (i/totalPages)*60) + '%';
+      progressBar.style.width = (10 + (i/totalPages)*55) + '%';
 
       const page = await pdf.getPage(i);
-      const scale = 2.5; // 고해상도
       const viewport = page.getViewport({scale});
+
+      // 캔버스 렌더링
       const canvas = document.createElement('canvas');
       canvas.width = viewport.width;
       canvas.height = viewport.height;
       const ctx = canvas.getContext('2d');
       await page.render({canvasContext:ctx, viewport}).promise;
-      pageCanvases.push({canvas, pageNum:i});
+
+      // 텍스트 추출
+      const textContent = await page.getTextContent();
+      const positions = findProblemPositions(textContent.items, scale, viewport.height);
+
+      pages.push({canvas, pageNum:i, positions, viewport, scale});
     }
 
     progressText.textContent = '문제 영역 분리 중...';
-    progressBar.style.width = '75%';
+    progressBar.style.width = '70%';
 
-    // 페이지별 문제 추출 (좌우 2열 구조 기반)
-    const problems = extractProblemsFromPages(pageCanvases);
+    const problems = await extractProblemsWithTextPos(pages);
     najeExtractedProblems = problems;
 
     progressBar.style.width = '100%';
     progressText.textContent = `✅ ${problems.length}개 문제 추출 완료!`;
 
-    // 미리보기 표시
     setTimeout(()=>{
       progressEl.style.display = 'none';
       showNajePreview(problems);
@@ -2380,90 +2450,69 @@ async function processNajePdf(file){
   }
 }
 
-// 페이지에서 문제 영역 추출 (2열 레이아웃 기반)
-function extractProblemsFromPages(pageCanvases){
+// 텍스트 좌표 기반 정밀 문제 분리
+async function extractProblemsWithTextPos(pages){
   const problems = [];
-  let problemNum = 0;
+  const PADDING = 8; // 문제 위 여백 (px, scale 적용 전)
+  const HEADER_RATIO = 0.11; // 페이지 상단 헤더 비율
 
-  // 1페이지: 표지+채점표 건너뛰고 실제 문제만 추출
-  // 각 페이지를 좌/우 2열로 분리 후, 문제번호 기준으로 세로 분할
-  pageCanvases.forEach(({canvas, pageNum}) => {
+  for(const {canvas, pageNum, positions, viewport} of pages){
     const w = canvas.width;
     const h = canvas.height;
+    const headerH = Math.round(h * HEADER_RATIO);
+    const halfW = Math.round(w * 0.505); // 중앙 분리선 (약간 오른쪽)
+    const pad = Math.round(PADDING * 2.5);
 
-    if(pageNum === 1){
-      // 1페이지는 하단부에 실제 문제가 있음 (상단 30%는 헤더/채점표)
-      // 좌측 열: 1번, 2번 / 우측 열: 2번(계속), 4번
-      const halfW = Math.floor(w * 0.5);
-      const headerH = Math.floor(h * 0.28); // 상단 헤더 제외
+    if(!positions.length){
+      // 텍스트로 번호를 못 찾은 경우 → 균등 분할 fallback
+      const leftC = cropCanvas(canvas, 0, headerH, halfW, h - headerH);
+      const rightC = cropCanvas(canvas, halfW, headerH, w - halfW, h - headerH);
+      const midL = Math.round((h - headerH) / 2);
+      const midR = Math.round((h - headerH) / 2);
 
-      // 좌측: 문제 1, 2 영역
-      const leftCanvas = cropCanvas(canvas, 0, headerH, halfW, h - headerH);
-      // 우측: 문제 2, 4 영역
-      const rightCanvas = cropCanvas(canvas, halfW, headerH, w - halfW, h - headerH);
-
-      // 좌우 각각을 반으로 나눠 문제 추출
-      const leftProblems = splitColumnIntoProblems(leftCanvas, pageNum, 'left', 2);
-      const rightProblems = splitColumnIntoProblems(rightCanvas, pageNum, 'right', 2);
-
-      leftProblems.forEach(p => {
-        problemNum++;
-        problems.push({...p, number: problemNum, ...getLevelInfo(problemNum)});
-      });
-      rightProblems.forEach(p => {
-        problemNum++;
-        problems.push({...p, number: problemNum, ...getLevelInfo(problemNum)});
-      });
-    } else {
-      // 2페이지 이후: 좌우 각 2문제씩
-      const halfW = Math.floor(w * 0.5);
-      const headerH = Math.floor(h * 0.12); // 헤더만 제외
-
-      const leftCanvas = cropCanvas(canvas, 0, headerH, halfW, h - headerH);
-      const rightCanvas = cropCanvas(canvas, halfW, headerH, w - halfW, h - headerH);
-
-      const leftProblems = splitColumnIntoProblems(leftCanvas, pageNum, 'left', 2);
-      const rightProblems = splitColumnIntoProblems(rightCanvas, pageNum, 'right', 2);
-
-      leftProblems.forEach(p => {
-        problemNum++;
-        if(problemNum <= 20) problems.push({...p, number: problemNum, ...getLevelInfo(problemNum)});
-      });
-      rightProblems.forEach(p => {
-        problemNum++;
-        if(problemNum <= 20) problems.push({...p, number: problemNum, ...getLevelInfo(problemNum)});
-      });
+      problems.push({canvas: cropCanvas(leftC, 0, 0, halfW, midL), pageNum, number: problems.length+1, dataUrl:'', ...getLevelInfo(problems.length+1)});
+      problems.push({canvas: cropCanvas(leftC, 0, midL, halfW, midL), pageNum, number: problems.length+1, dataUrl:'', ...getLevelInfo(problems.length+1)});
+      problems.push({canvas: cropCanvas(rightC, 0, 0, w-halfW, midR), pageNum, number: problems.length+1, dataUrl:'', ...getLevelInfo(problems.length+1)});
+      problems.push({canvas: cropCanvas(rightC, 0, midR, w-halfW, midR), pageNum, number: problems.length+1, dataUrl:'', ...getLevelInfo(problems.length+1)});
+      continue;
     }
+
+    // 좌열 / 우열로 분류
+    const leftPos = positions.filter(p => p.x < halfW).sort((a,b) => a.y - b.y);
+    const rightPos = positions.filter(p => p.x >= halfW).sort((a,b) => a.y - b.y);
+
+    // 각 열에서 문제 영역 자르기
+    const processCol = (colPositions, colX, colW) => {
+      colPositions.forEach((pos, idx) => {
+        const startY = Math.max(headerH, pos.y - pad);
+        const endY = idx + 1 < colPositions.length
+          ? colPositions[idx+1].y - pad
+          : h - Math.round(h * 0.04); // 마지막 문제는 하단까지
+        const cutH = Math.max(50, endY - startY);
+        const c = cropCanvas(canvas, colX, startY, colW, cutH);
+        problems.push({
+          canvas: c,
+          pageNum,
+          number: pos.num,
+          dataUrl: c.toDataURL('image/png'),
+          ...getLevelInfo(pos.num)
+        });
+      });
+    };
+
+    if(leftPos.length) processCol(leftPos, 0, halfW);
+    if(rightPos.length) processCol(rightPos, halfW, w - halfW);
+  }
+
+  // dataUrl 채우기 (fallback 포함)
+  problems.forEach(p => {
+    if(!p.dataUrl) p.dataUrl = p.canvas.toDataURL('image/png');
   });
 
-  return problems.slice(0, 20);
-}
+  // 번호 순으로 정렬
+  problems.sort((a,b) => a.number - b.number);
 
-// 캔버스 특정 영역 자르기
-function cropCanvas(srcCanvas, x, y, w, h){
-  const dst = document.createElement('canvas');
-  dst.width = w;
-  dst.height = h;
-  dst.getContext('2d').drawImage(srcCanvas, x, y, w, h, 0, 0, w, h);
-  return dst;
-}
-
-// 열을 문제 개수로 분할
-function splitColumnIntoProblems(colCanvas, pageNum, side, count){
-  const h = colCanvas.height;
-  const partH = Math.floor(h / count);
-  const result = [];
-  for(let i=0; i<count; i++){
-    const partCanvas = cropCanvas(colCanvas, 0, i*partH, colCanvas.width, partH);
-    result.push({canvas: partCanvas, pageNum, side, dataUrl: partCanvas.toDataURL('image/png')});
-  }
-  return result;
-}
-
-// 문제번호로 단계 정보 조회
-function getLevelInfo(num){
-  const info = NAJE_LEVEL_MAP[num];
-  return info ? {level_name: info.name, level_type: info.type, step: info.step} : {level_name:'기타', level_type:'기타', step:0};
+  return problems.filter(p => p.number >= 1 && p.number <= 99);
 }
 
 // 미리보기 표시
