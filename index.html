@@ -2444,32 +2444,46 @@ async function startNajePdfLoad(file){
   }
 }
 
-// 줄칸 시작 Y 감지: 밝은 행이 연속 MIN_CONSECUTIVE줄 이상이면 줄칸 확정
+// 줄칸 시작 Y 감지 v2: 가로줄(horizontal line) 패턴 감지
+// 줄칸 = 일정 간격으로 어두운 가로선이 반복되는 구간
 function njFindLineStart(imgData, W, x1, x2, startY, endY){
   const {data} = imgData;
-  const cfg = NJ.LINE;
-  const margin = 10;
-  const scanLeft = x1 + margin, scanRight = x2 - margin;
+  const margin = 15;
+  const scanLeft = x1 + margin;
+  const scanRight = x2 - margin;
   const colW = scanRight - scanLeft;
   if(colW <= 0) return endY;
 
-  let consecutive = 0, firstRow = -1;
+  // 각 행의 "어두운 픽셀 비율" 계산 (줄 = 어두운 행)
+  const darkRatios = [];
   for(let y = startY; y < endY; y++){
-    let brightCnt = 0;
+    let darkCnt = 0;
     for(let x = scanLeft; x < scanRight; x++){
       const i = (y * W + x) * 4;
-      if((data[i] + data[i+1] + data[i+2]) / 3 >= cfg.BRIGHT_THRESHOLD) brightCnt++;
+      const brightness = (data[i] + data[i+1] + data[i+2]) / 3;
+      if(brightness < 200) darkCnt++; // 어두운 픽셀
     }
-    const ratio = brightCnt / colW;
-    if(ratio >= cfg.MIN_BRIGHT_RATIO){
-      if(consecutive === 0) firstRow = y;
-      consecutive++;
-      if(consecutive >= cfg.MIN_CONSECUTIVE) return firstRow;
-    } else {
-      consecutive = 0; firstRow = -1;
+    darkRatios.push(darkCnt / colW);
+  }
+
+  // 줄칸 감지: 일정 간격(15~40px)으로 어두운 행이 반복되는 패턴
+  // 슬라이딩 윈도우로 60px 구간에서 어두운 행이 2개 이상이면 줄칸 시작
+  const WIN = 60;   // 탐색 윈도우 크기
+  const MIN_LINES = 2; // 윈도우 내 최소 줄 개수
+  const LINE_THRESH = 0.15; // 줄로 인정하는 어두운 픽셀 비율
+
+  for(let y = 0; y < darkRatios.length - WIN; y++){
+    let lineCnt = 0;
+    for(let dy = 0; dy < WIN; dy++){
+      if(darkRatios[y + dy] >= LINE_THRESH) lineCnt++;
+    }
+    if(lineCnt >= MIN_LINES){
+      // 줄칸 시작점 - 약간 위에서부터
+      return startY + Math.max(0, y - 5);
     }
   }
-  return endY;
+
+  return endY; // 줄칸 없으면 전체 사용
 }
 
 // QR 코드 디코딩
