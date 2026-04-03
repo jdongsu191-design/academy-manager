@@ -7,7 +7,6 @@
   <meta name="theme-color" content="#178EF5">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f6fa;color:#1a1a2e;min-height:100vh}
@@ -583,17 +582,18 @@
         <!-- 등록 탭 -->
         <div id="naje-panel-upload" style="display:none">
           <div class="card">
-            <div class="card-title">📄 PDF 문제 등록</div>
+            <div class="card-title">🖼️ 이미지로 문제 등록</div>
+            <div class="alert alert-info" style="margin-bottom:12px">💡 PDF를 JPG/PNG로 변환 후 업로드하세요. 각 이미지를 좌/우로 자동 분할합니다.</div>
 
             <!-- 기본 정보 -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
               <div class="form-group" style="margin:0;grid-column:1/-1">
                 <label>제목 *</label>
                 <input id="naje-title" placeholder="예: 5주차 삼각함수 HEAT 고2 본">
               </div>
               <div class="form-group" style="margin:0">
                 <label>과목</label>
-                <input id="naje-subject" placeholder="예: 수학, 미적분, 확률과 통계">
+                <input id="naje-subject" placeholder="예: 수학, 미적분">
               </div>
               <div class="form-group" style="margin:0">
                 <label>대상 학년</label>
@@ -609,18 +609,18 @@
               </div>
             </div>
 
-            <!-- PDF 업로드 영역 -->
+            <!-- 이미지 업로드 영역 -->
             <div id="naje-upload-area" class="upload-area"
-              onclick="document.getElementById('naje-pdf-input').click()"
+              onclick="document.getElementById('naje-img-input').click()"
               ondragover="event.preventDefault();this.style.borderColor='var(--primary)';this.style.background='#E6F1FB'"
               ondragleave="this.style.borderColor='';this.style.background='#fafafa'"
-              ondrop="event.preventDefault();this.style.borderColor='';this.style.background='#fafafa';handleNajePdfDrop(event)"
+              ondrop="event.preventDefault();this.style.borderColor='';this.style.background='#fafafa';handleNajeImgDrop(event)"
               style="margin-bottom:12px;transition:all 0.2s">
-              <div class="ua-icon">📎</div>
-              <p><strong style="color:var(--primary)">PDF 파일을 선택하거나 드래그하세요</strong></p>
-              <p style="font-size:12px;color:#6b7280;margin-top:4px">클릭 또는 드래그 앤 드롭</p>
+              <div class="ua-icon">🖼️</div>
+              <p><strong style="color:var(--primary)">이미지 파일을 선택하거나 드래그하세요</strong></p>
+              <p style="font-size:12px;color:#6b7280;margin-top:4px">JPG · PNG · 여러 장 한번에 선택 가능 · 페이지 순서대로</p>
             </div>
-            <input type="file" id="naje-pdf-input" accept=".pdf" style="display:none" onchange="handleNajePdf(event)">
+            <input type="file" id="naje-img-input" accept="image/*" multiple style="display:none" onchange="handleNajeImages(event)">
 
             <!-- 진행 상태 -->
             <div id="naje-progress" style="display:none;margin-bottom:12px">
@@ -632,9 +632,9 @@
 
             <!-- 미리보기 -->
             <div id="naje-preview" style="display:none">
-              <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#1a1a2e">📸 문제 미리보기</div>
+              <div style="font-size:13px;font-weight:600;margin-bottom:4px;color:#1a1a2e">📸 문제 미리보기</div>
               <div id="naje-preview-info" style="font-size:12px;color:#6b7280;margin-bottom:10px"></div>
-              <div id="naje-problem-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;max-height:400px;overflow-y:auto;padding:4px"></div>
+              <div id="naje-problem-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;max-height:420px;overflow-y:auto;padding:4px"></div>
               <div style="margin-top:14px;display:flex;gap:8px">
                 <button class="btn btn-full" onclick="resetNajeUpload()">다시 선택</button>
                 <button class="btn btn-primary btn-full" id="naje-save-btn" onclick="saveNajeSet()">💾 저장</button>
@@ -2214,9 +2214,7 @@ tryAutoLogin();
 
 // ===== 일일N제 =====
 // PDF.js worker 설정
-if(typeof pdfjsLib !== 'undefined'){
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
-}
+
 
 let najeExtractedProblems = []; // 추출된 문제 이미지 배열
 let najeCurrentPdfFile = null;
@@ -2245,32 +2243,6 @@ const NAJE_LEVEL_MAP = {
   20: {name:'내신심화', type:'내신', step:10},
 };
 
-// ── N제 설정 상수 ──────────────────────────────────────────
-const NAJE_CONFIG = {
-  PDF_SCALE: 2.5,
-  HEADER_RATIO_PAGE1_LEFT: 0.30,
-  LEFT_COL_RATIO: 0.50,
-  TAG_COLOR: {
-    R: { min: 30,  max: 120 },
-    G: { min: 150, max: 220 },
-    B: { min: 150, max: 220 },
-    MIN_SATURATION_RATIO: 0.6,
-  },
-  TAG_DETECTION: {
-    MIN_TEAL_PIXEL_RATIO: 0.15,
-    MIN_CONSECUTIVE_ROWS: 6,
-    SCAN_MARGIN_PX: 10,
-  },
-  PROBLEM_NUM_DETECTION: {
-    DARK_PIXEL_THRESHOLD: 80,
-    MIN_DARK_PIXELS: 3,
-    BLANK_ROW_THRESHOLD: 2,
-    MIN_BLANK_ROWS_BEFORE: 3,
-  },
-  MIN_PROBLEM_HEIGHT_PX: 80,
-  STORAGE_BUCKET: 'homework-photos',
-  STORAGE_PATH_PREFIX: 'naje',
-};
 
 // 탭 초기화
 function initNaje(){
@@ -2324,187 +2296,24 @@ async function loadNajeSets(){
 }
 
 // 파일명에서 제목 생성
-function filenameToTitle(filename){
-  return filename.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ').trim();
+// ── 이미지 업로드 방식 ────────────────────────────────────
+// 드래그 앤 드롭
+function handleNajeImgDrop(e){
+  const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+  if(!files.length){ alert('이미지 파일만 업로드 가능합니다.'); return; }
+  processNajeImages(files);
 }
 
-// 드래그 앤 드롭 처리
-function handleNajePdfDrop(e){
-  const file = e.dataTransfer.files[0];
-  if(!file || !file.name.toLowerCase().endsWith('.pdf')){
-    alert('PDF 파일만 업로드 가능합니다.');
-    return;
-  }
-  startNajePdfProcess(file);
-}
-
-// PDF 업로드 처리 (파일 입력)
-async function handleNajePdf(e){
-  const file = e.target.files[0];
-  if(!file) return;
-  await startNajePdfProcess(file);
+// 파일 선택
+async function handleNajeImages(e){
+  const files = Array.from(e.target.files);
+  if(!files.length) return;
+  await processNajeImages(files);
   e.target.value = '';
 }
 
-async function startNajePdfProcess(file){
-  najeCurrentPdfFile = file;
-
-  // 파일명을 제목으로 자동 설정 (제목이 비어있을 때만)
-  const titleEl = document.getElementById('naje-title');
-  if(titleEl && !titleEl.value.trim()){
-    titleEl.value = filenameToTitle(file.name);
-  }
-
-  // 업로드 영역 업데이트
-  document.getElementById('naje-upload-area').innerHTML = `
-    <div class="ua-icon">✅</div>
-    <p><strong style="color:var(--primary)">${file.name}</strong></p>
-    <p style="font-size:12px;color:#6b7280;margin-top:4px">${(file.size/1024/1024).toFixed(1)}MB · 처리 중...</p>`;
-
-  await processNajePdf(file);
-}
-
-// PDF를 페이지 이미지로 변환 → 문제 단위로 분리
-// 캔버스 특정 영역 자르기
-// ── 캔버스 크롭 헬퍼 ─────────────────────────────────────
-function cropCanvas(srcCanvas, x1, x2, y1, y2) {
-  const w = x2 - x1;
-  const h = y2 - y1;
-  const dst = document.createElement('canvas');
-  dst.width = Math.max(1, w);
-  dst.height = Math.max(1, h);
-  dst.getContext('2d').drawImage(srcCanvas, x1, y1, w, h, 0, 0, w, h);
-  return dst;
-}
-
-// 문제번호로 단계 정보 조회
-function getLevelInfo(num){
-  const info = NAJE_LEVEL_MAP[num];
-  return info ? {level_name: info.name, level_type: info.type, step: info.step} : {level_name:'기타', level_type:'기타', step:0};
-}
-
-// ── 청록색(teal) 픽셀 판별 ────────────────────────────────
-function isTealPixel(r, g, b) {
-  const cfg = NAJE_CONFIG.TAG_COLOR;
-  return (
-    r >= cfg.R.min && r <= cfg.R.max &&
-    g >= cfg.G.min && g <= cfg.G.max &&
-    b >= cfg.B.min && b <= cfg.B.max &&
-    g > r * (1 + cfg.MIN_SATURATION_RATIO) &&
-    b > r * (1 + cfg.MIN_SATURATION_RATIO)
-  );
-}
-
-// ── 청록색 태그 배너 영역 감지 ────────────────────────────
-function detectTagRegions(imageData, pageWidth, colStartX, colEndX, startY, endY) {
-  const { data } = imageData;
-  const det = NAJE_CONFIG.TAG_DETECTION;
-  const scanLeft = colStartX + det.SCAN_MARGIN_PX;
-  const scanRight = colEndX - det.SCAN_MARGIN_PX;
-  const colWidth = scanRight - scanLeft;
-  const tealRows = [];
-
-  for (let y = startY; y < endY; y++) {
-    let tealCount = 0;
-    for (let x = scanLeft; x < scanRight; x++) {
-      const idx = (y * pageWidth + x) * 4;
-      if (isTealPixel(data[idx], data[idx+1], data[idx+2])) tealCount++;
-    }
-    tealRows.push(tealCount / colWidth >= det.MIN_TEAL_PIXEL_RATIO);
-  }
-
-  const regions = [];
-  let inTag = false, tagStart = 0;
-  for (let i = 0; i < tealRows.length; i++) {
-    if (!inTag && tealRows[i]) {
-      inTag = true; tagStart = i + startY;
-    } else if (inTag && !tealRows[i]) {
-      const tagEnd = i - 1 + startY;
-      if (tagEnd - tagStart >= det.MIN_CONSECUTIVE_ROWS) {
-        regions.push({ topY: tagStart, bottomY: tagEnd, levelName: null });
-      }
-      inTag = false;
-    }
-  }
-  if (inTag) {
-    const tagEnd = tealRows.length - 1 + startY;
-    if (tagEnd - tagStart >= det.MIN_CONSECUTIVE_ROWS) {
-      regions.push({ topY: tagStart, bottomY: tagEnd, levelName: null });
-    }
-  }
-  return regions;
-}
-
-// ── 빈 행 패턴으로 문제 시작 감지 ────────────────────────
-function detectProblemStartsByBlank(imageData, pageWidth, colStartX, colEndX, startY, endY) {
-  const { data } = imageData;
-  const cfg = NAJE_CONFIG.PROBLEM_NUM_DETECTION;
-  const starts = [];
-  let blankCount = 0, inBlank = false;
-
-  for (let y = startY; y < endY; y++) {
-    let darkCount = 0;
-    for (let x = colStartX + 5; x < colEndX - 5; x++) {
-      const idx = (y * pageWidth + x) * 4;
-      const brightness = (data[idx] + data[idx+1] + data[idx+2]) / 3;
-      if (brightness <= cfg.DARK_PIXEL_THRESHOLD) darkCount++;
-    }
-    const isBlank = darkCount < cfg.BLANK_ROW_THRESHOLD;
-    if (isBlank) {
-      blankCount++;
-      inBlank = true;
-    } else if (inBlank && blankCount >= cfg.MIN_BLANK_ROWS_BEFORE && darkCount >= cfg.MIN_DARK_PIXELS) {
-      starts.push(y);
-      blankCount = 0; inBlank = false;
-    } else {
-      blankCount = 0; inBlank = false;
-    }
-  }
-  return starts;
-}
-
-// ── 열에서 문제 경계 추출 ─────────────────────────────────
-function extractProblemsFromColumn(imageData, pageWidth, colStartX, colEndX, startY, endY) {
-  const tagRegions = detectTagRegions(imageData, pageWidth, colStartX, colEndX, startY, endY);
-  const problemStarts = [];
-
-  if (tagRegions.length === 0) {
-    const textStarts = detectProblemStartsByBlank(imageData, pageWidth, colStartX, colEndX, startY, endY);
-    for (const y of textStarts) problemStarts.push({ startY: y, hasTag: false, levelName: null });
-  } else {
-    for (const tag of tagRegions) {
-      problemStarts.push({ startY: tag.topY, hasTag: true, levelName: tag.levelName });
-    }
-    // 태그 이전 구간
-    if (tagRegions[0].topY > startY + NAJE_CONFIG.MIN_PROBLEM_HEIGHT_PX) {
-      const found = detectProblemStartsByBlank(imageData, pageWidth, colStartX, colEndX, startY, tagRegions[0].topY);
-      for (const y of found) problemStarts.push({ startY: y, hasTag: false, levelName: null });
-    }
-    // 태그 사이 구간
-    for (let i = 0; i < tagRegions.length - 1; i++) {
-      const gapStart = tagRegions[i].bottomY + 1;
-      const gapEnd = tagRegions[i+1].topY;
-      if (gapEnd - gapStart >= NAJE_CONFIG.MIN_PROBLEM_HEIGHT_PX) {
-        const found = detectProblemStartsByBlank(imageData, pageWidth, colStartX, colEndX, gapStart, gapEnd);
-        for (const y of found) problemStarts.push({ startY: y, hasTag: false, levelName: null });
-      }
-    }
-  }
-
-  problemStarts.sort((a, b) => a.startY - b.startY);
-
-  const problems = [];
-  for (let i = 0; i < problemStarts.length; i++) {
-    const s = problemStarts[i].startY;
-    const e = i + 1 < problemStarts.length ? problemStarts[i+1].startY - 1 : endY;
-    if (e - s < NAJE_CONFIG.MIN_PROBLEM_HEIGHT_PX) continue;
-    problems.push({ startY: s, endY: e, hasTag: problemStarts[i].hasTag, levelName: problemStarts[i].levelName });
-  }
-  return problems;
-}
-
-// ── 메인 PDF 처리 함수 ────────────────────────────────────
-async function processNajePdf(file) {
+// 이미지 → 좌/우 분할 처리
+async function processNajeImages(files){
   const progressEl = document.getElementById('naje-progress');
   const progressBar = document.getElementById('naje-progress-bar');
   const progressText = document.getElementById('naje-progress-text');
@@ -2514,117 +2323,102 @@ async function processNajePdf(file) {
   previewEl.style.display = 'none';
   najeExtractedProblems = [];
 
-  try {
-    if (typeof pdfjsLib === 'undefined') {
-      await new Promise((res, rej) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
-        s.onload = res; s.onerror = rej;
-        document.head.appendChild(s);
-      });
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
-    }
-
-    progressText.textContent = 'PDF 읽는 중...';
-    progressBar.style.width = '10%';
-
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    const scale = NAJE_CONFIG.PDF_SCALE;
-    let problemNumber = 1;
-    const allProblems = [];
-
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      progressText.textContent = pageNum + '/' + pdf.numPages + ' 페이지 처리 중...';
-      progressBar.style.width = (10 + (pageNum / pdf.numPages) * 65) + '%';
-
-      const page = await pdf.getPage(pageNum);
-      const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext('2d');
-      await page.render({ canvasContext: ctx, viewport }).promise;
-
-      const isFirstPage = pageNum === 1;
-      const pageWidth = canvas.width;
-      const pageHeight = canvas.height;
-      const midX = Math.floor(pageWidth * NAJE_CONFIG.LEFT_COL_RATIO);
-      const imageData = ctx.getImageData(0, 0, pageWidth, pageHeight);
-
-      // 좌열
-      const leftStartY = isFirstPage
-        ? Math.floor(pageHeight * NAJE_CONFIG.HEADER_RATIO_PAGE1_LEFT)
-        : 0;
-      const leftProblems = extractProblemsFromColumn(imageData, pageWidth, 0, midX, leftStartY, pageHeight);
-      for (const prob of leftProblems) {
-        const cropC = cropCanvas(canvas, 0, midX, prob.startY, prob.endY);
-        const dataUrl = cropC.toDataURL('image/png');
-        allProblems.push({ canvas: cropC, dataUrl, pageNum, number: problemNumber, ...getLevelInfo(problemNumber) });
-        problemNumber++;
-      }
-
-      // 우열
-      const rightProblems = extractProblemsFromColumn(imageData, pageWidth, midX, pageWidth, 0, pageHeight);
-      for (const prob of rightProblems) {
-        const cropC = cropCanvas(canvas, midX, pageWidth, prob.startY, prob.endY);
-        const dataUrl = cropC.toDataURL('image/png');
-        allProblems.push({ canvas: cropC, dataUrl, pageNum, number: problemNumber, ...getLevelInfo(problemNumber) });
-        problemNumber++;
-      }
-    }
-
-    najeExtractedProblems = allProblems;
-    progressBar.style.width = '100%';
-    progressText.textContent = '✅ ' + allProblems.length + '개 문제 추출 완료!';
-    setTimeout(() => {
-      progressEl.style.display = 'none';
-      showNajePreview(allProblems);
-    }, 800);
-
-  } catch (err) {
-    progressEl.style.display = 'none';
-    alert('PDF 처리 오류: ' + err.message);
-    console.error(err);
+  // 파일명으로 제목 자동 설정
+  const titleEl = document.getElementById('naje-title');
+  if(titleEl && !titleEl.value.trim() && files.length){
+    titleEl.value = files[0].name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ').trim();
   }
+
+  // 업로드 영역 업데이트
+  document.getElementById('naje-upload-area').innerHTML = `
+    <div class="ua-icon">✅</div>
+    <p><strong style="color:var(--primary)">${files.length}장 선택됨</strong></p>
+    <p style="font-size:12px;color:#6b7280;margin-top:4px">이미지 분할 처리 중...</p>`;
+
+  const problems = [];
+  let problemNum = 1;
+
+  for(let i = 0; i < files.length; i++){
+    progressText.textContent = `${i+1}/${files.length} 이미지 처리 중...`;
+    progressBar.style.width = ((i+1)/files.length * 100) + '%';
+
+    const file = files[i];
+    const img = await loadImageFromFile(file);
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    const halfW = Math.floor(w / 2);
+
+    // 좌측 문제
+    const leftCanvas = splitImageHalf(img, 0, 0, halfW, h);
+    problems.push({
+      canvas: leftCanvas,
+      dataUrl: leftCanvas.toDataURL('image/jpeg', 0.92),
+      number: problemNum,
+      pageNum: i + 1,
+      side: 'left',
+      ...getLevelInfo(problemNum)
+    });
+    problemNum++;
+
+    // 우측 문제
+    const rightCanvas = splitImageHalf(img, halfW, 0, w - halfW, h);
+    problems.push({
+      canvas: rightCanvas,
+      dataUrl: rightCanvas.toDataURL('image/jpeg', 0.92),
+      number: problemNum,
+      pageNum: i + 1,
+      side: 'right',
+      ...getLevelInfo(problemNum)
+    });
+    problemNum++;
+  }
+
+  najeExtractedProblems = problems;
+  progressEl.style.display = 'none';
+  showNajePreview(problems);
 }
 
-// 미리보기 표시
-function showNajePreview(problems){
-  const previewEl = document.getElementById('naje-preview');
-  const infoEl = document.getElementById('naje-preview-info');
-  const gridEl = document.getElementById('naje-problem-grid');
-
-  infoEl.textContent = `총 ${problems.length}개 문제 추출됨. 이미지를 확인 후 저장하세요.`;
-  gridEl.innerHTML = problems.map((p,i)=>`
-    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;position:relative">
-      <div style="background:#f5f6fa;padding:6px 8px;display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:12px;font-weight:700;color:#1a1a2e">${p.number}번</span>
-        <span style="font-size:10px;color:#6b7280;background:#fff;padding:2px 6px;border-radius:100px">${p.level_name||''}</span>
-      </div>
-      <img src="${p.dataUrl}" style="width:100%;display:block" onclick="openImgViewer('${p.dataUrl}')">
-    </div>`).join('');
-
-  previewEl.style.display = 'block';
+// 파일 → Image 객체 로드
+function loadImageFromFile(file){
+  return new Promise((res, rej) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => { URL.revokeObjectURL(url); res(img); };
+    img.onerror = rej;
+    img.src = url;
+  });
 }
 
-// 업로드 초기화
+// 이미지 절반 자르기
+function splitImageHalf(img, x, y, w, h){
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(img, x, y, w, h, 0, 0, w, h);
+  return canvas;
+}
+
+// 문제번호로 단계 정보 조회
+function getLevelInfo(num){
+  const info = NAJE_LEVEL_MAP[num];
+  return info ? {level_name: info.name, level_type: info.type, step: info.step} : {level_name:'', level_type:'', step:0};
+}
+
 function resetNajeUpload(){
   najeExtractedProblems = [];
-  najeCurrentPdfFile = null;
   document.getElementById('naje-upload-area').innerHTML = `
-    <div class="ua-icon">📎</div>
-    <p><strong style="color:var(--primary)">PDF 파일을 선택하세요</strong></p>
-    <p style="font-size:12px;color:#6b7280;margin-top:4px">클릭하여 파일 선택</p>`;
+    <div class="ua-icon">🖼️</div>
+    <p><strong style="color:var(--primary)">이미지 파일을 선택하거나 드래그하세요</strong></p>
+    <p style="font-size:12px;color:#6b7280;margin-top:4px">JPG · PNG · 여러 장 한번에 선택 가능 · 페이지 순서대로</p>`;
   document.getElementById('naje-preview').style.display = 'none';
   document.getElementById('naje-progress').style.display = 'none';
 }
 
-// N제 저장
+// N제 저장// N제 저장
 async function saveNajeSet(){
   const title = document.getElementById('naje-title').value.trim();
   if(!title){ alert('제목을 입력하세요'); return; }
-  if(!najeExtractedProblems.length){ alert('PDF를 먼저 업로드하세요'); return; }
+  if(!najeExtractedProblems.length){ alert('이미지를 먼저 업로드하세요'); return; }
 
   const btn = document.getElementById('naje-save-btn');
   btn.textContent = '저장 중...'; btn.disabled = true;
@@ -2659,9 +2453,9 @@ async function saveNajeSet(){
       // dataUrl → Blob 변환
       const res = await fetch(p.dataUrl);
       const blob = await res.blob();
-      const fname = `${NAJE_CONFIG.STORAGE_PATH_PREFIX}/${setId}/${p.number}.png`;
+      const fname = `naje/${setId}/${p.number}.jpg`;
 
-      const{error:upErr} = await db.storage.from(NAJE_CONFIG.STORAGE_BUCKET).upload(fname, blob, {contentType:'image/png', upsert:true});
+      const{error:upErr} = await db.storage.from('homework-photos').upload(fname, blob, {contentType:'image/jpeg', upsert:true});
       if(upErr) throw upErr;
 
       const{data:urlData} = db.storage.from('homework-photos').getPublicUrl(fname);
