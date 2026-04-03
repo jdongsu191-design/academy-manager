@@ -2245,6 +2245,33 @@ const NAJE_LEVEL_MAP = {
   20: {name:'내신심화', type:'내신', step:10},
 };
 
+// ── N제 설정 상수 ──────────────────────────────────────────
+const NAJE_CONFIG = {
+  PDF_SCALE: 2.5,
+  HEADER_RATIO_PAGE1_LEFT: 0.30,
+  LEFT_COL_RATIO: 0.50,
+  TAG_COLOR: {
+    R: { min: 30,  max: 120 },
+    G: { min: 150, max: 220 },
+    B: { min: 150, max: 220 },
+    MIN_SATURATION_RATIO: 0.6,
+  },
+  TAG_DETECTION: {
+    MIN_TEAL_PIXEL_RATIO: 0.15,
+    MIN_CONSECUTIVE_ROWS: 6,
+    SCAN_MARGIN_PX: 10,
+  },
+  PROBLEM_NUM_DETECTION: {
+    DARK_PIXEL_THRESHOLD: 80,
+    MIN_DARK_PIXELS: 3,
+    BLANK_ROW_THRESHOLD: 2,
+    MIN_BLANK_ROWS_BEFORE: 3,
+  },
+  MIN_PROBLEM_HEIGHT_PX: 80,
+  STORAGE_BUCKET: 'homework-photos',
+  STORAGE_PATH_PREFIX: 'naje',
+};
+
 // 탭 초기화
 function initNaje(){
   switchNajeTab('list');
@@ -2339,11 +2366,14 @@ async function startNajePdfProcess(file){
 
 // PDF를 페이지 이미지로 변환 → 문제 단위로 분리
 // 캔버스 특정 영역 자르기
-function cropCanvas(srcCanvas, x, y, w, h){
+// ── 캔버스 크롭 헬퍼 ─────────────────────────────────────
+function cropCanvas(srcCanvas, x1, x2, y1, y2) {
+  const w = x2 - x1;
+  const h = y2 - y1;
   const dst = document.createElement('canvas');
-  dst.width = Math.max(1, Math.round(w));
-  dst.height = Math.max(1, Math.round(h));
-  dst.getContext('2d').drawImage(srcCanvas, Math.round(x), Math.round(y), Math.round(w), Math.round(h), 0, 0, dst.width, dst.height);
+  dst.width = Math.max(1, w);
+  dst.height = Math.max(1, h);
+  dst.getContext('2d').drawImage(srcCanvas, x1, y1, w, h, 0, 0, w, h);
   return dst;
 }
 
@@ -2353,7 +2383,128 @@ function getLevelInfo(num){
   return info ? {level_name: info.name, level_type: info.type, step: info.step} : {level_name:'기타', level_type:'기타', step:0};
 }
 
-async function processNajePdf(file){
+// ── 청록색(teal) 픽셀 판별 ────────────────────────────────
+function isTealPixel(r, g, b) {
+  const cfg = NAJE_CONFIG.TAG_COLOR;
+  return (
+    r >= cfg.R.min && r <= cfg.R.max &&
+    g >= cfg.G.min && g <= cfg.G.max &&
+    b >= cfg.B.min && b <= cfg.B.max &&
+    g > r * (1 + cfg.MIN_SATURATION_RATIO) &&
+    b > r * (1 + cfg.MIN_SATURATION_RATIO)
+  );
+}
+
+// ── 청록색 태그 배너 영역 감지 ────────────────────────────
+function detectTagRegions(imageData, pageWidth, colStartX, colEndX, startY, endY) {
+  const { data } = imageData;
+  const det = NAJE_CONFIG.TAG_DETECTION;
+  const scanLeft = colStartX + det.SCAN_MARGIN_PX;
+  const scanRight = colEndX - det.SCAN_MARGIN_PX;
+  const colWidth = scanRight - scanLeft;
+  const tealRows = [];
+
+  for (let y = startY; y < endY; y++) {
+    let tealCount = 0;
+    for (let x = scanLeft; x < scanRight; x++) {
+      const idx = (y * pageWidth + x) * 4;
+      if (isTealPixel(data[idx], data[idx+1], data[idx+2])) tealCount++;
+    }
+    tealRows.push(tealCount / colWidth >= det.MIN_TEAL_PIXEL_RATIO);
+  }
+
+  const regions = [];
+  let inTag = false, tagStart = 0;
+  for (let i = 0; i < tealRows.length; i++) {
+    if (!inTag && tealRows[i]) {
+      inTag = true; tagStart = i + startY;
+    } else if (inTag && !tealRows[i]) {
+      const tagEnd = i - 1 + startY;
+      if (tagEnd - tagStart >= det.MIN_CONSECUTIVE_ROWS) {
+        regions.push({ topY: tagStart, bottomY: tagEnd, levelName: null });
+      }
+      inTag = false;
+    }
+  }
+  if (inTag) {
+    const tagEnd = tealRows.length - 1 + startY;
+    if (tagEnd - tagStart >= det.MIN_CONSECUTIVE_ROWS) {
+      regions.push({ topY: tagStart, bottomY: tagEnd, levelName: null });
+    }
+  }
+  return regions;
+}
+
+// ── 빈 행 패턴으로 문제 시작 감지 ────────────────────────
+function detectProblemStartsByBlank(imageData, pageWidth, colStartX, colEndX, startY, endY) {
+  const { data } = imageData;
+  const cfg = NAJE_CONFIG.PROBLEM_NUM_DETECTION;
+  const starts = [];
+  let blankCount = 0, inBlank = false;
+
+  for (let y = startY; y < endY; y++) {
+    let darkCount = 0;
+    for (let x = colStartX + 5; x < colEndX - 5; x++) {
+      const idx = (y * pageWidth + x) * 4;
+      const brightness = (data[idx] + data[idx+1] + data[idx+2]) / 3;
+      if (brightness <= cfg.DARK_PIXEL_THRESHOLD) darkCount++;
+    }
+    const isBlank = darkCount < cfg.BLANK_ROW_THRESHOLD;
+    if (isBlank) {
+      blankCount++;
+      inBlank = true;
+    } else if (inBlank && blankCount >= cfg.MIN_BLANK_ROWS_BEFORE && darkCount >= cfg.MIN_DARK_PIXELS) {
+      starts.push(y);
+      blankCount = 0; inBlank = false;
+    } else {
+      blankCount = 0; inBlank = false;
+    }
+  }
+  return starts;
+}
+
+// ── 열에서 문제 경계 추출 ─────────────────────────────────
+function extractProblemsFromColumn(imageData, pageWidth, colStartX, colEndX, startY, endY) {
+  const tagRegions = detectTagRegions(imageData, pageWidth, colStartX, colEndX, startY, endY);
+  const problemStarts = [];
+
+  if (tagRegions.length === 0) {
+    const textStarts = detectProblemStartsByBlank(imageData, pageWidth, colStartX, colEndX, startY, endY);
+    for (const y of textStarts) problemStarts.push({ startY: y, hasTag: false, levelName: null });
+  } else {
+    for (const tag of tagRegions) {
+      problemStarts.push({ startY: tag.topY, hasTag: true, levelName: tag.levelName });
+    }
+    // 태그 이전 구간
+    if (tagRegions[0].topY > startY + NAJE_CONFIG.MIN_PROBLEM_HEIGHT_PX) {
+      const found = detectProblemStartsByBlank(imageData, pageWidth, colStartX, colEndX, startY, tagRegions[0].topY);
+      for (const y of found) problemStarts.push({ startY: y, hasTag: false, levelName: null });
+    }
+    // 태그 사이 구간
+    for (let i = 0; i < tagRegions.length - 1; i++) {
+      const gapStart = tagRegions[i].bottomY + 1;
+      const gapEnd = tagRegions[i+1].topY;
+      if (gapEnd - gapStart >= NAJE_CONFIG.MIN_PROBLEM_HEIGHT_PX) {
+        const found = detectProblemStartsByBlank(imageData, pageWidth, colStartX, colEndX, gapStart, gapEnd);
+        for (const y of found) problemStarts.push({ startY: y, hasTag: false, levelName: null });
+      }
+    }
+  }
+
+  problemStarts.sort((a, b) => a.startY - b.startY);
+
+  const problems = [];
+  for (let i = 0; i < problemStarts.length; i++) {
+    const s = problemStarts[i].startY;
+    const e = i + 1 < problemStarts.length ? problemStarts[i+1].startY - 1 : endY;
+    if (e - s < NAJE_CONFIG.MIN_PROBLEM_HEIGHT_PX) continue;
+    problems.push({ startY: s, endY: e, hasTag: problemStarts[i].hasTag, levelName: problemStarts[i].levelName });
+  }
+  return problems;
+}
+
+// ── 메인 PDF 처리 함수 ────────────────────────────────────
+async function processNajePdf(file) {
   const progressEl = document.getElementById('naje-progress');
   const progressBar = document.getElementById('naje-progress-bar');
   const progressText = document.getElementById('naje-progress-text');
@@ -2363,146 +2514,80 @@ async function processNajePdf(file){
   previewEl.style.display = 'none';
   najeExtractedProblems = [];
 
-  try{
-    if(typeof pdfjsLib === 'undefined'){
-      await new Promise((res,rej)=>{
-        const s=document.createElement('script');
-        s.src='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
-        s.onload=res; s.onerror=rej;
+  try {
+    if (typeof pdfjsLib === 'undefined') {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
+        s.onload = res; s.onerror = rej;
         document.head.appendChild(s);
       });
-      pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
     }
 
     progressText.textContent = 'PDF 읽는 중...';
     progressBar.style.width = '10%';
 
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
-    const totalPages = pdf.numPages;
-    const scale = 2.0;
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const scale = NAJE_CONFIG.PDF_SCALE;
+    let problemNumber = 1;
+    const allProblems = [];
 
-    const pageCanvases = [];
-    for(let i=1; i<=totalPages; i++){
-      progressText.textContent = i + '/' + totalPages + ' 페이지 처리 중...';
-      progressBar.style.width = (10 + (i/totalPages)*60) + '%';
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      progressText.textContent = pageNum + '/' + pdf.numPages + ' 페이지 처리 중...';
+      progressBar.style.width = (10 + (pageNum / pdf.numPages) * 65) + '%';
 
-      const page = await pdf.getPage(i);
-      const viewport = page.getViewport({scale});
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale });
       const canvas = document.createElement('canvas');
       canvas.width = viewport.width;
       canvas.height = viewport.height;
       const ctx = canvas.getContext('2d');
-      await page.render({canvasContext:ctx, viewport}).promise;
-      pageCanvases.push({canvas, pageNum:i});
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      const isFirstPage = pageNum === 1;
+      const pageWidth = canvas.width;
+      const pageHeight = canvas.height;
+      const midX = Math.floor(pageWidth * NAJE_CONFIG.LEFT_COL_RATIO);
+      const imageData = ctx.getImageData(0, 0, pageWidth, pageHeight);
+
+      // 좌열
+      const leftStartY = isFirstPage
+        ? Math.floor(pageHeight * NAJE_CONFIG.HEADER_RATIO_PAGE1_LEFT)
+        : 0;
+      const leftProblems = extractProblemsFromColumn(imageData, pageWidth, 0, midX, leftStartY, pageHeight);
+      for (const prob of leftProblems) {
+        const cropC = cropCanvas(canvas, 0, midX, prob.startY, prob.endY);
+        const dataUrl = cropC.toDataURL('image/png');
+        allProblems.push({ canvas: cropC, dataUrl, pageNum, number: problemNumber, ...getLevelInfo(problemNumber) });
+        problemNumber++;
+      }
+
+      // 우열
+      const rightProblems = extractProblemsFromColumn(imageData, pageWidth, midX, pageWidth, 0, pageHeight);
+      for (const prob of rightProblems) {
+        const cropC = cropCanvas(canvas, midX, pageWidth, prob.startY, prob.endY);
+        const dataUrl = cropC.toDataURL('image/png');
+        allProblems.push({ canvas: cropC, dataUrl, pageNum, number: problemNumber, ...getLevelInfo(problemNumber) });
+        problemNumber++;
+      }
     }
 
-    progressText.textContent = '문제 영역 분리 중...';
-    progressBar.style.width = '75%';
-
-    const problems = await extractProblemsPixelBased(pageCanvases);
-    najeExtractedProblems = problems;
-
+    najeExtractedProblems = allProblems;
     progressBar.style.width = '100%';
-    progressText.textContent = '✅ ' + problems.length + '개 문제 추출 완료!';
-
-    setTimeout(()=>{
+    progressText.textContent = '✅ ' + allProblems.length + '개 문제 추출 완료!';
+    setTimeout(() => {
       progressEl.style.display = 'none';
-      showNajePreview(problems);
+      showNajePreview(allProblems);
     }, 800);
 
-  }catch(err){
+  } catch (err) {
     progressEl.style.display = 'none';
     alert('PDF 처리 오류: ' + err.message);
     console.error(err);
   }
 }
-
-// 열 상단에서 단계 태그(배너 이미지) 높이 감지
-function detectStageTag(ctx, width, height) {
-  const scanH = Math.min(140, height);
-  const imageData = ctx.getImageData(0, 0, width, scanH);
-  const data = imageData.data;
-  let tagEndY = 0;
-
-  for (let y = 0; y < scanH; y++) {
-    let colorPixelCount = 0;
-    for (let x = 0; x < width; x++) {
-      const idx = (y * width + x) * 4;
-      const r = data[idx], g = data[idx+1], b = data[idx+2];
-      // 흰색/회색이 아닌 픽셀 (배너 색상 감지)
-      const isColored =
-        (Math.max(r,g,b) - Math.min(r,g,b) > 30) ||  // 채도 있는 색
-        (r < 200 && g < 200 && b < 200 && !(r > 180 && g > 180 && b > 180)); // 어두운 색
-      if (isColored) colorPixelCount++;
-    }
-    const ratio = colorPixelCount / width;
-    if (ratio > 0.15) {
-      tagEndY = y + 1;
-    } else if (tagEndY > 0 && (y - tagEndY) > 10) {
-      break; // 태그 끝
-    }
-  }
-  return tagEndY > 5 ? tagEndY + 10 : 0; // 여백 포함
-}
-
-// processNajePdf 내부에서 호출하는 핵심 분리 함수 (픽셀 분석 기반)
-async function extractProblemsPixelBased(pageCanvases) {
-  const problems = [];
-  let problemNum = 0;
-  const HEADER_RATIO = 0.11; // 상단 헤더 비율
-
-  for (const {canvas, pageNum} of pageCanvases) {
-    const w = canvas.width;
-    const h = canvas.height;
-    const headerH = Math.round(h * HEADER_RATIO);
-    const halfW = Math.round(w * 0.505);
-    const PADDING = 8;
-
-    const columns = [
-      {x: 0,     colW: halfW,      label: 'left'},
-      {x: halfW, colW: w - halfW,  label: 'right'},
-    ];
-
-    for (const col of columns) {
-      // 열 캔버스 생성 (헤더 제외)
-      const colCanvas = document.createElement('canvas');
-      colCanvas.width = col.colW;
-      colCanvas.height = h - headerH;
-      const colCtx = colCanvas.getContext('2d');
-      colCtx.drawImage(canvas, col.x, headerH, col.colW, h - headerH, 0, 0, col.colW, h - headerH);
-
-      // 단계 태그 감지 (있으면 태그 포함, 없으면 0부터)
-      const tagH = detectStageTag(colCtx, col.colW, h - headerH);
-
-      // 문제 시작 Y (태그 있으면 태그 위부터 포함)
-      const startY = 0; // 항상 열 상단부터 포함
-      const cutH = colCanvas.height;
-
-      // 여백 추가하여 최종 문제 캔버스 생성
-      const problemCanvas = document.createElement('canvas');
-      problemCanvas.width = col.colW + PADDING * 2;
-      problemCanvas.height = cutH + PADDING * 2;
-      const pCtx = problemCanvas.getContext('2d');
-      pCtx.fillStyle = '#ffffff';
-      pCtx.fillRect(0, 0, problemCanvas.width, problemCanvas.height);
-      pCtx.drawImage(colCanvas, 0, startY, col.colW, cutH, PADDING, PADDING, col.colW, cutH);
-
-      problemNum++;
-      problems.push({
-        canvas: problemCanvas,
-        pageNum,
-        number: problemNum,
-        dataUrl: problemCanvas.toDataURL('image/png'),
-        ...getLevelInfo(problemNum)
-      });
-    }
-  }
-
-  return problems;
-}
-
-// 미리보기 표시
 
 // 미리보기 표시
 function showNajePreview(problems){
@@ -2574,9 +2659,9 @@ async function saveNajeSet(){
       // dataUrl → Blob 변환
       const res = await fetch(p.dataUrl);
       const blob = await res.blob();
-      const fname = `naje/${setId}/${String(p.number).padStart(2,'0')}_p${p.pageNum}.png`;
+      const fname = `${NAJE_CONFIG.STORAGE_PATH_PREFIX}/${setId}/${p.number}.png`;
 
-      const{error:upErr} = await db.storage.from('homework-photos').upload(fname, blob, {contentType:'image/png', upsert:true});
+      const{error:upErr} = await db.storage.from(NAJE_CONFIG.STORAGE_BUCKET).upload(fname, blob, {contentType:'image/png', upsert:true});
       if(upErr) throw upErr;
 
       const{data:urlData} = db.storage.from('homework-photos').getPublicUrl(fname);
