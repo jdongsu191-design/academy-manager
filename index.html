@@ -2408,19 +2408,21 @@ async function startNajePdfLoad(file){
       const hdrY = isFirst ? Math.floor(H * NJ.HEADER_RATIO) : 0;
       const imgData = cvs.getContext('2d').getImageData(0, 0, W, H);
 
-      // 좌열: 줄칸 시작점 감지 → 그 위까지만 자름
+      // 좌열: 헤더 제외, 줄칸 위까지 자름
       const leftEndY = njFindLineStart(imgData, W, 0, midX, hdrY, H);
-      if(leftEndY - hdrY >= NJ.MIN_H){
-        const c = njCrop(cvs, 0, midX, hdrY, leftEndY);
+      const leftCutY = (leftEndY < H - 10) ? leftEndY : H; // 줄칸 감지됐으면 그 위까지, 아니면 전체
+      if(leftCutY - hdrY >= NJ.MIN_H){
+        const c = njCrop(cvs, 0, midX, hdrY, leftCutY);
         const qrUrl = await njDecodeQR(c);
         const dataUrl = c.toDataURL('image/jpeg', 0.92);
         najeExtractedProblems.push({number:num++, canvas:c, qrUrl, dataUrl, pageNum:p, side:'left', ...getLevelInfo(num-1)});
       }
 
-      // 우열
+      // 우열: 헤더 제외, 줄칸 위까지 자름
       const rightEndY = njFindLineStart(imgData, W, midX, W, hdrY, H);
-      if(rightEndY - hdrY >= NJ.MIN_H){
-        const c = njCrop(cvs, midX, W, hdrY, rightEndY);
+      const rightCutY = (rightEndY < H - 10) ? rightEndY : H;
+      if(rightCutY - hdrY >= NJ.MIN_H){
+        const c = njCrop(cvs, midX, W, hdrY, rightCutY);
         const qrUrl = await njDecodeQR(c);
         const dataUrl = c.toDataURL('image/jpeg', 0.92);
         najeExtractedProblems.push({number:num++, canvas:c, qrUrl, dataUrl, pageNum:p, side:'right', ...getLevelInfo(num-1)});
@@ -2448,38 +2450,43 @@ async function startNajePdfLoad(file){
 // 줄칸 = 일정 간격으로 어두운 가로선이 반복되는 구간
 function njFindLineStart(imgData, W, x1, x2, startY, endY){
   const {data} = imgData;
-  const margin = 15;
+  const margin = 20;
   const scanLeft = x1 + margin;
   const scanRight = x2 - margin;
   const colW = scanRight - scanLeft;
   if(colW <= 0) return endY;
 
-  // 각 행의 "어두운 픽셀 비율" 계산 (줄 = 어두운 행)
-  const darkRatios = [];
+  // 줄칸 감지 원리:
+  // - 줄칸 = 넓은 흰색 영역에 가로 실선이 반복
+  // - 각 행의 "밝은 픽셀 비율"을 계산
+  // - 밝은 행(ratio > 0.97)이 연속으로 나타나면 줄칸 시작
+  // - 문제 영역은 다양한 밝기의 픽셀이 섞여 있음
+
+  let consecutiveBright = 0;
+  let firstBrightRow = -1;
+  const BRIGHT_THRESH = 240;  // 거의 흰색
+  const BRIGHT_RATIO = 0.97;  // 97% 이상이 흰색이면 줄칸 행
+  const MIN_CONSEC = 8;       // 8행 연속이면 줄칸 확정
+
   for(let y = startY; y < endY; y++){
-    let darkCnt = 0;
+    let brightCnt = 0;
     for(let x = scanLeft; x < scanRight; x++){
       const i = (y * W + x) * 4;
       const brightness = (data[i] + data[i+1] + data[i+2]) / 3;
-      if(brightness < 200) darkCnt++; // 어두운 픽셀
+      if(brightness >= BRIGHT_THRESH) brightCnt++;
     }
-    darkRatios.push(darkCnt / colW);
-  }
+    const ratio = brightCnt / colW;
 
-  // 줄칸 감지: 일정 간격(15~40px)으로 어두운 행이 반복되는 패턴
-  // 슬라이딩 윈도우로 60px 구간에서 어두운 행이 2개 이상이면 줄칸 시작
-  const WIN = 60;   // 탐색 윈도우 크기
-  const MIN_LINES = 2; // 윈도우 내 최소 줄 개수
-  const LINE_THRESH = 0.15; // 줄로 인정하는 어두운 픽셀 비율
-
-  for(let y = 0; y < darkRatios.length - WIN; y++){
-    let lineCnt = 0;
-    for(let dy = 0; dy < WIN; dy++){
-      if(darkRatios[y + dy] >= LINE_THRESH) lineCnt++;
-    }
-    if(lineCnt >= MIN_LINES){
-      // 줄칸 시작점 - 약간 위에서부터
-      return startY + Math.max(0, y - 5);
+    if(ratio >= BRIGHT_RATIO){
+      if(consecutiveBright === 0) firstBrightRow = y;
+      consecutiveBright++;
+      if(consecutiveBright >= MIN_CONSEC){
+        // 줄칸 시작 - 여백 포함
+        return Math.max(startY, firstBrightRow - 5);
+      }
+    } else {
+      consecutiveBright = 0;
+      firstBrightRow = -1;
     }
   }
 
