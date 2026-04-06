@@ -2416,7 +2416,8 @@ const NJ = {
   PATH: 'naje',
 };
 
-let najeExtractedProblems = []; // { number, canvas, qrUrl, dataUrl, level_name, level_type }
+let najeExtractedProblems = [];
+let najeAnswerMap = {}; // {문항번호: 정답} - 정답 페이지 파싱 결과
 
 // PDF 드래그 드롭
 function handleNajePdfDrop(e){
@@ -2456,6 +2457,7 @@ async function startNajePdfLoad(file){
   const progressText = document.getElementById('naje-progress-text');
 
   najeExtractedProblems = [];
+  najeAnswerMap = {};
 
   try{
     if(typeof pdfjsLib === 'undefined'){
@@ -2477,13 +2479,68 @@ async function startNajePdfLoad(file){
       cvs.width = vp.width; cvs.height = vp.height;
       await page.render({canvasContext: cvs.getContext('2d'), viewport: vp}).promise;
 
-      // "정답과 해설" 페이지 감지 - 텍스트 레이어 확인
+      // 텍스트 레이어 추출
       const textContent = await page.getTextContent();
-      const pageText = textContent.items.map(i=>i.str).join('');
-      const isAnswerPage = new RegExp('\uC815\uB2F5|\uD574\uC124|answer|solution', 'i').test(pageText);
+      const pageText = textContent.items.map(function(i){return i.str;}).join('');
+
+      // 정답 페이지 감지: "빠른정답" 또는 "정답 및 해설" + 문항 패턴
+      const isAnswerPage = /빠른정답|정답 및 해설/.test(pageText) && /[0-9]+｜/.test(pageText);
       if(isAnswerPage){
-        console.log('정답/해설 페이지 스킵:', p);
-        continue;
+        // 정답 페이지 파싱: "N｜ ... 답 ..." 패턴에서 정답 추출
+        // 텍스트 아이템을 Y좌표 순으로 정렬해서 순서대로 읽기
+        var ansItems = textContent.items.filter(function(it){
+          return it.str && it.str.trim();
+        }).sort(function(a,b){
+          // Y좌표 내림차순 (PDF 좌표 아래=0), 같은 Y면 X 오름차순
+          var dy = b.transform[5] - a.transform[5];
+          return Math.abs(dy) > 5 ? dy : a.transform[4] - b.transform[4];
+        });
+
+        // "N｜" 패턴 찾아서 다음 텍스트를 정답으로
+        var i = 0;
+        while(i < ansItems.length){
+          var str = ansItems[i].str.trim();
+          // "41｜" 또는 "1｜" 형태
+          var numMatch = str.match(/^(\d+)[｜|]$/);
+          if(numMatch){
+            var pNum = parseInt(numMatch[1]);
+            // 다음 비어있지 않은 아이템들을 정답으로 수집
+            var answerParts = [];
+            var j = i + 1;
+            while(j < ansItems.length && j < i + 8){
+              var next = ansItems[j].str.trim();
+              if(!next || next === '정답'){ j++; continue; }
+              // 다음 문항번호(단독) 나오면 중단
+              if(/^\d+[｜|]$/.test(next)) break;
+              // 단계명이 나오면 중단
+              if(/빠른정답|내신|모고|킬러|베티/.test(next)) break;
+              // "-3 또는 1 38｜" 처럼 정답 뒤에 다음 번호가 붙은 경우
+              var mixedMatch = next.match(/^(.+?)\s+\d+[｜|].*$/);
+              if(mixedMatch){
+                var cleanAns = mixedMatch[1].trim();
+                if(cleanAns && cleanAns !== '정답') answerParts.push(cleanAns);
+                break;
+              }
+              // 특수 유니코드 제거 (분수 등 수식 렌더링 잔여물)
+              var cleaned = next.replace(/[\uE000-\uF8FF]/g, '').trim();
+              // 뒤에 "N｜"이 붙은 경우 앞부분만 (e.g. "  42｜")
+              var trailingMatch = cleaned.match(/^(.*?)\s*\d+[｜|]\s*$/);
+              if(trailingMatch){
+                if(trailingMatch[1].trim()) answerParts.push(trailingMatch[1].trim());
+                break;
+              }
+              if(cleaned) answerParts.push(cleaned);
+              j++;
+              break;
+            }
+            if(answerParts.length > 0 && answerParts[0] && !najeAnswerMap[pNum]){
+              najeAnswerMap[pNum] = answerParts[0].trim();
+            }
+          }
+          i++;
+        }
+        console.log('정답 페이지 파싱 완료:', Object.keys(najeAnswerMap).length, '개');
+        continue; // 문제 이미지 처리 스킵
       }
 
       const W = cvs.width, H = cvs.height;
@@ -2824,7 +2881,10 @@ function showNajePreview(problems, forceOpen){
   const infoEl = document.getElementById('naje-preview-info');
   const gridEl = document.getElementById('naje-problem-grid');
   const qrCount = problems.filter(function(p){return p.qrUrl;}).length;
-  infoEl.innerHTML = '총 ' + problems.length + '개 문제 인식' + (qrCount>0 ? ' &nbsp;·&nbsp; <span style="color:#10b981">📹 QR '+qrCount+'개</span>' : '');
+  const ansCount = Object.keys(najeAnswerMap).length;
+  infoEl.innerHTML = '총 ' + problems.length + '개 문제 인식'
+    + (qrCount>0 ? ' &nbsp;·&nbsp; <span style="color:#10b981">📹 QR '+qrCount+'개</span>' : '')
+    + (ansCount>0 ? ' &nbsp;·&nbsp; <span style="color:#dc2626">✅ 정답 '+ansCount+'개</span>' : '');
   gridEl.style.display = 'block';
   gridEl.style.gridTemplateColumns = '';
 
@@ -2863,10 +2923,12 @@ function showNajePreview(problems, forceOpen){
         html += '<div style="padding:10px;background:#fff;display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:8px;">';
         g.problems.forEach(function(p){
           const qrBadgeSmall = p.qrUrl ? '<span style="font-size:10px;color:#10b981;background:#d1fae5;padding:1px 5px;border-radius:100px;">📹</span>' : '';
+          const ans = najeAnswerMap[p.number];
+          const ansBadge = ans ? '<span style="font-size:10px;color:#dc2626;background:#fef2f2;padding:1px 5px;border-radius:100px;font-weight:700;">정답:'+ans+'</span>' : '';
           html += '<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;">'
             + '<div style="background:#f5f6fa;padding:5px 8px;display:flex;justify-content:space-between;align-items:center;">'
             + '<span style="font-size:12px;font-weight:700;">'+p.number+'번</span>'
-            + qrBadgeSmall
+            + '<div style="display:flex;gap:3px;align-items:center;">'+ansBadge+qrBadgeSmall+'</div>'
             + '</div>'
             + '<img src="'+p.dataUrl+'" style="width:100%;display:block;cursor:zoom-in;" onclick="openImgViewer(this.src)">'
             + '</div>';
@@ -2931,7 +2993,8 @@ async function saveNajeSet(){
         level_type: p.level_type || null,
         image_url: urlData.publicUrl,
         page_number: p.pageNum,
-        qr_url: p.qrUrl || null
+        qr_url: p.qrUrl || null,
+        correct_answer: najeAnswerMap[p.number] || null
       });
     }
 
