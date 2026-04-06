@@ -652,6 +652,7 @@
               <div id="naje-problem-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;max-height:500px;overflow-y:auto;padding:4px"></div>
               <div style="margin-top:14px;display:flex;gap:8px">
                 <button class="btn btn-full" onclick="resetNajeUpload()">← 처음으로</button>
+                <button class="btn btn-full" id="naje-assign-btn" onclick="openAssignAnswerModal()" style="background:#fef9ec;border-color:#fde68a;color:#92400e;">📋 문항별 정답 부여</button>
                 <button class="btn btn-primary btn-full" id="naje-save-btn" onclick="saveNajeSet()">💾 저장</button>
               </div>
             </div>
@@ -2495,15 +2496,9 @@ async function startNajePdfLoad(file){
       }
 
       if(isQuickAnswerPage){
-        // 빠른정답 페이지 이미지 캡처 + Claude API로 정답 파싱 (첫 번째만)
+        // 빠른정답 페이지 이미지 캡처 (첫 번째만, 분석은 버튼 클릭 시)
         if(!najeQuickAnswerDataUrl){
           najeQuickAnswerDataUrl = cvs.toDataURL('image/jpeg', 0.92);
-          progressText.textContent = '빠른정답 이미지 분석 중... (Claude AI)';
-          const claudeAnswers = await parseAnswersWithClaude(najeQuickAnswerDataUrl);
-          if(Object.keys(claudeAnswers).length > 0){
-            najeAnswerMap = claudeAnswers;
-            console.log('Claude 정답 파싱 완료:', Object.keys(claudeAnswers).length + '개', claudeAnswers);
-          }
         }
         // items를 좌표 기준으로 정렬 (위→아래, 같은 줄이면 좌→우)
         var ansItems = textContent.items.slice().sort(function(a, b) {
@@ -3161,6 +3156,111 @@ async function saveEditAnswer(problemId, problemNum){
 }
 
 // Claude Vision API로 빠른정답 이미지에서 정답 파싱
+// 문항별 정답 부여 모달 열기
+async function openAssignAnswerModal(){
+  if(!najeQuickAnswerDataUrl){
+    alert('빠른정답 이미지가 없습니다. 정답 페이지가 포함된 PDF인지 확인해주세요.');
+    return;
+  }
+
+  // 모달 생성
+  const existing = document.getElementById('modal-assign-answer');
+  if(existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'modal-assign-answer';
+  modal.className = 'modal-backdrop open';
+  modal.innerHTML = '<div class="modal" style="max-width:700px;width:95vw;max-height:90vh">'
+    + '<div class="modal-handle"></div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<h3 style="margin:0">📋 문항별 정답 부여</h3>'
+    + '<button onclick="document.getElementById(&quot;modal-assign-answer&quot;).remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280">✕</button>'
+    + '</div>'
+    + '<div id="assign-answer-body" style="overflow-y:auto;max-height:65vh;">'
+    + '<div style="text-align:center;padding:40px;color:#6b7280">'
+    + '<div style="font-size:32px;margin-bottom:12px">🤖</div>'
+    + '<div>Claude AI로 빠른정답 이미지 분석 중...</div>'
+    + '</div>'
+    + '</div>'
+    + '<div id="assign-answer-footer" style="margin-top:14px;display:flex;gap:8px;display:none">'
+    + '<button onclick="document.getElementById(&quot;modal-assign-answer&quot;).remove()" class="btn" style="flex:1">취소</button>'
+    + '<button onclick="applyAnswerMap()" class="btn btn-primary" style="flex:1">✅ 정답 부여</button>'
+    + '</div>'
+    + '</div>';
+  document.body.appendChild(modal);
+
+  // Claude API 호출
+  const claudeAnswers = await parseAnswersWithClaude(najeQuickAnswerDataUrl);
+  const body = document.getElementById('assign-answer-body');
+  const footer = document.getElementById('assign-answer-footer');
+
+  if(!claudeAnswers || Object.keys(claudeAnswers).length === 0){
+    body.innerHTML = '<div style="text-align:center;padding:30px;color:#dc2626">❌ 정답 인식 실패. 빠른정답 이미지를 확인해주세요.</div>';
+    return;
+  }
+
+  // 임시 저장 (부여 전 검토용)
+  window._pendingAnswerMap = claudeAnswers;
+
+  // 표 생성
+  const nums = Object.keys(claudeAnswers).map(Number).sort(function(a,b){return a-b;});
+  const total = najeExtractedProblems.length;
+  const matched = nums.filter(function(n){ return n >= 1 && n <= total; }).length;
+
+  let html = '<div style="margin-bottom:10px;font-size:13px;color:#6b7280">'
+    + '총 <strong>' + nums.length + '개</strong> 정답 인식 · '
+    + '현재 문제(<strong>' + total + '문항</strong>)와 매칭: <strong style="color:' + (matched===total?'#10b981':'#f59e0b') + '">' + matched + '개</strong>'
+    + '</div>'
+    + '<div style="overflow-x:auto;">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+    + '<thead><tr style="background:#f5f6fa;">'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center;">문항</th>'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center;">인식 정답</th>'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center;">문항 존재</th>'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center;">수정</th>'
+    + '</tr></thead><tbody>';
+
+  nums.forEach(function(n){
+    const ans = claudeAnswers[n];
+    const exists = n >= 1 && n <= total;
+    html += '<tr>'
+      + '<td style="padding:7px;border:1px solid #e5e7eb;text-align:center;font-weight:700;">' + n + '번</td>'
+      + '<td style="padding:7px;border:1px solid #e5e7eb;text-align:center;color:#dc2626;font-weight:700;" id="pending-ans-' + n + '">' + ans + '</td>'
+      + '<td style="padding:7px;border:1px solid #e5e7eb;text-align:center;">' + (exists ? '✅' : '❌ 없음') + '</td>'
+      + '<td style="padding:7px;border:1px solid #e5e7eb;text-align:center;">'
+      + '<button onclick="editPendingAnswer(' + n + ')" style="background:none;border:1px solid #d1d5db;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px;">✏️</button>'
+      + '</td>'
+      + '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  body.innerHTML = html;
+  footer.style.display = 'flex';
+}
+
+// 대기 중인 정답 개별 수정
+function editPendingAnswer(num){
+  const cell = document.getElementById('pending-ans-' + num);
+  const cur = cell ? cell.textContent : '';
+  const newVal = prompt(num + '번 정답 수정:', cur);
+  if(newVal === null) return;
+  if(cell) cell.textContent = newVal;
+  if(window._pendingAnswerMap) window._pendingAnswerMap[num] = newVal;
+}
+
+// 정답 부여 실행
+function applyAnswerMap(){
+  if(!window._pendingAnswerMap) return;
+  najeAnswerMap = {};
+  Object.keys(window._pendingAnswerMap).forEach(function(k){
+    najeAnswerMap[parseInt(k)] = window._pendingAnswerMap[k];
+  });
+  document.getElementById('modal-assign-answer').remove();
+  // 미리보기 새로고침
+  showNajePreview(najeExtractedProblems, _najePreviewOpen);
+  alert('✅ ' + Object.keys(najeAnswerMap).length + '개 문항에 정답이 부여되었습니다.');
+}
+
 async function parseAnswersWithClaude(dataUrl){
   try{
     // dataUrl → base64
