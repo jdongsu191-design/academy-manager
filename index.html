@@ -2492,22 +2492,24 @@ async function startNajePdfLoad(file){
       const isAnswerPage = (/빠른정답|정답/.test(pageText)) && /[0-9]+[｜|]/.test(pageText);
       if(isAnswerPage){
         console.log('✅ 정답 페이지 감지: p'+p);
-        // items 구조 디버깅 (앞 20개)
-        console.log('items 앞20개:', JSON.stringify(textContent.items.slice(0,20).map(function(it){return it.str;})));
-        // 정답 파싱: items 원래 순서로 처리 (Y좌표 정렬 X)
-        // 형태1: "1｜" 단독 아이템 → 다음 아이템이 정답
-        // 형태2: "1｜ ⑤" 한 아이템에 번호+정답이 같이 있는 경우
-        var ansItems = textContent.items;
+        // items를 좌표 기준으로 정렬 (위→아래, 같은 줄이면 좌→우)
+        // PDF 좌표: transform[4]=x, transform[5]=y(아래=0 → 내림차순이 화면 위)
+        var ansItems = textContent.items.slice().sort(function(a, b) {
+          var dy = b.transform[5] - a.transform[5];
+          if(Math.abs(dy) > 3) return dy;
+          return a.transform[4] - b.transform[4];
+        });
+        console.log('정렬된 items 앞30개:', JSON.stringify(ansItems.slice(0,30).map(function(it){return it.str;})));
+
         var i = 0;
         while(i < ansItems.length){
           var str = ansItems[i].str.trim();
 
-          // 형태2: "N｜ X" 한 아이템에 붙어있는 경우
+          // 형태2: "N｜ X" 한 아이템에 번호+정답이 같이 있는 경우
           var inlineMatch = str.match(/^(\d+)[｜|]\s+(.+)$/);
           if(inlineMatch){
             var pNum = parseInt(inlineMatch[1]);
             var ans = inlineMatch[2].replace(/[\uE000-\uF8FF]/g,'').trim();
-            // 정답 뒤에 다음 번호가 붙은 경우 제거 ("⑤ 2｜" → "⑤"만)
             ans = ans.replace(/\s*\d+[｜|].*$/, '').trim();
             if(ans && !najeAnswerMap[pNum]) najeAnswerMap[pNum] = ans;
             i++; continue;
@@ -2523,7 +2525,6 @@ async function startNajePdfLoad(file){
               if(!next || next === '정답'){ j++; continue; }
               if(/^\d+[｜|]$/.test(next)) break;
               if(/빠른정답|내신|모고|킬러|베티/.test(next)) break;
-              // "-3 또는 1 38｜" 처럼 정답 뒤에 다음 번호가 붙은 경우
               var mixedMatch = next.match(/^(.+?)\s+\d+[｜|].*$/);
               if(mixedMatch){
                 var cleanAns = mixedMatch[1].replace(/[\uE000-\uF8FF]/g,'').trim();
