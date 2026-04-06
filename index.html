@@ -2505,16 +2505,49 @@ async function startNajePdfLoad(file){
         return jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'}) || null;
       }
 
+      // ── 텍스트 레이어로 컬럼별 마지막 텍스트 Y좌표 추출 ──
+      // 줄칸에는 텍스트가 없으므로, 마지막 텍스트 블록 바로 아래 = 문제 본문 끝
+      // PDF 좌표계: y=0이 페이지 아래 → 화면Y = vp.height - pdfY
+      function getTextCutY(items, vpH, colXstart, colXend, scale) {
+        // 해당 컬럼에 속하는 텍스트 아이템만 필터
+        // transform[4]=pdfX, transform[5]=pdfY (아래=0 기준)
+        let maxScreenY = -1;
+        items.forEach(function(item) {
+          if(!item.str || !item.str.trim()) return;
+          var pdfX = item.transform[4] * scale;
+          var pdfY = item.transform[5] * scale;
+          var screenY = vpH - pdfY; // 화면 기준 Y (위=0)
+          // 텍스트 하단 = screenY (기준점이 텍스트 베이스라인이므로 높이 추가)
+          var itemBottom = screenY + (item.height || 0) * scale;
+          if(pdfX >= colXstart && pdfX < colXend) {
+            if(itemBottom > maxScreenY) maxScreenY = itemBottom;
+          }
+        });
+        return maxScreenY;
+      }
+
+      // 텍스트 아이템 (이미 위에서 getTextContent() 호출함)
+      const txtItems = textContent.items;
+      const scale = NJ.PDF_SCALE;
+
       // ── 좌열 처리 ──
       const leftCvs = document.createElement('canvas');
       leftCvs.width = midX; leftCvs.height = H;
       leftCvs.getContext('2d').drawImage(cvs, 0, 0, midX, H, 0, 0, midX, H);
       const leftData = leftCvs.getContext('2d').getImageData(0, 0, midX, H);
       const leftQR = scanQR(leftData, midX, H);
-      // 줄칸 시작점과 QR 위치 중 더 위쪽에서 자름 (둘 다 잘리도록)
-      const leftRuledY = njFindContentEnd(leftData, midX, H);
-      const leftQrY = leftQR ? Math.max(30, Math.round(leftQR.location.topLeftCorner.y) - 10) : H;
-      const leftCutY = Math.min(leftRuledY, leftQrY);
+
+      // 텍스트 레이어 기반 컷: 마지막 텍스트 Y + 여유(30px)
+      var leftTextY = getTextCutY(txtItems, H, 0, midX / scale, scale);
+      var leftCutY;
+      if(leftTextY > 0 && leftTextY < H * 0.95) {
+        leftCutY = Math.min(Math.round(leftTextY) + 30, H);
+      } else {
+        // 텍스트 레이어 실패 시 픽셀 기반 fallback
+        var leftRuledY = njFindContentEnd(leftData, midX, H);
+        var leftQrY = leftQR ? Math.max(30, Math.round(leftQR.location.topLeftCorner.y) - 10) : H;
+        leftCutY = Math.min(leftRuledY, leftQrY);
+      }
       const leftFinal = njCrop(cvs, 0, midX, 0, leftCutY);
       najeExtractedProblems.push({
         number: num++, canvas: leftFinal, qrUrl: leftQR ? leftQR.data : null,
@@ -2528,9 +2561,16 @@ async function startNajePdfLoad(file){
       rightCvs.getContext('2d').drawImage(cvs, midX, 0, W-midX, H, 0, 0, W-midX, H);
       const rightData = rightCvs.getContext('2d').getImageData(0, 0, W-midX, H);
       const rightQR = scanQR(rightData, W-midX, H);
-      const rightRuledY = njFindContentEnd(rightData, W-midX, H);
-      const rightQrY = rightQR ? Math.max(30, Math.round(rightQR.location.topLeftCorner.y) - 10) : H;
-      const rightCutY = Math.min(rightRuledY, rightQrY);
+
+      var rightTextY = getTextCutY(txtItems, H, midX / scale, W / scale, scale);
+      var rightCutY;
+      if(rightTextY > 0 && rightTextY < H * 0.95) {
+        rightCutY = Math.min(Math.round(rightTextY) + 30, H);
+      } else {
+        var rightRuledY = njFindContentEnd(rightData, W-midX, H);
+        var rightQrY = rightQR ? Math.max(30, Math.round(rightQR.location.topLeftCorner.y) - 10) : H;
+        rightCutY = Math.min(rightRuledY, rightQrY);
+      }
       const rightFinal = njCrop(cvs, midX, W, 0, rightCutY);
       najeExtractedProblems.push({
         number: num++, canvas: rightFinal, qrUrl: rightQR ? rightQR.data : null,
