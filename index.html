@@ -2492,60 +2492,50 @@ async function startNajePdfLoad(file){
       const isAnswerPage = (/빠른정답|정답/.test(pageText)) && /[0-9]+[｜|]/.test(pageText);
       if(isAnswerPage){
         console.log('✅ 정답 페이지 감지: p'+p);
-        // 정답 페이지 파싱: "N｜ ... 답 ..." 패턴에서 정답 추출
-        // 텍스트 아이템을 Y좌표 순으로 정렬해서 순서대로 읽기
-        var ansItems = textContent.items.filter(function(it){
-          return it.str && it.str.trim();
-        }).sort(function(a,b){
-          // Y좌표 내림차순 (PDF 좌표 아래=0), 같은 Y면 X 오름차순
-          var dy = b.transform[5] - a.transform[5];
-          return Math.abs(dy) > 5 ? dy : a.transform[4] - b.transform[4];
-        });
-
-        // "N｜" 패턴 찾아서 다음 텍스트를 정답으로
+        // 정답 파싱: items 원래 순서로 처리 (Y좌표 정렬 X)
+        // 형태1: "1｜" 단독 아이템 → 다음 아이템이 정답
+        // 형태2: "1｜ ⑤" 한 아이템에 번호+정답이 같이 있는 경우
+        var ansItems = textContent.items;
         var i = 0;
         while(i < ansItems.length){
           var str = ansItems[i].str.trim();
-          // "41｜" 또는 "1｜" 형태
+
+          // 형태2: "N｜ X" 한 아이템에 붙어있는 경우
+          var inlineMatch = str.match(/^(\d+)[｜|]\s+(.+)$/);
+          if(inlineMatch){
+            var pNum = parseInt(inlineMatch[1]);
+            var ans = inlineMatch[2].replace(/[\uE000-\uF8FF]/g,'').trim();
+            // 정답 뒤에 다음 번호가 붙은 경우 제거 ("⑤ 2｜" → "⑤"만)
+            ans = ans.replace(/\s*\d+[｜|].*$/, '').trim();
+            if(ans && !najeAnswerMap[pNum]) najeAnswerMap[pNum] = ans;
+            i++; continue;
+          }
+
+          // 형태1: "N｜" 단독 → 다음 비어있지 않은 아이템이 정답
           var numMatch = str.match(/^(\d+)[｜|]$/);
           if(numMatch){
             var pNum = parseInt(numMatch[1]);
-            // 다음 비어있지 않은 아이템들을 정답으로 수집
-            var answerParts = [];
             var j = i + 1;
             while(j < ansItems.length && j < i + 8){
               var next = ansItems[j].str.trim();
               if(!next || next === '정답'){ j++; continue; }
-              // 다음 문항번호(단독) 나오면 중단
               if(/^\d+[｜|]$/.test(next)) break;
-              // 단계명이 나오면 중단
               if(/빠른정답|내신|모고|킬러|베티/.test(next)) break;
               // "-3 또는 1 38｜" 처럼 정답 뒤에 다음 번호가 붙은 경우
               var mixedMatch = next.match(/^(.+?)\s+\d+[｜|].*$/);
               if(mixedMatch){
-                var cleanAns = mixedMatch[1].trim();
-                if(cleanAns && cleanAns !== '정답') answerParts.push(cleanAns);
+                var cleanAns = mixedMatch[1].replace(/[\uE000-\uF8FF]/g,'').trim();
+                if(cleanAns && !najeAnswerMap[pNum]) najeAnswerMap[pNum] = cleanAns;
                 break;
               }
-              // 특수 유니코드 제거 (분수 등 수식 렌더링 잔여물)
-              var cleaned = next.replace(/[\uE000-\uF8FF]/g, '').trim();
-              // 뒤에 "N｜"이 붙은 경우 앞부분만 (e.g. "  42｜")
-              var trailingMatch = cleaned.match(/^(.*?)\s*\d+[｜|]\s*$/);
-              if(trailingMatch){
-                if(trailingMatch[1].trim()) answerParts.push(trailingMatch[1].trim());
-                break;
-              }
-              if(cleaned) answerParts.push(cleaned);
-              j++;
+              var cleaned = next.replace(/[\uE000-\uF8FF]/g,'').trim();
+              if(cleaned && !najeAnswerMap[pNum]) najeAnswerMap[pNum] = cleaned;
               break;
-            }
-            if(answerParts.length > 0 && answerParts[0] && !najeAnswerMap[pNum]){
-              najeAnswerMap[pNum] = answerParts[0].trim();
             }
           }
           i++;
         }
-        console.log('정답 페이지 파싱 완료:', Object.keys(najeAnswerMap).length, '개');
+        console.log('정답 페이지 파싱 완료:', Object.keys(najeAnswerMap).length, '개', najeAnswerMap);
         continue; // 문제 이미지 처리 스킵
       }
 
