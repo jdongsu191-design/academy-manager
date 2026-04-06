@@ -2511,7 +2511,8 @@ async function startNajePdfLoad(file){
       leftCvs.getContext('2d').drawImage(cvs, 0, 0, midX, H, 0, 0, midX, H);
       const leftData = leftCvs.getContext('2d').getImageData(0, 0, midX, H);
       const leftQR = scanQR(leftData, midX, H);
-      const leftCutY = leftQR ? Math.max(50, Math.round(leftQR.location.topLeftCorner.y) - 10) : H;
+      // QR 있으면 → 줄칸+QR 포함 전체(H), QR 없으면 → 줄칸 위에서 자름
+      const leftCutY = leftQR ? H : njFindContentEnd(leftData, midX, H);
       const leftFinal = njCrop(cvs, 0, midX, 0, leftCutY);
       najeExtractedProblems.push({
         number: num++, canvas: leftFinal, qrUrl: leftQR ? leftQR.data : null,
@@ -2525,7 +2526,7 @@ async function startNajePdfLoad(file){
       rightCvs.getContext('2d').drawImage(cvs, midX, 0, W-midX, H, 0, 0, W-midX, H);
       const rightData = rightCvs.getContext('2d').getImageData(0, 0, W-midX, H);
       const rightQR = scanQR(rightData, W-midX, H);
-      const rightCutY = rightQR ? Math.max(50, Math.round(rightQR.location.topLeftCorner.y) - 10) : H;
+      const rightCutY = rightQR ? H : njFindContentEnd(rightData, W-midX, H);
       const rightFinal = njCrop(cvs, midX, W, 0, rightCutY);
       najeExtractedProblems.push({
         number: num++, canvas: rightFinal, qrUrl: rightQR ? rightQR.data : null,
@@ -2731,6 +2732,50 @@ async function njDecodeQR(canvas){
 }
 
 // 이미지 크롭
+// QR 없는 문제에서 문제 본문 끝(줄칸 시작) Y좌표 감지
+// 줄칸 특징: 흰 배경에 얇은 회색 수평선이 반복되는 영역
+// → 연속된 "밝은 줄"이 일정 개수 이상이면 줄칸으로 판단
+function njFindContentEnd(imgData, w, h){
+  const data = imgData.data;
+  const BRIGHT = 215;      // 밝기 임계값
+  const MIN_RATIO = 0.92;  // 한 줄의 92% 이상 밝으면 "빈 줄"
+  const RULED_MIN = 12;    // 연속 빈 줄이 12줄 이상이면 줄칸으로 판단
+  const STEP = Math.max(1, Math.floor(w / 50)); // 가로 샘플링 간격
+
+  let consecutive = 0;
+  let ruledTop = -1;
+
+  // 위에서 아래로 스캔
+  for(let y = 0; y < h; y++){
+    let bright = 0, total = 0;
+    for(let x = Math.floor(w * 0.05); x < Math.floor(w * 0.95); x += STEP){
+      const idx = (y * w + x) * 4;
+      if((data[idx] + data[idx+1] + data[idx+2]) / 3 >= BRIGHT) bright++;
+      total++;
+    }
+    const ratio = bright / total;
+    if(ratio >= MIN_RATIO){
+      consecutive++;
+      if(consecutive >= RULED_MIN && ruledTop < 0){
+        ruledTop = y - consecutive + 1; // 줄칸 시작 y
+      }
+    } else {
+      // 어두운 줄 만나면 리셋 (문제 텍스트/선)
+      if(ruledTop >= 0 && consecutive < RULED_MIN){
+        ruledTop = -1; // 가짜 줄칸이었으면 리셋
+      }
+      consecutive = 0;
+    }
+  }
+
+  // 줄칸 발견 → 그 위 8px에서 자름
+  if(ruledTop > h * 0.2){
+    return Math.max(30, ruledTop - 8);
+  }
+  // 못 찾으면 전체 높이
+  return h;
+}
+
 function njCrop(src, x1, x2, y1, y2){
   const w = x2-x1, h = Math.max(y2-y1, 1);
   const c = document.createElement('canvas');
