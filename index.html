@@ -1085,10 +1085,9 @@
       </div>
     </div>
     <div id="edit-student-status-row" style="margin-top:10px;padding:10px;background:#f5f6fa;border-radius:10px;font-size:13px;color:#4b5563"></div>
-    <!-- 일일N제 단계 부여 -->
     <div style="margin-top:12px;padding:12px 14px;background:#EBF5FF;border-radius:10px;border:1px solid #B5D4F4">
-      <div style="font-size:12px;font-weight:700;color:#185FA5;margin-bottom:8px">📄 일일N제 단계 부여</div>
-      <div style="font-size:12px;color:#4b5563;margin-bottom:8px">이 단계까지의 문제만 풀 수 있습니다. 해설도 부여된 단계까지만 공개됩니다.</div>
+      <div style="font-size:12px;font-weight:700;color:#185FA5;margin-bottom:6px">📄 일일N제 단계 부여</div>
+      <div style="font-size:11px;color:#4b5563;margin-bottom:8px">이 단계까지의 문제만 풀 수 있고, 해설도 해당 범위까지만 공개됩니다.</div>
       <select id="edit-student-naje-step" style="width:100%;padding:10px 12px;border:1.5px solid #B5D4F4;border-radius:10px;font-size:13px;outline:none;background:#fff;color:#1a1a2e">
         <option value="">단계 미지정 (전체 허용)</option>
         <option value="1">1단계 · 내신3점 (1~8번)</option>
@@ -1728,8 +1727,9 @@ function openEditStudentModal(id){
   } else {
     statusRow.innerHTML = `<span style="color:var(--success);font-weight:600">✅ 재학 중</span>${s.enrolled_at?' · 입학일: '+s.enrolled_at:''}`;
   }
-  // N제 단계
-  document.getElementById('edit-student-naje-step').value = s.naje_step != null ? String(s.naje_step) : '';
+  // N제 단계 세팅
+  const najeStepSel = document.getElementById('edit-student-naje-step');
+  if(najeStepSel) najeStepSel.value = s.naje_step != null ? String(s.naje_step) : '';
   openModal('editStudent');
 }
 
@@ -1762,8 +1762,8 @@ async function saveEditStudent(){
 
   const btn = document.querySelector('#modal-editStudent .btn-primary');
   btn.textContent='저장 중...';btn.disabled=true;
-  const najeStepVal = document.getElementById('edit-student-naje-step').value;
-  const naje_step = najeStepVal !== '' ? parseInt(najeStepVal) : null;
+  const najeStepVal = document.getElementById('edit-student-naje-step')?.value;
+  const naje_step = najeStepVal !== undefined && najeStepVal !== '' ? parseInt(najeStepVal) : null;
   const{error} = await db.from('users').update({
     name, class_id:classId||null,
     school:school||null, grade:grade||null, phone:phone||null,
@@ -2282,29 +2282,70 @@ tryAutoLogin();
 
 
 
-// HEAT PDF 단계 정보 (문제번호 → 단계 매핑)
-const NAJE_LEVEL_MAP = {
-  1:  {name:'내신3점', type:'내신', step:1},
-  2:  {name:'내신3점', type:'내신', step:1},
-  3:  {name:'내신3점', type:'내신', step:2},
-  4:  {name:'내신3점', type:'내신', step:2},
-  5:  {name:'모고3점', type:'모고', step:3},
-  6:  {name:'모고3점', type:'모고', step:3},
-  7:  {name:'모고3점', type:'모고', step:4},
-  8:  {name:'모고3점', type:'모고', step:4},
-  9:  {name:'내신4점', type:'내신', step:5},
-  10: {name:'내신4점', type:'내신', step:5},
-  11: {name:'내신4점', type:'내신', step:6},
-  12: {name:'내신4점', type:'내신', step:6},
-  13: {name:'모고쉬사', type:'모고', step:7},
-  14: {name:'모고쉬사', type:'모고', step:7},
-  15: {name:'모고어사', type:'모고', step:8},
-  16: {name:'모고어사', type:'모고', step:8},
-  17: {name:'내신심화', type:'내신', step:9},
-  18: {name:'내신심화', type:'내신', step:9},
-  19: {name:'내신심화', type:'내신', step:10},
-  20: {name:'내신심화', type:'내신', step:10},
-};
+// ─── 일일N제 단계 스펙 ───────────────────────────────────────
+// 1~10단계: 각 8문제씩 (총 80문제), 11단계(모고킬러): 81번~가변
+const NAJE_STAGES = [
+  {step:1,  name:'내신3점',  type:'내신', from:1,  to:8},
+  {step:2,  name:'내신3점',  type:'내신', from:9,  to:16},
+  {step:3,  name:'모고3점',  type:'모고', from:17, to:24},
+  {step:4,  name:'모고3점',  type:'모고', from:25, to:32},
+  {step:5,  name:'내신4점',  type:'내신', from:33, to:40},
+  {step:6,  name:'내신4점',  type:'내신', from:41, to:48},
+  {step:7,  name:'모고쉬사', type:'모고', from:49, to:56},
+  {step:8,  name:'모고어사', type:'모고', from:57, to:64},
+  {step:9,  name:'내신심화', type:'내신', from:65, to:72},
+  {step:10, name:'내신심화', type:'내신', from:73, to:80},
+];
+const NAJE_KILLER_STEP = 11;
+const NAJE_KILLER_NAME = '모고킬러';
+const NAJE_KILLER_TYPE = '모고';
+
+// 문제번호 → 단계 정보 (빠른 조회용 맵)
+const NAJE_LEVEL_MAP = (() => {
+  const map = {};
+  NAJE_STAGES.forEach(s => {
+    for(let n = s.from; n <= s.to; n++) map[n] = {name:s.name, type:s.type, step:s.step};
+  });
+  return map;
+})();
+
+// 문제번호 → 단계정보 (킬러 자동처리)
+function getLevelInfoByNum(num){
+  if(NAJE_LEVEL_MAP[num]) return NAJE_LEVEL_MAP[num];
+  if(num >= 81) return {name:NAJE_KILLER_NAME, type:NAJE_KILLER_TYPE, step:NAJE_KILLER_STEP};
+  return {name:'', type:'', step:0};
+}
+
+// 단계 아이콘
+function najeStageIcon(name){
+  const m = {'내신3점':'📘','모고3점':'📗','내신4점':'📙','모고쉬사':'📕','모고어사':'📒','내신심화':'📔','모고킬러':'🔥'};
+  return m[name] || '📄';
+}
+
+// 단계 헤더 HTML (화살표 뱃지 디자인)
+function najeStageHeaderHTML(stepNum, name, extra){
+  const icon = najeStageIcon(name);
+  const leftText = stepNum <= 10 ? stepNum+'단계' : '킬러';
+  const extraHtml = extra ? ' <span style="font-weight:400;font-size:11px;opacity:0.85">'+extra+'</span>' : '';
+  return `<div style="display:flex;align-items:stretch;gap:0;height:32px;margin:12px 0 8px;">
+    <div style="background:#1a1a2e;clip-path:polygon(0 0,80% 0,100% 50%,80% 100%,0 100%);padding:0 20px 0 12px;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;min-width:54px;white-space:nowrap;flex-shrink:0;">${leftText}</div>
+    <div style="background:var(--primary);clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%);padding:0 24px 0 8px;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;gap:4px;">${icon} ${name}${extraHtml}</div>
+  </div>`;
+}
+
+// 문제 배열을 step 기준으로 그룹핑
+// 반환: [{step, name, problems:[]}]
+function najeGroupByStep(problems){
+  const stepMap = {};
+  problems.forEach(p => {
+    const num = p.number !== undefined ? p.number : p.problem_number;
+    const info = getLevelInfoByNum(num);
+    const s = info.step || 0;
+    if(!stepMap[s]) stepMap[s] = {step:s, name:info.name, type:info.type, problems:[]};
+    stepMap[s].problems.push(p);
+  });
+  return Object.keys(stepMap).map(Number).sort((a,b)=>a-b).map(s => stepMap[s]);
+}
 
 
 // 탭 초기화
@@ -2447,27 +2488,21 @@ async function startNajePdfLoad(file){
 
       const W = cvs.width, H = cvs.height;
       const midX = Math.floor(W * NJ.LEFT_COL_RATIO);
-      const ctx = cvs.getContext('2d');
 
-      // ── 다중 전략 QR 스캔 헬퍼 ──
-      // QR은 주로 문제 하단에 있으므로 하단 50% 구간을 우선, 전체 시도, 반전 시도
-      function scanColQR(imgData, w, h){
-        // 전략1: 하단 50%만 스캔 (QR이 주로 하단에 위치)
-        const startRow = Math.floor(h * 0.5);
-        const cropH = h - startRow;
-        const cropBuf = new Uint8ClampedArray(cropH * w * 4);
-        for(let row = 0; row < cropH; row++){
-          cropBuf.set(imgData.data.slice((startRow + row) * w * 4, (startRow + row + 1) * w * 4), row * w * 4);
-        }
-        let r = jsQR(cropBuf, w, cropH, {inversionAttempts:'dontInvert'});
-        if(r){ r.location.topLeftCorner.y += startRow; r.location.bottomRightCorner.y += startRow; return r; }
-        r = jsQR(cropBuf, w, cropH, {inversionAttempts:'attemptBoth'});
-        if(r){ r.location.topLeftCorner.y += startRow; r.location.bottomRightCorner.y += startRow; return r; }
+      // ── 다중 전략 QR 스캔 (하단 50% 우선 → 전체 → 반전) ──
+      function scanQR(imgData, w, h){
+        // 전략1: 하단 50% (QR은 주로 문제 하단에 위치)
+        const sh = Math.floor(h * 0.5), ch = h - sh;
+        const buf = new Uint8ClampedArray(ch * w * 4);
+        for(let r = 0; r < ch; r++) buf.set(imgData.data.slice((sh+r)*w*4,(sh+r+1)*w*4), r*w*4);
+        let qr = jsQR(buf, w, ch, {inversionAttempts:'dontInvert'});
+        if(qr){ qr.location.topLeftCorner.y += sh; return qr; }
+        qr = jsQR(buf, w, ch, {inversionAttempts:'attemptBoth'});
+        if(qr){ qr.location.topLeftCorner.y += sh; return qr; }
         // 전략2: 전체 스캔
-        r = jsQR(imgData.data, w, h, {inversionAttempts:'dontInvert'});
-        if(r) return r;
-        r = jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'});
-        return r || null;
+        qr = jsQR(imgData.data, w, h, {inversionAttempts:'dontInvert'});
+        if(qr) return qr;
+        return jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'}) || null;
       }
 
       // ── 좌열 처리 ──
@@ -2475,20 +2510,13 @@ async function startNajePdfLoad(file){
       leftCvs.width = midX; leftCvs.height = H;
       leftCvs.getContext('2d').drawImage(cvs, 0, 0, midX, H, 0, 0, midX, H);
       const leftData = leftCvs.getContext('2d').getImageData(0, 0, midX, H);
-      const leftQR = scanColQR(leftData, midX, H);
-
-      // QR 감지되면 QR 상단 위까지, 아니면 전체
-      const leftCutY = leftQR
-        ? Math.max(50, Math.round(leftQR.location.topLeftCorner.y) - 10)
-        : H;
+      const leftQR = scanQR(leftData, midX, H);
+      const leftCutY = leftQR ? Math.max(50, Math.round(leftQR.location.topLeftCorner.y) - 10) : H;
       const leftFinal = njCrop(cvs, 0, midX, 0, leftCutY);
-      const leftUrl = leftQR ? leftQR.data : null;
       najeExtractedProblems.push({
-        number: num++, canvas: leftFinal,
-        qrUrl: leftUrl,
+        number: num++, canvas: leftFinal, qrUrl: leftQR ? leftQR.data : null,
         dataUrl: leftFinal.toDataURL('image/jpeg', 0.92),
-        pageNum: p, side: 'left',
-        ...getLevelInfo(num-1)
+        pageNum: p, side: 'left', ...getLevelInfo(num-1)
       });
 
       // ── 우열 처리 ──
@@ -2496,19 +2524,13 @@ async function startNajePdfLoad(file){
       rightCvs.width = W-midX; rightCvs.height = H;
       rightCvs.getContext('2d').drawImage(cvs, midX, 0, W-midX, H, 0, 0, W-midX, H);
       const rightData = rightCvs.getContext('2d').getImageData(0, 0, W-midX, H);
-      const rightQR = scanColQR(rightData, W-midX, H);
-
-      const rightCutY = rightQR
-        ? Math.max(50, Math.round(rightQR.location.topLeftCorner.y) - 10)
-        : H;
+      const rightQR = scanQR(rightData, W-midX, H);
+      const rightCutY = rightQR ? Math.max(50, Math.round(rightQR.location.topLeftCorner.y) - 10) : H;
       const rightFinal = njCrop(cvs, midX, W, 0, rightCutY);
-      const rightUrl = rightQR ? rightQR.data : null;
       najeExtractedProblems.push({
-        number: num++, canvas: rightFinal,
-        qrUrl: rightUrl,
+        number: num++, canvas: rightFinal, qrUrl: rightQR ? rightQR.data : null,
         dataUrl: rightFinal.toDataURL('image/jpeg', 0.92),
-        pageNum: p, side: 'right',
-        ...getLevelInfo(num-1)
+        pageNum: p, side: 'right', ...getLevelInfo(num-1)
       });
     }
 
@@ -2694,18 +2716,13 @@ async function njDecodeQR(canvas){
     const ctx = canvas.getContext('2d');
     const w = canvas.width, h = canvas.height;
     const d = ctx.getImageData(0, 0, w, h);
-    // 전략1: 하단 50%
-    const startRow = Math.floor(h * 0.5);
-    const cropH = h - startRow;
-    const cropBuf = new Uint8ClampedArray(cropH * w * 4);
-    for(let row = 0; row < cropH; row++){
-      cropBuf.set(d.data.slice((startRow+row)*w*4, (startRow+row+1)*w*4), row*w*4);
-    }
-    let code = jsQR(cropBuf, w, cropH, {inversionAttempts:'dontInvert'});
+    const sh = Math.floor(h * 0.5), ch = h - sh;
+    const buf = new Uint8ClampedArray(ch * w * 4);
+    for(let r = 0; r < ch; r++) buf.set(d.data.slice((sh+r)*w*4,(sh+r+1)*w*4), r*w*4);
+    let code = jsQR(buf, w, ch, {inversionAttempts:'dontInvert'});
     if(code) return code.data;
-    code = jsQR(cropBuf, w, cropH, {inversionAttempts:'attemptBoth'});
+    code = jsQR(buf, w, ch, {inversionAttempts:'attemptBoth'});
     if(code) return code.data;
-    // 전략2: 전체
     code = jsQR(d.data, w, h, {inversionAttempts:'dontInvert'});
     if(code) return code.data;
     code = jsQR(d.data, w, h, {inversionAttempts:'attemptBoth'});
@@ -2751,22 +2768,65 @@ function resetNajeUpload(){
 }
 
 // ── 미리보기 표시 ──────────────────────────────────────────
+let _najePreviewOpen = 0;
+
 function showNajePreview(problems){
   const infoEl = document.getElementById('naje-preview-info');
   const gridEl = document.getElementById('naje-problem-grid');
-  const qrCount = problems.filter(p=>p.qrUrl).length;
-  infoEl.innerHTML = `총 ${problems.length}개 문제${qrCount>0?' · <span style="color:#10b981">📹 QR 해설 '+qrCount+'개 감지</span>':''}. 순서를 확인하고 저장하세요.`;
-  gridEl.innerHTML = problems.map((p,i) => `
-    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
-      <div style="background:#f5f6fa;padding:6px 8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
-        <span style="font-size:12px;font-weight:700;color:#1a1a2e">${p.number}번</span>
-        <div style="display:flex;gap:4px;align-items:center">
-          ${p.level_name?`<span style="font-size:10px;color:#6b7280;background:#fff;padding:2px 6px;border-radius:100px">${p.level_name}</span>`:''}
-          ${p.qrUrl?`<span style="font-size:10px;color:#10b981;background:#d1fae5;padding:2px 6px;border-radius:100px">📹 QR</span>`:''}
-        </div>
-      </div>
-      <img src="${p.dataUrl}" style="width:100%;display:block;cursor:zoom-in" onclick="openImgViewer('${p.dataUrl}')">
-    </div>`).join('');
+  const qrCount = problems.filter(function(p){return p.qrUrl;}).length;
+  infoEl.innerHTML = '총 ' + problems.length + '개 문제 인식' + (qrCount>0 ? ' &nbsp;·&nbsp; <span style="color:#10b981">📹 QR '+qrCount+'개</span>' : '');
+  gridEl.style.display = 'block';
+  gridEl.style.gridTemplateColumns = '';
+
+  const groups = najeGroupByStep(problems);
+  _najePreviewOpen = 0;
+  window._najePreviewProblems = problems;
+
+  function render(openIdx){
+    let html = '';
+    groups.forEach(function(g, gi){
+      const isOpen = gi === openIdx;
+      const qrN = g.problems.filter(function(p){return p.qrUrl;}).length;
+      const pNums = g.problems.map(function(p){return p.number;});
+      const rangeStr = pNums.length ? pNums[0]+'~'+pNums[pNums.length-1]+'번' : '';
+      const borderC = isOpen ? 'var(--primary)' : 'var(--border)';
+      const hdrBg   = isOpen ? '#EBF5FF' : '#f9fafb';
+      const tagBg   = isOpen ? 'var(--primary)' : '#64748b';
+      const stepTxt = g.step <= 10 ? g.step+'단계' : '킬러';
+      const chevron = isOpen ? '▲' : '▼';
+      const chevC   = isOpen ? 'var(--primary)' : '#9ca3af';
+      const qrBadge = qrN > 0 ? '<span style="background:#d1fae5;color:#10b981;padding:2px 6px;border-radius:100px;font-weight:600;white-space:nowrap;">📹'+qrN+'</span>' : '';
+      html += '<div style="margin-bottom:6px;border:1.5px solid '+borderC+';border-radius:12px;overflow:hidden;">';
+      html += '<div onclick="_najePreviewOpen='+gi+'===_najePreviewOpen?-1:'+gi+';showNajePreview(window._najePreviewProblems||[])" style="display:flex;align-items:center;cursor:pointer;background:'+hdrBg+';padding:0;">'
+        + '<div style="display:flex;align-items:stretch;gap:0;height:36px;flex:1;min-width:0;">'
+        + '<div style="background:#1a1a2e;clip-path:polygon(0 0,80% 0,100% 50%,80% 100%,0 100%);padding:0 20px 0 12px;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;min-width:54px;white-space:nowrap;flex-shrink:0;">'+stepTxt+'</div>'
+        + '<div style="background:'+tagBg+';clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%);padding:0 20px 0 8px;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;gap:4px;flex-shrink:0;">'+najeStageIcon(g.name)+' '+g.name+'</div>'
+        + '<div style="padding:0 8px;display:flex;align-items:center;gap:6px;font-size:11px;color:#6b7280;flex:1;min-width:0;">'
+        + '<span style="background:#f0f0f0;padding:2px 8px;border-radius:100px;font-weight:600;white-space:nowrap;">'+g.problems.length+'문제</span>'
+        + '<span style="color:#9ca3af;font-size:10px;white-space:nowrap;">'+rangeStr+'</span>'
+        + qrBadge
+        + '</div></div>'
+        + '<div style="padding:0 14px;font-size:14px;color:'+chevC+';font-weight:700;flex-shrink:0;">'+chevron+'</div>'
+        + '</div>';
+      if(isOpen){
+        html += '<div style="padding:10px;background:#fff;display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:8px;">';
+        g.problems.forEach(function(p){
+          const qrBadgeSmall = p.qrUrl ? '<span style="font-size:10px;color:#10b981;background:#d1fae5;padding:1px 5px;border-radius:100px;">📹</span>' : '';
+          html += '<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;">'
+            + '<div style="background:#f5f6fa;padding:5px 8px;display:flex;justify-content:space-between;align-items:center;">'
+            + '<span style="font-size:12px;font-weight:700;">'+p.number+'번</span>'
+            + qrBadgeSmall
+            + '</div>'
+            + '<img src="'+p.dataUrl+'" style="width:100%;display:block;cursor:zoom-in;" onclick="openImgViewer(this.src)">'
+            + '</div>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    gridEl.innerHTML = html;
+  }
+  render(_najePreviewOpen);
 }
 
 async function saveNajeSet(){
@@ -3505,19 +3565,18 @@ async function openStudentNajeViewer(setId, title){
   document.getElementById('student-naje-viewer-title').textContent = title;
   const{data: problems} = await db.from('naje_problems')
     .select('*').eq('set_id', setId).order('problem_number');
-  let allProblems = problems || [];
-  if(!allProblems.length){ alert('문제가 없습니다.'); return; }
+  let all = problems || [];
+  if(!all.length){ alert('문제가 없습니다.'); return; }
 
-  // ── 단계 필터링: 학생에게 부여된 naje_step까지만 허용 ──
-  const assignedStep = currentUser.naje_step; // null이면 전체 허용
+  // ── 단계 필터링: 부여된 naje_step까지만 허용 ──
+  const assignedStep = currentUser.naje_step;
   if(assignedStep != null){
-    // 부여된 step의 마지막 문제번호 계산
     const stageInfo = NAJE_STAGES.find(s => s.step === assignedStep);
-    const maxProbNum = stageInfo ? stageInfo.to : (assignedStep >= 11 ? Infinity : 80);
-    allProblems = allProblems.filter(p => p.problem_number <= maxProbNum);
-    if(!allProblems.length){ alert('아직 풀 수 있는 문제가 없습니다.\n선생님께 단계 부여를 요청하세요.'); return; }
+    const maxNum = stageInfo ? stageInfo.to : (assignedStep >= 11 ? Infinity : 80);
+    all = all.filter(p => p.problem_number <= maxNum);
+    if(!all.length){ alert('아직 풀 수 있는 단계가 지정되지 않았습니다.\n선생님께 단계 부여를 요청하세요.'); return; }
   }
-  studentNajeProblems = allProblems;
+  studentNajeProblems = all;
 
   // 기존 저장된 답안 불러오기
   const{data: savedAnswers} = await db.from('naje_answers')
@@ -3531,59 +3590,72 @@ async function openStudentNajeViewer(setId, title){
   document.getElementById('student-naje-list').style.display = 'none';
   document.getElementById('student-naje-viewer').style.display = 'block';
   document.getElementById('student-naje-result').style.display = 'none';
-  _najeNavOpenGroup = -1;
+  _najeNavOpen = -1;
   renderNajeProblemNav();
   showNajeProblem(0);
 }
+
+let _najeNavOpen = -1; // -1: 자동(현재 문제 속한 그룹)
 
 function renderNajeProblemNav(){
   const nav = document.getElementById('naje-problem-nav');
   if(!nav) return;
 
-  // NAJE_LEVEL_MAP의 step 기준으로 단계별 그룹핑
-  // step이 바뀔 때마다 단계 헤더 표시
+  const mapped = studentNajeProblems.map(function(p){ return Object.assign({}, p, {number: p.problem_number}); });
+  const groups = najeGroupByStep(mapped);
+
+  // 현재 문제가 속한 그룹 자동 감지
+  const currNum = (studentNajeProblems[studentNajeCurrentIdx]||{}).problem_number;
+  let autoOpen = 0;
+  groups.forEach(function(g,gi){ if(g.problems.some(function(p){return p.problem_number===currNum;})) autoOpen=gi; });
+  if(_najeNavOpen === -1) _najeNavOpen = autoOpen;
+
+  // 문제 id → 전체 인덱스 맵
+  const idxMap = {};
+  studentNajeProblems.forEach(function(p,i){ idxMap[p.id] = i; });
+
   let html = '';
-  let lastStep = null;
-  let stepNum = 0;
+  groups.forEach(function(g, gi){
+    const isOpen = gi === _najeNavOpen;
+    const hasCurr = g.problems.some(function(p){ return idxMap[p.id] === studentNajeCurrentIdx; });
+    const done = g.problems.filter(function(p){ return !!studentNajeAnswers[p.id]; }).length;
+    const total = g.problems.length;
+    const borderC = isOpen ? 'var(--primary)' : hasCurr ? '#93c5fd' : 'var(--border)';
+    const hdrBg  = isOpen ? '#EBF5FF' : hasCurr ? '#f0f7ff' : '#f9fafb';
+    const tagBg  = isOpen ? 'var(--primary)' : hasCurr ? '#3b82f6' : '#64748b';
+    const stepTxt = g.step <= 10 ? g.step+'단계' : '킬러';
+    const chevron = isOpen ? '▲' : '▼';
+    const chevC   = isOpen ? 'var(--primary)' : '#9ca3af';
+    const doneC   = done === total ? '#d1fae5' : '#f0f0f0';
+    const doneTxtC= done === total ? '#059669' : '#6b7280';
 
-  for(let i = 0; i < studentNajeProblems.length; i++){
-    const p = studentNajeProblems[i];
-    const levelInfo = NAJE_LEVEL_MAP[p.problem_number] || null;
-    const curStep = levelInfo ? levelInfo.step : null;
+    html += '<div style="margin-bottom:5px;border:1.5px solid '+borderC+';border-radius:10px;overflow:hidden;">';
+    html += '<div onclick="_najeNavOpen=_najeNavOpen==='+gi+'?-1:'+gi+';renderNajeProblemNav()" style="display:flex;align-items:center;cursor:pointer;background:'+hdrBg+';padding:0;">'
+      + '<div style="display:flex;align-items:stretch;gap:0;height:34px;flex:1;min-width:0;">'
+      + '<div style="background:#1a1a2e;clip-path:polygon(0 0,80% 0,100% 50%,80% 100%,0 100%);padding:0 18px 0 10px;color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;min-width:52px;white-space:nowrap;flex-shrink:0;">'+stepTxt+'</div>'
+      + '<div style="background:'+tagBg+';clip-path:polygon(0 0,calc(100% - 10px) 0,100% 50%,calc(100% - 10px) 100%,0 100%);padding:0 16px 0 7px;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;gap:3px;flex-shrink:0;">'+najeStageIcon(g.name)+' '+g.name+'</div>'
+      + '<div style="padding:0 6px;display:flex;align-items:center;flex:1;min-width:0;">'
+      + '<span style="background:'+doneC+';color:'+doneTxtC+';padding:1px 7px;border-radius:100px;font-weight:600;font-size:10px;white-space:nowrap;">'+done+'/'+total+'</span>'
+      + '</div></div>'
+      + '<div style="padding:0 12px;font-size:12px;color:'+chevC+';font-weight:700;">'+chevron+'</div>'
+      + '</div>';
 
-    // 단계 헤더: step이 바뀌면 새 단계 표시
-    if(curStep !== lastStep){
-      stepNum++;
-      if(i > 0) html += '</div></div>'; // 이전 그룹 닫기
-      const stepLabel = levelInfo ? stepNum + '. ' + levelInfo.name : stepNum + '단계';
-      html += `
-        <div style="margin-bottom:10px">
-          <div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:6px;
-            padding:3px 10px;background:#f5f6fa;border-radius:100px;display:inline-block">
-            ${stepLabel}
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">`;
-      lastStep = curStep;
+    if(isOpen){
+      html += '<div style="padding:8px 10px;background:#fff;display:flex;flex-wrap:wrap;gap:5px;">';
+      g.problems.forEach(function(p){
+        const i = idxMap[p.id];
+        const isDone = !!studentNajeAnswers[p.id];
+        const isCurr = i === studentNajeCurrentIdx;
+        let bg, color, border;
+        if(isCurr){ bg='#1070C2'; color='#fff'; border='#1070C2'; }
+        else if(isDone){ bg='var(--primary)'; color='#fff'; border='var(--primary)'; }
+        else { bg='#fff'; color='#1a1a2e'; border='var(--border)'; }
+        html += '<button id="naje-nav-'+i+'" onclick="showNajeProblem('+i+')" style="width:36px;height:36px;border-radius:8px;border:1.5px solid '+border+';background:'+bg+';color:'+color+';cursor:pointer;font-size:13px;font-weight:600;">'+p.problem_number+'</button>';
+      });
+      html += '</div>';
     }
-
-    const isDone = !!studentNajeAnswers[p.id];
-    const isCurrent = i === studentNajeCurrentIdx;
-    let bg, color, border;
-    if(isCurrent){
-      bg='#1070C2'; color='#fff'; border='#1070C2';
-    } else if(isDone){
-      bg='var(--primary)'; color='#fff'; border='var(--primary)';
-    } else {
-      bg='#fff'; color='#1a1a2e'; border='var(--border)';
-    }
-
-    html += `<button id="naje-nav-${i}" onclick="showNajeProblem(${i})"
-      style="width:36px;height:36px;border-radius:8px;border:1.5px solid ${border};
-      background:${bg};color:${color};cursor:pointer;font-size:13px;font-weight:600;">
-      ${p.problem_number}</button>`;
-  }
-
-  if(studentNajeProblems.length > 0) html += '</div></div>';
+    html += '</div>';
+  });
   nav.innerHTML = html;
 }
 
@@ -3596,17 +3668,17 @@ function showNajeProblem(idx){
 
   studentNajeCurrentIdx = idx;
   const p = studentNajeProblems[idx];
-  const levelInfo = NAJE_LEVEL_MAP[p.problem_number];
+  const levelInfo = getLevelInfoByNum(p.problem_number);
 
   document.getElementById('naje-problem-img').src = p.image_url;
   document.getElementById('naje-current-label').textContent = p.problem_number + '번 문제';
-  document.getElementById('naje-current-level').textContent =
-    levelInfo ? (Object.keys(NAJE_LEVEL_MAP).filter(k=>NAJE_LEVEL_MAP[k].step===levelInfo.step).indexOf(String(p.problem_number))+1 <= 0 ? '' : levelInfo.name) : '';
+  document.getElementById('naje-current-level').textContent = levelInfo ? levelInfo.name : '';
   document.getElementById('naje-problem-counter').textContent = (idx+1) + ' / ' + studentNajeProblems.length;
   document.getElementById('naje-prev-btn').disabled = idx === 0;
   document.getElementById('naje-next-btn').disabled = idx === studentNajeProblems.length - 1;
   document.getElementById('naje-answer-input').value = studentNajeAnswers[p.id] || '';
 
+  _najeNavOpen = -1; // 현재 문제 그룹 자동 열기
   renderNajeProblemNav();
 }
 
@@ -3678,52 +3750,38 @@ function najeRenderResult(){
   const list = document.getElementById('naje-result-list');
   if(!list) return;
 
-  // 학생에게 부여된 단계 (null = 전체 허용)
+  // 부여된 단계 → 해설 공개 범위 계산
   const assignedStep = currentUser.naje_step;
-  const assignedStage = assignedStep != null ? NAJE_STAGES.find(s => s.step === assignedStep) : null;
+  const assignedStage = assignedStep != null ? NAJE_STAGES.find(s=>s.step===assignedStep) : null;
   const maxProbNum = assignedStep == null ? Infinity : (assignedStage ? assignedStage.to : (assignedStep >= 11 ? Infinity : 80));
 
-  const staged = najeGroupByStage(studentNajeProblems.map(p => ({...p, number: p.problem_number})));
+  const groups = najeGroupByStep(studentNajeProblems.map(p=>({...p, number:p.problem_number})));
   let html = '';
 
-  staged.forEach((group, gi) => {
-    const firstStepName = group.steps[0].name;
-    const stepNum = group.step || group.steps[0].step;
-    const icon = najeStageIcon(firstStepName);
-    const stageNames = group.steps.map(s=>s.name).filter((v,i,a)=>a.indexOf(v)===i).join(' · ');
+  groups.forEach(g => {
+    // 단계 헤더
+    html += najeStageHeaderHTML(g.step, g.name, '');
 
-    // 단계 헤더 (이미지 디자인)
-    html += `<div style="display:flex;align-items:stretch;gap:0;height:32px;margin:14px 0 8px;">
-      <div style="background:#1a1a2e;clip-path:polygon(0 0,80% 0,100% 50%,80% 100%,0 100%);padding:0 22px 0 12px;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;min-width:58px;white-space:nowrap;">${stepNum <= 10 ? stepNum+'단계' : '킬러'}</div>
-      <div style="background:var(--primary);clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%);padding:0 24px 0 8px;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;gap:4px;">${icon} ${stageNames}</div>
-    </div>`;
+    g.problems.forEach(p => {
+      const probNum = p.problem_number;
+      const myAnswer = studentNajeAnswers[p.id] || '';
+      const hasQr = p.qr_url && p.qr_url.startsWith('http');
+      const canSee = hasQr && probNum <= maxProbNum;
 
-    group.steps.forEach(sg => {
-      sg.problems.forEach(p => {
-        const probNum = p.problem_number;
-        const myAnswer = studentNajeAnswers[p.id] || '';
-        const hasQr = p.qr_url && p.qr_url.startsWith('http');
-        // 해설은 부여된 단계 범위 내 문제만 공개
-        const canSeeQr = hasQr && (probNum <= maxProbNum);
-
-        html += `<div style="border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;background:#fff">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <span style="font-size:13px;font-weight:700;color:#1a1a2e">${probNum}번 문제</span>
-            <span style="font-size:11px;color:${myAnswer?'#10b981':'#9ca3af'};font-weight:600">${myAnswer?'✅ 제출됨':'⬜ 미제출'}</span>
-          </div>
-          <img src="${p.image_url}" style="width:100%;border-radius:8px;margin-bottom:10px;cursor:zoom-in" onclick="openImgViewer('${p.image_url}')">
-          ${myAnswer?`<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
-            <span style="font-size:11px;color:#16a34a;font-weight:600;display:block;margin-bottom:4px">내 풀이</span>
-            ${myAnswer.replace(/\n/g,'<br>')}
-          </div>`:''}
-          ${canSeeQr
-            ? `<a href="${p.qr_url}" target="_blank" rel="noopener noreferrer" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;border-radius:10px;text-decoration:none;font-size:13px;font-weight:700">📹 해설 영상 보기</a>`
-            : hasQr && probNum > maxProbNum
-            ? `<div style="padding:10px;background:#FEF3C7;border-radius:8px;text-align:center;font-size:12px;color:#92400E">🔒 해설은 해당 단계 완료 후 공개됩니다</div>`
-            : `<div style="padding:10px;background:#f5f6fa;border-radius:8px;text-align:center;font-size:12px;color:#9ca3af">해설 영상 없음</div>`
-          }
-        </div>`;
-      });
+      html += `<div style="border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;background:#fff">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <span style="font-size:13px;font-weight:700;color:#1a1a2e">${probNum}번 문제</span>
+          <span style="font-size:11px;color:${myAnswer?'#10b981':'#9ca3af'};font-weight:600">${myAnswer?'✅ 제출됨':'⬜ 미제출'}</span>
+        </div>
+        <img src="${p.image_url}" style="width:100%;border-radius:8px;margin-bottom:10px;cursor:zoom-in" onclick="openImgViewer('${p.image_url}')">
+        ${myAnswer?`<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px"><span style="font-size:11px;color:#16a34a;font-weight:600;display:block;margin-bottom:4px">내 풀이</span>${myAnswer.replace(/\n/g,'<br>')}</div>`:''}
+        ${canSee
+          ? `<a href="${p.qr_url}" target="_blank" rel="noopener noreferrer" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;border-radius:10px;text-decoration:none;font-size:13px;font-weight:700">📹 해설 영상 보기</a>`
+          : hasQr && probNum > maxProbNum
+          ? `<div style="padding:10px;background:#FEF3C7;border-radius:8px;text-align:center;font-size:12px;color:#92400E">🔒 해설은 해당 단계 완료 후 공개됩니다</div>`
+          : `<div style="padding:10px;background:#f5f6fa;border-radius:8px;text-align:center;font-size:12px;color:#9ca3af">해설 영상 없음</div>`
+        }
+      </div>`;
     });
   });
 
