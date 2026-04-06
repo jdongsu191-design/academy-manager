@@ -2511,8 +2511,8 @@ async function startNajePdfLoad(file){
       leftCvs.getContext('2d').drawImage(cvs, 0, 0, midX, H, 0, 0, midX, H);
       const leftData = leftCvs.getContext('2d').getImageData(0, 0, midX, H);
       const leftQR = scanQR(leftData, midX, H);
-      // QR 있으면 → QR 바로 위(줄칸 포함 제거), QR 없으면 → 줄칸 시작 위에서 자름
-      const leftCutY = leftQR ? njFindContentEnd(leftData, midX, H, Math.round(leftQR.location.topLeftCorner.y)) : njFindContentEnd(leftData, midX, H, null);
+      // 줄칸 위치 감지해서 자름 (QR 위치는 줄칸 못찾을 때 fallback으로만 사용)
+      const leftCutY = njFindContentEnd(leftData, midX, H, leftQR ? Math.round(leftQR.location.topLeftCorner.y) : null);
       const leftFinal = njCrop(cvs, 0, midX, 0, leftCutY);
       najeExtractedProblems.push({
         number: num++, canvas: leftFinal, qrUrl: leftQR ? leftQR.data : null,
@@ -2526,7 +2526,7 @@ async function startNajePdfLoad(file){
       rightCvs.getContext('2d').drawImage(cvs, midX, 0, W-midX, H, 0, 0, W-midX, H);
       const rightData = rightCvs.getContext('2d').getImageData(0, 0, W-midX, H);
       const rightQR = scanQR(rightData, W-midX, H);
-      const rightCutY = rightQR ? njFindContentEnd(rightData, W-midX, H, Math.round(rightQR.location.topLeftCorner.y)) : njFindContentEnd(rightData, W-midX, H, null);
+      const rightCutY = njFindContentEnd(rightData, W-midX, H, rightQR ? Math.round(rightQR.location.topLeftCorner.y) : null);
       const rightFinal = njCrop(cvs, midX, W, 0, rightCutY);
       najeExtractedProblems.push({
         number: num++, canvas: rightFinal, qrUrl: rightQR ? rightQR.data : null,
@@ -2732,59 +2732,64 @@ async function njDecodeQR(canvas){
 }
 
 // 이미지 크롭
-// 문제 본문 끝 Y좌표 감지 (줄칸/QR 시작 위에서 자름)
-// qrTopY: QR이 있으면 그 Y좌표, 없으면 null
+// 문제 본문 끝 Y좌표 감지
+// 줄칸 = "어두운 수평선이 일정 간격으로 반복"되는 구간
+// 여백(문제 본문 사이)과 줄칸을 이 주기성으로 구분
 function njFindContentEnd(imgData, w, h, qrTopY){
   const data = imgData.data;
-  const BRIGHT = 215;
-  const MIN_RATIO = 0.92;   // 한 줄의 92% 이상 밝으면 "빈 줄"
-  const RULED_MIN = 8;      // 연속 밝은 줄 8줄 이상 = 줄칸 시작
+  const DARK_THR = 200;    // 이 밝기 미만이면 "선"으로 간주
   const STEP = Math.max(1, Math.floor(w / 50));
+  const xL = Math.floor(w * 0.08);
+  const xR = Math.floor(w * 0.92);
 
-  // 탐색 범위: QR 있으면 QR 위까지, 없으면 전체
-  const scanEnd = qrTopY !== null ? Math.min(qrTopY + 5, h) : h;
-
-  let consecutive = 0;
-  let firstRuledTop = -1; // 줄칸 "첫" 시작점 (한 번 찾으면 유지)
-
-  for(let y = 0; y < scanEnd; y++){
-    let bright = 0, total = 0;
-    for(let x = Math.floor(w * 0.05); x < Math.floor(w * 0.95); x += STEP){
-      const idx = (y * w + x) * 4;
-      if((data[idx] + data[idx+1] + data[idx+2]) / 3 >= BRIGHT) bright++;
-      total++;
+  // 각 행의 평균 밝기 계산
+  const rowAvg = new Float32Array(h);
+  for(let y=0; y<h; y++){
+    let sum=0, cnt=0;
+    for(let x=xL; x<xR; x+=STEP){
+      const i=(y*w+x)*4;
+      sum+=(data[i]+data[i+1]+data[i+2])/3;
+      cnt++;
     }
-    if(bright / total >= MIN_RATIO){
-      consecutive++;
-      // 연속 밝은 줄이 기준 이상 → 줄칸 시작점 (최초 1회만 기록)
-      if(consecutive >= RULED_MIN && firstRuledTop < 0){
-        firstRuledTop = y - consecutive + 1;
-      }
-    } else {
-      // 어두운 줄(선) 만나도 firstRuledTop은 리셋하지 않음
-      // 단, 줄칸 영역 진입 전에 짧은 밝은 구간은 무시
-      if(firstRuledTop < 0){
-        consecutive = 0; // 아직 줄칸 못 찾은 상태면 리셋
-      }
-      // 줄칸 내부 선은 consecutive만 리셋 (firstRuledTop 유지)
-      else {
-        consecutive = 0;
-      }
+    rowAvg[y]=sum/cnt;
+  }
+
+  // "어두운 줄(선)" 목록 수집
+  // 어두운 줄: 평균 밝기 < DARK_THR
+  const darkLines = [];
+  for(let y=1; y<h-1; y++){
+    if(rowAvg[y] < DARK_THR && rowAvg[y-1] >= DARK_THR){
+      darkLines.push(y); // 어두운 구간 시작
     }
   }
 
-  // 결과: 줄칸 첫 시작점에서 자름
-  if(firstRuledTop > 0){
-    // 문제 본문 최소 20% 이상이어야 정상 (너무 위에서 자르면 오류)
-    if(firstRuledTop > h * 0.10){
-      return Math.max(30, firstRuledTop - 6);
+  // 어두운 줄들의 간격(gap) 분석 → 일정하면 줄칸
+  // 줄칸 선 간격: scale=3 기준 약 50~90px
+  const MIN_GAP = 40, MAX_GAP = 120, MIN_REPEAT = 5;
+
+  for(let i=0; i < darkLines.length - MIN_REPEAT; i++){
+    const gap = darkLines[i+1] - darkLines[i];
+    if(gap < MIN_GAP || gap > MAX_GAP) continue;
+
+    // 이 간격이 MIN_REPEAT번 이상 반복되는지 확인 (±15px 허용)
+    let repeat = 1;
+    for(let j=i+1; j < darkLines.length-1 && repeat < MIN_REPEAT+3; j++){
+      const g = darkLines[j+1] - darkLines[j];
+      if(Math.abs(g - gap) <= 15) repeat++;
+      else break;
+    }
+
+    if(repeat >= MIN_REPEAT){
+      // 줄칸 발견: darkLines[i]가 첫 번째 선 → 줄칸 시작은 그 조금 위
+      const ruledStart = Math.max(0, darkLines[i] - Math.floor(gap * 0.5));
+      // 상단 15% 이내면 무시
+      if(ruledStart < h * 0.15) continue;
+      return Math.max(30, ruledStart - 8);
     }
   }
 
-  // 줄칸 못찾음 → QR 있으면 QR 바로 위, 없으면 전체
-  if(qrTopY !== null){
-    return Math.max(30, qrTopY - 10);
-  }
+  // 줄칸 패턴 못찾음 → fallback
+  if(qrTopY !== null) return Math.max(30, qrTopY - 10);
   return h;
 }
 
