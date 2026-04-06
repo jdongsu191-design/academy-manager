@@ -2669,6 +2669,75 @@ function getLevelInfo(num){
   return info ? {level_name:info.name, level_type:info.type, step:info.step} : {level_name:'', level_type:'', step:0};
 }
 
+/**
+ * 문제 배열을 8문제 묶음 기준으로 그룹핑.
+ * - 기본: 8문제씩 묶음
+ * - 단, 남은 문제가 8개 미만이면 NAJE_LEVEL_MAP의 level_name(대제목)이 바뀌는 시점 기준으로 묶음
+ * - 각 묶음에 대제목(title) 부여: 묶음 첫 문제의 level_name
+ * problems: [{ number, level_name, ... }]
+ * returns: [{ title, problems[] }]
+ */
+function najeGroupProblems(problems){
+  const GROUP_SIZE = 8;
+  const groups = [];
+  let i = 0;
+  while(i < problems.length){
+    const remaining = problems.length - i;
+    if(remaining >= GROUP_SIZE){
+      // 8문제 묶음
+      const chunk = problems.slice(i, i + GROUP_SIZE);
+      const title = chunk[0].level_name || '';
+      groups.push({ title, problems: chunk });
+      i += GROUP_SIZE;
+    } else {
+      // 남은 문제 < 8: level_name(대제목) 변경 기준으로 소그룹 분할
+      let j = i;
+      while(j < problems.length){
+        const curTitle = problems[j].level_name || '';
+        const subChunk = [problems[j]];
+        j++;
+        while(j < problems.length && (problems[j].level_name || '') === curTitle){
+          subChunk.push(problems[j]);
+          j++;
+        }
+        groups.push({ title: curTitle, problems: subChunk });
+      }
+      break;
+    }
+  }
+  return groups;
+}
+
+// 대제목 뱃지 HTML 생성 (이미지 디자인: 좌측 다크 화살표 + 우측 파란 라벨)
+function najeGroupTitleHTML(title, isPreview){
+  if(!title) return '';
+  // 아이콘 매핑
+  const icons = { '내신3점':'📘', '모고3점':'📗', '내신4점':'📙', '모고쉬사':'📕', '모고어사':'📒', '내신심화':'📔' };
+  const icon = icons[title] || '📄';
+  // 왼쪽 태그에 들어갈 분류 텍스트 (내신/모고)
+  const leftLabel = title.startsWith('내신') ? '내신' : title.startsWith('모고') ? '모고' : title.slice(0,2);
+  const marginTop = isPreview ? 'grid-column:1/-1;margin:10px 0 4px' : 'margin:14px 0 8px';
+  const fs = isPreview ? '11px' : '12px';
+  const fsR = isPreview ? '12px' : '13px';
+  const py = isPreview ? '5px' : '6px';
+  return `<div style="${marginTop};display:flex;align-items:stretch;gap:0;height:28px;">
+    <div style="
+      background:#1a1a2e;
+      clip-path:polygon(0 0,80% 0,100% 50%,80% 100%,0 100%);
+      padding:${py} 22px ${py} 10px;
+      color:#fff;font-size:${fs};font-weight:700;
+      display:flex;align-items:center;gap:3px;min-width:64px;
+    ">▶ ${leftLabel}</div>
+    <div style="
+      background:var(--primary,#178EF5);
+      clip-path:polygon(0 0,calc(100% - 14px) 0,100% 50%,calc(100% - 14px) 100%,0 100%);
+      padding:${py} 28px ${py} 8px;
+      color:#fff;font-size:${fsR};font-weight:700;
+      display:flex;align-items:center;gap:5px;
+    ">${icon} ${title} &nbsp;<span style="font-weight:400;font-size:${fs};opacity:0.85">베타일일N제</span></div>
+  </div>`;
+}
+
 // 초기화
 function resetNajeUpload(){
   najeExtractedProblems = [];
@@ -2697,17 +2766,28 @@ function showNajePreview(problems){
   const gridEl = document.getElementById('naje-problem-grid');
   const qrCount = problems.filter(p=>p.qrUrl).length;
   infoEl.innerHTML = `총 ${problems.length}개 문제${qrCount>0?' · <span style="color:#10b981">📹 QR 해설 '+qrCount+'개 감지</span>':''}. 순서를 확인하고 저장하세요.`;
-  gridEl.innerHTML = problems.map((p,i) => `
-    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
-      <div style="background:#f5f6fa;padding:6px 8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
-        <span style="font-size:12px;font-weight:700;color:#1a1a2e">${p.number}번</span>
-        <div style="display:flex;gap:4px;align-items:center">
-          ${p.level_name?`<span style="font-size:10px;color:#6b7280;background:#fff;padding:2px 6px;border-radius:100px">${p.level_name}</span>`:''}
-          ${p.qrUrl?`<span style="font-size:10px;color:#10b981;background:#d1fae5;padding:2px 6px;border-radius:100px">📹 QR</span>`:''}
-        </div>
-      </div>
-      <img src="${p.dataUrl}" style="width:100%;display:block;cursor:zoom-in" onclick="openImgViewer('${p.dataUrl}')">
-    </div>`).join('');
+
+  const groups = najeGroupProblems(problems);
+  let html = '';
+  groups.forEach(group => {
+    // 대제목 헤더 (grid 전체 너비 차지)
+    html += najeGroupTitleHTML(group.title, true);
+    // 문제 카드들
+    group.problems.forEach(p => {
+      html += `
+        <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
+          <div style="background:#f5f6fa;padding:6px 8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
+            <span style="font-size:12px;font-weight:700;color:#1a1a2e">${p.number}번</span>
+            <div style="display:flex;gap:4px;align-items:center">
+              ${p.level_name?`<span style="font-size:10px;color:#6b7280;background:#fff;padding:2px 6px;border-radius:100px">${p.level_name}</span>`:''}
+              ${p.qrUrl?`<span style="font-size:10px;color:#10b981;background:#d1fae5;padding:2px 6px;border-radius:100px">📹 QR</span>`:''}
+            </div>
+          </div>
+          <img src="${p.dataUrl}" style="width:100%;display:block;cursor:zoom-in" onclick="openImgViewer('${p.dataUrl}')">
+        </div>`;
+    });
+  });
+  gridEl.innerHTML = html;
 }
 
 async function saveNajeSet(){
@@ -3468,50 +3548,43 @@ function renderNajeProblemNav(){
   const nav = document.getElementById('naje-problem-nav');
   if(!nav) return;
 
-  // NAJE_LEVEL_MAP의 step 기준으로 단계별 그룹핑
-  // step이 바뀔 때마다 단계 헤더 표시
+  // studentNajeProblems를 level_name 기준으로 najeGroupProblems에 맞는 형식으로 변환
+  const mapped = studentNajeProblems.map(p => ({
+    ...p,
+    level_name: (NAJE_LEVEL_MAP[p.problem_number] || {}).name || ''
+  }));
+  const groups = najeGroupProblems(mapped);
+
   let html = '';
-  let lastStep = null;
-  let stepNum = 0;
+  let globalIdx = 0; // 전체 배열 인덱스 추적
 
-  for(let i = 0; i < studentNajeProblems.length; i++){
-    const p = studentNajeProblems[i];
-    const levelInfo = NAJE_LEVEL_MAP[p.problem_number] || null;
-    const curStep = levelInfo ? levelInfo.step : null;
+  groups.forEach(group => {
+    // 대제목 헤더
+    html += `<div style="margin-bottom:12px">`;
+    html += najeGroupTitleHTML(group.title, false);
+    html += `<div style="display:flex;flex-wrap:wrap;gap:6px;padding-left:2px">`;
 
-    // 단계 헤더: step이 바뀌면 새 단계 표시
-    if(curStep !== lastStep){
-      stepNum++;
-      if(i > 0) html += '</div></div>'; // 이전 그룹 닫기
-      const stepLabel = levelInfo ? stepNum + '. ' + levelInfo.name : stepNum + '단계';
-      html += `
-        <div style="margin-bottom:10px">
-          <div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:6px;
-            padding:3px 10px;background:#f5f6fa;border-radius:100px;display:inline-block">
-            ${stepLabel}
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">`;
-      lastStep = curStep;
-    }
+    group.problems.forEach(p => {
+      const i = globalIdx++;
+      const isDone = !!studentNajeAnswers[p.id];
+      const isCurrent = i === studentNajeCurrentIdx;
+      let bg, color, border;
+      if(isCurrent){
+        bg='#1070C2'; color='#fff'; border='#1070C2';
+      } else if(isDone){
+        bg='var(--primary)'; color='#fff'; border='var(--primary)';
+      } else {
+        bg='#fff'; color='#1a1a2e'; border='var(--border)';
+      }
+      html += `<button id="naje-nav-${i}" onclick="showNajeProblem(${i})"
+        style="width:36px;height:36px;border-radius:8px;border:1.5px solid ${border};
+        background:${bg};color:${color};cursor:pointer;font-size:13px;font-weight:600;">
+        ${p.problem_number}</button>`;
+    });
 
-    const isDone = !!studentNajeAnswers[p.id];
-    const isCurrent = i === studentNajeCurrentIdx;
-    let bg, color, border;
-    if(isCurrent){
-      bg='#1070C2'; color='#fff'; border='#1070C2';
-    } else if(isDone){
-      bg='var(--primary)'; color='#fff'; border='var(--primary)';
-    } else {
-      bg='#fff'; color='#1a1a2e'; border='var(--border)';
-    }
+    html += `</div></div>`;
+  });
 
-    html += `<button id="naje-nav-${i}" onclick="showNajeProblem(${i})"
-      style="width:36px;height:36px;border-radius:8px;border:1.5px solid ${border};
-      background:${bg};color:${color};cursor:pointer;font-size:13px;font-weight:600;">
-      ${p.problem_number}</button>`;
-  }
-
-  if(studentNajeProblems.length > 0) html += '</div></div>';
   nav.innerHTML = html;
 }
 
