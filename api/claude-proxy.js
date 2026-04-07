@@ -8,8 +8,7 @@ export default async function handler(req) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return new Response(JSON.stringify({ error: 'API key not configured' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
+      status: 500, headers: { 'Content-Type': 'application/json' }
     });
   }
 
@@ -30,27 +29,26 @@ export default async function handler(req) {
       parts.push({ text: message.content });
     }
 
-    // parts가 비어있으면 오류 반환 (디버그)
     if (parts.length === 0) {
-      return new Response(JSON.stringify({ error: 'empty parts', debug: { message } }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
+      return new Response(JSON.stringify({ error: 'empty parts' }), {
+        status: 400, headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + apiKey;
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=' + apiKey;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: body.max_tokens || 1000, temperature: 0.1 } })
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { maxOutputTokens: body.max_tokens || 1000, temperature: 0.1 }
+      })
     });
 
     const data = await response.json();
-    // Gemini 오류 시 그대로 반환 (디버그)
     if (data.error) {
-      return new Response(JSON.stringify({ error: data.error }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
+      return new Response(JSON.stringify({ error: data.error.message }), {
+        status: 400, headers: { 'Content-Type': 'application/json' }
       });
     }
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -61,8 +59,7 @@ export default async function handler(req) {
     });
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
+      status: 500, headers: { 'Content-Type': 'application/json' }
     });
   }
 }
