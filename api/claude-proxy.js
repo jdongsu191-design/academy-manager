@@ -1,5 +1,6 @@
 export const config = { runtime: 'edge' };
 
+
 export default async function handler(req) {
   if (req.method !== 'POST') {
     return new Response('Method Not Allowed', { status: 405 });
@@ -30,25 +31,7 @@ export default async function handler(req) {
         status: 400, headers: { 'Content-Type': 'application/json' }
       });
     }
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey;
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { maxOutputTokens: body.max_tokens || 1000, temperature: 0.1 } })
-    });
-    const data = await response.json();
-    if (data.error) {
-      return new Response(JSON.stringify({ error: data.error.message }), {
-        status: 400, headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    const txt = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] ? data.candidates[0].content.parts[0].text || '' : '';
-    return new Response(JSON.stringify({ content: [{ type: 'text', text: txt }] }), {
-      status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-    });
-  } catch (e) {
-    return new Response(JSON.stringify({ error: e.message }), {
-      status: 500, headers: { 'Content-Type': 'application/json' }
-    });
-  }
-}
