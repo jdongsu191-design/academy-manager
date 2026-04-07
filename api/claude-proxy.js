@@ -15,23 +15,17 @@ export default async function handler(req, res) {
       parts.push({ text: msg.content });
     }
     if (!parts.length) { res.status(400).json({ error: 'empty' }); return; }
-    const models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
-    let lastErr = '';
-    for (const model of models) {
-      const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + apiKey;
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 4096, temperature: 0.1 } })
-      });
-      const d = await r.json();
-      if (d.error) { lastErr = d.error.message; continue; }
-      const text = d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts && d.candidates[0].content.parts[0] ? d.candidates[0].content.parts[0].text || '' : '';
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.status(200).json({ content: [{ type: 'text', text }] });
-      return;
-    }
-    res.status(400).json({ error: lastErr });
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 4096, temperature: 0.1 } })
+    });
+    const d = await r.json();
+    if (d.error) { res.status(400).json({ error: d.error.message }); return; }
+    const text = d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts && d.candidates[0].content.parts[0] ? d.candidates[0].content.parts[0].text || '' : '';
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.status(200).json({ content: [{ type: 'text', text }] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
