@@ -813,10 +813,23 @@
       <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a2e">📄 일일N제</div>
       <div style="font-size:13px;color:#6b7280;margin-bottom:16px">선생님이 등록한 문제를 풀어보세요</div>
       <div id="student-naje-list"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
+
+      <!-- 단계 선택 화면 -->
+      <div id="student-naje-step-select" style="display:none">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+          <button onclick="closeStudentNajeStepSelect()" class="btn btn-sm">← 목록으로</button>
+          <div id="student-naje-step-title" style="font-size:15px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+        </div>
+        <div class="alert alert-info" style="margin-bottom:14px;font-size:13px">
+          💡 풀고 싶은 단계를 선택하세요. 단계별로 독립적으로 진행됩니다.
+        </div>
+        <div id="student-naje-step-grid" style="display:grid;gap:10px;"></div>
+      </div>
+
       <!-- 문제 풀기 뷰어 -->
       <div id="student-naje-viewer" style="display:none">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
-          <button onclick="closeStudentNajeViewer()" class="btn btn-sm">← 목록으로</button>
+          <button onclick="backToStepSelect()" class="btn btn-sm">← 단계 선택</button>
           <div id="student-naje-viewer-title" style="font-size:15px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
         </div>
 
@@ -903,12 +916,13 @@
 
       <!-- 결과 화면 -->
       <div id="student-naje-result" style="display:none">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
-          <button onclick="najeBackToSolve()" class="btn btn-sm">← 다시 풀기</button>
-          <div style="font-size:15px;font-weight:700;flex:1" id="naje-result-title"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+          <button onclick="najeBackToSolve()" class="btn btn-sm">↩ 다시 풀기</button>
+          <button onclick="backToStepSelect()" class="btn btn-sm btn-primary">📋 단계 선택</button>
+          <div style="font-size:15px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="naje-result-title"></div>
         </div>
         <div class="alert alert-success" style="margin-bottom:16px">
-          ✅ 제출 완료! 아래에서 각 문제의 해설 영상을 확인하세요.
+          ✅ 제출 완료! 정답과 비교하고 해설 영상을 확인하세요.
         </div>
         <div id="naje-result-list"></div>
       </div>
@@ -3954,48 +3968,117 @@ async function loadStudentNaje(){
     </div>`).join('');
 }
 
+// N제 선택 → 단계 선택 화면
+let _najeAllProblems = []; // 해당 N제 전체 문제 캐시
+let _najeCurrentSetTitle = '';
+let _najeCurrentStep = null; // 현재 선택된 단계
+
 async function openStudentNajeViewer(setId, title){
-  studentNajeProblems = [];
-  studentNajeCurrentIdx = 0;
-  studentNajeAnswers = {};
+  _najeCurrentSetTitle = title;
   studentNajeSetId = setId;
-  document.getElementById('student-naje-viewer-title').textContent = title;
+  document.getElementById('student-naje-step-title').textContent = title;
+
+  // 전체 문제 로드
   const{data: problems} = await db.from('naje_problems')
     .select('*').eq('set_id', setId).order('problem_number');
-  let all = problems || [];
-  if(!all.length){ alert('문제가 없습니다.'); return; }
+  _najeAllProblems = problems || [];
+  if(!_najeAllProblems.length){ alert('문제가 없습니다.'); return; }
 
-  // ── 단계 필터링: 부여된 naje_steps (배열)에 해당하는 문제만 허용 ──
-  const assignedSteps = Array.isArray(currentUser.naje_steps) ? currentUser.naje_steps : [];
-  if(assignedSteps.length > 0){
-    // 허용된 단계에 속하는 문제번호 범위만 허용
-    const allowedNums = new Set();
-    NAJE_STAGES.forEach(function(stage){
-      if(assignedSteps.includes(stage.step)){
-        for(var n = stage.from; n <= stage.to; n++) allowedNums.add(n);
-      }
-    });
-    // 킬러(11단계) 포함 여부
-    const killerAllowed = assignedSteps.includes(11);
-    all = all.filter(function(p){
-      return allowedNums.has(p.problem_number) || (killerAllowed && p.problem_number >= 81);
-    });
-    if(!all.length){ alert('아직 풀 수 있는 단계가 지정되지 않았습니다.\n선생님께 단계 부여를 요청하세요.'); return; }
-  }
-  studentNajeProblems = all;
-
-  // 기존 저장된 답안 불러오기
+  // 기존 답안 로드
   const{data: savedAnswers} = await db.from('naje_answers')
-    .select('problem_id, answer')
-    .eq('student_id', currentUser.id)
-    .eq('set_id', setId);
-  if(savedAnswers){
-    savedAnswers.forEach(a => { studentNajeAnswers[a.problem_id] = a.answer; });
-  }
+    .select('problem_id,answer').eq('student_id',currentUser.id).eq('set_id',setId);
+  studentNajeAnswers = {};
+  if(savedAnswers) savedAnswers.forEach(function(a){ studentNajeAnswers[a.problem_id] = a.answer; });
+
+  // 부여된 단계 계산
+  const assignedSteps = Array.isArray(currentUser.naje_steps) ? currentUser.naje_steps : [];
+
+  // 단계 선택 그리드 렌더
+  renderStepSelectGrid(assignedSteps);
 
   document.getElementById('student-naje-list').style.display = 'none';
+  document.getElementById('student-naje-step-select').style.display = 'block';
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'none';
+}
+
+function renderStepSelectGrid(assignedSteps){
+  const grid = document.getElementById('student-naje-step-grid');
+  const stepsToShow = assignedSteps.length > 0 ? assignedSteps : NAJE_STAGES.map(function(s){return s.step;});
+
+  let html = '';
+  stepsToShow.forEach(function(stepNum){
+    var stageInfo = NAJE_STAGES.find(function(s){return s.step===stepNum;})
+      || (stepNum===11?{step:11,name:NAJE_KILLER_NAME,from:81,to:999}:null);
+    if(!stageInfo) return;
+
+    // 이 단계 문제들
+    var stepProblems = _najeAllProblems.filter(function(p){
+      return p.problem_number >= stageInfo.from && p.problem_number <= stageInfo.to;
+    });
+    if(!stepProblems.length) return;
+
+    // 제출된 답안 수
+    var answered = stepProblems.filter(function(p){ return !!studentNajeAnswers[p.id]; }).length;
+    var total = stepProblems.length;
+    var pct = Math.round(answered/total*100);
+    var isComplete = answered === total;
+    var icon = najeStageIcon(stageInfo.name);
+    var statusColor = isComplete?'#3B6D11':answered>0?'#178EF5':'#6b7280';
+    var statusBg = isComplete?'#EAF3DE':answered>0?'#E6F1FB':'#f5f6fa';
+    var statusLabel = isComplete?'✅ 완료':answered>0?'진행중 '+answered+'/'+total:'미시작';
+
+    html += '<div onclick="startNajeStep('+stepNum+')" style="background:#fff;border:2px solid '+(isComplete?'#86efac':answered>0?'#93c5fd':'var(--border)')+';border-radius:14px;padding:14px;cursor:pointer;transition:border-color 0.15s;display:flex;align-items:center;gap:12px;">'
+      + '<div style="width:44px;height:44px;border-radius:12px;background:#1a1a2e;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">'+icon+'</div>'
+      + '<div style="flex:1;min-width:0;">'
+      + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">'
+      + '<span style="font-size:11px;font-weight:700;background:#1a1a2e;color:#fff;padding:2px 7px;border-radius:100px;">'+(stepNum<=10?stepNum+'단계':'킬러')+'</span>'
+      + '<span style="font-size:13px;font-weight:700;color:#1a1a2e;">'+stageInfo.name+'</span>'
+      + '</div>'
+      + '<div style="font-size:11px;color:#6b7280;">'+stageInfo.from+'~'+Math.min(stageInfo.to, _najeAllProblems.length)+'번 · '+total+'문제</div>'
+      + '<div style="margin-top:6px;background:#e5e7eb;border-radius:100px;height:5px;overflow:hidden;">'
+      + '<div style="width:'+pct+'%;height:100%;background:'+statusColor+';border-radius:100px;transition:width 0.3s;"></div>'
+      + '</div>'
+      + '</div>'
+      + '<div style="text-align:right;flex-shrink:0;">'
+      + '<span style="font-size:11px;font-weight:700;padding:4px 9px;border-radius:100px;background:'+statusBg+';color:'+statusColor+';">'+statusLabel+'</span>'
+      + '<div style="font-size:18px;color:#d1d5db;margin-top:4px;">›</div>'
+      + '</div>'
+      + '</div>';
+  });
+
+  if(!html) html = '<div class="card" style="text-align:center;padding:24px;color:#6b7280"><p>풀 수 있는 단계가 없습니다.<br>선생님께 단계 부여를 요청하세요.</p></div>';
+  grid.innerHTML = html;
+}
+
+function closeStudentNajeStepSelect(){
+  document.getElementById('student-naje-step-select').style.display = 'none';
+  document.getElementById('student-naje-list').style.display = 'block';
+}
+
+// 단계 선택 → 해당 단계 문제만 풀기
+function startNajeStep(stepNum){
+  _najeCurrentStep = stepNum;
+  var stageInfo = NAJE_STAGES.find(function(s){return s.step===stepNum;})
+    || (stepNum===11?{step:11,name:NAJE_KILLER_NAME,from:81,to:999}:null);
+  if(!stageInfo) return;
+
+  // 해당 단계 문제만 필터
+  studentNajeProblems = _najeAllProblems.filter(function(p){
+    return p.problem_number >= stageInfo.from && p.problem_number <= stageInfo.to;
+  });
+  if(!studentNajeProblems.length){ alert('이 단계에 문제가 없습니다.'); return; }
+
+  studentNajeCurrentIdx = 0;
+
+  // 뷰어 제목에 단계명 표시
+  document.getElementById('student-naje-viewer-title').textContent =
+    _najeCurrentSetTitle + ' · ' + (stepNum<=10?stepNum+'단계 ':' ') + stageInfo.name;
+
+  document.getElementById('student-naje-step-select').style.display = 'none';
   document.getElementById('student-naje-viewer').style.display = 'block';
   document.getElementById('student-naje-result').style.display = 'none';
+
   _najeNavOpen = -1;
   renderNajeProblemNav();
   showNajeProblem(0);
@@ -4445,6 +4528,15 @@ function najeBackToSolve(){
   showNajeProblem(studentNajeCurrentIdx);
 }
 
+function backToStepSelect(){
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'none';
+  // 단계 그리드 새로고침 (진행 상황 반영)
+  const assignedSteps = Array.isArray(currentUser.naje_steps) ? currentUser.naje_steps : [];
+  renderStepSelectGrid(assignedSteps);
+  document.getElementById('student-naje-step-select').style.display = 'block';
+}
+
 // 개별 임시 저장 (로컬만) - 최종 제출 시 DB 저장
 function saveNajeAnswer(e){
   const p = studentNajeProblems[studentNajeCurrentIdx];
@@ -4456,9 +4548,18 @@ function saveNajeAnswer(e){
 function closeStudentNajeViewer(){
   studentNajeProblems = [];
   studentNajeCurrentIdx = 0;
-  studentNajeAnswers = {};
-  document.getElementById('student-naje-list').style.display = 'block';
+  _najeCurrentStep = null;
   document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'none';
+  // 단계 선택 화면이 있으면 거기로, 없으면 목록으로
+  const stepSel = document.getElementById('student-naje-step-select');
+  if(stepSel && _najeAllProblems.length){
+    const assignedSteps = Array.isArray(currentUser.naje_steps) ? currentUser.naje_steps : [];
+    renderStepSelectGrid(assignedSteps);
+    stepSel.style.display = 'block';
+  } else {
+    document.getElementById('student-naje-list').style.display = 'block';
+  }
 }
 
 </script>
