@@ -571,15 +571,38 @@
       <!-- 일일N제 패널 -->
       <div class="panel" id="panel-naje">
 
-        <!-- 상단: 목록 / 등록 탭 -->
+        <!-- 상단: 목록 / 등록 / 결과 탭 -->
         <div style="display:flex;gap:4px;margin-bottom:16px;background:#f5f6fa;border-radius:10px;padding:4px">
           <button id="naje-tab-list" onclick="switchNajeTab('list')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:var(--primary);color:#fff">📋 등록 목록</button>
           <button id="naje-tab-upload" onclick="switchNajeTab('upload')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;background:transparent;color:#6b7280">➕ 문제 등록</button>
+          <button id="naje-tab-results" onclick="switchNajeTab('results')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;background:transparent;color:#6b7280">📊 결과 확인</button>
         </div>
 
         <!-- 목록 탭 -->
         <div id="naje-panel-list">
           <div id="naje-set-list"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
+        </div>
+
+        <!-- 결과 확인 탭 -->
+        <div id="naje-panel-results" style="display:none">
+          <div class="card" style="margin-bottom:12px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <div style="flex:1;min-width:140px">
+                <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">N제 선택</div>
+                <select id="naje-result-set-select" onchange="loadNajeResultStudents()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+                  <option value="">N제를 선택하세요</option>
+                </select>
+              </div>
+              <div style="flex:1;min-width:120px">
+                <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">학생 선택</div>
+                <select id="naje-result-student-select" onchange="loadNajeResultDetail()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff" disabled>
+                  <option value="">학생 선택</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div id="naje-result-summary"></div>
+          <div id="naje-result-detail"></div>
         </div>
 
         <!-- 등록 탭 -->
@@ -2358,12 +2381,15 @@ function initNaje(){
 function switchNajeTab(tab){
   document.getElementById('naje-panel-list').style.display = tab==='list'?'block':'none';
   document.getElementById('naje-panel-upload').style.display = tab==='upload'?'block':'none';
-  document.getElementById('naje-tab-list').style.background = tab==='list'?'var(--primary)':'transparent';
-  document.getElementById('naje-tab-list').style.color = tab==='list'?'#fff':'#6b7280';
-  document.getElementById('naje-tab-list').style.fontWeight = tab==='list'?'600':'500';
-  document.getElementById('naje-tab-upload').style.background = tab==='upload'?'var(--primary)':'transparent';
-  document.getElementById('naje-tab-upload').style.color = tab==='upload'?'#fff':'#6b7280';
-  document.getElementById('naje-tab-upload').style.fontWeight = tab==='upload'?'600':'500';
+  document.getElementById('naje-panel-results').style.display = tab==='results'?'block':'none';
+  ['list','upload','results'].forEach(function(t){
+    var btn = document.getElementById('naje-tab-'+t);
+    if(!btn) return;
+    btn.style.background = tab===t?'var(--primary)':'transparent';
+    btn.style.color = tab===t?'#fff':'#6b7280';
+    btn.style.fontWeight = tab===t?'600':'500';
+  });
+  if(tab==='results') initNajeResultTab();
 }
 
 // 등록된 N제 목록 로드
@@ -4126,16 +4152,204 @@ async function najeSubmitAll(){
 }
 
 // 결과 화면 렌더링
+
+// ===== 선생님 N제 결과 확인 =====
+async function initNajeResultTab(){
+  // N제 목록 로드
+  const sel = document.getElementById('naje-result-set-select');
+  sel.innerHTML = '<option value="">N제를 선택하세요</option>';
+  const{data} = await db.from('naje_sets')
+    .select('id,title,total_problems').eq('teacher_id',currentUser.id)
+    .order('created_at',{ascending:false});
+  (data||[]).forEach(function(s){
+    sel.innerHTML += '<option value="'+s.id+'">'+s.title+' ('+s.total_problems+'문제)</option>';
+  });
+}
+
+async function loadNajeResultStudents(){
+  const setId = document.getElementById('naje-result-set-select').value;
+  const studentSel = document.getElementById('naje-result-student-select');
+  const summary = document.getElementById('naje-result-summary');
+  const detail = document.getElementById('naje-result-detail');
+  summary.innerHTML = '';
+  detail.innerHTML = '';
+  if(!setId){ studentSel.innerHTML='<option value="">학생 선택</option>'; studentSel.disabled=true; return; }
+
+  // 이 N제에 답안 제출한 학생 목록
+  const{data:answers} = await db.from('naje_answers')
+    .select('student_id').eq('set_id',setId);
+  const studentIds = [...new Set((answers||[]).map(function(a){return a.student_id;}))];
+
+  if(!studentIds.length){
+    studentSel.innerHTML='<option value="">제출한 학생 없음</option>';
+    studentSel.disabled=true;
+    summary.innerHTML='<div class="card" style="text-align:center;padding:24px;color:#6b7280"><div style="font-size:32px;margin-bottom:8px">📭</div><p>아직 제출한 학생이 없습니다</p></div>';
+    return;
+  }
+
+  const{data:studentData} = await db.from('users').select('id,name').in('id',studentIds).order('name');
+  studentSel.innerHTML = '<option value="">전체 학생 현황</option>';
+  (studentData||[]).forEach(function(s){
+    studentSel.innerHTML += '<option value="'+s.id+'">'+s.name+'</option>';
+  });
+  studentSel.disabled = false;
+
+  // 전체 현황 로드
+  loadNajeResultDetail();
+}
+
+async function loadNajeResultDetail(){
+  const setId = document.getElementById('naje-result-set-select').value;
+  const studentId = document.getElementById('naje-result-student-select').value;
+  const summary = document.getElementById('naje-result-summary');
+  const detail = document.getElementById('naje-result-detail');
+  if(!setId) return;
+
+  detail.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+
+  // 문제 목록 + 정답
+  const{data:problems} = await db.from('naje_problems')
+    .select('id,problem_number,correct_answer,image_url')
+    .eq('set_id',setId).order('problem_number');
+
+  if(studentId){
+    // 특정 학생 결과
+    const{data:answers} = await db.from('naje_answers')
+      .select('problem_id,answer,answered_at')
+      .eq('set_id',setId).eq('student_id',studentId);
+    const ansMap = {};
+    (answers||[]).forEach(function(a){ ansMap[a.problem_id] = a.answer; });
+
+    const{data:studentInfo} = await db.from('users').select('name').eq('id',studentId).single();
+    renderNajeTeacherStudentResult(problems||[], ansMap, studentInfo?.name||'학생');
+  } else {
+    // 전체 현황
+    const{data:allAnswers} = await db.from('naje_answers')
+      .select('problem_id,student_id,answer').eq('set_id',setId);
+    const{data:allStudents} = await db.from('users')
+      .select('id,name').eq('teacher_id',currentUser.id).eq('status','active').order('name');
+    renderNajeTeacherOverview(problems||[], allAnswers||[], allStudents||[]);
+  }
+}
+
+function renderNajeTeacherStudentResult(problems, ansMap, studentName){
+  const detail = document.getElementById('naje-result-detail');
+  let correct=0, wrong=0, unanswered=0;
+  problems.forEach(function(p){
+    const ans = ansMap[p.id]?.trim();
+    if(!ans){ unanswered++; return; }
+    if(p.correct_answer && normalizeAnswer(ans) === normalizeAnswer(p.correct_answer)) correct++;
+    else if(p.correct_answer) wrong++;
+  });
+  const total = problems.length;
+  const scored = correct+wrong;
+  const pct = scored>0 ? Math.round(correct/problems.filter(function(p){return p.correct_answer;}).length*100) : null;
+
+  let html = '<div class="card" style="margin-bottom:12px">'
+    + '<div style="font-size:15px;font-weight:700;margin-bottom:12px">'+studentName+' 학생 결과</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">'
+    + '<div style="text-align:center;padding:12px;background:#EAF3DE;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#3B6D11">'+correct+'</div><div style="font-size:11px;color:#3B6D11">정답</div></div>'
+    + '<div style="text-align:center;padding:12px;background:#FCEBEB;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#E24B4A">'+wrong+'</div><div style="font-size:11px;color:#E24B4A">오답</div></div>'
+    + '<div style="text-align:center;padding:12px;background:#f5f6fa;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#6b7280">'+unanswered+'</div><div style="font-size:11px;color:#6b7280">미제출</div></div>'
+    + '<div style="text-align:center;padding:12px;background:#E6F1FB;border-radius:10px"><div style="font-size:22px;font-weight:700;color:var(--primary)">'+(pct!==null?pct+'%':'-')+'</div><div style="font-size:11px;color:var(--primary)">정답률</div></div>'
+    + '</div></div>';
+
+  const groups = najeGroupByStep(problems.map(function(p){return Object.assign({},p,{number:p.problem_number});}));
+  groups.forEach(function(g){
+    html += najeStageHeaderHTML(g.step, g.name, '');
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:12px">';
+    g.problems.forEach(function(p){
+      const myAns = (ansMap[p.id]||'').trim();
+      const hasCorrect = !!p.correct_answer;
+      let statusBg, statusText, statusIcon;
+      if(!myAns){ statusBg='#f5f6fa'; statusText='#6b7280'; statusIcon='⬜ 미제출'; }
+      else if(!hasCorrect){ statusBg='#FEF3C7'; statusText='#92400E'; statusIcon='📝 '+myAns; }
+      else if(normalizeAnswer(myAns)===normalizeAnswer(p.correct_answer)){ statusBg='#EAF3DE'; statusText='#3B6D11'; statusIcon='✅ 정답'; }
+      else { statusBg='#FCEBEB'; statusText='#E24B4A'; statusIcon='❌ 오답'; }
+      html += '<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">'
+        + '<div style="background:#f5f6fa;padding:5px 8px;font-size:12px;font-weight:700">'+p.problem_number+'번</div>'
+        + '<img src="'+p.image_url+'" style="width:100%;display:block;cursor:zoom-in" onclick="openImgViewer(this.getAttribute(\'data-src\'))" data-src="'+p.image_url+'">'
+        + '<div style="padding:6px 8px;background:'+statusBg+'">'
+        + '<div style="font-size:11px;font-weight:700;color:'+statusText+'">'+statusIcon+'</div>'
+        + (myAns&&hasCorrect&&normalizeAnswer(myAns)!==normalizeAnswer(p.correct_answer)?'<div style="font-size:10px;color:#6b7280;margin-top:2px">내 답: '+myAns+' / 정답: '+p.correct_answer+'</div>':'')
+        + (myAns&&!hasCorrect?'':'')
+        + '</div>'
+        + '</div>';
+    });
+    html += '</div>';
+  });
+  detail.innerHTML = html;
+}
+
+function renderNajeTeacherOverview(problems, allAnswers, allStudents){
+  const detail = document.getElementById('naje-result-detail');
+  // 학생별 정답 수 집계
+  const ansMap = {}; // {studentId: {problemId: answer}}
+  allAnswers.forEach(function(a){
+    if(!ansMap[a.student_id]) ansMap[a.student_id] = {};
+    ansMap[a.student_id][a.problem_id] = a.answer;
+  });
+  const submittedIds = Object.keys(ansMap);
+  const totalWithAnswer = problems.filter(function(p){return p.correct_answer;}).length;
+
+  let html = '<div class="card" style="margin-bottom:12px">'
+    + '<div style="font-size:14px;font-weight:700;margin-bottom:10px">전체 제출 현황 ('+submittedIds.length+'명 제출)</div>';
+
+  if(!submittedIds.length){
+    html += '<div style="text-align:center;padding:20px;color:#6b7280">아직 제출한 학생이 없습니다</div></div>';
+    detail.innerHTML = html;
+    return;
+  }
+
+  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
+    + '<thead><tr style="background:#f5f6fa">'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:left">학생</th>'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center">정답</th>'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center">오답</th>'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center">미제출</th>'
+    + (totalWithAnswer>0?'<th style="padding:8px;border:1px solid #e5e7eb;text-align:center">정답률</th>':'')
+    + '</tr></thead><tbody>';
+
+  submittedIds.forEach(function(sid){
+    const student = allStudents.find(function(s){return s.id===sid;});
+    const sName = student ? student.name : '알 수 없음';
+    const sAnswers = ansMap[sid];
+    let correct=0, wrong=0, unanswered=0;
+    problems.forEach(function(p){
+      const ans = (sAnswers[p.id]||'').trim();
+      if(!ans){ unanswered++; return; }
+      if(p.correct_answer && normalizeAnswer(ans)===normalizeAnswer(p.correct_answer)) correct++;
+      else if(p.correct_answer) wrong++;
+    });
+    const pct = totalWithAnswer>0 ? Math.round(correct/totalWithAnswer*100) : null;
+    html += '<tr>'
+      + '<td style="padding:8px;border:1px solid #e5e7eb;font-weight:600">'+sName+'</td>'
+      + '<td style="padding:8px;border:1px solid #e5e7eb;text-align:center;color:#3B6D11;font-weight:700">'+correct+'</td>'
+      + '<td style="padding:8px;border:1px solid #e5e7eb;text-align:center;color:#E24B4A;font-weight:700">'+wrong+'</td>'
+      + '<td style="padding:8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280">'+unanswered+'</td>'
+      + (totalWithAnswer>0?'<td style="padding:8px;border:1px solid #e5e7eb;text-align:center;font-weight:700;color:'+(pct>=70?'#3B6D11':pct>=40?'#d97706':'#E24B4A')+'">'+(pct!==null?pct+'%':'-')+'</td>':'')
+      + '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  detail.innerHTML = html;
+}
+
+// 정답 비교용 정규화 (공백 제거, 소문자, ① → 1 등)
+function normalizeAnswer(ans){
+  if(!ans) return '';
+  var s = ans.toString().trim().replace(/\s+/g,'');
+  // 원문자 ①②③④⑤ → 1,2,3,4,5
+  s = s.replace(/①/g,'1').replace(/②/g,'2').replace(/③/g,'3').replace(/④/g,'4').replace(/⑤/g,'5');
+  return s.toLowerCase();
+}
+
 function najeRenderResult(){
   const list = document.getElementById('naje-result-list');
   if(!list) return;
 
-  // 부여된 단계 → 해설 공개 범위 계산 (naje_steps 배열 기준)
   const assignedSteps2 = Array.isArray(currentUser.naje_steps) ? currentUser.naje_steps : [];
-  // 허용된 문제번호 집합
   const allowedProbNums = new Set();
   if(assignedSteps2.length === 0){
-    // 단계 미부여 → 전체 허용
     for(var _n=1; _n<=9999; _n++) allowedProbNums.add(_n);
   } else {
     NAJE_STAGES.forEach(function(stage){
@@ -4148,33 +4362,76 @@ function najeRenderResult(){
     }
   }
 
-  const groups = najeGroupByStep(studentNajeProblems.map(p=>({...p, number:p.problem_number})));
-  let html = '';
+  // 점수 집계
+  let correct=0, wrong=0, unanswered=0;
+  studentNajeProblems.forEach(function(p){
+    const ans = (studentNajeAnswers[p.id]||'').trim();
+    if(!ans){ unanswered++; return; }
+    if(p.correct_answer && normalizeAnswer(ans)===normalizeAnswer(p.correct_answer)) correct++;
+    else if(p.correct_answer) wrong++;
+  });
+  const totalWithAns = studentNajeProblems.filter(function(p){return p.correct_answer;}).length;
+  const pct = totalWithAns>0 ? Math.round(correct/totalWithAns*100) : null;
 
-  groups.forEach(g => {
-    // 단계 헤더
+  // 점수 카드
+  let scoreHtml = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">'
+    + '<div style="text-align:center;padding:12px;background:#EAF3DE;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#3B6D11">'+correct+'</div><div style="font-size:11px;color:#3B6D11">정답</div></div>'
+    + '<div style="text-align:center;padding:12px;background:#FCEBEB;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#E24B4A">'+wrong+'</div><div style="font-size:11px;color:#E24B4A">오답</div></div>'
+    + '<div style="text-align:center;padding:12px;background:#f5f6fa;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#6b7280">'+unanswered+'</div><div style="font-size:11px;color:#6b7280">미제출</div></div>'
+    + '<div style="text-align:center;padding:12px;background:#E6F1FB;border-radius:10px"><div style="font-size:22px;font-weight:700;color:var(--primary)">'+(pct!==null?pct+'%':'-')+'</div><div style="font-size:11px;color:var(--primary)">정답률</div></div>'
+    + '</div>';
+
+  const groups = najeGroupByStep(studentNajeProblems.map(function(p){return Object.assign({},p,{number:p.problem_number});}));
+  let html = scoreHtml;
+
+  groups.forEach(function(g){
     html += najeStageHeaderHTML(g.step, g.name, '');
-
-    g.problems.forEach(p => {
+    g.problems.forEach(function(p){
       const probNum = p.problem_number;
-      const myAnswer = studentNajeAnswers[p.id] || '';
+      const myAnswer = (studentNajeAnswers[p.id] || '').trim();
       const hasQr = p.qr_url && p.qr_url.startsWith('http');
       const canSee = hasQr && allowedProbNums.has(probNum);
+      const hasCorrect = !!p.correct_answer;
 
-      html += `<div style="border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;background:#fff">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <span style="font-size:13px;font-weight:700;color:#1a1a2e">${probNum}번 문제</span>
-          <span style="font-size:11px;color:${myAnswer?'#10b981':'#9ca3af'};font-weight:600">${myAnswer?'✅ 제출됨':'⬜ 미제출'}</span>
-        </div>
-        <img src="${p.image_url}" style="width:100%;border-radius:8px;margin-bottom:10px;cursor:zoom-in" onclick="openImgViewer('${p.image_url}')">
-        ${myAnswer?`<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px"><span style="font-size:11px;color:#16a34a;font-weight:600;display:block;margin-bottom:4px">내 풀이</span>${myAnswer.replace(/\n/g,'<br>')}</div>`:''}
-        ${canSee
-          ? `<a href="${p.qr_url}" target="_blank" rel="noopener noreferrer" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;border-radius:10px;text-decoration:none;font-size:13px;font-weight:700">📹 해설 영상 보기</a>`
-          : hasQr && !allowedProbNums.has(probNum)
-          ? `<div style="padding:10px;background:#FEF3C7;border-radius:8px;text-align:center;font-size:12px;color:#92400E">🔒 해설은 해당 단계 완료 후 공개됩니다</div>`
-          : `<div style="padding:10px;background:#f5f6fa;border-radius:8px;text-align:center;font-size:12px;color:#9ca3af">해설 영상 없음</div>`
+      // 정답 비교
+      let resultBg='#f5f6fa', resultColor='#6b7280', resultLabel='⬜ 미제출';
+      if(myAnswer){
+        if(!hasCorrect){ resultBg='#FEF3C7'; resultColor='#92400E'; resultLabel='📝 제출됨'; }
+        else if(normalizeAnswer(myAnswer)===normalizeAnswer(p.correct_answer)){ resultBg='#EAF3DE'; resultColor='#3B6D11'; resultLabel='✅ 정답!'; }
+        else { resultBg='#FCEBEB'; resultColor='#E24B4A'; resultLabel='❌ 오답'; }
+      }
+
+      html += '<div style="border:2px solid '+(resultBg==='#EAF3DE'?'#86efac':resultBg==='#FCEBEB'?'#fca5a5':'var(--border)')+';border-radius:12px;padding:14px;margin-bottom:10px;background:#fff">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+        + '<span style="font-size:13px;font-weight:700;color:#1a1a2e">'+probNum+'번 문제</span>'
+        + '<span style="font-size:12px;font-weight:700;padding:4px 10px;border-radius:100px;background:'+resultBg+';color:'+resultColor+'">'+resultLabel+'</span>'
+        + '</div>';
+
+      if(myAnswer){
+        html += '<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">'
+          + '<div style="flex:1;min-width:80px;background:#f0f4ff;border-radius:8px;padding:8px;font-size:12px">'
+          + '<div style="color:#6b7280;font-size:10px;margin-bottom:2px">내 답</div>'
+          + '<div style="font-weight:700;color:#1a1a2e">'+myAnswer+'</div>'
+          + '</div>';
+        if(hasCorrect){
+          html += '<div style="flex:1;min-width:80px;background:'+(normalizeAnswer(myAnswer)===normalizeAnswer(p.correct_answer)?'#EAF3DE':'#FCEBEB')+';border-radius:8px;padding:8px;font-size:12px">'
+            + '<div style="color:#6b7280;font-size:10px;margin-bottom:2px">정답</div>'
+            + '<div style="font-weight:700;color:#1a1a2e">'+p.correct_answer+'</div>'
+            + '</div>';
         }
-      </div>`;
+        html += '</div>';
+      }
+
+      html += '<img src="'+p.image_url+'" style="width:100%;border-radius:8px;margin-bottom:8px;cursor:zoom-in" onclick="openImgViewer(this.getAttribute(\'data-src\'))" data-src="'+p.image_url+'">';
+
+      if(canSee){
+        html += '<a href="'+p.qr_url+'" target="_blank" rel="noopener noreferrer" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;border-radius:10px;text-decoration:none;font-size:13px;font-weight:700">📹 해설 영상 보기</a>';
+      } else if(hasQr && !allowedProbNums.has(probNum)){
+        html += '<div style="padding:10px;background:#FEF3C7;border-radius:8px;text-align:center;font-size:12px;color:#92400E">🔒 해설은 해당 단계 완료 후 공개됩니다</div>';
+      } else {
+        html += '<div style="padding:10px;background:#f5f6fa;border-radius:8px;text-align:center;font-size:12px;color:#9ca3af">해설 영상 없음</div>';
+      }
+      html += '</div>';
     });
   });
 
