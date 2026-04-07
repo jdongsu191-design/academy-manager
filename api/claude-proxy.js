@@ -16,7 +16,7 @@ export default async function handler(req) {
       parts.push({ text: msg.content });
     }
     if (!parts.length) return new Response(JSON.stringify({ error: 'empty' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey;
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key=' + apiKey;
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 1000, temperature: 0.1 } }) });
     const d = await r.json();
     if (d.error) return new Response(JSON.stringify({ error: d.error.message }), { status: 400, headers: { 'Content-Type': 'application/json' } });
@@ -26,3 +26,4 @@ export default async function handler(req) {
     return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
   }
 }
+
