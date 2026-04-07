@@ -30,6 +30,14 @@ export default async function handler(req) {
       parts.push({ text: message.content });
     }
 
+    // parts가 비어있으면 오류 반환 (디버그)
+    if (parts.length === 0) {
+      return new Response(JSON.stringify({ error: 'empty parts', debug: { message } }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
     const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + apiKey;
     const response = await fetch(url, {
       method: 'POST',
@@ -38,6 +46,13 @@ export default async function handler(req) {
     });
 
     const data = await response.json();
+    // Gemini 오류 시 그대로 반환 (디버그)
+    if (data.error) {
+      return new Response(JSON.stringify({ error: data.error }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
     return new Response(JSON.stringify({ content: [{ type: 'text', text }] }), {
