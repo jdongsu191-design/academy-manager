@@ -3307,7 +3307,7 @@ async function extractBetiProblems(file){
       return c;
     }
 
-    /* ── jsQR 다중전략 스캔 ── */
+    /* ── jsQR 스캔 ── */
     function scanQR(imgData, w, h){
       var sh = Math.floor(h*0.40), ch = h-sh;
       var buf = new Uint8ClampedArray(ch*w*4);
@@ -3321,50 +3321,34 @@ async function extractBetiProblems(file){
       return jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'}) || null;
     }
 
-    /* ── 각 행의 밝기 비율 ── */
-    function rowBrightness(data, w, h){
-      var rows = new Float32Array(h);
-      for(var y=0; y<h; y++){
-        var bright=0;
-        for(var x=0; x<w; x++){
-          var i=(y*w+x)*4;
-          if((data[i]+data[i+1]+data[i+2])/3 > 238) bright++;
-        }
-        rows[y]=bright/w;
-      }
-      return rows;
-    }
-
-    /* ── 콘텐츠 블록 찾기 ── */
-    function findBlocks(rows, h, minGap){
-      var T=0.96, blocks=[], state='blank', bs=0, blank=0;
-      for(var y=0; y<h; y++){
-        var isBlank = rows[y]>=T;
-        if(state==='blank'){
-          if(!isBlank){ state='content'; bs=y; blank=0; }
-        } else if(state==='content'){
-          if(isBlank){ state='mayend'; blank=1; }
-        } else {
-          if(isBlank){ blank++;
-            if(blank>=minGap){ blocks.push({y0:bs, y1:y-blank}); state='blank'; }
-          } else { state='content'; blank=0; }
-        }
-      }
-      if(state==='content') blocks.push({y0:bs, y1:h});
-      if(state==='mayend')  blocks.push({y0:bs, y1:h-blank});
-      return blocks.filter(function(b){ return b.y1-b.y0>=40; });
-    }
-
-    /* ── Gemini에게 컬럼의 문제 개수와 QR 여부만 물어봄 ── */
-    async function askGeminiColumnInfo(colBase64, side, pageNum){
-      var prompt = '이 이미지는 수학 시험지의 ' + side + '쪽 컬럼입니다.\n'
-        + '이 컬럼에 몇 개의 문제가 있는지, 각 문제에 QR코드가 있는지 알려주세요.\n'
-        + '문제는 "N | [출처]" 형식의 번호로 시작하고 객관식 선택지(①②③④⑤)로 끝납니다.\n'
-        + 'QR코드는 일부 문제의 선택지 아래에 있는 정사각형 흑백 코드입니다.\n'
-        + '컬럼이 비어있으면 problems를 빈 배열로 반환하세요.\n'
-        + '\n반드시 아래 JSON 형식으로만 응답:\n'
-        + '{"problems": [{"hasQr": true}, {"hasQr": false}]}\n'
-        + '(problems 배열의 순서 = 위에서 아래 순서)';
+    /* ── Gemini: 페이지 전체 이미지로 문제 영역 bbox 추출 ──
+       비율(0~1)로 반환 받음 */
+    async function getProblemsFromGemini(pageBase64, pageNum){
+      var prompt = [
+        '이 이미지는 수학 시험지의 한 페이지입니다.',
+        '',
+        '이 페이지에서 각 문제의 영역을 찾아 bounding box를 알려주세요.',
+        '각 문제는 "N | [출처정보]" 형태의 문제번호로 시작하고,',
+        '객관식 문제는 ①②③④⑤ 선택지로 끝납니다.',
+        'QR코드가 있는 문제는 선택지 바로 아래에 정사각형 QR코드가 있으며,',
+        'QR코드는 문제에 포함하지 않고 선택지 마지막 줄에서 잘라주세요.',
+        '',
+        '반드시 아래 JSON 형식으로만 응답하세요:',
+        '[',
+        '  {',
+        '    "col": "left" 또는 "right",',
+        '    "y0": 문제시작 Y비율(0.0~1.0),',
+        '    "y1": 문제끝 Y비율(0.0~1.0),',
+        '    "hasQr": true/false',
+        '  }',
+        ']',
+        '',
+        '주의:',
+        '- y0/y1은 이미지 높이 대비 비율 (0=최상단, 1=최하단)',
+        '- 페이지 상단 헤더(회차번호 배너)와 하단 푸터(페이지번호+로고)는 제외',
+        '- 문제가 없는 빈 컬럼은 포함하지 마세요',
+        '- JSON 배열만 반환하고 다른 텍스트는 절대 포함하지 마세요',
+      ].join('\n');
 
       var resp = await fetch('/api/gemini-proxy', {
         method:'POST',
@@ -3372,162 +3356,115 @@ async function extractBetiProblems(file){
         body: JSON.stringify({
           model:'gemini-2.0-flash',
           contents:[{parts:[
-            {inlineData:{mimeType:'image/jpeg', data:colBase64}},
+            {inlineData:{mimeType:'image/jpeg', data:pageBase64}},
             {text: prompt}
           ]}],
-          generationConfig:{temperature:0, maxOutputTokens:256, responseMimeType:'application/json'}
+          generationConfig:{temperature:0, maxOutputTokens:1024, responseMimeType:'application/json'}
         })
       });
+
       var data = await resp.json();
+      if(data.error){ console.error('Gemini오류 p'+pageNum+':', data.error); return null; }
+
       var text = '';
       if(data.candidates&&data.candidates[0]){
         var parts = data.candidates[0].content&&data.candidates[0].content.parts;
         text = (parts&&parts[0]&&parts[0].text)||'';
       }
-      if(!text){ console.warn('Gemini 응답없음 p'+pageNum+' '+side); return null; }
-      var clean = text.replace(/```json|```/g,'').trim();
-      return JSON.parse(clean);
-    }
+      if(!text){ console.warn('Gemini 응답없음 p'+pageNum); return null; }
 
-    /* ── 컬럼을 Gemini 정보 기반으로 자르기 ──
-       geminiInfo: {problems:[{hasQr}]} or null
-       qr: jsQR 결과 */
-    function sliceColumn(workCvs, colX, colW, H, geminiInfo, qr, scale){
-      var colCvs = document.createElement('canvas');
-      colCvs.width=colW; colCvs.height=H;
-      colCvs.getContext('2d').drawImage(workCvs, colX,0,colW,H, 0,0,colW,H);
-      var colData = colCvs.getContext('2d').getImageData(0,0,colW,H);
-
-      // 빈 컬럼 체크
-      var dark=0;
-      for(var i=0;i<colData.data.length;i+=4)
-        if((colData.data[i]+colData.data[i+1]+colData.data[i+2])/3<215) dark++;
-      if(dark/(colW*H)<0.003) return;
-
-      var rows = rowBrightness(colData.data, colW, H);
-      var contentH = Math.floor(H*0.93); // 하단 푸터 제외
-      var minGap = Math.round(12*scale); // ~12pt 여백
-
-      var problemCount = geminiInfo && geminiInfo.problems ? geminiInfo.problems.length : 1;
-      var qrY = qr ? Math.round(qr.location.topLeftCorner.y)-Math.round(10*scale) : null;
-
-      if(problemCount === 0) return; // 빈 컬럼
-
-      if(problemCount === 1){
-        // 1문제: QR있으면 QR위까지, 없으면 contentH까지
-        var y1 = qrY || contentH;
-        var y0 = 0;
-        var blocks = findBlocks(rows.slice(0, y1), y1, minGap);
-        if(blocks.length>0){ y0=Math.max(0,blocks[0].y0-8); y1=Math.min(y1,blocks[blocks.length-1].y1+8); }
-        pushSeg(workCvs, colX, colW, y0, y1, qr, geminiInfo&&geminiInfo.problems[0]&&geminiInfo.problems[0].hasQr);
-
-      } else {
-        // 2문제: 빈 띠로 분리
-        var splitH = qrY || contentH;
-        var blocks = findBlocks(rows.slice(0, splitH), splitH, minGap);
-
-        if(blocks.length >= 2){
-          // 블록이 2개 이상 → 각 블록이 1문제
-          for(var bi=0; bi<Math.min(blocks.length, problemCount); bi++){
-            var b = blocks[bi];
-            var isLast = bi===blocks.length-1;
-            var y0 = Math.max(0, b.y0-8);
-            var y1 = isLast && qrY ? qrY : Math.min(splitH, b.y1+8);
-            var hasQr = geminiInfo&&geminiInfo.problems[bi]&&geminiInfo.problems[bi].hasQr;
-            var segQr = (isLast && qr) ? qr : null;
-            pushSeg(workCvs, colX, colW, y0, y1, segQr, hasQr);
-          }
-        } else {
-          // 블록이 명확히 안 나뉘면 절반으로 자름
-          var half = Math.floor(splitH/2);
-          var hasQr0 = geminiInfo&&geminiInfo.problems[0]&&geminiInfo.problems[0].hasQr;
-          var hasQr1 = geminiInfo&&geminiInfo.problems[1]&&geminiInfo.problems[1].hasQr;
-          pushSeg(workCvs, colX, colW, 0, half, null, hasQr0);
-          pushSeg(workCvs, colX, colW, half, qrY||contentH, qr, hasQr1);
-        }
+      try{
+        var clean = text.replace(/```json|```/g,'').trim();
+        var result = JSON.parse(clean);
+        console.log('p'+pageNum+' Gemini결과:', JSON.stringify(result));
+        return result;
+      }catch(e){
+        console.error('JSON파싱실패 p'+pageNum+':', text.slice(0,200));
+        return null;
       }
     }
 
-    function pushSeg(workCvs, colX, colW, y0, y1, qr, hasQr){
-      if(y1-y0<20) return;
-      var seg = njCrop(workCvs, colX, colX+colW, y0, y1);
-      var d = seg.getContext('2d').getImageData(0,0,seg.width,seg.height).data;
-      var dark=0; for(var i=0;i<d.length;i+=4) if((d[i]+d[i+1]+d[i+2])/3<215) dark++;
-      if(dark/(seg.width*seg.height)<0.003) return;
-      _betiProblems.push({
-        number: problemNum++,
-        dataUrl: seg.toDataURL('image/jpeg',0.92),
-        qrUrl: qr?qr.data:null, hasQr:!!hasQr
-      });
-    }
+    /* ── 4 ~ (마지막-1)페이지 처리 ── */
+    var HI_SCALE = 4.0;  // 자르기용 고해상도
+    var LO_SCALE = 1.5;  // Gemini 전송용 저해상도
+    var START = 4, END = pdf.numPages - 1;
 
-    // ── 4 ~ (마지막-1)페이지 처리 ──
-    var SCALE=4.0, GEMINI_SCALE=1.5; // 렌더=4배, Gemini전송=1.5배(토큰 절약)
-    var START=4, END=pdf.numPages-1;
-
-    for(var p=START; p<=END; p++){
-      progText.textContent = p+'/'+END+' 페이지 분석 중... (AI 인식)';
+    for(var p = START; p <= END; p++){
+      progText.textContent = p+'/'+END+' 페이지 AI 분석 중...';
       progBar.style.width = Math.round((p-START)/(END-START+1)*88)+'%';
 
       var page = await pdf.getPage(p);
       var rot  = page.getViewport({scale:1.0}).rotation;
 
       // 고해상도 렌더 (자르기용)
-      var vpHi = page.getViewport({scale:SCALE});
+      var vpHi = page.getViewport({scale:HI_SCALE});
       var cvsHi = document.createElement('canvas');
       cvsHi.width=vpHi.width; cvsHi.height=vpHi.height;
       await page.render({canvasContext:cvsHi.getContext('2d'), viewport:vpHi}).promise;
-      var workHi = (rot===180)?rotate180(cvsHi):cvsHi;
+      var wHi = (rot===180)?rotate180(cvsHi):cvsHi;
 
-      // 저해상도 렌더 (Gemini 전송용)
-      var vpLo = page.getViewport({scale:GEMINI_SCALE});
+      // 저해상도 렌더 (Gemini용)
+      var vpLo = page.getViewport({scale:LO_SCALE});
       var cvsLo = document.createElement('canvas');
       cvsLo.width=vpLo.width; cvsLo.height=vpLo.height;
       await page.render({canvasContext:cvsLo.getContext('2d'), viewport:vpLo}).promise;
-      var workLo = (rot===180)?rotate180(cvsLo):cvsLo;
+      var wLo = (rot===180)?rotate180(cvsLo):cvsLo;
 
-      var W=workHi.width, H=workHi.height;
-      var midX=Math.floor(W*0.50);
-      var midXLo=Math.floor(workLo.width*0.50);
+      var W = wHi.width, H = wHi.height;
+      var midX = Math.floor(W*0.50);
 
-      // 컬럼별 저해상도 이미지 → Gemini
-      var leftLoCvs=document.createElement('canvas');
-      leftLoCvs.width=midXLo; leftLoCvs.height=workLo.height;
-      leftLoCvs.getContext('2d').drawImage(workLo,0,0,midXLo,workLo.height,0,0,midXLo,workLo.height);
+      // Gemini로 페이지 분석
+      var loBase64 = wLo.toDataURL('image/jpeg',0.85).split(',')[1];
+      var segments = await getProblemsFromGemini(loBase64, p);
 
-      var rightLoCvs=document.createElement('canvas');
-      rightLoCvs.width=workLo.width-midXLo; rightLoCvs.height=workLo.height;
-      rightLoCvs.getContext('2d').drawImage(workLo,midXLo,0,workLo.width-midXLo,workLo.height,0,0,workLo.width-midXLo,workLo.height);
+      if(segments && Array.isArray(segments) && segments.length > 0){
+        // Gemini 결과로 자르기
+        for(var si=0; si<segments.length; si++){
+          var seg = segments[si];
+          var colX = seg.col==='left' ? 0 : midX;
+          var colW = midX;
+          var y0   = Math.max(0,   Math.round(seg.y0 * H));
+          var y1   = Math.min(H,   Math.round(seg.y1 * H));
+          if(y1-y0 < 30) continue;
 
-      var leftB64  = leftLoCvs.toDataURL('image/jpeg',0.8).split(',')[1];
-      var rightB64 = rightLoCvs.toDataURL('image/jpeg',0.8).split(',')[1];
+          // QR 있으면 jsQR로 실제 URL 추출
+          var qrUrl = null;
+          if(seg.hasQr){
+            var colImg = wHi.getContext('2d').getImageData(colX, 0, colW, H);
+            var qrResult = scanQR(colImg, colW, H);
+            if(qrResult) qrUrl = qrResult.data;
+          }
 
-      // Gemini 병렬 호출
-      var results = await Promise.allSettled([
-        askGeminiColumnInfo(leftB64,  '왼쪽', p),
-        askGeminiColumnInfo(rightB64, '오른쪽', p)
-      ]);
-      var leftInfo  = results[0].status==='fulfilled' ? results[0].value : null;
-      var rightInfo = results[1].status==='fulfilled' ? results[1].value : null;
+          var cropCvs = njCrop(wHi, colX, colX+colW, y0, y1);
+          _betiProblems.push({
+            number: problemNum++,
+            dataUrl: cropCvs.toDataURL('image/jpeg', 0.92),
+            qrUrl: qrUrl, hasQr: !!seg.hasQr
+          });
+        }
 
-      console.log('p'+p+' left:'+JSON.stringify(leftInfo)+' right:'+JSON.stringify(rightInfo));
-
-      // QR 스캔 (고해상도 기준)
-      var leftImg  = workHi.getContext('2d').getImageData(0,0,midX,H);
-      var rightImg = workHi.getContext('2d').getImageData(midX,0,W-midX,H);
-      var leftQR   = scanQR(leftImg, midX, H);
-      var rightQR  = scanQR(rightImg, W-midX, H);
-
-      // 자르기
-      sliceColumn(workHi, 0,    midX,   H, leftInfo,  leftQR,  SCALE);
-      sliceColumn(workHi, midX, W-midX, H, rightInfo, rightQR, SCALE);
+      } else {
+        // Gemini 실패 시 폴백: jsQR로 좌/우 각 1문제
+        console.warn('p'+p+' Gemini실패 → 폴백');
+        var leftImg  = wHi.getContext('2d').getImageData(0,    0, midX,   H);
+        var rightImg = wHi.getContext('2d').getImageData(midX, 0, W-midX, H);
+        var leftQR   = scanQR(leftImg,  midX,   H);
+        var rightQR  = scanQR(rightImg, W-midX, H);
+        var fH = Math.floor(H*0.92);
+        var lY = leftQR  ? Math.max(20,Math.round(leftQR.location.topLeftCorner.y) -20) : fH;
+        var rY = rightQR ? Math.max(20,Math.round(rightQR.location.topLeftCorner.y)-20) : fH;
+        var lc = njCrop(wHi,0,midX,0,lY);
+        var rc = njCrop(wHi,midX,W,0,rY);
+        _betiProblems.push({number:problemNum++,dataUrl:lc.toDataURL('image/jpeg',0.92),qrUrl:leftQR?leftQR.data:null,hasQr:!!leftQR});
+        _betiProblems.push({number:problemNum++,dataUrl:rc.toDataURL('image/jpeg',0.92),qrUrl:rightQR?rightQR.data:null,hasQr:!!rightQR});
+      }
     }
 
     progBar.style.width='95%';
-    var qrCount=_betiProblems.filter(function(p){return p.hasQr;}).length;
-    progText.textContent='분석 완료: '+_betiProblems.length+'문제 / QR '+qrCount+'개 감지';
+    var qrCnt = _betiProblems.filter(function(p){return p.hasQr;}).length;
+    progText.textContent='분석 완료: '+_betiProblems.length+'문제 / QR '+qrCnt+'개 감지';
     var di=document.getElementById('beti-problem-done-info');
-    if(di) di.textContent=_betiProblems.length+'문제 / QR '+qrCount+'개 감지';
+    if(di) di.textContent=_betiProblems.length+'문제 / QR '+qrCnt+'개 감지';
 
   }catch(err){
     document.getElementById('admin-beti-step1').style.display='block';
