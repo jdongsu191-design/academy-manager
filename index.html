@@ -3325,36 +3325,30 @@ async function extractBetiProblems(file){
        비율(0~1)로 반환 받음 */
     async function getProblemsFromGemini(pageBase64, pageNum){
       var prompt = [
-        '이 이미지는 수학 시험지의 한 페이지입니다.',
+        '이 이미지는 수학 시험지의 한 페이지입니다. 좌/우 2단 레이아웃입니다.',
         '',
-        '이 페이지에서 각 문제의 영역을 찾아 bounding box를 알려주세요.',
-        '각 문제는 "N | [출처정보]" 형태의 문제번호로 시작하고,',
-        '객관식 문제는 ①②③④⑤ 선택지로 끝납니다.',
-        'QR코드가 있는 문제는 선택지 바로 아래에 정사각형 QR코드가 있으며,',
-        'QR코드는 문제에 포함하지 않고 선택지 마지막 줄에서 잘라주세요.',
+        '각 문제를 찾아서 bounding box를 알려주세요. 규칙:',
+        '1. 문제는 "N | [출처]" 형태의 번호(N은 숫자)로 시작합니다.',
+        '2. 문제 끝: QR코드가 있으면 선택지(①②③④⑤) 마지막 줄까지만 포함 (QR코드 제외)',
+        '   QR코드가 없으면 선택지 마지막 줄이 문제의 끝입니다.',
+        '3. 페이지 상단 배너(파란 헤더)와 하단 로고/페이지번호는 제외하세요.',
+        '4. 내용 없는 빈 영역은 포함하지 마세요.',
         '',
-        '반드시 아래 JSON 형식으로만 응답하세요:',
-        '[',
-        '  {',
-        '    "col": "left" 또는 "right",',
-        '    "y0": 문제시작 Y비율(0.0~1.0),',
-        '    "y1": 문제끝 Y비율(0.0~1.0),',
-        '    "hasQr": true/false',
-        '  }',
-        ']',
+        'JSON 배열로만 응답 (다른 텍스트 없이):',
+        '[{"col":"left","y0":0.15,"y1":0.48,"hasQr":false},{"col":"right","y0":0.12,"y1":0.55,"hasQr":true}]',
         '',
-        '주의:',
-        '- y0/y1은 이미지 높이 대비 비율 (0=최상단, 1=최하단)',
-        '- 페이지 상단 헤더(회차번호 배너)와 하단 푸터(페이지번호+로고)는 제외',
-        '- 문제가 없는 빈 컬럼은 포함하지 마세요',
-        '- JSON 배열만 반환하고 다른 텍스트는 절대 포함하지 마세요',
+        '- col: 좌측="left", 우측="right"',
+        '- y0: 문제 시작 Y좌표 (이미지 높이 대비 비율, 0.0=최상단)',
+        '- y1: 문제 끝 Y좌표 (이미지 높이 대비 비율, 1.0=최하단)',
+        '- hasQr: QR코드 포함 여부',
+        '- 위에서 아래 순서로 나열',
       ].join('\n');
 
       var resp = await fetch('/api/gemini-proxy', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
-          model:'gemini-2.0-flash',
+          model:'gemini-2.5-flash',
           contents:[{parts:[
             {inlineData:{mimeType:'image/jpeg', data:pageBase64}},
             {text: prompt}
@@ -3364,7 +3358,7 @@ async function extractBetiProblems(file){
       });
 
       var data = await resp.json();
-      if(data.error){ console.error('Gemini오류 p'+pageNum+':', data.error); return null; }
+      if(data.error){ console.error('Gemini오류 p'+pageNum+':', JSON.stringify(data.error)); return null; }
 
       var text = '';
       if(data.candidates&&data.candidates[0]){
@@ -3379,7 +3373,7 @@ async function extractBetiProblems(file){
         console.log('p'+pageNum+' Gemini결과:', JSON.stringify(result));
         return result;
       }catch(e){
-        console.error('JSON파싱실패 p'+pageNum+':', text.slice(0,200));
+        console.error('JSON파싱실패 p'+pageNum+':', text.slice(0,300));
         return null;
       }
     }
