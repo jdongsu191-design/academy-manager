@@ -3332,11 +3332,14 @@ async function extractBetiProblems(file){
     if(typeof pdfjsLib === 'undefined') throw new Error('PDF.js 없음');
     var ab  = await file.arrayBuffer();
     var pdf = await pdfjsLib.getDocument({data: ab}).promise;
+
+    // 반자동용 변수 초기화
     _betiPages      = [];
     _betiSelections = {};
     _betiCurPage    = 0;
     _betiProblems   = [];
 
+    /* ── 헬퍼 ── */
     function rotate180(src){
       var c=document.createElement('canvas'); c.width=src.width; c.height=src.height;
       var ctx=c.getContext('2d');
@@ -3344,195 +3347,212 @@ async function extractBetiProblems(file){
       ctx.drawImage(src,-src.width/2,-src.height/2); return c;
     }
 
-    var SCALE = 2.5; // 표시용 해상도 (너무 크면 메모리 부담)
-    var START = 4, END = pdf.numPages - 1;
+    /* jsQR 다중전략 */
+    function scanQR(data, w, h){
+      var sh=Math.floor(h*0.35), ch=h-sh;
+      var buf=new Uint8ClampedArray(ch*w*4);
+      for(var r=0;r<ch;r++) buf.set(data.slice((sh+r)*w*4,(sh+r+1)*w*4),r*w*4);
+      var qr=jsQR(buf,w,ch,{inversionAttempts:'dontInvert'});
+      if(qr){qr.location.topLeftCorner.y+=sh;return qr;}
+      qr=jsQR(buf,w,ch,{inversionAttempts:'attemptBoth'});
+      if(qr){qr.location.topLeftCorner.y+=sh;return qr;}
+      qr=jsQR(data,w,h,{inversionAttempts:'dontInvert'});
+      if(qr) return qr;
+      return jsQR(data,w,h,{inversionAttempts:'attemptBoth'})||null;
+    }
 
-    for(var p = START; p <= END; p++){
-      progText.textContent = p+'/'+END+' 페이지 렌더링 중...';
-      progBar.style.width = Math.round((p-START)/(END-START+1)*95)+'%';
+    /* 각 행의 평균 밝기 (0=검정, 255=흰색) */
+    function rowBright(data, w, h){
+      var rows=new Float32Array(h);
+      for(var y=0;y<h;y++){
+        var s=0;
+        for(var x=0;x<w;x++){ var i=(y*w+x)*4; s+=(data[i]+data[i+1]+data[i+2])/3; }
+        rows[y]=s/w;
+      }
+      return rows;
+    }
+
+    /* 연속 밝은 행(여백)을 찾아 [{s,e}] 반환 */
+    function findGaps(rows, fromY, toY, minLen, thresh){
+      var gaps=[], in_=false, gs=0;
+      for(var y=fromY;y<toY;y++){
+        if(rows[y]>=thresh){
+          if(!in_){in_=true;gs=y;}
+        } else {
+          if(in_){in_=false; if(y-gs>=minLen) gaps.push({s:gs,e:y,mid:Math.floor((gs+y)/2)});}
+        }
+      }
+      return gaps;
+    }
+
+    /* 픽셀에 내용 있는지 */
+    function hasDark(data, total){
+      var d=0; for(var i=0;i<data.length;i+=4) if((data[i]+data[i+1]+data[i+2])/3<210) d++;
+      return d/total > 0.004;
+    }
+
+    /* ── 컬럼 처리 핵심 함수 ──
+       workCvs: 정방향 전체 페이지
+       colX, colW: 컬럼 x/폭
+       H: 전체 높이
+       scale: 렌더 배율 (갭 크기 계산용)
+    */
+    function processColumn(workCvs, colX, colW, H, scale, outProblems){
+      // 컬럼 픽셀 추출
+      var colData = workCvs.getContext('2d').getImageData(colX,0,colW,H);
+      if(!hasDark(colData.data, colW*H)) return; // 빈 컬럼
+
+      var rows = rowBright(colData.data, colW, H);
+
+      // 헤더 제외: 상단에서 첫 번째 큰 여백 다음부터 시작
+      // (헤더 배너는 상단에 있고 그 아래 빈 줄이 있음)
+      var HEADER_SKIP = Math.floor(H*0.18); // 상단 18% 헤더 영역
+      var FOOTER_END  = Math.floor(H*0.93); // 하단 7% 푸터 제외
+      var MIN_GAP     = Math.round(scale*8); // 문제 사이 최소 여백 px (~8pt)
+      var BRIGHT      = 248; // 흰색 행 판정 기준
+
+      // ── QR 스캔 ──
+      var qrResult = scanQR(colData.data, colW, H);
+      var qrY = qrResult ? Math.round(qrResult.location.topLeftCorner.y) : null;
+
+      if(qrResult){
+        // ── QR 있는 컬럼 ──
+        // QR 위 영역에서 문제들 찾기
+        var cutY = Math.max(HEADER_SKIP+10, qrY - Math.round(scale*6)); // QR 위 6pt
+
+        // cutY 이전 영역에서 여백으로 문제 경계 찾기
+        var gaps = findGaps(rows, HEADER_SKIP, cutY, MIN_GAP, BRIGHT);
+
+        // 문제 시작점 목록 구성
+        var starts = [HEADER_SKIP];
+        gaps.forEach(function(g){ starts.push(g.e); });
+        starts.push(cutY);
+
+        for(var i=0;i<starts.length-1;i++){
+          var y0=starts[i], y1=starts[i+1];
+          if(y1-y0 < Math.round(scale*20)) continue; // 너무 작으면 스킵
+          var seg=njCrop(workCvs,colX,colX+colW,y0,y1);
+          var sd=seg.getContext('2d').getImageData(0,0,seg.width,seg.height);
+          if(!hasDark(sd.data,seg.width*seg.height)) continue;
+          // 마지막 세그먼트만 QR 있음
+          var isLast = (i===starts.length-2);
+          outProblems.push({
+            dataUrl: seg.toDataURL('image/jpeg',0.92),
+            qrUrl:   isLast ? qrResult.data : null,
+            hasQr:   isLast
+          });
+        }
+
+      } else {
+        // ── QR 없는 컬럼 ──
+        var gaps = findGaps(rows, HEADER_SKIP, FOOTER_END, MIN_GAP, BRIGHT);
+
+        var starts = [HEADER_SKIP];
+        gaps.forEach(function(g){ starts.push(g.e); });
+        starts.push(FOOTER_END);
+
+        for(var i=0;i<starts.length-1;i++){
+          var y0=starts[i], y1=starts[i+1];
+          if(y1-y0 < Math.round(scale*20)) continue;
+          var seg=njCrop(workCvs,colX,colX+colW,y0,y1);
+          var sd=seg.getContext('2d').getImageData(0,0,seg.width,seg.height);
+          if(!hasDark(sd.data,seg.width*seg.height)) continue;
+          outProblems.push({dataUrl:seg.toDataURL('image/jpeg',0.92), qrUrl:null, hasQr:false});
+        }
+      }
+    }
+
+    /* ── 4 ~ (마지막-1)페이지 처리 ── */
+    var SCALE = 4.0;
+    var START = 4, END = pdf.numPages - 1;
+    var rawProblems = []; // 번호 미부여 상태
+
+    for(var p=START; p<=END; p++){
+      progText.textContent = p+'/'+END+' 페이지 처리 중...';
+      progBar.style.width = Math.round((p-START)/(END-START+1)*90)+'%';
 
       var page = await pdf.getPage(p);
       var rot  = page.getViewport({scale:1.0}).rotation;
-      var vp   = page.getViewport({scale:SCALE});
-      var cvs  = document.createElement('canvas');
+
+      var vp=page.getViewport({scale:SCALE});
+      var cvs=document.createElement('canvas');
       cvs.width=vp.width; cvs.height=vp.height;
-      await page.render({canvasContext:cvs.getContext('2d'), viewport:vp}).promise;
+      await page.render({canvasContext:cvs.getContext('2d'),viewport:vp}).promise;
       var workCvs = (rot===180) ? rotate180(cvs) : cvs;
 
-      _betiPages.push({canvas: workCvs, scale: SCALE, pageNum: p});
+      // 이미지로 회전 감지 보완:
+      // 하단 3% 행 평균 밝기 vs 상단 3% 비교
+      // 정방향이면 하단에 흰 여백(밝음), 회전이면 상단이 밝음
+      // → 이미 rot===180로 처리하므로 추가 보정 생략
+
+      var W=workCvs.width, H=workCvs.height;
+      var midX=Math.floor(W*0.50);
+
+      var colProbs = [];
+      processColumn(workCvs, 0,    midX,   H, SCALE, colProbs);
+      processColumn(workCvs, midX, W-midX, H, SCALE, colProbs);
+      colProbs.forEach(function(prob){ rawProblems.push(prob); });
+
+      // 반자동용 페이지 저장 (2.5 스케일로 별도 렌더)
+      var vpLo=page.getViewport({scale:2.5});
+      var cvsLo=document.createElement('canvas');
+      cvsLo.width=vpLo.width; cvsLo.height=vpLo.height;
+      await page.render({canvasContext:cvsLo.getContext('2d'),viewport:vpLo}).promise;
+      var wLo=(rot===180)?rotate180(cvsLo):cvsLo;
+      _betiPages.push({canvas:wLo, scale:2.5, pageNum:p});
     }
 
-    progBar.style.width='100%';
-    progText.textContent='렌더링 완료 ('+_betiPages.length+'페이지) — 문제 영역을 직접 선택하세요';
+    // 번호 부여
+    _betiProblems = rawProblems.map(function(p,i){
+      return Object.assign({number:i+1},p);
+    });
 
-    // step3으로 전환 + 첫 페이지 표시
+    progBar.style.width='95%';
+    var qrCnt=_betiProblems.filter(function(p){return p.hasQr;}).length;
+    progText.textContent='자동 인식 완료: '+_betiProblems.length+'문제 / QR '+qrCnt+'개';
+    var doneInfo=document.getElementById('beti-problem-done-info');
+    if(doneInfo) doneInfo.textContent=_betiProblems.length+'문제 / QR '+qrCnt+'개';
+
+    // step3으로 전환 (반자동 UI에서 결과 확인)
     document.getElementById('admin-beti-step2').style.display='none';
     document.getElementById('admin-beti-step3').style.display='block';
     betiShowPage(0);
     betiInitDrag();
+
+    // 자동 인식 결과 미리보기 (step3 위에 표시)
+    var previewInfo = document.getElementById('beti-preview-info');
+    if(previewInfo){
+      previewInfo.innerHTML='✅ 자동 인식: <strong>'+_betiProblems.length+'문제</strong> / QR <strong>'+qrCnt+'개</strong>'
+        +'&nbsp;&nbsp;<span style="color:#6b7280;font-size:11px">틀린 부분은 드래그로 수정하세요</span>';
+    }
+
+    // 자동으로 인식된 문제들을 결과 그리드에 표시
+    var existGrid = document.getElementById('beti-auto-result-grid');
+    if(existGrid) existGrid.remove();
+    var grid = document.createElement('div');
+    grid.id = 'beti-auto-result-grid';
+    grid.style.cssText = 'margin-bottom:12px;';
+    grid.innerHTML = '<div style="font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:6px">🤖 자동 인식 결과 미리보기</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;max-height:300px;overflow-y:auto;">'
+      +_betiProblems.map(function(p){
+        return '<div style="border:1px solid '+(p.hasQr?'#16a34a':'var(--border)')+';border-radius:8px;overflow:hidden">'
+          +'<div style="background:#f5f6fa;padding:3px 6px;font-size:11px;font-weight:700;display:flex;justify-content:space-between">'
+          +'<span>'+p.number+'번</span>'
+          +(p.hasQr?'<span style="color:#10b981">QR✓</span>':'')
+          +'</div>'
+          +'<img src="'+p.dataUrl+'" style="width:100%;display:block">'
+          +'</div>';
+      }).join('')
+      +'</div>';
+
+    var selInfo = document.getElementById('beti-sel-info');
+    if(selInfo) selInfo.parentNode.insertBefore(grid, selInfo);
 
   }catch(err){
     document.getElementById('admin-beti-step1').style.display='block';
     document.getElementById('admin-beti-step2').style.display='none';
     alert('오류: '+err.message); console.error(err);
   }
-}
-
-/* ── 페이지 표시 ── */
-function betiShowPage(idx){
-  if(idx < 0 || idx >= _betiPages.length) return;
-  _betiCurPage = idx;
-
-  var pg = _betiPages[idx];
-  var drawCvs = document.getElementById('beti-draw-canvas');
-  drawCvs.width  = pg.canvas.width;
-  drawCvs.height = pg.canvas.height;
-  drawCvs.getContext('2d').drawImage(pg.canvas, 0, 0);
-
-  document.getElementById('beti-page-label').textContent =
-    (idx+1)+'/'+_betiPages.length+' 페이지 (PDF '+(pg.pageNum)+'p)';
-  document.getElementById('beti-prev-page').disabled = idx===0;
-  document.getElementById('beti-next-page').disabled = idx===_betiPages.length-1;
-
-  betiRedrawOverlay();
-  betiUpdateSelInfo();
-}
-
-function betiNavPage(dir){
-  betiShowPage(_betiCurPage + dir);
-}
-
-/* ── 오버레이 다시 그리기 (선택 박스) ── */
-function betiRedrawOverlay(){
-  var drawCvs = document.getElementById('beti-draw-canvas');
-  var overCvs = document.getElementById('beti-overlay-canvas');
-  overCvs.width  = drawCvs.width;
-  overCvs.height = drawCvs.height;
-  var ctx = overCvs.getContext('2d');
-  ctx.clearRect(0,0,overCvs.width,overCvs.height);
-
-  var sels = _betiSelections[_betiCurPage] || [];
-  sels.forEach(function(sel, i){
-    ctx.strokeStyle = sel.hasQr ? '#16a34a' : '#dc2626';
-    ctx.lineWidth = Math.max(2, drawCvs.width/300);
-    ctx.fillStyle = sel.hasQr ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)';
-    ctx.fillRect(sel.x, sel.y, sel.w, sel.h);
-    ctx.strokeRect(sel.x, sel.y, sel.w, sel.h);
-    // 번호 라벨
-    var fs = Math.max(14, drawCvs.width/40);
-    ctx.font = 'bold '+fs+'px sans-serif';
-    ctx.fillStyle = sel.hasQr ? '#15803d' : '#b91c1c';
-    ctx.fillText((i+1)+'번'+(sel.hasQr?' [QR]':''), sel.x+6, sel.y+fs+4);
-  });
-
-  // 드래그 중인 임시 박스
-  if(_betiTempRect){
-    ctx.strokeStyle = '#2563eb';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6,3]);
-    ctx.strokeRect(_betiTempRect.x, _betiTempRect.y, _betiTempRect.w, _betiTempRect.h);
-    ctx.setLineDash([]);
-  }
-}
-
-/* ── 드래그 이벤트 초기화 ── */
-function betiInitDrag(){
-  var wrap = document.getElementById('beti-canvas-wrap');
-  var overCvs = document.getElementById('beti-overlay-canvas');
-
-  // 실제 픽셀 좌표로 변환
-  function getCanvasPos(e){
-    var rect = document.getElementById('beti-draw-canvas').getBoundingClientRect();
-    var drawCvs = document.getElementById('beti-draw-canvas');
-    var scaleX = drawCvs.width  / rect.width;
-    var scaleY = drawCvs.height / rect.height;
-    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    var clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    return {
-      x: (clientX - rect.left) * scaleX,
-      y: (clientY - rect.top)  * scaleY
-    };
-  }
-
-  function onDown(e){
-    e.preventDefault();
-    var pos = getCanvasPos(e);
-    // 기존 박스 클릭 시 삭제
-    var sels = _betiSelections[_betiCurPage] || [];
-    for(var i=sels.length-1; i>=0; i--){
-      var s=sels[i];
-      if(pos.x>=s.x && pos.x<=s.x+s.w && pos.y>=s.y && pos.y<=s.y+s.h){
-        sels.splice(i,1);
-        _betiSelections[_betiCurPage]=sels;
-        betiRedrawOverlay(); betiUpdateSelInfo(); betiUpdateAllSummary();
-        return;
-      }
-    }
-    _betiDragging=true; _betiDragStart=pos; _betiTempRect=null;
-  }
-
-  function onMove(e){
-    if(!_betiDragging) return;
-    e.preventDefault();
-    var pos = getCanvasPos(e);
-    _betiTempRect = {
-      x: Math.min(_betiDragStart.x, pos.x),
-      y: Math.min(_betiDragStart.y, pos.y),
-      w: Math.abs(pos.x - _betiDragStart.x),
-      h: Math.abs(pos.y - _betiDragStart.y)
-    };
-    betiRedrawOverlay();
-  }
-
-  function onUp(e){
-    if(!_betiDragging) return;
-    _betiDragging=false;
-    if(_betiTempRect && _betiTempRect.w > 10 && _betiTempRect.h > 10){
-      var hasQr = document.getElementById('beti-qr-toggle').checked;
-      if(!_betiSelections[_betiCurPage]) _betiSelections[_betiCurPage]=[];
-      _betiSelections[_betiCurPage].push({
-        x:_betiTempRect.x, y:_betiTempRect.y,
-        w:_betiTempRect.w, h:_betiTempRect.h,
-        hasQr: hasQr
-      });
-    }
-    _betiTempRect=null;
-    betiRedrawOverlay(); betiUpdateSelInfo(); betiUpdateAllSummary();
-  }
-
-  // 이전 리스너 제거 후 재등록
-  var newOverlay = overCvs.cloneNode(true);
-  overCvs.parentNode.replaceChild(newOverlay, overCvs);
-
-  wrap.addEventListener('mousedown',  onDown,  {passive:false});
-  wrap.addEventListener('mousemove',  onMove,  {passive:false});
-  wrap.addEventListener('mouseup',    onUp,    {passive:false});
-  wrap.addEventListener('mouseleave', onUp,    {passive:false});
-  wrap.addEventListener('touchstart', onDown,  {passive:false});
-  wrap.addEventListener('touchmove',  onMove,  {passive:false});
-  wrap.addEventListener('touchend',   onUp,    {passive:false});
-}
-
-function betiUpdateSelInfo(){
-  var sels = _betiSelections[_betiCurPage] || [];
-  document.getElementById('beti-sel-info').textContent =
-    '이 페이지에서 선택한 영역: '+sels.length+'개';
-}
-
-function betiUpdateAllSummary(){
-  var total=0, html='';
-  for(var pi=0; pi<_betiPages.length; pi++){
-    var sels = _betiSelections[pi]||[];
-    if(sels.length>0){
-      total+=sels.length;
-      html+='<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;background:#EBF5FF;border-radius:100px;font-size:11px;">'
-        +(_betiPages[pi].pageNum)+'p: '+sels.length+'개</span>';
-    }
-  }
-  var el=document.getElementById('beti-all-sel-summary');
-  el.innerHTML = total>0 ? html+'<span style="font-size:11px;color:#178EF5;font-weight:700;"> 총 '+total+'문제</span>'
-                         : '아직 선택된 문제가 없습니다';
-  document.getElementById('beti-preview-info').textContent = '총 '+total+'개 문제 선택됨';
 }
 
 
