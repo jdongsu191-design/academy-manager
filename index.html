@@ -596,16 +596,22 @@
         <div id="naje-panel-results" style="display:none">
           <div class="card" style="margin-bottom:12px">
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-              <div style="flex:1;min-width:140px">
-                <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">N제 선택</div>
-                <select id="naje-result-set-select" onchange="loadNajeResultStudents()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
-                  <option value="">N제를 선택하세요</option>
+              <div style="flex:1;min-width:120px">
+                <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">반 선택</div>
+                <select id="naje-result-class-select" onchange="loadNajeResultByClass()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+                  <option value="">전체 학생</option>
                 </select>
               </div>
               <div style="flex:1;min-width:120px">
                 <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">학생 선택</div>
-                <select id="naje-result-student-select" onchange="loadNajeResultDetail()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff" disabled>
+                <select id="naje-result-student-select" onchange="loadNajeResultByStudent()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff" disabled>
                   <option value="">학생 선택</option>
+                </select>
+              </div>
+              <div style="flex:1;min-width:140px">
+                <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">N제 선택</div>
+                <select id="naje-result-set-select" onchange="loadNajeResultStudents()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+                  <option value="">N제를 선택하세요</option>
                 </select>
               </div>
             </div>
@@ -4866,12 +4872,21 @@ function renderStepSelectGrid(assignedSteps){
     // 제출된 답안 수 (1개라도 제출하면 완료 처리)
     var answered = stepProblems.filter(function(p){ return !!studentNajeAnswers[p.id]; }).length;
     var total = stepProblems.length;
+    // 맞은 문항 계산
+    var correct = stepProblems.filter(function(p){
+      var my = (studentNajeAnswers[p.id]||'').trim();
+      return my && p.correct_answer && normalizeAnswer(my)===normalizeAnswer(p.correct_answer);
+    }).length;
     var pct = Math.round(answered/total*100);
     var isComplete = answered > 0; // 1개 이상 제출하면 완료 (다시 풀기는 선생님만 가능)
     var icon = najeStageIcon(stageInfo.name);
     var statusColor = isComplete?'#3B6D11':'#6b7280';
     var statusBg = isComplete?'#EAF3DE':'#f5f6fa';
-    var statusLabel = isComplete?'✅ 완료 ('+answered+'/'+total+')':'미시작';
+    // 정답이 부여된 문제 수 기준으로 표시, 없으면 제출수/전체
+    var hasCorrectAnswers = stepProblems.some(function(p){ return !!p.correct_answer; });
+    var statusLabel = isComplete
+      ? (hasCorrectAnswers ? '✅ '+correct+'/'+total : '✅ '+answered+'/'+total)
+      : '미시작';
 
     var clickAction = isComplete ? 'viewNajeStepResult('+stepNum+')' : 'startNajeStep('+stepNum+')';
     var actionLabel = isComplete ? '결과 보기 ›' : '시작하기 ›';
@@ -5088,46 +5103,64 @@ async function najeSubmitAll(){
 
 // ===== 선생님 N제 결과 확인 =====
 async function initNajeResultTab(){
+  // 반 목록 채우기
+  const classSel = document.getElementById('naje-result-class-select');
+  if(classSel){
+    classSel.innerHTML = '<option value="">전체 학생</option>';
+    (classes||[]).forEach(function(c){
+      classSel.innerHTML += '<option value="'+c.id+'">'+c.name+'</option>';
+    });
+  }
+
+  // 학생 드롭다운 초기화
+  const studentSel = document.getElementById('naje-result-student-select');
+  studentSel.innerHTML = '<option value="">학생 선택</option>';
+  studentSel.disabled = true;
+
   // N제 목록 로드
   const sel = document.getElementById('naje-result-set-select');
   sel.innerHTML = '<option value="">N제를 선택하세요</option>';
   const{data} = await db.from('naje_sets')
-    .select('id,title,total_problems')
+    .select('id,title,total_problems,target_grade')
     .order('title',{ascending:true});
   (data||[]).forEach(function(s){
-    sel.innerHTML += '<option value="'+s.id+'">'+s.title+' ('+s.total_problems+'문제)</option>';
+    sel.innerHTML += '<option value="'+s.id+'">'+(s.target_grade?'['+s.target_grade+'] ':'')+s.title+' ('+s.total_problems+'문제)</option>';
   });
+}
+
+// 반 선택 → 학생 드롭다운 갱신
+function loadNajeResultByClass(){
+  const classId = document.getElementById('naje-result-class-select').value;
+  const studentSel = document.getElementById('naje-result-student-select');
+  studentSel.innerHTML = '<option value="">전체 학생</option>';
+  const filtered = classId
+    ? students.filter(function(s){ return s.class_id===classId && s.status==='active'; })
+    : students.filter(function(s){ return s.status==='active'; });
+  filtered.sort(function(a,b){return a.name.localeCompare(b.name);});
+  filtered.forEach(function(s){
+    studentSel.innerHTML += '<option value="'+s.id+'">'+s.name+'</option>';
+  });
+  studentSel.disabled = filtered.length === 0;
+  // 결과 초기화
+  document.getElementById('naje-result-summary').innerHTML = '';
+  document.getElementById('naje-result-detail').innerHTML = '';
+}
+
+// 학생 선택 → N제 선택 유지하며 결과 갱신
+function loadNajeResultByStudent(){
+  const setId = document.getElementById('naje-result-set-select').value;
+  if(setId) loadNajeResultDetail();
 }
 
 async function loadNajeResultStudents(){
   const setId = document.getElementById('naje-result-set-select').value;
-  const studentSel = document.getElementById('naje-result-student-select');
   const summary = document.getElementById('naje-result-summary');
   const detail = document.getElementById('naje-result-detail');
   summary.innerHTML = '';
   detail.innerHTML = '';
-  if(!setId){ studentSel.innerHTML='<option value="">학생 선택</option>'; studentSel.disabled=true; return; }
+  if(!setId) return;
 
-  // 이 N제에 답안 제출한 학생 목록
-  const{data:answers} = await db.from('naje_answers')
-    .select('student_id').eq('set_id',setId);
-  const studentIds = [...new Set((answers||[]).map(function(a){return a.student_id;}))];
-
-  if(!studentIds.length){
-    studentSel.innerHTML='<option value="">제출한 학생 없음</option>';
-    studentSel.disabled=true;
-    summary.innerHTML='<div class="card" style="text-align:center;padding:24px;color:#6b7280"><div style="font-size:32px;margin-bottom:8px">📭</div><p>아직 제출한 학생이 없습니다</p></div>';
-    return;
-  }
-
-  const{data:studentData} = await db.from('users').select('id,name').in('id',studentIds).order('name');
-  studentSel.innerHTML = '<option value="">전체 학생 현황</option>';
-  (studentData||[]).forEach(function(s){
-    studentSel.innerHTML += '<option value="'+s.id+'">'+s.name+'</option>';
-  });
-  studentSel.disabled = false;
-
-  // 전체 현황 로드
+  // N제 선택 즉시 결과 로드 (현재 선택된 학생 기준)
   loadNajeResultDetail();
 }
 
@@ -5156,11 +5189,13 @@ async function loadNajeResultDetail(){
     const{data:studentInfo} = await db.from('users').select('name').eq('id',studentId).single();
     renderNajeTeacherStudentResult(problems||[], ansMap, studentInfo?.name||'학생');
   } else {
-    // 전체 현황
+    // 전체 현황 (반 필터 반영)
+    const classId = document.getElementById('naje-result-class-select')?.value || '';
     const{data:allAnswers} = await db.from('naje_answers')
       .select('problem_id,student_id,answer').eq('set_id',setId);
-    const{data:allStudents} = await db.from('users')
-      .select('id,name').eq('teacher_id',currentUser.id).eq('status','active').order('name');
+    let q = db.from('users').select('id,name,class_id').eq('teacher_id',currentUser.id).eq('status','active').order('name');
+    if(classId) q = q.eq('class_id', classId);
+    const{data:allStudents} = await q;
     renderNajeTeacherOverview(problems||[], allAnswers||[], allStudents||[]);
   }
 }
