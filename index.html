@@ -966,6 +966,30 @@
             </div>
           </div>
 
+          <!-- STEP 2-5: 해설 PDF 업로드 (문제 PDF 완료 후) -->
+          <div id="admin-beti-step-solution" style="display:none">
+            <div class="card">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                <div style="width:32px;height:32px;border-radius:50%;background:#EAF3DE;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">✅</div>
+                <div>
+                  <div style="font-size:14px;font-weight:700;color:#1a1a2e">문제 PDF 분석 완료</div>
+                  <div style="font-size:12px;color:#6b7280" id="beti-problem-done-info">문제 로드됨</div>
+                </div>
+              </div>
+              <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">📋 해설 PDF 업로드</div>
+              <div style="font-size:12px;color:#6b7280;margin-bottom:10px">1페이지 좌측 상단 빠른정답 표에서 정답을 자동 파싱합니다</div>
+              <div id="beti-solution-upload-area2" class="upload-area" onclick="document.getElementById('beti-solution-pdf-input2').click()" style="margin-bottom:10px;transition:all 0.2s"
+                ondragover="event.preventDefault();this.style.borderColor='var(--primary)'"
+                ondragleave="this.style.borderColor=''"
+                ondrop="event.preventDefault();this.style.borderColor='';handleBetiPdfDrop(event,'solution')">
+                <div class="ua-icon">📋</div>
+                <p><strong style="color:var(--primary)">해설 PDF를 선택하거나 드래그하세요</strong></p>
+              </div>
+              <input type="file" id="beti-solution-pdf-input2" accept=".pdf" style="display:none" onchange="handleBetiPdfUpload(event,'solution')">
+              <button onclick="showBetiPreview()" class="btn btn-full" style="border-style:dashed;font-size:13px;color:#6b7280">해설 PDF 없이 계속 진행 →</button>
+            </div>
+          </div>
+
           <!-- STEP 3: 미리보기 -->
           <div id="admin-beti-step3" style="display:none">
             <div class="card">
@@ -3244,81 +3268,100 @@ async function processBetiPdf(file, type){
   }
   // 문제 PDF 완료 후 해설 PDF 대기 안내 또는 바로 미리보기
   if(_betiProblemPdfReady && _betiSolutionPdfReady){
+    // 둘 다 완료 → 미리보기
     showBetiPreview();
   } else if(_betiProblemPdfReady && !_betiSolutionPdfReady && type==='problem'){
-    // 문제 PDF 완료 - 해설 PDF 업로드 안내
-    var progText = document.getElementById('beti-progress-text');
-    var progBar = document.getElementById('beti-progress-bar');
-    progText.innerHTML = '✅ 문제 PDF 분석 완료 ('+_betiProblems.length+'문제)<br><span style="color:#178EF5;font-size:12px">📋 해설 PDF를 업로드하면 빠른정답도 자동 추출됩니다</span>';
-    progBar.style.width = '50%';
-    // 해설 PDF 없이 바로 진행할 수 있는 버튼 표시
-    var step2 = document.getElementById('admin-beti-step2');
-    if(step2 && !document.getElementById('beti-skip-solution')){
-      var skipBtn = document.createElement('div');
-      skipBtn.id = 'beti-skip-solution';
-      skipBtn.style.cssText = 'margin-top:12px;text-align:center';
-      skipBtn.innerHTML = '<button onclick="showBetiPreview()" class="btn btn-sm" style="border-style:dashed">해설 PDF 없이 계속 진행 →</button>';
-      step2.querySelector('.card').appendChild(skipBtn);
-    }
+    // 문제 PDF 완료 → 해설 PDF 업로드 화면으로 전환
+    document.getElementById('admin-beti-step2').style.display = 'none';
+    document.getElementById('admin-beti-step-solution').style.display = 'block';
   } else if(_betiSolutionPdfReady && type==='solution'){
-    // 해설 PDF만 완료됐을 때 (문제 PDF가 아직인 경우)
-    var progText2 = document.getElementById('beti-progress-text');
-    progText2.textContent = '✅ 해설 PDF 분석 완료 - 문제 PDF를 업로드해주세요';
+    // 해설 PDF 완료 → 미리보기 (문제 PDF가 먼저 됐든 안됐든)
+    if(_betiProblemPdfReady) showBetiPreview();
   }
 }
 
 async function extractBetiProblems(file){
   document.getElementById('admin-beti-step1').style.display = 'none';
   document.getElementById('admin-beti-step2').style.display = 'block';
+  document.getElementById('admin-beti-step-solution').style.display = 'none';
   var progText = document.getElementById('beti-progress-text');
   var progBar = document.getElementById('beti-progress-bar');
+  progBar.style.width = '0%';
 
   try{
     if(typeof pdfjsLib === 'undefined') throw new Error('PDF.js 없음');
     var ab = await file.arrayBuffer();
     var pdf = await pdfjsLib.getDocument({data:ab}).promise;
     _betiProblems = [];
+    var num = 1;
+
+    // jsQR 스캔 함수 (일일N제와 동일)
+    function scanQR(imgData, w, h){
+      var sh = Math.floor(h*0.5), ch = h-sh;
+      var buf = new Uint8ClampedArray(ch*w*4);
+      for(var r=0; r<ch; r++) buf.set(imgData.data.slice((sh+r)*w*4,(sh+r+1)*w*4), r*w*4);
+      var qr = jsQR(buf, w, ch, {inversionAttempts:'dontInvert'});
+      if(qr){ qr.location.topLeftCorner.y += sh; return qr; }
+      qr = jsQR(buf, w, ch, {inversionAttempts:'attemptBoth'});
+      if(qr){ qr.location.topLeftCorner.y += sh; return qr; }
+      qr = jsQR(imgData.data, w, h, {inversionAttempts:'dontInvert'});
+      if(qr) return qr;
+      return jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'}) || null;
+    }
 
     // 2페이지부터 (1페이지=표지/채점표)
     for(var p=2; p<=pdf.numPages; p++){
       progText.textContent = p+'/'+pdf.numPages+' 페이지 분석 중...';
-      progBar.style.width = Math.round((p-2)/(pdf.numPages-1)*70)+'%';
+      progBar.style.width = Math.round((p-2)/(pdf.numPages-1)*90)+'%';
 
       var page = await pdf.getPage(p);
-      var vp = page.getViewport({scale:3.0});
+      var vp = page.getViewport({scale:4.0}); // 일일N제와 동일한 해상도
       var cvs = document.createElement('canvas');
       cvs.width = vp.width; cvs.height = vp.height;
-      await page.render({canvasContext:cvs.getContext('2d'),viewport:vp}).promise;
+      await page.render({canvasContext:cvs.getContext('2d'), viewport:vp}).promise;
 
-      // 텍스트에서 문제 번호 확인
-      var textContent = await page.getTextContent();
-      var pageText = textContent.items.map(function(i){return i.str;}).join(' ');
-
-      // 2단 레이아웃 - 좌/우 분리
       var W = cvs.width, H = cvs.height;
+      var midX = Math.floor(W * 0.50); // 50% 기준 좌/우 분리
 
-      // 좌측 컬럼
+      // ── 좌열 처리 (일일N제와 동일) ──
       var leftCvs = document.createElement('canvas');
-      leftCvs.width = Math.floor(W/2);
-      leftCvs.height = H;
-      leftCvs.getContext('2d').drawImage(cvs, 0,0,Math.floor(W/2),H, 0,0,Math.floor(W/2),H);
+      leftCvs.width = midX; leftCvs.height = H;
+      leftCvs.getContext('2d').drawImage(cvs, 0, 0, midX, H, 0, 0, midX, H);
+      var leftData = leftCvs.getContext('2d').getImageData(0, 0, midX, H);
+      var leftQR = scanQR(leftData, midX, H);
+      var leftCutY = leftQR ? Math.max(30, Math.round(leftQR.location.topLeftCorner.y) - 15) : H;
+      var leftFinal = njCrop(cvs, 0, midX, 0, leftCutY);
+      _betiProblems.push({
+        number: num++,
+        dataUrl: leftFinal.toDataURL('image/jpeg', 0.92),
+        qrUrl: leftQR ? leftQR.data : null,
+        hasQr: !!leftQR
+      });
 
-      // 우측 컬럼
+      // ── 우열 처리 ──
       var rightCvs = document.createElement('canvas');
-      rightCvs.width = W - Math.floor(W/2);
-      rightCvs.height = H;
-      rightCvs.getContext('2d').drawImage(cvs, Math.floor(W/2),0,W-Math.floor(W/2),H, 0,0,W-Math.floor(W/2),H);
-
-      // 각 컬럼에서 문제 분할 (줄칸 감지)
-      [leftCvs, rightCvs].forEach(function(colCvs, colIdx){
-        var ctx = colCvs.getContext('2d');
-        var imgData = ctx.getImageData(0,0,colCvs.width,colCvs.height);
-        var cuts = detectHorizontalLines(imgData, colCvs.width, colCvs.height);
-        splitAndAddBetiProblems(colCvs, cuts, colCvs.width, colCvs.height);
+      rightCvs.width = W-midX; rightCvs.height = H;
+      rightCvs.getContext('2d').drawImage(cvs, midX, 0, W-midX, H, 0, 0, W-midX, H);
+      var rightData = rightCvs.getContext('2d').getImageData(0, 0, W-midX, H);
+      var rightQR = scanQR(rightData, W-midX, H);
+      var rightCutY = rightQR ? Math.max(30, Math.round(rightQR.location.topLeftCorner.y) - 15) : H;
+      var rightFinal = njCrop(cvs, midX, W, 0, rightCutY);
+      _betiProblems.push({
+        number: num++,
+        dataUrl: rightFinal.toDataURL('image/jpeg', 0.92),
+        qrUrl: rightQR ? rightQR.data : null,
+        hasQr: !!rightQR
       });
     }
-    progBar.style.width = '70%';
-    progText.textContent = '문제 PDF 분석 완료 ('+_betiProblems.length+'문제)';
+
+    progBar.style.width = '95%';
+    var qrCount = _betiProblems.filter(function(p){ return p.hasQr; }).length;
+    progText.textContent = '분석 완료: '+_betiProblems.length+'문제 / QR '+qrCount+'개 감지';
+
+    // 완료 안내
+    var doneInfo = document.getElementById('beti-problem-done-info');
+    if(doneInfo) doneInfo.textContent = _betiProblems.length+'문제 / QR '+qrCount+'개 감지';
+
   }catch(err){
     document.getElementById('admin-beti-step1').style.display = 'block';
     document.getElementById('admin-beti-step2').style.display = 'none';
@@ -3326,57 +3369,6 @@ async function extractBetiProblems(file){
   }
 }
 
-function detectHorizontalLines(imgData, W, H){
-  var cuts = [0];
-  for(var y=0; y<H; y++){
-    var brightCount = 0;
-    for(var x=0; x<W; x++){
-      var i=(y*W+x)*4;
-      var r=imgData.data[i], g=imgData.data[i+1], b=imgData.data[i+2];
-      if((r+g+b)/3 > 220) brightCount++;
-    }
-    if(brightCount/W > 0.93) cuts.push(y);
-  }
-  // 연속 줄 합치기
-  var merged = [0];
-  for(var i=1; i<cuts.length; i++){
-    if(cuts[i]-merged[merged.length-1] > 30) merged.push(cuts[i]);
-  }
-  merged.push(H);
-  return merged;
-}
-
-function splitAndAddBetiProblems(srcCvs, cuts, W, H){
-  for(var i=0; i<cuts.length-1; i++){
-    var y0=cuts[i], y1=cuts[i+1];
-    if(y1-y0 < 60) continue;
-    var seg = document.createElement('canvas');
-    seg.width=W; seg.height=y1-y0;
-    seg.getContext('2d').drawImage(srcCvs,0,y0,W,y1-y0,0,0,W,y1-y0);
-    // QR 감지
-    var qrUrl = detectBetiQR(seg);
-    _betiProblems.push({
-      number: _betiProblems.length+1,
-      dataUrl: seg.toDataURL('image/jpeg',0.85),
-      qrUrl: qrUrl,
-      hasQr: !!qrUrl
-    });
-  }
-}
-
-function detectBetiQR(cvs){
-  // 우측 하단 15% 영역에서 QR 패턴(어두운 픽셀 밀집) 감지
-  var ctx = cvs.getContext('2d');
-  var W=cvs.width, H=cvs.height;
-  var x0=Math.floor(W*0.75), y0=Math.floor(H*0.75);
-  var imgData = ctx.getImageData(x0,y0,W-x0,H-y0);
-  var darkCount=0;
-  for(var i=0; i<imgData.data.length; i+=4){
-    if((imgData.data[i]+imgData.data[i+1]+imgData.data[i+2])/3<80) darkCount++;
-  }
-  var ratio = darkCount/(imgData.data.length/4);
-  return ratio>0.08 ? '_QR_DETECTED_' : null; // 실제 URL은 추후 처리
-}
 
 async function extractBetiAnswers(file){
   var progText = document.getElementById('beti-progress-text');
@@ -3503,6 +3495,8 @@ function resetBetiUpload(){
   document.getElementById('admin-beti-step1').style.display = 'block';
   document.getElementById('admin-beti-step2').style.display = 'none';
   document.getElementById('admin-beti-step3').style.display = 'none';
+  var solStep = document.getElementById('admin-beti-step-solution');
+  if(solStep) solStep.style.display = 'none';
   document.getElementById('beti-save-progress').style.display = 'none';
   document.getElementById('beti-progress-bar').style.width = '0%';
   ['beti-problem-upload-area','beti-solution-upload-area'].forEach(function(id){
