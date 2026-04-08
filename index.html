@@ -3593,6 +3593,150 @@ async function extractBetiAnswers(file){
   }
 }
 
+/* ═══════════════════════════════════════════
+   베티 반자동 UI 전역 함수들
+═══════════════════════════════════════════ */
+
+/* ── 페이지 표시 ── */
+function betiShowPage(idx){
+  if(!_betiPages || idx < 0 || idx >= _betiPages.length) return;
+  _betiCurPage = idx;
+  var pg = _betiPages[idx];
+  var drawCvs = document.getElementById('beti-draw-canvas');
+  if(!drawCvs) return;
+  drawCvs.width  = pg.canvas.width;
+  drawCvs.height = pg.canvas.height;
+  drawCvs.getContext('2d').drawImage(pg.canvas, 0, 0);
+  document.getElementById('beti-page-label').textContent =
+    (idx+1)+'/'+_betiPages.length+' (PDF '+pg.pageNum+'p)';
+  document.getElementById('beti-prev-page').disabled = (idx===0);
+  document.getElementById('beti-next-page').disabled = (idx===_betiPages.length-1);
+  betiRedrawOverlay();
+  betiUpdateSelInfo();
+}
+
+function betiNavPage(dir){
+  betiShowPage(_betiCurPage + dir);
+}
+
+/* ── 오버레이 다시 그리기 ── */
+function betiRedrawOverlay(){
+  var drawCvs = document.getElementById('beti-draw-canvas');
+  var overCvs = document.getElementById('beti-overlay-canvas');
+  if(!drawCvs || !overCvs) return;
+  overCvs.width  = drawCvs.width;
+  overCvs.height = drawCvs.height;
+  var ctx = overCvs.getContext('2d');
+  ctx.clearRect(0,0,overCvs.width,overCvs.height);
+
+  var sels = _betiSelections[_betiCurPage] || [];
+  sels.forEach(function(sel, i){
+    ctx.strokeStyle = sel.hasQr ? '#16a34a' : '#dc2626';
+    ctx.lineWidth   = Math.max(2, drawCvs.width/300);
+    ctx.fillStyle   = sel.hasQr ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)';
+    ctx.fillRect(sel.x, sel.y, sel.w, sel.h);
+    ctx.strokeRect(sel.x, sel.y, sel.w, sel.h);
+    var fs = Math.max(14, drawCvs.width/40);
+    ctx.font = 'bold '+fs+'px sans-serif';
+    ctx.fillStyle = sel.hasQr ? '#15803d' : '#b91c1c';
+    ctx.fillText((i+1)+'번'+(sel.hasQr?' [QR]':''), sel.x+6, sel.y+fs+4);
+  });
+
+  if(window._betiTempRect){
+    ctx.strokeStyle='#2563eb'; ctx.lineWidth=2;
+    ctx.setLineDash([6,3]);
+    ctx.strokeRect(_betiTempRect.x,_betiTempRect.y,_betiTempRect.w,_betiTempRect.h);
+    ctx.setLineDash([]);
+  }
+}
+
+/* ── 드래그 이벤트 초기화 ── */
+function betiInitDrag(){
+  var wrap = document.getElementById('beti-canvas-wrap');
+  if(!wrap) return;
+
+  function getCanvasPos(e){
+    var rect = document.getElementById('beti-draw-canvas').getBoundingClientRect();
+    var drawCvs = document.getElementById('beti-draw-canvas');
+    var scaleX = drawCvs.width / rect.width;
+    var scaleY = drawCvs.height / rect.height;
+    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    var clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x:(clientX-rect.left)*scaleX, y:(clientY-rect.top)*scaleY };
+  }
+
+  function onDown(e){
+    e.preventDefault();
+    var pos = getCanvasPos(e);
+    // 기존 박스 클릭 → 삭제
+    var sels = _betiSelections[_betiCurPage] || [];
+    for(var i=sels.length-1;i>=0;i--){
+      var s=sels[i];
+      if(pos.x>=s.x&&pos.x<=s.x+s.w&&pos.y>=s.y&&pos.y<=s.y+s.h){
+        sels.splice(i,1); _betiSelections[_betiCurPage]=sels;
+        betiRedrawOverlay(); betiUpdateSelInfo(); betiUpdateAllSummary(); return;
+      }
+    }
+    window._betiDragging=true; window._betiDragStart=pos; window._betiTempRect=null;
+  }
+  function onMove(e){
+    if(!window._betiDragging) return; e.preventDefault();
+    var pos=getCanvasPos(e);
+    window._betiTempRect={
+      x:Math.min(_betiDragStart.x,pos.x), y:Math.min(_betiDragStart.y,pos.y),
+      w:Math.abs(pos.x-_betiDragStart.x), h:Math.abs(pos.y-_betiDragStart.y)
+    };
+    betiRedrawOverlay();
+  }
+  function onUp(e){
+    if(!window._betiDragging) return; window._betiDragging=false;
+    if(window._betiTempRect&&_betiTempRect.w>10&&_betiTempRect.h>10){
+      var hasQr=document.getElementById('beti-qr-toggle').checked;
+      if(!_betiSelections[_betiCurPage]) _betiSelections[_betiCurPage]=[];
+      _betiSelections[_betiCurPage].push({
+        x:_betiTempRect.x,y:_betiTempRect.y,w:_betiTempRect.w,h:_betiTempRect.h,hasQr:hasQr
+      });
+    }
+    window._betiTempRect=null;
+    betiRedrawOverlay(); betiUpdateSelInfo(); betiUpdateAllSummary();
+  }
+
+  // 기존 리스너 제거 (cloneNode)
+  var newWrap = wrap.cloneNode(true);
+  wrap.parentNode.replaceChild(newWrap, wrap);
+  newWrap.addEventListener('mousedown',  onDown, {passive:false});
+  newWrap.addEventListener('mousemove',  onMove, {passive:false});
+  newWrap.addEventListener('mouseup',    onUp,   {passive:false});
+  newWrap.addEventListener('mouseleave', onUp,   {passive:false});
+  newWrap.addEventListener('touchstart', onDown, {passive:false});
+  newWrap.addEventListener('touchmove',  onMove, {passive:false});
+  newWrap.addEventListener('touchend',   onUp,   {passive:false});
+}
+
+function betiUpdateSelInfo(){
+  var el=document.getElementById('beti-sel-info');
+  if(!el) return;
+  var sels=_betiSelections[_betiCurPage]||[];
+  el.textContent='이 페이지에서 선택한 영역: '+sels.length+'개';
+}
+
+function betiUpdateAllSummary(){
+  var total=0, html='';
+  for(var pi=0;pi<(_betiPages||[]).length;pi++){
+    var sels=_betiSelections[pi]||[];
+    if(sels.length>0){
+      total+=sels.length;
+      html+='<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;background:#EBF5FF;border-radius:100px;font-size:11px;">'
+        +(_betiPages[pi].pageNum)+'p: '+sels.length+'개</span>';
+    }
+  }
+  var el=document.getElementById('beti-all-sel-summary');
+  if(el) el.innerHTML=total>0?html+'<span style="font-size:11px;color:#178EF5;font-weight:700;"> 총 '+total+'문제</span>':'아직 선택된 문제가 없습니다';
+  var pi2=document.getElementById('beti-preview-info');
+  if(pi2&&total>0) pi2.textContent='총 '+total+'개 문제 선택됨';
+}
+
+
 function showBetiPreview(){
   // 해설 PDF step에서 호출 → step3(드래그 선택 화면)으로 전환
   document.getElementById('admin-beti-step2').style.display = 'none';
