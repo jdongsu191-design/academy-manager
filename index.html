@@ -3296,6 +3296,7 @@ async function extractBetiProblems(file){
     _betiProblems = [];
     var problemNum = 1;
 
+    /* ── 180도 회전 ── */
     function rotate180(src){
       var c = document.createElement('canvas');
       c.width = src.width; c.height = src.height;
@@ -3306,8 +3307,9 @@ async function extractBetiProblems(file){
       return c;
     }
 
+    /* ── jsQR 다중전략 스캔 ── */
     function scanQR(imgData, w, h){
-      var sh = Math.floor(h*0.40), ch = h-sh;
+      var sh = Math.floor(h*0.35), ch = h-sh;
       var buf = new Uint8ClampedArray(ch*w*4);
       for(var r=0; r<ch; r++) buf.set(imgData.data.slice((sh+r)*w*4,(sh+r+1)*w*4), r*w*4);
       var qr = jsQR(buf, w, ch, {inversionAttempts:'dontInvert'});
@@ -3319,136 +3321,167 @@ async function extractBetiProblems(file){
       return jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'}) || null;
     }
 
-    async function analyzeWithGemini(pageBase64, pageNum){
-      var prompt = [
-        '이 이미지는 수학 시험지의 한 페이지입니다. 좌/우 2단 레이아웃입니다.',
-        '',
-        '각 문제를 찾아서 잘라야 할 y좌표 범위를 알려주세요.',
-        '',
-        '★ 중요한 규칙:',
-        '1. 문제는 반드시 "숫자 |" 패턴으로 시작합니다. (예: "1 |", "2 |", "9 |")',
-        '2. 페이지 상단의 회차 배너(큰 숫자와 제목이 있는 헤더)는 문제가 아닙니다. 절대 포함하지 마세요.',
-        '3. QR코드(흑백 정사각형 패턴)가 있는 문제는 QR코드를 제외하고 자릅니다.',
-        '   → y1은 QR코드 바로 위 선택지 마지막 줄의 Y좌표여야 합니다.',
-        '4. QR코드가 없는 문제는 선택지(①②③④⑤) 마지막 줄까지 자릅니다.',
-        '5. 한 컬럼에 문제가 2개 있으면 반드시 2개를 따로 반환하세요.',
-        '6. 문제가 없는 빈 영역은 포함하지 마세요.',
-        '',
-        '아래 JSON 배열만 반환 (설명 없이):',
-        '[{"col":"left","y0":0.20,"y1":0.48,"hasQr":false},{"col":"left","y0":0.52,"y1":0.78,"hasQr":true}]',
-        '',
-        '- col: "left"(왼쪽) 또는 "right"(오른쪽)',
-        '- y0: 문제번호("N |") 시작 Y (이미지 높이 비율, 0=최상단)',
-        '- y1: 문제 끝 Y (QR 없으면 선택지 끝, QR 있으면 QR 바로 위)',
-        '- hasQr: QR코드 있으면 true',
-        '- 위에서 아래 순서로 정렬',
-      ].join('\n');
-
-      var resp = await fetch('/api/gemini-proxy', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          model:'gemini-2.5-flash',
-          contents:[{parts:[
-            {inlineData:{mimeType:'image/jpeg', data:pageBase64}},
-            {text: prompt}
-          ]}],
-          generationConfig:{temperature:0, maxOutputTokens:1024, responseMimeType:'application/json'}
-        })
-      });
-
-      var data = await resp.json();
-      if(data.error){ console.error('Gemini오류 p'+pageNum+':', JSON.stringify(data.error)); return null; }
-
-      var text = '';
-      if(data.candidates&&data.candidates[0]){
-        var parts = data.candidates[0].content&&data.candidates[0].content.parts;
-        text = (parts&&parts[0]&&parts[0].text)||'';
+    /* ── 각 행의 밝기 (컬럼 기준) ── */
+    function rowBrightness(data, w, h){
+      var rows = new Float32Array(h);
+      for(var y=0; y<h; y++){
+        var s=0;
+        for(var x=0; x<w; x++){
+          var i=(y*w+x)*4;
+          s+=(data[i]+data[i+1]+data[i+2])/3;
+        }
+        rows[y]=s/w;
       }
-      if(!text){ console.warn('Gemini응답없음 p'+pageNum); return null; }
-
-      try{
-        var clean = text.replace(/```json|```/g,'').trim();
-        var result = JSON.parse(clean);
-        console.log('p'+pageNum+' Gemini:', JSON.stringify(result));
-        return Array.isArray(result) ? result : null;
-      }catch(e){
-        console.error('p'+pageNum+' JSON실패:', text.slice(0,300));
-        return null;
-      }
+      return rows;
     }
 
-    var HI = 4.0, LO = 2.0;
+    /* ── 텍스트 끝 이후 첫 번째 긴 공백(여백)의 끝 Y 반환 ──
+       startY부터 스캔, minBlank 픽셀 이상 밝은 행이 연속되면 공백으로 판정
+       공백 끝 Y를 반환 (없으면 maxY) */
+    function findBlankEnd(rows, startY, maxY, minBlank, brightThresh){
+      var blankStart=-1, count=0;
+      for(var y=startY; y<maxY; y++){
+        if(rows[y]>=brightThresh){
+          if(blankStart<0) blankStart=y;
+          count++;
+          if(count>=minBlank) return y+1; // 공백 끝
+        } else {
+          blankStart=-1; count=0;
+        }
+      }
+      return maxY;
+    }
+
+    /* ── 4 ~ (마지막-1)페이지 처리 ── */
+    var SCALE = 4.0;
     var START = 4, END = pdf.numPages - 1;
 
     for(var p = START; p <= END; p++){
-      progText.textContent = p+'/'+END+' AI 분석 중...';
-      progBar.style.width = Math.round((p-START)/(END-START+1)*88)+'%';
+      progText.textContent = p+'/'+END+' 페이지 분석 중...';
+      progBar.style.width = Math.round((p-START)/(END-START+1)*90)+'%';
 
       var page = await pdf.getPage(p);
-      var rot  = page.getViewport({scale:1.0}).rotation;
 
-      // 고해상도 (자르기용)
-      var vpHi = page.getViewport({scale:HI});
-      var cHi  = document.createElement('canvas');
-      cHi.width=vpHi.width; cHi.height=vpHi.height;
-      await page.render({canvasContext:cHi.getContext('2d'), viewport:vpHi}).promise;
-      var wHi = (rot===180) ? rotate180(cHi) : cHi;
+      // 회전 감지
+      var vpBase = page.getViewport({scale:1.0});
+      var rot = vpBase.rotation;
 
-      // 저해상도 (Gemini용)
-      var vpLo = page.getViewport({scale:LO});
-      var cLo  = document.createElement('canvas');
-      cLo.width=vpLo.width; cLo.height=vpLo.height;
-      await page.render({canvasContext:cLo.getContext('2d'), viewport:vpLo}).promise;
-      var wLo = (rot===180) ? rotate180(cLo) : cLo;
+      // 고해상도 렌더링
+      var vp = page.getViewport({scale:SCALE});
+      var cvs = document.createElement('canvas');
+      cvs.width=vp.width; cvs.height=vp.height;
+      await page.render({canvasContext:cvs.getContext('2d'), viewport:vp}).promise;
+      var workCvs = (rot===180) ? rotate180(cvs) : cvs;
 
-      var W = wHi.width, H = wHi.height;
-      var midX = Math.floor(W*0.50);
+      var W=workCvs.width, H=workCvs.height;
+      var midX=Math.floor(W*0.50);
 
-      var loBase64 = wLo.toDataURL('image/jpeg',0.88).split(',')[1];
-      var segs = await analyzeWithGemini(loBase64, p);
+      // 푸터 제외 높이 (하단 7%)
+      var contentH = Math.floor(H*0.93);
 
-      if(segs && segs.length > 0){
-        for(var si=0; si<segs.length; si++){
-          var seg = segs[si];
-          var colX = seg.col==='left' ? 0 : midX;
-          var colW = midX;
-          var y0 = Math.max(0,   Math.round(seg.y0 * H));
-          var y1 = Math.min(H-1, Math.round(seg.y1 * H));
-          if(y1-y0 < 30) continue;
+      // ── 텍스트 레이어에서 문항번호 위치 추출 ──
+      // PDF 좌표 → 캔버스 좌표 변환
+      // PDF: 원점=좌하단, 캔버스: 원점=좌상단
+      var pageH_pts = vpBase.height; // PDF 포인트 단위 높이
+      var tc = await page.getTextContent();
 
-          // QR URL 추출 (jsQR)
-          var qrUrl = null;
-          if(seg.hasQr){
-            var colImg = wHi.getContext('2d').getImageData(colX, 0, colW, H);
-            var qrResult = scanQR(colImg, colW, H);
-            if(qrResult) qrUrl = qrResult.data;
+      // 문항번호 패턴: "숫자｜" 또는 "숫자 ｜" (전각/반각 모두)
+      var NUM_PAT = /^(\d{1,2})\s*[｜|]\s*$/;
+
+      var leftNums = [], rightNums = [];
+
+      tc.items.forEach(function(item){
+        var s = item.str.trim();
+        if(!NUM_PAT.test(s)) return;
+
+        // PDF 좌표 → 캔버스 픽셀
+        var pdfX = item.transform[4];
+        var pdfY = item.transform[5];
+
+        // 회전 보정
+        var canX, canY;
+        if(rot===180){
+          canX = (vpBase.width - pdfX) * SCALE;
+          canY = pdfY * SCALE;
+        } else {
+          canX = pdfX * SCALE;
+          canY = (pageH_pts - pdfY) * SCALE;
+        }
+
+        // 컬럼 판단
+        if(canX < midX) leftNums.push({y: canY, canX: canX});
+        else             rightNums.push({y: canY, canX: canX});
+      });
+
+      // Y 오름차순 정렬
+      leftNums.sort(function(a,b){return a.y-b.y;});
+      rightNums.sort(function(a,b){return a.y-b.y;});
+
+      console.log('p'+p+' rot='+rot+' leftNums='+leftNums.length+' rightNums='+rightNums.length,
+        leftNums.map(function(n){return Math.round(n.y);}),
+        rightNums.map(function(n){return Math.round(n.y);}));
+
+      // ── 각 컬럼 처리 ──
+      [
+        {nums: leftNums,  colX: 0,    colW: midX},
+        {nums: rightNums, colX: midX, colW: W-midX}
+      ].forEach(function(col){
+        if(col.nums.length === 0) return;
+
+        // 컬럼 이미지 데이터 (QR 스캔 + 밝기)
+        var colData = workCvs.getContext('2d').getImageData(col.colX, 0, col.colW, H);
+        var colQR   = scanQR(colData, col.colW, H);
+        var rows    = rowBrightness(colData.data, col.colW, H);
+
+        // QR Y (컬럼 기준)
+        var qrTopY = colQR ? Math.round(colQR.location.topLeftCorner.y) : null;
+
+        for(var ni=0; ni<col.nums.length; ni++){
+          var numY   = Math.max(0, Math.round(col.nums[ni].y) - Math.round(SCALE*4));
+          var nextNumY = (ni+1 < col.nums.length)
+            ? Math.round(col.nums[ni+1].y) - Math.round(SCALE*4)
+            : contentH;
+
+          // 이 문제에 QR이 있는지: QR Y가 numY~nextNumY 사이
+          var hasQr = qrTopY !== null && qrTopY > numY && qrTopY < nextNumY;
+
+          var cutY;
+          if(hasQr){
+            // QR 위에서 자름 (QR 시작점 - 약간 위)
+            cutY = Math.max(numY+10, qrTopY - Math.round(SCALE*3));
+          } else {
+            // 텍스트 끝 이후 공백으로 자름
+            // 다음 문항번호 직전 공백을 찾음
+            var searchFrom = Math.min(nextNumY - Math.round(SCALE*20), contentH);
+            var blankEnd = findBlankEnd(rows, Math.max(numY, searchFrom),
+                                        nextNumY, Math.round(SCALE*5), 245);
+            cutY = Math.min(blankEnd, nextNumY);
           }
 
-          var crop = njCrop(wHi, colX, colX+colW, y0, y1);
+          cutY = Math.min(cutY, contentH);
+          if(cutY - numY < 30) continue;
+
+          // 크롭
+          var seg = njCrop(workCvs, col.colX, col.colX+col.colW, numY, cutY);
+
+          // 내용 체크
+          var sd = seg.getContext('2d').getImageData(0,0,seg.width,seg.height).data;
+          var dark=0;
+          for(var i=0;i<sd.length;i+=4) if((sd[i]+sd[i+1]+sd[i+2])/3<215) dark++;
+          if(dark/(seg.width*seg.height)<0.003) continue;
+
           _betiProblems.push({
             number: problemNum++,
-            dataUrl: crop.toDataURL('image/jpeg',0.92),
-            qrUrl: qrUrl, hasQr: !!seg.hasQr
+            dataUrl: seg.toDataURL('image/jpeg',0.92),
+            qrUrl: (hasQr && colQR) ? colQR.data : null,
+            hasQr: hasQr
           });
         }
-      } else {
-        // 폴백
-        console.warn('p'+p+' 폴백');
-        var fH = Math.floor(H*0.92);
-        var lImg = wHi.getContext('2d').getImageData(0,    0, midX,   H);
-        var rImg = wHi.getContext('2d').getImageData(midX, 0, W-midX, H);
-        var lQR  = scanQR(lImg, midX,   H);
-        var rQR  = scanQR(rImg, W-midX, H);
-        var lY = lQR ? Math.max(20,Math.round(lQR.location.topLeftCorner.y)-20) : fH;
-        var rY = rQR ? Math.max(20,Math.round(rQR.location.topLeftCorner.y)-20) : fH;
-        _betiProblems.push({number:problemNum++,dataUrl:njCrop(wHi,0,midX,0,lY).toDataURL('image/jpeg',0.92),qrUrl:lQR?lQR.data:null,hasQr:!!lQR});
-        _betiProblems.push({number:problemNum++,dataUrl:njCrop(wHi,midX,W,0,rY).toDataURL('image/jpeg',0.92),qrUrl:rQR?rQR.data:null,hasQr:!!rQR});
-      }
+      });
     }
 
     progBar.style.width='95%';
-    var qrCnt = _betiProblems.filter(function(p){return p.hasQr;}).length;
+    var qrCnt=_betiProblems.filter(function(p){return p.hasQr;}).length;
     progText.textContent='완료: '+_betiProblems.length+'문제 / QR '+qrCnt+'개';
     var di=document.getElementById('beti-problem-done-info');
     if(di) di.textContent=_betiProblems.length+'문제 / QR '+qrCnt+'개';
