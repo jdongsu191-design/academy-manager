@@ -732,7 +732,28 @@
       <!-- 관리자 N제 관리 패널 -->
       <div class="panel" id="panel-admin-naje">
         <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a2e">📄 N제 관리</div>
-        <div style="font-size:13px;color:#6b7280;margin-bottom:16px">N제 문제를 등록하고 관리합니다</div>
+        <div style="font-size:13px;color:#6b7280;margin-bottom:14px">N제 문제를 등록하고 관리합니다</div>
+
+        <!-- 탭 -->
+        <div style="display:flex;gap:4px;margin-bottom:16px;background:#f5f6fa;border-radius:10px;padding:4px">
+          <button id="admin-naje-tab-list" onclick="switchAdminNajeTab('list')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:var(--primary);color:#fff">📋 N제 목록</button>
+          <button id="admin-naje-tab-upload" onclick="switchAdminNajeTab('upload')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;background:transparent;color:#6b7280">➕ 문제 등록</button>
+        </div>
+
+        <!-- 목록 탭 -->
+        <div id="admin-naje-panel-list">
+          <!-- 학년 필터 -->
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+            <button onclick="filterAdminNaje('')" id="admin-naje-filter-all" class="btn btn-sm btn-primary">전체</button>
+            <button onclick="filterAdminNaje('고1')" id="admin-naje-filter-고1" class="btn btn-sm">고1</button>
+            <button onclick="filterAdminNaje('고2')" id="admin-naje-filter-고2" class="btn btn-sm">고2</button>
+            <button onclick="filterAdminNaje('고3')" id="admin-naje-filter-고3" class="btn btn-sm">고3</button>
+          </div>
+          <div id="admin-naje-set-list"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
+        </div>
+
+        <!-- 등록 탭 -->
+        <div id="admin-naje-panel-upload" style="display:none">
 
         <!-- STEP 1 -->
         <div id="admin-naje-step1" class="card">
@@ -816,6 +837,7 @@
             <div id="admin-naje-save-progress-bar" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s;border-radius:100px"></div>
           </div>
         </div>
+        </div><!-- /admin-naje-panel-upload -->
       </div>
     </div>
 
@@ -2655,14 +2677,74 @@ function switchNajeTab(tab){
 
 // ===== 관리자 N제 관리 =====
 async function initAdminNaje(){
-  resetNajeUpload('admin');
+  switchAdminNajeTab('list');
+  loadAdminNajeSets();
 }
 
-function switchAdminNajeStep(step){
-  ['1','2','3'].forEach(function(s){
-    var el = document.getElementById('admin-naje-step'+s);
-    if(el) el.style.display = (s===String(step))?'block':'none';
+var _adminNajeFilter = '';
+
+function switchAdminNajeTab(tab){
+  document.getElementById('admin-naje-panel-list').style.display = tab==='list'?'block':'none';
+  document.getElementById('admin-naje-panel-upload').style.display = tab==='upload'?'block':'none';
+  var listBtn = document.getElementById('admin-naje-tab-list');
+  var uploadBtn = document.getElementById('admin-naje-tab-upload');
+  if(listBtn){ listBtn.style.background = tab==='list'?'var(--primary)':'transparent'; listBtn.style.color = tab==='list'?'#fff':'#6b7280'; listBtn.style.fontWeight = tab==='list'?'600':'500'; }
+  if(uploadBtn){ uploadBtn.style.background = tab==='upload'?'var(--primary)':'transparent'; uploadBtn.style.color = tab==='upload'?'#fff':'#6b7280'; uploadBtn.style.fontWeight = tab==='upload'?'600':'500'; }
+  if(tab==='upload') resetNajeUpload('admin');
+}
+
+function filterAdminNaje(grade){
+  _adminNajeFilter = grade;
+  // 필터 버튼 스타일
+  ['all','고1','고2','고3'].forEach(function(g){
+    var btn = document.getElementById('admin-naje-filter-'+(g||'all'));
+    if(!btn) return;
+    var active = (g===grade)||(g==='all'&&!grade);
+    btn.style.background = active?'var(--primary)':'#fff';
+    btn.style.color = active?'#fff':'#4b5563';
+    btn.style.borderColor = active?'var(--primary)':'var(--border)';
   });
+  loadAdminNajeSets();
+}
+
+async function loadAdminNajeSets(){
+  var el = document.getElementById('admin-naje-set-list');
+  if(!el) return;
+  el.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+
+  var query = db.from('naje_sets')
+    .select('*, naje_problems(count)')
+    .order('created_at',{ascending:false});
+  if(_adminNajeFilter) query = query.eq('target_grade', _adminNajeFilter);
+
+  var {data, error} = await query;
+  if(error||!data||!data.length){
+    el.innerHTML = '<div class="empty-state"><div class="ei">📄</div><p>등록된 N제가 없습니다</p></div>';
+    return;
+  }
+
+  el.innerHTML = data.map(function(s){
+    var cnt = s.naje_problems && s.naje_problems[0] ? s.naje_problems[0].count : s.total_problems||0;
+    return '<div class="card" style="margin-bottom:10px;">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
+      + '<div style="flex:1;min-width:0">'
+      + '<div style="font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:6px">'+s.title+'</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:5px;">'
+      + (s.target_grade?'<span class="badge badge-blue">'+s.target_grade+'</span>':'')
+      + (s.subject?'<span class="badge" style="background:#f5f6fa;color:#4b5563">'+s.subject+'</span>':'')
+      + (s.week_number?'<span class="badge" style="background:#EAF3DE;color:#3B6D11">'+s.week_number+'주차</span>':'')
+      + '<span class="badge" style="background:#f5f6fa;color:#4b5563">'+cnt+'문제</span>'
+      + '</div>'
+      + (s.description?'<div style="font-size:12px;color:#9ca3af;margin-top:4px">'+s.description+'</div>':'')
+      + '<div style="font-size:11px;color:#c4c9d4;margin-top:5px">'+new Date(s.created_at).toLocaleDateString('ko-KR')+' 등록</div>'
+      + '</div>'
+      + '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">'
+      + '<button class="btn btn-primary btn-sm" onclick="viewNajeSet(\''+s.id+'\')">보기</button>'
+      + '<button class="btn btn-danger btn-sm" onclick="deleteNajeSet(\''+s.id+'\',\''+s.title.replace(/'/g,"\\'")+'\')" style="font-size:11px">삭제</button>'
+      + '</div>'
+      + '</div>'
+      + '</div>';
+  }).join('');
 }
 
 // 등록된 N제 목록 로드
@@ -3374,7 +3456,11 @@ async function saveNajeSet(mode){
       if(el) el.value='';
     });
     if(mode==='admin'){
-      // 관리자는 그냥 초기화만
+      // 관리자: 목록 탭으로 이동 + 새로고침
+      resetNajeUpload('admin');
+      switchAdminNajeTab('list');
+      loadAdminNajeSets();
+      alert('✅ N제가 등록됐습니다!');
     } else {
       switchNajeTab('list');
       loadNajeSets();
