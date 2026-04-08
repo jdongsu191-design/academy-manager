@@ -3283,23 +3283,25 @@ async function processBetiPdf(file, type){
 async function extractBetiProblems(file){
   document.getElementById('admin-beti-step1').style.display = 'none';
   document.getElementById('admin-beti-step2').style.display = 'block';
-  document.getElementById('admin-beti-step-solution').style.display = 'none';
+  var solStep = document.getElementById('admin-beti-step-solution');
+  if(solStep) solStep.style.display = 'none';
   var progText = document.getElementById('beti-progress-text');
-  var progBar = document.getElementById('beti-progress-bar');
+  var progBar  = document.getElementById('beti-progress-bar');
   progBar.style.width = '0%';
 
   try{
     if(typeof pdfjsLib === 'undefined') throw new Error('PDF.js 없음');
-    var ab = await file.arrayBuffer();
-    var pdf = await pdfjsLib.getDocument({data:ab}).promise;
+    var ab  = await file.arrayBuffer();
+    var pdf = await pdfjsLib.getDocument({data: ab}).promise;
     _betiProblems = [];
     var num = 1;
 
-    // jsQR 스캔 함수 (일일N제와 동일)
+    // jsQR 다중전략 스캔 (일일N제와 동일)
     function scanQR(imgData, w, h){
-      var sh = Math.floor(h*0.5), ch = h-sh;
-      var buf = new Uint8ClampedArray(ch*w*4);
-      for(var r=0; r<ch; r++) buf.set(imgData.data.slice((sh+r)*w*4,(sh+r+1)*w*4), r*w*4);
+      var sh = Math.floor(h * 0.45), ch = h - sh;
+      var buf = new Uint8ClampedArray(ch * w * 4);
+      for(var r = 0; r < ch; r++)
+        buf.set(imgData.data.slice((sh+r)*w*4, (sh+r+1)*w*4), r*w*4);
       var qr = jsQR(buf, w, ch, {inversionAttempts:'dontInvert'});
       if(qr){ qr.location.topLeftCorner.y += sh; return qr; }
       qr = jsQR(buf, w, ch, {inversionAttempts:'attemptBoth'});
@@ -3309,63 +3311,88 @@ async function extractBetiProblems(file){
       return jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'}) || null;
     }
 
-    // 2페이지부터 (1페이지=표지/채점표)
-    for(var p=2; p<=pdf.numPages; p++){
-      progText.textContent = p+'/'+pdf.numPages+' 페이지 분석 중...';
-      progBar.style.width = Math.round((p-2)/(pdf.numPages-1)*90)+'%';
+    // 컬럼 이미지가 실질적으로 빈 페이지인지 확인
+    // (상단 헤더/로고 영역 제외하고 내용이 있는지)
+    function hasContent(imgData, w, h){
+      // 상단 10% 는 헤더(로고/제목)로 스킵, 나머지에서 어두운 픽셀 비율 체크
+      var startY = Math.floor(h * 0.10);
+      var darkCount = 0, total = 0;
+      for(var y = startY; y < h; y++){
+        for(var x = 0; x < w; x++){
+          var i = (y * w + x) * 4;
+          var gray = (imgData.data[i] + imgData.data[i+1] + imgData.data[i+2]) / 3;
+          if(gray < 200) darkCount++;
+          total++;
+        }
+      }
+      return (darkCount / total) > 0.005; // 0.5% 이상 어두운 픽셀 있으면 내용 있음
+    }
+
+    // 4페이지 ~ 15페이지만 처리
+    var startPage = 4, endPage = Math.min(15, pdf.numPages);
+
+    for(var p = startPage; p <= endPage; p++){
+      progText.textContent = p + '/' + endPage + ' 페이지 분석 중...';
+      progBar.style.width = Math.round((p - startPage) / (endPage - startPage + 1) * 90) + '%';
 
       var page = await pdf.getPage(p);
-      var vp = page.getViewport({scale:4.0}); // 일일N제와 동일한 해상도
-      var cvs = document.createElement('canvas');
+      var vp   = page.getViewport({scale: 4.0});
+      var cvs  = document.createElement('canvas');
       cvs.width = vp.width; cvs.height = vp.height;
-      await page.render({canvasContext:cvs.getContext('2d'), viewport:vp}).promise;
+      await page.render({canvasContext: cvs.getContext('2d'), viewport: vp}).promise;
 
-      var W = cvs.width, H = cvs.height;
-      var midX = Math.floor(W * 0.50); // 50% 기준 좌/우 분리
+      var W    = cvs.width, H = cvs.height;
+      var midX = Math.floor(W * 0.50);
 
-      // ── 좌열 처리 (일일N제와 동일) ──
-      var leftCvs = document.createElement('canvas');
-      leftCvs.width = midX; leftCvs.height = H;
-      leftCvs.getContext('2d').drawImage(cvs, 0, 0, midX, H, 0, 0, midX, H);
-      var leftData = leftCvs.getContext('2d').getImageData(0, 0, midX, H);
-      var leftQR = scanQR(leftData, midX, H);
-      var leftCutY = leftQR ? Math.max(30, Math.round(leftQR.location.topLeftCorner.y) - 15) : H;
-      var leftFinal = njCrop(cvs, 0, midX, 0, leftCutY);
-      _betiProblems.push({
-        number: num++,
-        dataUrl: leftFinal.toDataURL('image/jpeg', 0.92),
-        qrUrl: leftQR ? leftQR.data : null,
-        hasQr: !!leftQR
-      });
+      // ── 좌측 컬럼 ──
+      var leftData = cvs.getContext('2d').getImageData(0, 0, midX, H);
 
-      // ── 우열 처리 ──
-      var rightCvs = document.createElement('canvas');
-      rightCvs.width = W-midX; rightCvs.height = H;
-      rightCvs.getContext('2d').drawImage(cvs, midX, 0, W-midX, H, 0, 0, W-midX, H);
-      var rightData = rightCvs.getContext('2d').getImageData(0, 0, W-midX, H);
-      var rightQR = scanQR(rightData, W-midX, H);
-      var rightCutY = rightQR ? Math.max(30, Math.round(rightQR.location.topLeftCorner.y) - 15) : H;
-      var rightFinal = njCrop(cvs, midX, W, 0, rightCutY);
-      _betiProblems.push({
-        number: num++,
-        dataUrl: rightFinal.toDataURL('image/jpeg', 0.92),
-        qrUrl: rightQR ? rightQR.data : null,
-        hasQr: !!rightQR
-      });
+      if(hasContent(leftData, midX, H)){
+        var leftQR   = scanQR(leftData, midX, H);
+        // QR이 있으면 QR 바로 위까지, 없으면 컬럼 전체
+        var leftCutY = leftQR
+          ? Math.max(40, Math.round(leftQR.location.topLeftCorner.y) - 10)
+          : H;
+        var leftCvs  = njCrop(cvs, 0, midX, 0, leftCutY);
+        _betiProblems.push({
+          number: num++,
+          dataUrl: leftCvs.toDataURL('image/jpeg', 0.92),
+          qrUrl:   leftQR ? leftQR.data : null,
+          hasQr:   !!leftQR
+        });
+      }
+
+      // ── 우측 컬럼 ──
+      var rightW    = W - midX;
+      var rightData = cvs.getContext('2d').getImageData(midX, 0, rightW, H);
+
+      if(hasContent(rightData, rightW, H)){
+        var rightQR   = scanQR(rightData, rightW, H);
+        var rightCutY = rightQR
+          ? Math.max(40, Math.round(rightQR.location.topLeftCorner.y) - 10)
+          : H;
+        var rightCvs  = njCrop(cvs, midX, W, 0, rightCutY);
+        _betiProblems.push({
+          number: num++,
+          dataUrl: rightCvs.toDataURL('image/jpeg', 0.92),
+          qrUrl:   rightQR ? rightQR.data : null,
+          hasQr:   !!rightQR
+        });
+      }
     }
 
     progBar.style.width = '95%';
     var qrCount = _betiProblems.filter(function(p){ return p.hasQr; }).length;
-    progText.textContent = '분석 완료: '+_betiProblems.length+'문제 / QR '+qrCount+'개 감지';
+    progText.textContent = '분석 완료: ' + _betiProblems.length + '문제 / QR ' + qrCount + '개 감지';
 
-    // 완료 안내
     var doneInfo = document.getElementById('beti-problem-done-info');
-    if(doneInfo) doneInfo.textContent = _betiProblems.length+'문제 / QR '+qrCount+'개 감지';
+    if(doneInfo) doneInfo.textContent = _betiProblems.length + '문제 / QR ' + qrCount + '개 감지';
 
   }catch(err){
     document.getElementById('admin-beti-step1').style.display = 'block';
     document.getElementById('admin-beti-step2').style.display = 'none';
-    alert('문제 PDF 오류: '+err.message);
+    alert('문제 PDF 오류: ' + err.message);
+    console.error(err);
   }
 }
 
