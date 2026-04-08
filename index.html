@@ -1296,8 +1296,14 @@
     <div id="edit-student-status-row" style="margin-top:10px;padding:10px;background:#f5f6fa;border-radius:10px;font-size:13px;color:#4b5563"></div>
     <div style="margin-top:12px;padding:12px 14px;background:#EBF5FF;border-radius:10px;border:1px solid #B5D4F4">
       <div style="font-size:12px;font-weight:700;color:#185FA5;margin-bottom:8px">📄 일일N제 단계 부여</div>
-      <div style="font-size:11px;color:#4b5563;margin-bottom:10px">N제를 선택하면 해당 N제에서 풀 수 있는 단계를 설정할 수 있습니다.</div>
-      <!-- N제 선택 드롭다운 -->
+      <!-- 학년 버튼 -->
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button onclick="selectEditNajeGrade('')" id="edit-naje-grade-btn-all" style="flex:1;padding:6px 4px;border:1.5px solid #B5D4F4;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:#178EF5;color:#fff;">전체</button>
+        <button onclick="selectEditNajeGrade('고1')" id="edit-naje-grade-btn-고1" style="flex:1;padding:6px 4px;border:1.5px solid #B5D4F4;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:#fff;color:#185FA5;">고1</button>
+        <button onclick="selectEditNajeGrade('고2')" id="edit-naje-grade-btn-고2" style="flex:1;padding:6px 4px;border:1.5px solid #B5D4F4;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:#fff;color:#185FA5;">고2</button>
+        <button onclick="selectEditNajeGrade('고3')" id="edit-naje-grade-btn-고3" style="flex:1;padding:6px 4px;border:1.5px solid #B5D4F4;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:#fff;color:#185FA5;">고3</button>
+      </div>
+      <!-- N제 선택 드롭다운 (선택된 학년 기준) -->
       <select id="edit-naje-set-select" onchange="loadEditNajeSteps()" style="width:100%;padding:8px 10px;border:1.5px solid #B5D4F4;border-radius:8px;font-size:13px;background:#fff;margin-bottom:10px;outline:none">
         <option value="">-- N제를 선택하세요 --</option>
       </select>
@@ -1984,43 +1990,65 @@ async function saveEditStudent(){
 let _editNajeSets = [];
 let _editNajeAssignments = [];
 
+var _editNajeGradeFilter = '';
+
+function selectEditNajeGrade(grade){
+  _editNajeGradeFilter = grade;
+  // 버튼 스타일 토글
+  ['all','고1','고2','고3'].forEach(function(g){
+    var btn = document.getElementById('edit-naje-grade-btn-'+(g||'all'));
+    if(!btn) return;
+    var active = (grade===''&&g==='all') || (grade===g);
+    btn.style.background = active ? '#178EF5' : '#fff';
+    btn.style.color = active ? '#fff' : '#185FA5';
+  });
+  // 드롭다운 필터링
+  renderEditNajeDropdown();
+  // 단계 영역 숨기기
+  document.getElementById('edit-naje-steps-area').style.display = 'none';
+}
+
+function renderEditNajeDropdown(){
+  var sel = document.getElementById('edit-naje-set-select');
+  if(!sel) return;
+  var filtered = _editNajeSets.filter(function(s){
+    return !_editNajeGradeFilter || s.target_grade === _editNajeGradeFilter;
+  });
+  var html = '<option value="">-- N제를 선택하세요 ('+(filtered.length)+'개) --</option>';
+  filtered.forEach(function(s){
+    var assigned = _editNajeAssignments.find(function(a){return a.set_id===s.id;});
+    var stepCount = assigned && assigned.steps ? assigned.steps.length : 0;
+    html += '<option value="'+s.id+'">'
+      +(s.target_grade?'['+s.target_grade+'] ':'')+s.title
+      +(s.week_number?' ('+s.week_number+'주차)':'')
+      +(stepCount>0?' ✅ '+stepCount+'단계':'')
+      +'</option>';
+  });
+  sel.innerHTML = html;
+}
+
 async function loadEditNajeSets(studentId){
-  // teacher_id 필터 없이 전체 N제 조회 (관리자 등록 포함)
+  // 전체 N제 조회 (관리자 등록 포함)
   const{data: sets} = await db.from('naje_sets')
-    .select('id,title,week_number,target_grade,subject')
+    .select('id,title,week_number,target_grade')
     .order('target_grade',{ascending:true})
     .order('title',{ascending:true});
   _editNajeSets = sets||[];
   const{data: assignments} = await db.from('naje_assignments')
     .select('set_id,steps').eq('student_id', studentId);
   _editNajeAssignments = assignments||[];
-  const sel = document.getElementById('edit-naje-set-select');
-  if(!sel) return;
 
-  // 학년별로 그룹핑해서 optgroup으로 표시
-  var grades = ['고1','고2','고3',''];
-  var grouped = {};
-  _editNajeSets.forEach(function(s){
-    var g = s.target_grade||'기타';
-    if(!grouped[g]) grouped[g] = [];
-    grouped[g].push(s);
+  // 기본 전체 표시
+  _editNajeGradeFilter = '';
+  // 버튼 초기화
+  ['all','고1','고2','고3'].forEach(function(g){
+    var btn = document.getElementById('edit-naje-grade-btn-'+(g||'all'));
+    if(!btn) return;
+    btn.style.background = g==='all' ? '#178EF5' : '#fff';
+    btn.style.color = g==='all' ? '#fff' : '#185FA5';
   });
 
-  var html = '<option value="">-- N제를 선택하세요 --</option>';
-  grades.forEach(function(g){
-    var label = g||'기타';
-    var list = grouped[label]||[];
-    if(!list.length) return;
-    html += '<optgroup label="'+label+'">';
-    list.forEach(function(s){
-      var assigned = _editNajeAssignments.find(function(a){return a.set_id===s.id;});
-      var stepCount = assigned && assigned.steps ? assigned.steps.length : 0;
-      html += '<option value="'+s.id+'">'+s.title+(s.week_number?' ('+s.week_number+'주차)':'')+
-        (stepCount>0?' ✅ '+stepCount+'단계':'')+'</option>';
-    });
-    html += '</optgroup>';
-  });
-  sel.innerHTML = html;
+  renderEditNajeDropdown();
   document.getElementById('edit-naje-steps-area').style.display = 'none';
   renderEditNajeAssignmentsSummary();
 }
@@ -2079,11 +2107,7 @@ async function saveNajeAssignment(){
   var idx = _editNajeAssignments.findIndex(function(a){return a.set_id===setId;});
   if(idx>=0) _editNajeAssignments[idx].steps = steps;
   else _editNajeAssignments.push({set_id:setId, steps:steps});
-  var opt = document.querySelector('#edit-naje-set-select option[value="'+setId+'"]');
-  if(opt){
-    var s = _editNajeSets.find(function(x){return x.id===setId;});
-    opt.textContent = (s?s.title:'N제')+(s&&s.week_number?' ('+s.week_number+'주차)':'')+(steps.length>0?' ✅ '+steps.length+'단계':'');
-  }
+  renderEditNajeDropdown();
   renderEditNajeAssignmentsSummary();
   alert('✅ '+steps.length+'개 단계가 저장됐습니다!');
 }
