@@ -993,21 +993,51 @@
           <!-- STEP 3: 미리보기 -->
           <div id="admin-beti-step3" style="display:none">
             <div class="card">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                <div style="font-size:14px;font-weight:700;color:#1a1a2e">📸 최종 미리보기</div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div style="font-size:14px;font-weight:700;color:#1a1a2e">✂️ 문제 영역 선택</div>
                 <button onclick="resetBetiUpload()" class="btn btn-sm">← 처음으로</button>
               </div>
-              <div id="beti-preview-info" style="font-size:12px;color:#6b7280;margin-bottom:10px"></div>
+              <div style="font-size:12px;color:#6b7280;margin-bottom:10px;padding:8px;background:#f0f7ff;border-radius:8px;line-height:1.6">
+                📌 <strong>드래그</strong>로 문제 영역을 선택하세요. QR이 있으면 <strong>QR 위까지만</strong> 선택하세요.<br>
+                선택 후 박스를 클릭하면 삭제됩니다.
+              </div>
               <!-- 빠른정답 이미지 -->
               <div id="beti-quick-answer-preview" style="margin-bottom:12px;display:none">
-                <div style="font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:6px">📋 빠른정답 (해설 PDF 1페이지)</div>
+                <div style="font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:6px">📋 빠른정답</div>
                 <img id="beti-quick-answer-img" src="" style="max-width:100%;border:1px solid var(--border);border-radius:8px">
               </div>
-              <!-- 문제 미리보기 -->
-              <div id="beti-problem-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;max-height:400px;overflow-y:auto;padding:4px;margin-bottom:14px"></div>
+
+              <!-- 페이지 네비게이션 -->
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <button onclick="betiNavPage(-1)" class="btn btn-sm" id="beti-prev-page">◀</button>
+                <div style="font-size:13px;font-weight:700" id="beti-page-label">페이지 -/-</div>
+                <button onclick="betiNavPage(1)" class="btn btn-sm" id="beti-next-page">▶</button>
+              </div>
+
+              <!-- 드래그 캔버스 -->
+              <div style="position:relative;display:inline-block;width:100%;margin-bottom:10px;border:2px solid var(--border);border-radius:8px;overflow:hidden;cursor:crosshair" id="beti-canvas-wrap">
+                <canvas id="beti-draw-canvas" style="display:block;width:100%;height:auto;"></canvas>
+                <canvas id="beti-overlay-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>
+              </div>
+
+              <!-- 현재 페이지 선택 현황 -->
+              <div style="font-size:12px;color:#6b7280;margin-bottom:10px" id="beti-sel-info">이 페이지에서 선택한 영역: 0개</div>
+
+              <!-- QR 토글 -->
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px;background:#f5f6fa;border-radius:8px">
+                <input type="checkbox" id="beti-qr-toggle" style="width:16px;height:16px;cursor:pointer">
+                <label for="beti-qr-toggle" style="font-size:13px;font-weight:600;cursor:pointer">마지막으로 선택한 영역에 QR 있음</label>
+              </div>
+
+              <!-- 전체 선택 현황 -->
+              <div style="margin-bottom:12px">
+                <div style="font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:6px">전체 선택 현황</div>
+                <div id="beti-all-sel-summary" style="font-size:12px;color:#6b7280">아직 선택된 문제가 없습니다</div>
+              </div>
+
               <div style="display:flex;gap:8px">
                 <button class="btn btn-full" onclick="resetBetiUpload()">← 처음으로</button>
-                <button class="btn btn-full" id="beti-assign-btn" onclick="openBetiAnswerModal()" style="background:#fef9ec;border-color:#fde68a;color:#92400e;">📋 문항별 정답 부여</button>
+                <button class="btn btn-full" id="beti-assign-btn" onclick="openBetiAnswerModal()" style="background:#fef9ec;border-color:#fde68a;color:#92400e;">📋 정답 부여</button>
                 <button class="btn btn-primary btn-full" id="beti-save-btn" onclick="saveBetiExam()">💾 저장</button>
               </div>
             </div>
@@ -3280,6 +3310,15 @@ async function processBetiPdf(file, type){
   }
 }
 
+// ── 베티 반자동: 페이지 렌더링 + 드래그 선택 ──
+var _betiPages      = [];  // [{canvas, scale}] 각 페이지 고해상도 캔버스
+var _betiSelections = {};  // {pageIdx: [{x,y,w,h, hasQr}]} 선택 영역
+var _betiCurPage    = 0;
+var _betiDragging   = false;
+var _betiDragStart  = null;
+var _betiTempRect   = null;
+_betiProblems       = [];  // 최종 잘린 문제들 (저장 시 채움)
+
 async function extractBetiProblems(file){
   document.getElementById('admin-beti-step1').style.display = 'none';
   document.getElementById('admin-beti-step2').style.display = 'block';
@@ -3293,271 +3332,207 @@ async function extractBetiProblems(file){
     if(typeof pdfjsLib === 'undefined') throw new Error('PDF.js 없음');
     var ab  = await file.arrayBuffer();
     var pdf = await pdfjsLib.getDocument({data: ab}).promise;
-    _betiProblems = [];
-    var problemNum = 1;
-
-    // 전체 분석 결과 저장 (미리보기용)
-    var _betiPageAnalysis = []; // [{pageNum, pageBase64, segs}]
+    _betiPages      = [];
+    _betiSelections = {};
+    _betiCurPage    = 0;
+    _betiProblems   = [];
 
     function rotate180(src){
-      var c = document.createElement('canvas');
-      c.width = src.width; c.height = src.height;
-      var ctx = c.getContext('2d');
-      ctx.translate(c.width/2, c.height/2);
-      ctx.rotate(Math.PI);
-      ctx.drawImage(src, -src.width/2, -src.height/2);
-      return c;
+      var c=document.createElement('canvas'); c.width=src.width; c.height=src.height;
+      var ctx=c.getContext('2d');
+      ctx.translate(c.width/2,c.height/2); ctx.rotate(Math.PI);
+      ctx.drawImage(src,-src.width/2,-src.height/2); return c;
     }
 
-    function scanQR(imgData, w, h){
-      var sh = Math.floor(h*0.40), ch = h-sh;
-      var buf = new Uint8ClampedArray(ch*w*4);
-      for(var r=0; r<ch; r++) buf.set(imgData.data.slice((sh+r)*w*4,(sh+r+1)*w*4), r*w*4);
-      var qr = jsQR(buf, w, ch, {inversionAttempts:'dontInvert'});
-      if(qr){ qr.location.topLeftCorner.y += sh; return qr; }
-      qr = jsQR(buf, w, ch, {inversionAttempts:'attemptBoth'});
-      if(qr){ qr.location.topLeftCorner.y += sh; return qr; }
-      qr = jsQR(imgData.data, w, h, {inversionAttempts:'dontInvert'});
-      if(qr) return qr;
-      return jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'}) || null;
-    }
-
-    async function analyzeWithGemini(pageBase64, pageNum){
-      var prompt = [
-        '이 이미지는 수학 시험지의 한 페이지입니다. 좌/우 2단 레이아웃입니다.',
-        '각 문제를 찾아 자를 영역의 좌표를 알려주세요.',
-        '',
-        '규칙:',
-        '1. 문제는 "N |" 형식의 번호로 시작합니다 (예: "1 |", "9 |", "30 |")',
-        '2. 페이지 상단 헤더(큰 숫자+제목 배너)는 문제가 아닙니다 - 절대 포함 금지',
-        '3. 페이지 하단 푸터(페이지번호+로고)도 제외',
-        '4. QR코드(흑백 정사각형)가 있는 문제: y1 = 선택지 마지막 줄 (QR 위쪽, QR 미포함)',
-        '5. QR코드 없는 문제: y1 = 선택지 마지막 줄',
-        '6. 한 컬럼에 2문제면 반드시 2개 따로 반환',
-        '',
-        'JSON 배열만 반환:',
-        '[{"col":"left","y0":0.20,"y1":0.46,"hasQr":false}]',
-        'col: left/right, y0/y1: 이미지 높이 비율(0=상단,1=하단), hasQr: QR여부',
-      ].join('\n');
-
-      var resp = await fetch('/api/gemini-proxy', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          model:'gemini-2.5-flash',
-          contents:[{parts:[
-            {inlineData:{mimeType:'image/jpeg', data:pageBase64}},
-            {text: prompt}
-          ]}],
-          generationConfig:{
-            temperature:0,
-            maxOutputTokens:8192,
-            responseMimeType:'application/json'
-          }
-        })
-      });
-
-      var data = await resp.json();
-      if(data.error){ console.error('Gemini오류 p'+pageNum+':', JSON.stringify(data.error)); return null; }
-      var text = '';
-      if(data.candidates&&data.candidates[0]){
-        var parts = data.candidates[0].content&&data.candidates[0].content.parts;
-        text = (parts&&parts[0]&&parts[0].text)||'';
-      }
-      var finishReason = data.candidates&&data.candidates[0]&&data.candidates[0].finishReason;
-      if(finishReason==='MAX_TOKENS') console.warn('p'+pageNum+' MAX_TOKENS 경고!');
-      if(!text){ console.warn('Gemini응답없음 p'+pageNum); return null; }
-      try{
-        var clean = text.replace(/```json|```/g,'').trim();
-        var result = JSON.parse(clean);
-        console.log('p'+pageNum+' Gemini:', JSON.stringify(result));
-        return Array.isArray(result) ? result : null;
-      }catch(e){
-        console.error('p'+pageNum+' JSON실패('+finishReason+'):', text.slice(0,300));
-        return null;
-      }
-    }
-
-    /* ── 페이지 이미지에 Gemini 분석 결과를 빨간 테두리로 시각화 ── */
-    function drawAnalysisPreview(pageCvs, segs, midX){
-      var W = pageCvs.width, H = pageCvs.height;
-      // 원본 복사
-      var previewCvs = document.createElement('canvas');
-      previewCvs.width = W; previewCvs.height = H;
-      var ctx = previewCvs.getContext('2d');
-      ctx.drawImage(pageCvs, 0, 0);
-
-      // 각 세그먼트에 빨간 테두리 + 번호
-      segs.forEach(function(seg, i){
-        var colX = seg.col==='left' ? 0 : midX;
-        var colW = midX;
-        var y0   = Math.round(seg.y0 * H);
-        var y1   = Math.round(seg.y1 * H);
-
-        ctx.strokeStyle = seg.hasQr ? '#00ff00' : '#ff0000';
-        ctx.lineWidth   = Math.max(2, W/200);
-        ctx.strokeRect(colX + 4, y0 + 4, colW - 8, y1 - y0 - 8);
-
-        // 라벨
-        var label = (i+1)+'번' + (seg.hasQr ? ' [QR]' : '');
-        var fs = Math.max(14, W/40);
-        ctx.font = 'bold '+fs+'px sans-serif';
-        ctx.fillStyle = seg.hasQr ? '#00aa00' : '#cc0000';
-        ctx.fillText(label, colX + 10, y0 + fs + 6);
-      });
-
-      // 중앙 구분선
-      ctx.setLineDash([10, 5]);
-      ctx.strokeStyle = '#0066ff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(midX, 0);
-      ctx.lineTo(midX, H);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      return previewCvs;
-    }
-
-    var HI = 4.0, LO = 2.0;
+    var SCALE = 2.5; // 표시용 해상도 (너무 크면 메모리 부담)
     var START = 4, END = pdf.numPages - 1;
-    var allPageAnalysis = []; // 미리보기용
 
     for(var p = START; p <= END; p++){
-      progText.textContent = p+'/'+END+' AI 분석 중...';
-      progBar.style.width = Math.round((p-START)/(END-START+1)*88)+'%';
+      progText.textContent = p+'/'+END+' 페이지 렌더링 중...';
+      progBar.style.width = Math.round((p-START)/(END-START+1)*95)+'%';
 
       var page = await pdf.getPage(p);
       var rot  = page.getViewport({scale:1.0}).rotation;
+      var vp   = page.getViewport({scale:SCALE});
+      var cvs  = document.createElement('canvas');
+      cvs.width=vp.width; cvs.height=vp.height;
+      await page.render({canvasContext:cvs.getContext('2d'), viewport:vp}).promise;
+      var workCvs = (rot===180) ? rotate180(cvs) : cvs;
 
-      // 고해상도
-      var vpHi = page.getViewport({scale:HI});
-      var cHi  = document.createElement('canvas');
-      cHi.width=vpHi.width; cHi.height=vpHi.height;
-      await page.render({canvasContext:cHi.getContext('2d'), viewport:vpHi}).promise;
-      var wHi = (rot===180) ? rotate180(cHi) : cHi;
-
-      // 저해상도 (Gemini)
-      var vpLo = page.getViewport({scale:LO});
-      var cLo  = document.createElement('canvas');
-      cLo.width=vpLo.width; cLo.height=vpLo.height;
-      await page.render({canvasContext:cLo.getContext('2d'), viewport:vpLo}).promise;
-      var wLo = (rot===180) ? rotate180(cLo) : cLo;
-
-      var W = wHi.width, H = wHi.height;
-      var midX = Math.floor(W*0.50);
-
-      var loBase64 = wLo.toDataURL('image/jpeg',0.88).split(',')[1];
-      var segs = await analyzeWithGemini(loBase64, p);
-
-      // 미리보기용 저장
-      var previewBase64 = null;
-      if(segs && segs.length > 0){
-        var previewCvs = drawAnalysisPreview(wLo, segs, Math.floor(wLo.width*0.50));
-        previewBase64 = previewCvs.toDataURL('image/jpeg', 0.85);
-      }
-      allPageAnalysis.push({
-        pageNum: p,
-        segs: segs,
-        previewBase64: previewBase64,
-        loBase64: wLo.toDataURL('image/jpeg',0.7)
-      });
-
-      if(segs && segs.length > 0){
-        for(var si=0; si<segs.length; si++){
-          var seg = segs[si];
-          var colX = seg.col==='left' ? 0 : midX;
-          var colW = midX;
-          var y0 = Math.max(0,   Math.round(seg.y0 * H));
-          var y1 = Math.min(H-1, Math.round(seg.y1 * H));
-          if(y1-y0 < 30) continue;
-
-          var qrUrl = null;
-          if(seg.hasQr){
-            var colImg = wHi.getContext('2d').getImageData(colX, 0, colW, H);
-            var qrResult = scanQR(colImg, colW, H);
-            if(qrResult) qrUrl = qrResult.data;
-          }
-
-          var crop = njCrop(wHi, colX, colX+colW, y0, y1);
-          _betiProblems.push({
-            number: problemNum++,
-            dataUrl: crop.toDataURL('image/jpeg',0.92),
-            qrUrl: qrUrl, hasQr: !!seg.hasQr
-          });
-        }
-      } else {
-        // 폴백
-        console.warn('p'+p+' 폴백');
-        var fH = Math.floor(H*0.92);
-        var lImg = wHi.getContext('2d').getImageData(0,    0, midX,   H);
-        var rImg = wHi.getContext('2d').getImageData(midX, 0, W-midX, H);
-        var lQR  = scanQR(lImg, midX,   H);
-        var rQR  = scanQR(rImg, W-midX, H);
-        var lY = lQR ? Math.max(20,Math.round(lQR.location.topLeftCorner.y)-20) : fH;
-        var rY = rQR ? Math.max(20,Math.round(rQR.location.topLeftCorner.y)-20) : fH;
-        _betiProblems.push({number:problemNum++,dataUrl:njCrop(wHi,0,midX,0,lY).toDataURL('image/jpeg',0.92),qrUrl:lQR?lQR.data:null,hasQr:!!lQR});
-        _betiProblems.push({number:problemNum++,dataUrl:njCrop(wHi,midX,W,0,rY).toDataURL('image/jpeg',0.92),qrUrl:rQR?rQR.data:null,hasQr:!!rQR});
-      }
+      _betiPages.push({canvas: workCvs, scale: SCALE, pageNum: p});
     }
 
-    progBar.style.width='95%';
-    var qrCnt=_betiProblems.filter(function(p){return p.hasQr;}).length;
-    progText.textContent='완료: '+_betiProblems.length+'문제 / QR '+qrCnt+'개';
-    var di=document.getElementById('beti-problem-done-info');
-    if(di) di.textContent=_betiProblems.length+'문제 / QR '+qrCnt+'개';
+    progBar.style.width='100%';
+    progText.textContent='렌더링 완료 ('+_betiPages.length+'페이지) — 문제 영역을 직접 선택하세요';
 
-    // ── AI 인식 미리보기 모달 표시 ──
-    var existModal = document.getElementById('beti-analysis-modal');
-    if(existModal) existModal.remove();
-
-    var modal = document.createElement('div');
-    modal.id = 'beti-analysis-modal';
-    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;overflow-y:auto;padding:20px;';
-
-    var html = '<div style="max-width:900px;margin:0 auto;">'
-      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
-      +'<h2 style="color:#fff;margin:0;font-size:18px;">🔍 Gemini AI 인식 결과 (빨간=QR없음, 초록=QR있음)</h2>'
-      +'<button onclick="document.getElementById(\'beti-analysis-modal\').remove()" '
-      +'style="padding:8px 20px;background:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:14px;">✕ 닫기</button>'
-      +'</div>';
-
-    allPageAnalysis.forEach(function(pg){
-      html += '<div style="margin-bottom:20px;background:#1a1a1a;border-radius:10px;padding:12px;">'
-        +'<div style="color:#9ca3af;font-size:13px;margin-bottom:8px;">'
-        +'📄 '+(pg.pageNum)+'페이지 '
-        +(pg.segs ? '→ <span style="color:#4ade80">'+pg.segs.length+'개 문제 인식</span>' : '→ <span style="color:#f87171">인식 실패 (폴백)</span>')
-        +'</div>';
-
-      if(pg.previewBase64){
-        html += '<img src="'+pg.previewBase64+'" style="width:100%;border-radius:6px;">';
-        if(pg.segs){
-          html += '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">';
-          pg.segs.forEach(function(s, i){
-            html += '<span style="font-size:12px;padding:3px 8px;border-radius:100px;background:'
-              +(s.hasQr?'#166534':'#7f1d1d')+';color:#fff;">'
-              +(i+1)+'번 '+s.col+' y:'+Math.round(s.y0*100)+'~'+Math.round(s.y1*100)+'%'+(s.hasQr?' QR':'')+'</span>';
-          });
-          html += '</div>';
-        }
-      } else {
-        html += '<img src="data:image/jpeg;base64,'+pg.loBase64.split(',')[1]+'" style="width:100%;border-radius:6px;opacity:0.5;">'
-          +'<div style="color:#f87171;font-size:12px;margin-top:6px;">AI 인식 실패 → 기본 방식으로 처리됨</div>';
-      }
-      html += '</div>';
-    });
-
-    html += '</div>';
-    modal.innerHTML = html;
-    modal.onclick = function(e){ if(e.target===modal) modal.remove(); };
-    document.body.appendChild(modal);
+    // step3으로 전환 + 첫 페이지 표시
+    document.getElementById('admin-beti-step2').style.display='none';
+    document.getElementById('admin-beti-step3').style.display='block';
+    betiShowPage(0);
+    betiInitDrag();
 
   }catch(err){
     document.getElementById('admin-beti-step1').style.display='block';
     document.getElementById('admin-beti-step2').style.display='none';
-    alert('오류: '+err.message);
-    console.error(err);
+    alert('오류: '+err.message); console.error(err);
   }
+}
+
+/* ── 페이지 표시 ── */
+function betiShowPage(idx){
+  if(idx < 0 || idx >= _betiPages.length) return;
+  _betiCurPage = idx;
+
+  var pg = _betiPages[idx];
+  var drawCvs = document.getElementById('beti-draw-canvas');
+  drawCvs.width  = pg.canvas.width;
+  drawCvs.height = pg.canvas.height;
+  drawCvs.getContext('2d').drawImage(pg.canvas, 0, 0);
+
+  document.getElementById('beti-page-label').textContent =
+    (idx+1)+'/'+_betiPages.length+' 페이지 (PDF '+(pg.pageNum)+'p)';
+  document.getElementById('beti-prev-page').disabled = idx===0;
+  document.getElementById('beti-next-page').disabled = idx===_betiPages.length-1;
+
+  betiRedrawOverlay();
+  betiUpdateSelInfo();
+}
+
+function betiNavPage(dir){
+  betiShowPage(_betiCurPage + dir);
+}
+
+/* ── 오버레이 다시 그리기 (선택 박스) ── */
+function betiRedrawOverlay(){
+  var drawCvs = document.getElementById('beti-draw-canvas');
+  var overCvs = document.getElementById('beti-overlay-canvas');
+  overCvs.width  = drawCvs.width;
+  overCvs.height = drawCvs.height;
+  var ctx = overCvs.getContext('2d');
+  ctx.clearRect(0,0,overCvs.width,overCvs.height);
+
+  var sels = _betiSelections[_betiCurPage] || [];
+  sels.forEach(function(sel, i){
+    ctx.strokeStyle = sel.hasQr ? '#16a34a' : '#dc2626';
+    ctx.lineWidth = Math.max(2, drawCvs.width/300);
+    ctx.fillStyle = sel.hasQr ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)';
+    ctx.fillRect(sel.x, sel.y, sel.w, sel.h);
+    ctx.strokeRect(sel.x, sel.y, sel.w, sel.h);
+    // 번호 라벨
+    var fs = Math.max(14, drawCvs.width/40);
+    ctx.font = 'bold '+fs+'px sans-serif';
+    ctx.fillStyle = sel.hasQr ? '#15803d' : '#b91c1c';
+    ctx.fillText((i+1)+'번'+(sel.hasQr?' [QR]':''), sel.x+6, sel.y+fs+4);
+  });
+
+  // 드래그 중인 임시 박스
+  if(_betiTempRect){
+    ctx.strokeStyle = '#2563eb';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6,3]);
+    ctx.strokeRect(_betiTempRect.x, _betiTempRect.y, _betiTempRect.w, _betiTempRect.h);
+    ctx.setLineDash([]);
+  }
+}
+
+/* ── 드래그 이벤트 초기화 ── */
+function betiInitDrag(){
+  var wrap = document.getElementById('beti-canvas-wrap');
+  var overCvs = document.getElementById('beti-overlay-canvas');
+
+  // 실제 픽셀 좌표로 변환
+  function getCanvasPos(e){
+    var rect = document.getElementById('beti-draw-canvas').getBoundingClientRect();
+    var drawCvs = document.getElementById('beti-draw-canvas');
+    var scaleX = drawCvs.width  / rect.width;
+    var scaleY = drawCvs.height / rect.height;
+    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    var clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top)  * scaleY
+    };
+  }
+
+  function onDown(e){
+    e.preventDefault();
+    var pos = getCanvasPos(e);
+    // 기존 박스 클릭 시 삭제
+    var sels = _betiSelections[_betiCurPage] || [];
+    for(var i=sels.length-1; i>=0; i--){
+      var s=sels[i];
+      if(pos.x>=s.x && pos.x<=s.x+s.w && pos.y>=s.y && pos.y<=s.y+s.h){
+        sels.splice(i,1);
+        _betiSelections[_betiCurPage]=sels;
+        betiRedrawOverlay(); betiUpdateSelInfo(); betiUpdateAllSummary();
+        return;
+      }
+    }
+    _betiDragging=true; _betiDragStart=pos; _betiTempRect=null;
+  }
+
+  function onMove(e){
+    if(!_betiDragging) return;
+    e.preventDefault();
+    var pos = getCanvasPos(e);
+    _betiTempRect = {
+      x: Math.min(_betiDragStart.x, pos.x),
+      y: Math.min(_betiDragStart.y, pos.y),
+      w: Math.abs(pos.x - _betiDragStart.x),
+      h: Math.abs(pos.y - _betiDragStart.y)
+    };
+    betiRedrawOverlay();
+  }
+
+  function onUp(e){
+    if(!_betiDragging) return;
+    _betiDragging=false;
+    if(_betiTempRect && _betiTempRect.w > 10 && _betiTempRect.h > 10){
+      var hasQr = document.getElementById('beti-qr-toggle').checked;
+      if(!_betiSelections[_betiCurPage]) _betiSelections[_betiCurPage]=[];
+      _betiSelections[_betiCurPage].push({
+        x:_betiTempRect.x, y:_betiTempRect.y,
+        w:_betiTempRect.w, h:_betiTempRect.h,
+        hasQr: hasQr
+      });
+    }
+    _betiTempRect=null;
+    betiRedrawOverlay(); betiUpdateSelInfo(); betiUpdateAllSummary();
+  }
+
+  // 이전 리스너 제거 후 재등록
+  var newOverlay = overCvs.cloneNode(true);
+  overCvs.parentNode.replaceChild(newOverlay, overCvs);
+
+  wrap.addEventListener('mousedown',  onDown,  {passive:false});
+  wrap.addEventListener('mousemove',  onMove,  {passive:false});
+  wrap.addEventListener('mouseup',    onUp,    {passive:false});
+  wrap.addEventListener('mouseleave', onUp,    {passive:false});
+  wrap.addEventListener('touchstart', onDown,  {passive:false});
+  wrap.addEventListener('touchmove',  onMove,  {passive:false});
+  wrap.addEventListener('touchend',   onUp,    {passive:false});
+}
+
+function betiUpdateSelInfo(){
+  var sels = _betiSelections[_betiCurPage] || [];
+  document.getElementById('beti-sel-info').textContent =
+    '이 페이지에서 선택한 영역: '+sels.length+'개';
+}
+
+function betiUpdateAllSummary(){
+  var total=0, html='';
+  for(var pi=0; pi<_betiPages.length; pi++){
+    var sels = _betiSelections[pi]||[];
+    if(sels.length>0){
+      total+=sels.length;
+      html+='<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;background:#EBF5FF;border-radius:100px;font-size:11px;">'
+        +(_betiPages[pi].pageNum)+'p: '+sels.length+'개</span>';
+    }
+  }
+  var el=document.getElementById('beti-all-sel-summary');
+  el.innerHTML = total>0 ? html+'<span style="font-size:11px;color:#178EF5;font-weight:700;"> 총 '+total+'문제</span>'
+                         : '아직 선택된 문제가 없습니다';
+  document.getElementById('beti-preview-info').textContent = '총 '+total+'개 문제 선택됨';
 }
 
 
@@ -3599,16 +3574,9 @@ async function extractBetiAnswers(file){
 }
 
 function showBetiPreview(){
+  // 해설 PDF step에서 호출 → step3(드래그 선택 화면)으로 전환
   document.getElementById('admin-beti-step2').style.display = 'none';
   document.getElementById('admin-beti-step3').style.display = 'block';
-  document.getElementById('beti-progress-bar').style.width = '100%';
-
-  var info = document.getElementById('beti-preview-info');
-  var qrCount = _betiProblems.filter(function(p){return p.hasQr;}).length;
-  var ansCount = Object.keys(_betiAnswerMap).length;
-  info.innerHTML = '총 <strong>'+_betiProblems.length+'</strong>개 문제 인식'
-    +(qrCount>0?' &nbsp;·&nbsp; <span style="color:#10b981">📹 QR '+qrCount+'개</span>':'');
-
   // 빠른정답 이미지 표시
   var qaDiv = document.getElementById('beti-quick-answer-preview');
   if(_betiQuickAnswerDataUrl){
@@ -3617,18 +3585,11 @@ function showBetiPreview(){
   } else {
     qaDiv.style.display = 'none';
   }
-
-  // 문제 미리보기 그리드
-  var grid = document.getElementById('beti-problem-grid');
-  grid.innerHTML = _betiProblems.map(function(p,i){
-    return '<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">'
-      +'<div style="background:#f5f6fa;padding:4px 8px;font-size:12px;font-weight:700;display:flex;justify-content:space-between">'
-      +'<span>'+p.number+'번</span>'
-      +(p.hasQr?'<span style="color:#10b981">📹 QR</span>':'<span style="color:#9ca3af">QR없음</span>')
-      +'</div>'
-      +'<img src="'+p.dataUrl+'" style="width:100%;display:block">'
-      +'</div>';
-  }).join('');
+  if(_betiPages && _betiPages.length > 0){
+    betiShowPage(_betiCurPage || 0);
+    betiInitDrag();
+  }
+  betiUpdateAllSummary();
 }
 
 // 정답 부여 모달 (해설 이미지 기반)
@@ -3704,7 +3665,69 @@ async function saveBetiExam(){
   var num = parseInt(document.getElementById('beti-number').value)||null;
   var desc = document.getElementById('beti-desc').value.trim();
   if(!title){ alert('제목을 입력하세요'); return; }
-  if(!_betiProblems.length){ alert('문제 PDF를 먼저 업로드하세요'); return; }
+
+  // ── 반자동: 선택 영역 → _betiProblems 변환 ──
+  var totalSel = 0;
+  for(var pi=0; pi<_betiPages.length; pi++) totalSel += (_betiSelections[pi]||[]).length;
+
+  if(totalSel > 0){
+    // 선택 영역 기반으로 자르기
+    _betiProblems = [];
+    var pNum = 1;
+
+    function scanQRInData(imgData, w, h){
+      var sh=Math.floor(h*0.4), ch=h-sh;
+      var buf=new Uint8ClampedArray(ch*w*4);
+      for(var r=0;r<ch;r++) buf.set(imgData.data.slice((sh+r)*w*4,(sh+r+1)*w*4),r*w*4);
+      var qr=jsQR(buf,w,ch,{inversionAttempts:'dontInvert'});
+      if(qr){qr.location.topLeftCorner.y+=sh;return qr;}
+      qr=jsQR(buf,w,ch,{inversionAttempts:'attemptBoth'});
+      if(qr){qr.location.topLeftCorner.y+=sh;return qr;}
+      qr=jsQR(imgData.data,w,h,{inversionAttempts:'dontInvert'});
+      if(qr) return qr;
+      return jsQR(imgData.data,w,h,{inversionAttempts:'attemptBoth'})||null;
+    }
+
+    for(var pi=0; pi<_betiPages.length; pi++){
+      var sels = _betiSelections[pi] || [];
+      if(!sels.length) continue;
+      var pgCvs = _betiPages[pi].canvas;
+
+      // Y 오름차순 정렬
+      sels = sels.slice().sort(function(a,b){ return a.y - b.y; });
+
+      for(var si=0; si<sels.length; si++){
+        var sel = sels[si];
+        var x = Math.round(Math.max(0, sel.x));
+        var y = Math.round(Math.max(0, sel.y));
+        var w = Math.round(Math.min(sel.w, pgCvs.width - x));
+        var h = Math.round(Math.min(sel.h, pgCvs.height - y));
+        if(w < 5 || h < 5) continue;
+
+        var seg = njCrop(pgCvs, x, x+w, y, y+h);
+
+        // QR URL 추출
+        var qrUrl = null;
+        if(sel.hasQr){
+          var segData = seg.getContext('2d').getImageData(0,0,seg.width,seg.height);
+          var qrResult = scanQRInData(segData, seg.width, seg.height);
+          if(qrResult) qrUrl = qrResult.data;
+        }
+
+        _betiProblems.push({
+          number: pNum++,
+          dataUrl: seg.toDataURL('image/jpeg', 0.92),
+          qrUrl: qrUrl,
+          hasQr: !!sel.hasQr
+        });
+      }
+    }
+
+    if(!_betiProblems.length){ alert('선택된 영역이 없습니다. 문제 영역을 드래그로 선택하세요.'); return; }
+
+  } else if(!_betiProblems.length){
+    alert('문제 영역을 드래그로 선택하거나 PDF를 업로드하세요'); return;
+  }
 
   var btn = document.getElementById('beti-save-btn');
   btn.textContent='저장 중...'; btn.disabled=true;
