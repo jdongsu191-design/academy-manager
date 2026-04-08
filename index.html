@@ -721,9 +721,16 @@
         </div>
         <div class="card">
           <div class="card-title">👨‍🎓 전체 학생</div>
-          <div class="search-row">
-            <input class="search-input" id="admStudentSearch" placeholder="이름 검색..." oninput="renderAdminStudents()">
-            <select class="filter" id="admClassFilter" onchange="renderAdminStudents()"><option value="">전체 반</option></select>
+          <div class="search-row" style="flex-wrap:wrap;gap:6px">
+            <input class="search-input" id="admStudentSearch" placeholder="이름 검색..." oninput="renderAdminStudents()" style="flex:1;min-width:120px">
+            <!-- 재원/퇴원 필터 -->
+            <div style="display:flex;gap:4px">
+              <button onclick="setAdmStatusFilter('')" id="adm-filter-all" class="btn btn-sm btn-primary">전체</button>
+              <button onclick="setAdmStatusFilter('active')" id="adm-filter-active" class="btn btn-sm">재원</button>
+              <button onclick="setAdmStatusFilter('inactive')" id="adm-filter-inactive" class="btn btn-sm">퇴원</button>
+            </div>
+            <!-- 담당 선생님 필터 -->
+            <select class="filter" id="admTeacherFilter" onchange="renderAdminStudents()" style="flex:1;min-width:100px"><option value="">전체 선생님</option></select>
           </div>
           <div id="studentAccountList"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
         </div>
@@ -1106,6 +1113,23 @@
     <div style="display:flex;gap:8px;margin-top:16px">
       <button class="btn btn-full" onclick="closeModal('editNajeSet')">취소</button>
       <button class="btn btn-primary btn-full" onclick="saveEditNajeSet()">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 모달: 선생님 수정 (관리자) -->
+<div class="modal-backdrop" id="modal-editTeacher">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>✏️ 선생님 정보 수정</h3>
+    <input type="hidden" id="edit-teacher-id">
+    <div class="form-group"><label>이름 *</label><input id="edit-teacher-name" placeholder="이름"></div>
+    <div class="form-group"><label>아이디 *</label><input id="edit-teacher-username" placeholder="로그인 아이디"></div>
+    <div class="form-group"><label>비밀번호</label><input id="edit-teacher-password" placeholder="변경 시에만 입력" type="password"></div>
+    <div class="form-group"><label>전화번호</label><input id="edit-teacher-phone" placeholder="010-0000-0000"></div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn btn-full" onclick="closeModal('editTeacher')">취소</button>
+      <button class="btn btn-primary btn-full" onclick="saveEditTeacher()">저장</button>
     </div>
   </div>
 </div>
@@ -1612,6 +1636,13 @@ async function loadAdminData(){
   document.getElementById('adm-pending').textContent=pending.length;
   renderPendingList(pending);renderTeacherAccounts();renderAdminStudents();
   const cf=document.getElementById('admClassFilter');
+  // 담당 선생님 필터 채우기
+  const tf=document.getElementById('admTeacherFilter');
+  if(tf){
+    const teachers=allUsers.filter(u=>u.role==='teacher'&&u.status==='active');
+    tf.innerHTML='<option value="">전체 선생님</option>'
+      +teachers.map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
+  }
   cf.innerHTML='<option value="">전체 반</option>';
   allClasses.forEach(c=>{cf.innerHTML+=`<option value="${c.id}">${c.name}</option>`;});
   const hf=document.getElementById('adminHwClassFilter');
@@ -1645,24 +1676,63 @@ function renderTeacherAccounts(){
   el.innerHTML=t.map(u=>`<div class="user-item">
     <div class="avatar teacher">${u.name[0]}</div>
     <div class="user-info"><div class="user-name">${u.name} ${badge(u.status)}</div><div class="user-meta">@${u.username}${u.phone?' · '+u.phone:''}</div></div>
-    <div class="user-actions">
+    <div class="user-actions" style="display:flex;flex-direction:column;gap:3px">
+      <button class="btn btn-sm" onclick="openEditTeacherModal('${u.id}','${(u.name||'').replace(/'/g,"\\'")}','${u.username||''}','${u.phone||''}')" style="background:#f0f7ff;border-color:#93c5fd;color:#1d4ed8">수정</button>
       ${u.status==='active'?`<button class="btn btn-danger btn-sm" onclick="deactivateUser('${u.id}')">비활성</button>`:`<button class="btn btn-success btn-sm" onclick="approveUser('${u.id}')">활성화</button>`}
+      <button class="btn btn-sm" onclick="deleteTeacher('${u.id}','${(u.name||'').replace(/'/g,"\\'")}')" style="background:#fff0f0;border-color:#fca5a5;color:#dc2626;font-size:11px">삭제</button>
     </div>
   </div>`).join('');
 }
 
+var _admStatusFilter = '';
+
+function setAdmStatusFilter(status){
+  _admStatusFilter = status;
+  ['all','active','inactive'].forEach(function(s){
+    var btn = document.getElementById('adm-filter-'+(s||'all'));
+    if(!btn) return;
+    var active = status===''?s==='all':s===status;
+    btn.style.background = active?'var(--primary)':'#fff';
+    btn.style.color = active?'#fff':'#4b5563';
+    btn.style.borderColor = active?'var(--primary)':'var(--border)';
+    btn.style.fontWeight = active?'700':'500';
+  });
+  renderAdminStudents();
+}
+
 function renderAdminStudents(){
   const q=document.getElementById('admStudentSearch').value.toLowerCase();
-  const cf=document.getElementById('admClassFilter').value;
-  const f=allUsers.filter(u=>u.role==='student'&&(!q||u.name.toLowerCase().includes(q))&&(!cf||u.class_id===cf));
+  const tf=document.getElementById('admTeacherFilter').value;
+  const students=allUsers.filter(u=>u.role==='student');
+  const f=students.filter(u=>{
+    if(q && !u.name.toLowerCase().includes(q)) return false;
+    if(tf && u.teacher_id!==tf) return false;
+    if(_admStatusFilter==='active' && u.status!=='active') return false;
+    if(_admStatusFilter==='inactive' && u.status==='inactive') return false;
+    // 기본(전체)이면 다 보여줌
+    return true;
+  });
   const el=document.getElementById('studentAccountList');
   if(!f.length){el.innerHTML='<div class="empty-state"><p>학생 없음</p></div>';return;}
   el.innerHTML=f.map(u=>{
     const cls=allClasses.find(c=>c.id===u.class_id);
-    return`<div class="user-item">
+    const teacher=allUsers.find(t=>t.id===u.teacher_id&&t.role==='teacher');
+    const isActive = u.status==='active';
+    const statusBadge = isActive
+      ? '<span style="font-size:10px;padding:2px 7px;border-radius:100px;background:#EAF3DE;color:#3B6D11;font-weight:700">재원</span>'
+      : '<span style="font-size:10px;padding:2px 7px;border-radius:100px;background:#FCEBEB;color:#E24B4A;font-weight:700">퇴원</span>';
+    return`<div class="user-item" style="opacity:${isActive?1:0.7}">
       <div class="avatar student">${u.name[0]}</div>
-      <div class="user-info"><div class="user-name">${u.name} ${cls?`<span class="badge badge-blue">${cls.name}</span>`:''}</div><div class="user-meta">${u.phone||'연락처 없음'}</div></div>
-      <div class="user-actions"><button class="btn btn-danger btn-sm" onclick="deleteStudent('${u.id}')">삭제</button></div>
+      <div class="user-info" style="flex:1;min-width:0">
+        <div class="user-name" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">${u.name} ${statusBadge}${cls?`<span class="badge badge-blue">${cls.name}</span>`:''}</div>
+        <div class="user-meta">${teacher?'👤 '+teacher.name+' · ':''}${u.phone||'연락처 없음'}</div>
+      </div>
+      <div class="user-actions" style="flex-shrink:0">
+        ${isActive
+          ? `<button class="btn btn-danger btn-sm" onclick="adminRetireStudent('${u.id}')">퇴원</button>`
+          : `<button class="btn btn-success btn-sm" onclick="adminReEnrollStudent('${u.id}')">재원</button>`
+        }
+      </div>
     </div>`;
   }).join('');
 }
@@ -1671,6 +1741,56 @@ async function approveUser(id){await db.from('users').update({status:'active'}).
 async function rejectUser(id){if(!confirm('거절하고 삭제할까요?'))return;await db.from('users').delete().eq('id',id);await loadAdminData();}
 async function deactivateUser(id){if(!confirm('비활성화할까요?'))return;await db.from('users').update({status:'inactive'}).eq('id',id);await loadAdminData();}
 async function deleteStudent(id){if(!confirm('퇴원 처리할까요?\n학생 데이터는 보존되며 목록에서 숨겨집니다.'))return;await db.from('users').update({status:'inactive'}).eq('id',id);await loadAdminData();}
+
+// 선생님 수정
+function openEditTeacherModal(id, name, username, phone){
+  document.getElementById('edit-teacher-id').value = id;
+  document.getElementById('edit-teacher-name').value = name||'';
+  document.getElementById('edit-teacher-username').value = username||'';
+  document.getElementById('edit-teacher-password').value = '';
+  document.getElementById('edit-teacher-phone').value = phone||'';
+  openModal('editTeacher');
+}
+
+async function saveEditTeacher(){
+  var id = document.getElementById('edit-teacher-id').value;
+  var name = document.getElementById('edit-teacher-name').value.trim();
+  var username = document.getElementById('edit-teacher-username').value.trim();
+  var password = document.getElementById('edit-teacher-password').value.trim();
+  var phone = document.getElementById('edit-teacher-phone').value.trim();
+  if(!name||!username){alert('이름과 아이디는 필수입니다');return;}
+  var update = {name, username, phone:phone||null};
+  if(password) update.password = password;
+  var btn = document.querySelector('#modal-editTeacher .btn-primary');
+  btn.textContent='저장 중...'; btn.disabled=true;
+  var {error} = await db.from('users').update(update).eq('id',id);
+  btn.textContent='저장'; btn.disabled=false;
+  if(error){alert('오류: '+error.message);return;}
+  closeModal('editTeacher');
+  await loadAdminData();
+  alert('✅ 선생님 정보가 수정됐습니다!');
+}
+
+async function deleteTeacher(id, name){
+  if(!confirm('['+name+'] 선생님 계정을 완전히 삭제할까요?\n이 작업은 되돌릴 수 없습니다.')) return;
+  var {error} = await db.from('users').delete().eq('id',id);
+  if(error){alert('오류: '+error.message);return;}
+  await loadAdminData();
+  alert('✅ 선생님 계정이 삭제됐습니다.');
+}
+
+// 학생 재원/퇴원
+async function adminRetireStudent(id){
+  if(!confirm('퇴원 처리할까요?')) return;
+  await db.from('users').update({status:'inactive', withdrawn_at: new Date().toISOString().split('T')[0]}).eq('id',id);
+  await loadAdminData();
+}
+
+async function adminReEnrollStudent(id){
+  if(!confirm('재원 처리할까요?')) return;
+  await db.from('users').update({status:'active', withdrawn_at: null}).eq('id',id);
+  await loadAdminData();
+}
 
 async function addTeacherAccount(){
   const username=document.getElementById('inp-tuser').value.trim();
