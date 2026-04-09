@@ -1357,6 +1357,20 @@
         <input id="edit-naje-set-desc" placeholder="추가 설명 (선택)">
       </div>
     </div>
+    <!-- 단계명 편집 섹션 -->
+    <div id="edit-naje-stages-section" style="margin-top:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:13px;font-weight:700;color:#1a1a2e">✏️ 단계명 수정</div>
+        <button type="button" onclick="toggleNajeStageEdit()" id="edit-stage-toggle-btn"
+          style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:#f5f6fa;cursor:pointer;color:#6b7280">
+          펼치기 ▼
+        </button>
+      </div>
+      <div id="edit-naje-stages-body" style="display:none">
+        <div style="font-size:11px;color:#9ca3af;margin-bottom:8px">단계명을 수정하면 해당 문제들의 단계 정보가 모두 업데이트됩니다.</div>
+        <div id="edit-naje-stages-grid" style="display:grid;gap:6px"></div>
+      </div>
+    </div>
     <div style="display:flex;gap:8px;margin-top:16px">
       <button class="btn btn-full" onclick="closeModal('editNajeSet')">취소</button>
       <button class="btn btn-primary btn-full" onclick="saveEditNajeSet()">저장</button>
@@ -4248,7 +4262,84 @@ function openEditNajeSetModal(id, title, subject, grade, week, desc){
   document.getElementById('edit-naje-set-grade').value = clean(grade);
   document.getElementById('edit-naje-set-week').value = (!week || week==='null') ? '' : week;
   document.getElementById('edit-naje-set-desc').value = clean(desc);
+
+  // 단계명 편집 섹션 초기화 (접힌 상태)
+  var body = document.getElementById('edit-naje-stages-body');
+  var btn  = document.getElementById('edit-stage-toggle-btn');
+  if(body){ body.style.display='none'; }
+  if(btn)  { btn.textContent='펼치기 ▼'; }
+
+  // 해당 N제의 실제 단계명 로드
+  loadNajeStagesForEdit(id);
   openModal('editNajeSet');
+}
+
+function toggleNajeStageEdit(){
+  var body = document.getElementById('edit-naje-stages-body');
+  var btn  = document.getElementById('edit-stage-toggle-btn');
+  if(!body) return;
+  var isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  btn.textContent = isOpen ? '펼치기 ▼' : '접기 ▲';
+}
+
+async function loadNajeStagesForEdit(setId){
+  // 해당 N제의 단계별 대표 문제에서 level_name, level_type 조회
+  var {data, error} = await db.from('naje_problems')
+    .select('problem_number, level_name, level_type')
+    .eq('set_id', setId)
+    .order('problem_number');
+  if(error||!data||!data.length) return;
+
+  // 단계별로 그룹핑 (step 기준)
+  var stageMap = {}; // step → {name, type, from, to}
+  data.forEach(function(p){
+    var num = p.problem_number;
+    var info = getLevelInfoByNum(num);
+    var step = info.step || 0;
+    if(!stageMap[step]){
+      stageMap[step] = {
+        step: step,
+        name: p.level_name || info.name || '',
+        type: p.level_type || info.type || '',
+        from: num, to: num
+      };
+    } else {
+      stageMap[step].to = Math.max(stageMap[step].to, num);
+      // 실제 DB에 저장된 이름 우선 (첫 번째 값 사용)
+    }
+  });
+
+  var grid = document.getElementById('edit-naje-stages-grid');
+  if(!grid) return;
+  var steps = Object.values(stageMap).sort(function(a,b){return a.step-b.step;});
+
+  // 타입 선택지
+  var typeOptions = ['내신','모고'].map(function(t){
+    return '<option value="'+t+'">'+t+'</option>';
+  }).join('');
+
+  grid.innerHTML = steps.map(function(s){
+    var stepLabel = s.step === 11 ? '킬러' : s.step+'단계';
+    var rangeLabel = s.from===s.to ? s.from+'번' : s.from+'~'+s.to+'번';
+    return '<div style="display:grid;grid-template-columns:60px 1fr 70px;gap:6px;align-items:center;padding:6px 8px;background:#f9fafb;border-radius:7px;">'
+      +'<div style="font-size:11px;font-weight:700;color:#374151">'+stepLabel+'<br><span style="font-weight:400;color:#9ca3af;font-size:10px">'+rangeLabel+'</span></div>'
+      +'<input id="edit-stage-name-'+s.step+'" value="'+s.name+'" placeholder="단계명" '
+        +'style="padding:6px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;font-weight:600;width:100%">'
+      +'<select id="edit-stage-type-'+s.step+'" style="padding:6px 4px;border:1.5px solid var(--border);border-radius:6px;font-size:11px;">'
+        +typeOptions
+      +'</select>'
+      +'</div>';
+  }).join('');
+
+  // 타입 선택 값 설정
+  steps.forEach(function(s){
+    var sel = document.getElementById('edit-stage-type-'+s.step);
+    if(sel) sel.value = s.type || '내신';
+  });
+
+  // step 정보 저장 (저장 시 활용)
+  grid.dataset.steps = JSON.stringify(steps.map(function(s){return {step:s.step, from:s.from, to:s.to};}));
 }
 
 async function saveEditNajeSet(){
@@ -4263,15 +4354,42 @@ async function saveEditNajeSet(){
   var btn = document.querySelector('#modal-editNajeSet .btn-primary');
   btn.textContent='저장 중...'; btn.disabled=true;
 
+  // N제 기본 정보 저장
   var {error} = await db.from('naje_sets').update({
     title, subject:subject||null, target_grade:grade||null,
     week_number:week, description:desc||null
   }).eq('id', id);
 
+  if(error){ btn.textContent='저장'; btn.disabled=false; alert('오류: '+error.message); return; }
+
+  // 단계명 변경사항 저장
+  var grid = document.getElementById('edit-naje-stages-grid');
+  var body = document.getElementById('edit-naje-stages-body');
+  if(grid && body && body.style.display !== 'none' && grid.dataset.steps){
+    var steps = JSON.parse(grid.dataset.steps);
+    var updatePromises = steps.map(function(s){
+      var nameEl = document.getElementById('edit-stage-name-'+s.step);
+      var typeEl = document.getElementById('edit-stage-type-'+s.step);
+      if(!nameEl) return Promise.resolve();
+      var newName = nameEl.value.trim();
+      var newType = typeEl ? typeEl.value : '내신';
+      if(!newName) return Promise.resolve();
+      // 해당 단계 범위 문제들의 level_name, level_type 업데이트
+      return db.from('naje_problems')
+        .update({level_name: newName, level_type: newType})
+        .eq('set_id', id)
+        .gte('problem_number', s.from)
+        .lte('problem_number', s.to);
+    });
+    var results = await Promise.all(updatePromises);
+    var hasError = results.some(function(r){ return r && r.error; });
+    if(hasError){ btn.textContent='저장'; btn.disabled=false; alert('단계명 저장 중 오류 발생'); return; }
+  }
+
   btn.textContent='저장'; btn.disabled=false;
-  if(error){ alert('오류: '+error.message); return; }
   closeModal('editNajeSet');
   loadAdminNajeSets();
+  alert('✅ 저장됐습니다!');
 }
 
 async function loadAdminNajeSets(){
@@ -5336,7 +5454,7 @@ async function parseAnswersWithClaude(dataUrl){
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 4096,
         messages: [{
           role: 'user',
