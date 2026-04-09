@@ -427,9 +427,21 @@
         <button class="at-menu-item" id="amenu-homework" onclick="switchAdminTab('admin-homework',this);loadAdminHomework()">
           <span class="at-menu-icon">📝</span>숙제 현황
         </button>
-        <button class="at-menu-item" id="amenu-naje" onclick="switchAdminTab('admin-naje',this);initAdminNaje()">
-          <span class="at-menu-icon">📄</span>N제 관리
-        </button>
+        <!-- N제 관리 아코디언 -->
+        <div id="amenu-naje-accordion">
+          <button class="at-menu-item" id="amenu-naje-toggle" onclick="toggleAdminNajeMenu()" style="width:100%;justify-content:space-between">
+            <span><span class="at-menu-icon">📄</span>N제 관리</span>
+            <span id="amenu-naje-arrow" style="font-size:10px;transition:transform 0.2s">▼</span>
+          </button>
+          <div id="amenu-naje-submenu" style="display:none;padding-left:12px">
+            <button class="at-menu-item" id="amenu-naje" onclick="switchAdminTab('admin-naje',this);initAdminNaje()" style="font-size:12px;padding:8px 10px">
+              <span class="at-menu-icon" style="font-size:14px">📚</span>N제 문제 모음
+            </button>
+            <button class="at-menu-item" id="amenu-middle-naje" onclick="switchAdminTab('admin-middle-naje',this);initMiddleNajeCheck()" style="font-size:12px;padding:8px 10px">
+              <span class="at-menu-icon" style="font-size:14px">✅</span>중등 일일N제 체크
+            </button>
+          </div>
+        </div>
         <button class="at-menu-item" id="amenu-beti" onclick="switchAdminTab('admin-beti',this);initAdminBeti()">
           <span class="at-menu-icon">📝</span>베티모의고사
         </button>
@@ -878,6 +890,49 @@
         </div>
         </div><!-- /admin-naje-panel-upload -->
       </div>
+
+      <!-- 중등 일일N제 체크 패널 -->
+      <div class="panel" id="panel-admin-middle-naje">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <div style="font-size:20px;font-weight:700;color:#1a1a2e">✅ 중등 일일N제 체크</div>
+          <div id="mnc-today-label" style="font-size:12px;color:#6b7280;font-weight:600"></div>
+        </div>
+        <div style="font-size:13px;color:#6b7280;margin-bottom:14px">담당 선생님별 학생의 일일N제 학습 결과를 입력합니다</div>
+
+        <!-- 필터 영역 -->
+        <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+          <!-- 날짜 선택 -->
+          <div style="display:flex;align-items:center;gap:6px;background:#f5f6fa;padding:6px 12px;border-radius:10px">
+            <span style="font-size:13px;color:#6b7280;font-weight:600">📅 결과 날짜</span>
+            <input type="date" id="mnc-date" style="border:none;background:transparent;font-size:13px;font-weight:700;color:#1a1a2e;cursor:pointer;outline:none" onchange="mncLoadStudents()">
+          </div>
+          <!-- 선생님 필터 -->
+          <select id="mnc-teacher-filter" onchange="mncLoadStudents()" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:13px;font-weight:600;background:#fff;cursor:pointer;outline:none;color:#1a1a2e">
+            <option value="">전체 선생님</option>
+          </select>
+          <!-- 통계 뱃지 -->
+          <div id="mnc-stats" style="margin-left:auto;display:flex;gap:6px"></div>
+        </div>
+
+        <!-- 학생 체크 테이블 -->
+        <div id="mnc-table-wrap" style="overflow-x:auto">
+          <div class="empty-state" style="padding:40px">
+            <div class="ei">📅</div>
+            <p>날짜를 선택하면 학생 목록이 표시됩니다</p>
+          </div>
+        </div>
+
+        <!-- 하단 액션 -->
+        <div id="mnc-actions" style="display:none;margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+          <button onclick="mncSaveAll()" class="btn btn-primary" style="flex:1;min-width:120px">
+            💾 전체 저장
+          </button>
+          <button onclick="mncCopyAllMents()" class="btn" style="flex:1;min-width:120px;background:#fef9ec;border-color:#fde68a;color:#92400e">
+            📋 전체 멘트 복사
+          </button>
+        </div>
+      </div>
+
 
       <!-- 관리자 베티모의고사 패널 -->
       <div class="panel" id="panel-admin-beti">
@@ -3213,6 +3268,311 @@ var _betiQuickAnswerDataUrl = null; // 해설 PDF 1페이지 이미지
 var _betiFilter = '';
 
 // 관리자 초기화
+/* ═══════════════════════════════════════════════════════
+   중등 일일N제 체크 (Middle Naje Check)
+═══════════════════════════════════════════════════════ */
+
+var _mncData = {};        // {studentId: {is_completed, score, memo}}
+var _mncStudents = [];    // 학생 목록
+var _mncDate = '';        // 선택 날짜
+var _mncTeachers = [];    // 선생님 목록
+
+// 아코디언 토글
+function toggleAdminNajeMenu(){
+  var sub = document.getElementById('amenu-naje-submenu');
+  var arrow = document.getElementById('amenu-naje-arrow');
+  if(!sub) return;
+  var isOpen = sub.style.display !== 'none';
+  sub.style.display = isOpen ? 'none' : 'block';
+  if(arrow) arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
+// switchAdminTab에서 패널 전환 처리
+var _origSwitchAdminTab = typeof switchAdminTab === 'function' ? switchAdminTab : null;
+
+async function initMiddleNajeCheck(){
+  // 오늘 날짜 기본 설정 (어제 = 확인할 결과 날짜)
+  var yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  // 일~목만 유효 (금~토는 목요일로)
+  var day = yesterday.getDay(); // 0=일,1=월,...,6=토
+  if(day === 5) yesterday.setDate(yesterday.getDate() - 1); // 금→목
+  if(day === 6) yesterday.setDate(yesterday.getDate() - 2); // 토→목
+  _mncDate = yesterday.toISOString().slice(0,10);
+
+  var dateEl = document.getElementById('mnc-date');
+  if(dateEl) dateEl.value = _mncDate;
+
+  // 오늘 날짜 라벨
+  var todayEl = document.getElementById('mnc-today-label');
+  if(todayEl){
+    var now = new Date();
+    var days = ['일','월','화','수','목','금','토'];
+    todayEl.textContent = now.getFullYear()+'년 '+(now.getMonth()+1)+'월 '+now.getDate()+'일 ('+days[now.getDay()]+')';
+  }
+
+  // 선생님 목록 로드
+  await mncLoadTeachers();
+  await mncLoadStudents();
+}
+
+async function mncLoadTeachers(){
+  var {data, error} = await db.from('users').select('id,name').eq('role','teacher').order('name');
+  if(error||!data) return;
+  _mncTeachers = data;
+  var sel = document.getElementById('mnc-teacher-filter');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">전체 선생님</option>'
+    + data.map(t => '<option value="'+t.id+'">'+t.name+'</option>').join('');
+}
+
+async function mncLoadStudents(){
+  _mncDate = document.getElementById('mnc-date')?.value || _mncDate;
+  if(!_mncDate) return;
+
+  var teacherFilter = document.getElementById('mnc-teacher-filter')?.value || '';
+  var wrap = document.getElementById('mnc-table-wrap');
+  wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+
+  // 재원 중인 학생 조회
+  var query = db.from('users').select('id,name,school,grade,teacher_id')
+    .eq('role','student').eq('status','active').order('name');
+  if(teacherFilter) query = query.eq('teacher_id', teacherFilter);
+  var {data: students, error} = await query;
+  if(error){ wrap.innerHTML='<p style="color:red">오류: '+error.message+'</p>'; return; }
+  _mncStudents = students || [];
+
+  // 해당 날짜 기존 체크 데이터 조회
+  var {data: checks} = await db.from('middle_naje_check')
+    .select('*').eq('check_date', _mncDate);
+  _mncData = {};
+  (checks||[]).forEach(function(c){ _mncData[c.student_id] = c; });
+
+  mncRenderTable();
+}
+
+function mncRenderTable(){
+  var wrap = document.getElementById('mnc-table-wrap');
+  if(!_mncStudents.length){
+    wrap.innerHTML='<div class="empty-state"><div class="ei">👤</div><p>해당 조건의 학생이 없습니다</p></div>';
+    return;
+  }
+
+  var date = new Date(_mncDate);
+  var days = ['일','월','화','수','목','금','토'];
+  var dateLabel = (date.getMonth()+1)+'월 '+date.getDate()+'일 ('+days[date.getDay()]+')';
+
+  // 통계
+  var totalDone = Object.values(_mncData).filter(function(d){ return d.is_completed; }).length;
+  var totalUndone = _mncStudents.length - Object.values(_mncData).filter(function(d){ return d.student_id; }).length;
+  var statsEl = document.getElementById('mnc-stats');
+  if(statsEl) statsEl.innerHTML =
+    '<span style="padding:4px 10px;background:#EAF3DE;border-radius:100px;font-size:11px;font-weight:700;color:#3B6D11">✅ 완료 '+totalDone+'명</span>'
+    +'<span style="padding:4px 10px;background:#FEF2F2;border-radius:100px;font-size:11px;font-weight:700;color:#B91C1C">❌ 미학습 '
+    +Object.values(_mncData).filter(function(d){ return d.is_completed===false; }).length+'명</span>';
+
+  // 선생님별 그룹핑
+  var groups = {};
+  _mncStudents.forEach(function(s){
+    var tid = s.teacher_id||'none';
+    if(!groups[tid]) groups[tid] = {teacherName:'', students:[]};
+    var t = _mncTeachers.find(function(t){ return t.id===tid; });
+    groups[tid].teacherName = t ? t.name+'T' : '담당선생님 미지정';
+    groups[tid].students.push(s);
+  });
+
+  var html = '';
+  Object.keys(groups).forEach(function(tid){
+    var g = groups[tid];
+    html += '<div style="margin-bottom:20px">'
+      +'<div style="font-size:13px;font-weight:700;color:#1a1a2e;padding:8px 12px;background:#f0f7ff;border-radius:8px;margin-bottom:8px;border-left:3px solid var(--primary)">'
+      +'👨‍🏫 '+g.teacherName+' ('+g.students.length+'명)'
+      +'</div>'
+      +'<div style="display:grid;gap:6px">';
+
+    g.students.forEach(function(s){
+      var saved = _mncData[s.id] || {};
+      var status = saved.is_completed === true ? 'done'
+        : saved.is_completed === false ? 'undone' : '';
+      var score = saved.score || '';
+      var ment = status ? mncGenerateMent(s.name, _mncDate, status, score) : '';
+
+      html += '<div id="mnc-row-'+s.id+'" style="border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;background:#fff;transition:border-color 0.2s">'
+        // 상단: 학생 정보 + 상태 버튼
+        +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+        +'<div style="font-size:14px;font-weight:700;color:#1a1a2e;min-width:60px">'+s.name+'</div>'
+        +'<div style="font-size:11px;color:#9ca3af">'+( s.school||'' )+(s.grade?' '+s.grade+'학년':'')+'</div>'
+        // 상태 선택
+        +'<div style="display:flex;gap:4px;margin-left:auto">'
+        +'<button onclick="mncSetStatus(\''+s.id+'\',\'undone\')" id="mnc-btn-undone-'+s.id+'" class="btn btn-sm" style="'+(status==='undone'?'background:#FEE2E2;border-color:#FCA5A5;color:#B91C1C;font-weight:700':'')+'">❌ 미학습</button>'
+        +'<button onclick="mncSetStatus(\''+s.id+'\',\'done\')" id="mnc-btn-done-'+s.id+'" class="btn btn-sm" style="'+(status==='done'?'background:#DCFCE7;border-color:#86EFAC;color:#15803D;font-weight:700':'')+'">✅ 완료</button>'
+        +'</div>'
+        +'</div>'
+        // 점수 입력 (완료 시에만)
+        +'<div id="mnc-score-wrap-'+s.id+'" style="margin-top:8px;display:'+(status==='done'?'flex':'none')+';align-items:center;gap:8px">'
+        +'<label style="font-size:12px;color:#6b7280;font-weight:600;white-space:nowrap">점수</label>'
+        +'<input type="number" id="mnc-score-'+s.id+'" value="'+score+'" min="0" max="100" placeholder="0~100" '
+        +'style="width:80px;padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:13px;font-weight:700;text-align:center" '
+        +'oninput="mncUpdateMent(\''+s.id+'\')">'
+        +'<span style="font-size:12px;color:#6b7280">점</span>'
+        +'</div>'
+        // 카톡멘트
+        +'<div id="mnc-ment-wrap-'+s.id+'" style="margin-top:8px;display:'+(ment?'block':'none')+'">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">'
+        +'<span style="font-size:11px;color:#9ca3af;font-weight:600">💬 카톡 멘트</span>'
+        +'<button onclick="mncCopyMent(\''+s.id+'\')" class="btn btn-sm" style="font-size:11px;padding:3px 8px;background:#f0f7ff;border-color:#bfdbfe;color:#1d4ed8">📋 복사</button>'
+        +'</div>'
+        +'<div id="mnc-ment-'+s.id+'" style="font-size:12px;white-space:pre-line;background:#f9fafb;border:1px solid #e5e7eb;border-radius:7px;padding:10px;color:#374151;line-height:1.7">'+mncHtmlEscape(ment)+'</div>'
+        +'</div>'
+        +'</div>';
+    });
+    html += '</div></div>';
+  });
+
+  wrap.innerHTML = html;
+
+  // 액션 버튼 표시
+  var actEl = document.getElementById('mnc-actions');
+  if(actEl) actEl.style.display = 'flex';
+}
+
+function mncSetStatus(studentId, status){
+  if(!_mncData[studentId]) _mncData[studentId] = {};
+  _mncData[studentId].is_completed = (status === 'done');
+  _mncData[studentId].student_id = studentId;
+
+  // 버튼 스타일 업데이트
+  var btnDone   = document.getElementById('mnc-btn-done-'+studentId);
+  var btnUndone = document.getElementById('mnc-btn-undone-'+studentId);
+  var scoreWrap = document.getElementById('mnc-score-wrap-'+studentId);
+  var row       = document.getElementById('mnc-row-'+studentId);
+
+  if(btnDone){
+    btnDone.style.cssText = status==='done'
+      ? 'background:#DCFCE7;border:1.5px solid #86EFAC;color:#15803D;font-weight:700;padding:4px 8px;border-radius:6px;font-size:12px;cursor:pointer'
+      : '';
+  }
+  if(btnUndone){
+    btnUndone.style.cssText = status==='undone'
+      ? 'background:#FEE2E2;border:1.5px solid #FCA5A5;color:#B91C1C;font-weight:700;padding:4px 8px;border-radius:6px;font-size:12px;cursor:pointer'
+      : '';
+  }
+  if(scoreWrap) scoreWrap.style.display = status==='done' ? 'flex' : 'none';
+  if(row) row.style.borderColor = status==='done' ? '#86EFAC' : status==='undone' ? '#FCA5A5' : '#e5e7eb';
+
+  mncUpdateMent(studentId);
+}
+
+function mncUpdateMent(studentId){
+  var s = _mncStudents.find(function(s){ return s.id===studentId; });
+  if(!s) return;
+  var status = _mncData[studentId]?.is_completed === true ? 'done'
+    : _mncData[studentId]?.is_completed === false ? 'undone' : '';
+  var scoreEl = document.getElementById('mnc-score-'+studentId);
+  var score = scoreEl ? parseInt(scoreEl.value)||0 : 0;
+  if(_mncData[studentId]) _mncData[studentId].score = score||null;
+
+  var ment = mncGenerateMent(s.name, _mncDate, status, score);
+  var mentWrap = document.getElementById('mnc-ment-wrap-'+studentId);
+  var mentEl   = document.getElementById('mnc-ment-'+studentId);
+  if(mentWrap) mentWrap.style.display = ment ? 'block' : 'none';
+  if(mentEl)   mentEl.textContent = ment;
+}
+
+function mncGenerateMent(studentName, dateStr, status, score){
+  if(!status) return '';
+  var date = new Date(dateStr+'T00:00:00');
+  var days = ['일','월','화','수','목','금','토'];
+  var dayLabel = (date.getMonth()+1)+'/'+date.getDate()+'('+days[date.getDay()]+')';
+  var studyLabel = (date.getMonth()+1)+'월 '+date.getDate()+'일';
+
+  if(status === 'undone'){
+    return '안녕하세요 베스티안 수학학원입니다.\n'
+      +studentName+' 학생 '+dayLabel+' 일일N제 학습이 진행되지 않았습니다.\n'
+      +'학습은 진행했으나 스터디큐에 미입력한 경우 확인하여 입력해 주시기 바랍니다.\n'
+      +'―――――――――――――――――――――――\n'
+      +'1. 주 3회 70점 미만 시 학원에 등원하여 일일N제를 완료해야 합니다.\n'
+      +'2. 레벨 문제로 불통과 시 담당선생님과 상의 후 레벨을 변경합니다.\n'
+      +'3. 2회 연속 불통과 시 경고\n'
+      +'4. 경고 2회 시 퇴원\n'
+      +'―――――――――――――――――――――――\n'
+      +'일일N제는 매일 공부하는 습관과 수학 실력 향상을 위한 프로그램입니다. 감사합니다.';
+  }
+
+  if(score >= 70){
+    return '안녕하세요 베스티안 수학학원입니다.\n'
+      +studentName+' 학생 '+dayLabel+' 일일N제 학습 결과입니다.\n\n'
+      +'■ 학습일 _ '+studyLabel+'\n\n'
+      +'■ 점수 _ '+score+'점\n\n'
+      +'성실히 N제를 학습한 우리 학생에게 응원과 격려를 해주시면 감사드리겠습니다. 😊';
+  }
+
+  // 1~69점
+  return '안녕하세요 베스티안 수학학원입니다.\n'
+    +studentName+' 학생 '+dayLabel+' 일일N제 학습 결과입니다.\n\n'
+    +'■ 학습일 _ '+studyLabel+'\n\n'
+    +'■ 점수 _ '+score+'점\n\n'
+    +'주 3회 70점 미만 시 수업일 여부와 관계없이 학원에 등원하여 N제를 마무리해야 합니다.';
+}
+
+function mncHtmlEscape(str){
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function mncCopyMent(studentId){
+  var el = document.getElementById('mnc-ment-'+studentId);
+  if(!el) return;
+  navigator.clipboard.writeText(el.textContent).then(function(){
+    var btn = el.parentElement?.querySelector('button');
+    if(btn){ btn.textContent='✅ 복사됨'; setTimeout(function(){ btn.textContent='📋 복사'; },1500); }
+  });
+}
+
+function mncCopyAllMents(){
+  var all = [];
+  _mncStudents.forEach(function(s){
+    var el = document.getElementById('mnc-ment-'+s.id);
+    if(el && el.textContent.trim()){
+      all.push('【'+s.name+'】\n'+el.textContent);
+    }
+  });
+  if(!all.length){ alert('입력된 멘트가 없습니다.'); return; }
+  navigator.clipboard.writeText(all.join('\n\n──────────────────\n\n')).then(function(){
+    alert('✅ 전체 멘트 '+all.length+'개가 복사됐습니다!\n카톡방에 붙여넣기 하세요.');
+  });
+}
+
+async function mncSaveAll(){
+  if(!_mncDate){ alert('날짜를 선택하세요'); return; }
+  var toSave = Object.keys(_mncData).filter(function(sid){
+    return _mncData[sid].is_completed !== undefined;
+  });
+  if(!toSave.length){ alert('저장할 데이터가 없습니다'); return; }
+
+  var upserts = toSave.map(function(sid){
+    var d = _mncData[sid];
+    var scoreEl = document.getElementById('mnc-score-'+sid);
+    var score = scoreEl ? parseInt(scoreEl.value)||null : d.score||null;
+    return {
+      student_id: sid,
+      check_date: _mncDate,
+      is_completed: d.is_completed,
+      score: d.is_completed ? score : null,
+      teacher_id: (_mncStudents.find(function(s){ return s.id===sid; })||{}).teacher_id || null,
+      created_by: currentUser?.id || null,
+      updated_at: new Date().toISOString()
+    };
+  });
+
+  var {error} = await db.from('middle_naje_check')
+    .upsert(upserts, {onConflict:'student_id,check_date'});
+
+  if(error){ alert('저장 오류: '+error.message); return; }
+  alert('✅ '+upserts.length+'명 데이터가 저장됐습니다!');
+  mncLoadStudents();
+}
+
+
 async function initAdminBeti(){
   switchAdminBetiTab('list');
   loadAdminBetiExams();
