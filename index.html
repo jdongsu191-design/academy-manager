@@ -3662,30 +3662,40 @@ async function mncSaveAll(){
    중등 일일N제 결과 요약 이미지 생성
 ══════════════════════════════════════════ */
 
-// 체크 날짜 기준 결과 날짜 범위 계산
-// 월=일요일만, 화=일~월, 수=일~화, 목=일~수, 금=일~목
+// 체크 날짜 기준 해당 주 일~목 전체 날짜 반환
+// 예: 월요일(4/7) → 해당 주 일(4/6)~목(4/10) 5일치
+// 이미지는 항상 주간 전체(일~목)를 보여주되, 미래 날짜는 빈칸
 function mncGetResultDateRange(checkDateStr){
   var checkDate = new Date(checkDateStr+'T00:00:00');
   var checkDay  = checkDate.getDay(); // 0=일,1=월,...,6=토
 
-  // 결과 범위 끝 = 체크 날짜 - 1일 (전날)
-  var endDate = new Date(checkDate);
-  endDate.setDate(endDate.getDate() - 1);
+  // 해당 주 일요일 찾기
+  var sunday = new Date(checkDate);
+  var daysFromSun = checkDay === 0 ? 0 : checkDay;
+  sunday.setDate(sunday.getDate() - daysFromSun);
 
-  // 결과 범위 시작 = 해당 주 일요일
-  var startDate = new Date(endDate);
-  var endDay = endDate.getDay(); // 끝날 요일
-  // 일요일(0)로 되돌리기
-  var daysFromSun = endDay === 0 ? 0 : endDay;
-  startDate.setDate(startDate.getDate() - daysFromSun);
+  // 해당 주 목요일
+  var thursday = new Date(sunday);
+  thursday.setDate(thursday.getDate() + 4);
 
+  // 일~목 5일치
   var dates = [];
-  var cur = new Date(startDate);
-  while(cur <= endDate){
-    dates.push(cur.toISOString().slice(0,10));
-    cur.setDate(cur.getDate() + 1);
+  for(var i=0; i<5; i++){
+    var d = new Date(sunday);
+    d.setDate(d.getDate() + i);
+    dates.push(d.toISOString().slice(0,10));
   }
-  return {startDate, endDate, dates};
+
+  // 오늘(체크날) 기준 결과 확인 가능한 마지막 날 = 어제
+  var yesterday = new Date(checkDate);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  return {
+    startDate: sunday,
+    endDate: thursday,
+    yesterday: yesterday, // 이 날짜까지만 실제 결과 있음
+    dates: dates
+  };
 }
 
 function mncDateLabel(dateStr){
@@ -3709,19 +3719,12 @@ async function mncLoadSummaryData(){
   var el = document.getElementById('mnc-summary-range-label');
   if(el) el.textContent = label;
 
-  // 해당 범위 전체 체크 데이터 조회
+  // 해당 범위 전체 체크 데이터 조회 (날짜 범위만으로)
   var {data: checks, error} = await db.from('middle_naje_check')
     .select('*')
-    .in('check_date', range.dates)
-    .eq('created_by', currentUser?.id || '');
-
-  // created_by 조건 없이 재시도
-  if(error || !checks?.length){
-    var {data: checks2} = await db.from('middle_naje_check')
-      .select('*')
-      .in('check_date', range.dates);
-    checks = checks2 || [];
-  }
+    .in('check_date', range.dates);
+  if(error) checks = [];
+  checks = checks || [];
 
   return {range, checks};
 }
@@ -3730,172 +3733,217 @@ async function mncGenerateSummaryImage(mode){
   var summaryData = await mncLoadSummaryData();
   if(!summaryData) return;
   var {range, checks} = summaryData;
+  var dates = range.dates; // 항상 일~목 5일
 
-  // 학생 목록 (현재 필터 기준)
-  var teacherFilter = mode==='teacher'
-    ? (document.getElementById('mnc-teacher-filter')?.value || '')
-    : '';
-  var students = teacherFilter
-    ? _mncStudents.filter(function(s){ return s.teacher_id===teacherFilter; })
-    : _mncStudents;
-
-  if(!students.length){ alert('학생이 없습니다'); return; }
-
-  // check 데이터를 {studentId: {date: {is_completed, score}}} 형태로
   var checkMap = {};
   checks.forEach(function(c){
     if(!checkMap[c.student_id]) checkMap[c.student_id] = {};
     checkMap[c.student_id][c.check_date] = c;
   });
 
-  // Canvas로 이미지 생성
+  // 선생님별 그룹 구성
+  var groups = [];
+  if(mode === 'teacher'){
+    var teacherFilter = document.getElementById('mnc-teacher-filter')?.value || '';
+    var tObj = _mncTeachers.find(function(t){ return t.id===teacherFilter; });
+    var students = _mncStudents.filter(function(s){ return !teacherFilter || s.teacher_id===teacherFilter; });
+    if(!students.length){ alert('학생이 없습니다'); return; }
+    groups.push({teacher: tObj||null, students: students});
+  } else {
+    var teacherOrder = [], teacherMap2 = {};
+    _mncStudents.forEach(function(s){
+      var tid = s.teacher_id||'none';
+      if(!teacherMap2[tid]){ teacherMap2[tid]=[]; teacherOrder.push(tid); }
+      teacherMap2[tid].push(s);
+    });
+    teacherOrder.forEach(function(tid){
+      var t = _mncTeachers.find(function(t){ return t.id===tid; });
+      groups.push({teacher: t||null, students: teacherMap2[tid]});
+    });
+    if(!groups.length){ alert('학생이 없습니다'); return; }
+  }
+
   var canvas = document.createElement('canvas');
-  var dates   = range.dates;
-  var COLS    = 1 + dates.length + 1; // 이름 + 날짜별 + 합계
-  var ROWS    = 1 + students.length;  // 헤더 + 학생
-  var CW      = [160].concat(dates.map(function(){ return 90; })).concat([80]); // 컬럼폭
-  var RH      = 44;   // 행 높이
-  var PAD     = 20;   // 전체 패딩
-  var HEADER  = 80;   // 상단 타이틀 높이
+  var ctx    = canvas.getContext('2d');
+  var PAD    = 24, RH = 46, GH = 40;
+  var TITLE_H = 100, NAME_W = 100, DATE_W = 88, AVG_W = 72, FOOTER_H = 36;
+  var DAYS7  = ['일','월','화','수','목','금','토'];
 
-  var totalW = PAD*2 + CW.reduce(function(a,b){return a+b;},0);
-  var totalH = PAD*2 + HEADER + RH * ROWS + PAD;
+  var totalRows = 0;
+  groups.forEach(function(g){ totalRows += g.students.length; });
+  var groupHeaderRows = mode==='all' ? groups.length : 0;
+  var totalW = PAD*2 + NAME_W + DATE_W*5 + AVG_W;
+  var totalH = PAD + TITLE_H + RH + (totalRows+groupHeaderRows)*RH + FOOTER_H + PAD;
 
-  canvas.width  = totalW;
-  canvas.height = totalH;
-
-  var ctx = canvas.getContext('2d');
+  canvas.width = totalW*2; canvas.height = totalH*2;
+  ctx.scale(2,2);
 
   // 배경
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0,0,totalW,totalH);
+  ctx.fillStyle = '#f8fafc'; ctx.fillRect(0,0,totalW,totalH);
 
-  // 타이틀
+  // 타이틀 바
+  ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0,0,totalW,TITLE_H);
+
   var checkD = new Date(_mncDate+'T00:00:00');
-  var days7  = ['일','월','화','수','목','금','토'];
-  var title  = '중등 일일N제 결과 요약';
-  var subtitle = (checkD.getMonth()+1)+'월 '+checkD.getDate()+'일('+days7[checkD.getDay()]+') 기준';
-  if(teacherFilter){
-    var t = _mncTeachers.find(function(t){ return t.id===teacherFilter; });
-    if(t) subtitle += '  |  '+t.name+'T 반';
-  } else {
-    subtitle += '  |  전체';
-  }
+  var startD = new Date(range.startDate);
+  var endD   = new Date(range.endDate);
+  var dateRangeLabel = (startD.getMonth()+1)+'/'+(startD.getDate())+'('
+    +DAYS7[startD.getDay()]+') ~ '+(endD.getMonth()+1)+'/'+(endD.getDate())
+    +'('+DAYS7[endD.getDay()]+')';
 
-  ctx.fillStyle = '#1a1a2e';
-  ctx.font = 'bold 22px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(title, totalW/2, PAD+28);
-  ctx.font = '14px sans-serif';
-  ctx.fillStyle = '#6b7280';
-  ctx.fillText(subtitle, totalW/2, PAD+52);
-
-  // 선생님 그룹 구분선 색
-  var groupColors = ['#dbeafe','#dcfce7','#fef9c3','#fce7f3','#f3e8ff','#ffedd5'];
-  var teacherColorMap = {};
-  var colorIdx = 0;
-  _mncTeachers.forEach(function(t){
-    teacherColorMap[t.id] = groupColors[colorIdx++ % groupColors.length];
-  });
-
-  // 테이블 시작 Y
-  var tableY = PAD + HEADER;
-  // 컬럼 X 시작 위치 배열
-  var colX = [PAD];
-  CW.forEach(function(w, i){ if(i>0) colX.push(colX[i-1]+CW[i-1]); });
-
-  // 헤더 행
-  function drawCell(col, row, text, opts){
-    var x = colX[col];
-    var y = tableY + row*RH;
-    var w = CW[col];
-    var h = RH;
-    // 배경
-    ctx.fillStyle = opts.bg || '#fff';
-    ctx.fillRect(x, y, w, h);
-    // 테두리
-    ctx.strokeStyle = '#d1d5db';
-    ctx.lineWidth   = 0.8;
-    ctx.strokeRect(x, y, w, h);
-    // 텍스트
-    ctx.fillStyle   = opts.color || '#1a1a2e';
-    ctx.font        = (opts.bold?'bold ':'')+((opts.fontSize||13)+'px sans-serif');
-    ctx.textAlign   = opts.align || 'center';
-    var textX = opts.align==='left' ? x+10 : x+w/2;
-    var textY = y + h/2 + 5;
-    ctx.fillText(text, textX, textY);
+  if(mode==='teacher'){
+    var tf = document.getElementById('mnc-teacher-filter')?.value||'';
+    var tObj2 = _mncTeachers.find(function(t){ return t.id===tf; });
+    var tName = tObj2 ? tObj2.name+'T 반' : '전체';
+    ctx.fillStyle='#93c5fd'; ctx.font='bold 11px sans-serif';
+    ctx.fillText(tName, totalW/2, 22);
+    ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
+    ctx.fillText('중등 일일N제 주간 결과', totalW/2, 48);
+    ctx.fillStyle='#94a3b8'; ctx.font='11px sans-serif';
+    ctx.fillText(dateRangeLabel+'  |  기준일 '+(checkD.getMonth()+1)+'.'
+      +(checkD.getDate())+'('+DAYS7[checkD.getDay()]+')', totalW/2, 70);
+    ctx.fillStyle='#475569'; ctx.font='10px sans-serif';
+    ctx.fillText('* 진행 전 날짜는 빈칸으로 표시됩니다', totalW/2, 88);
+  } else {
+    ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
+    ctx.fillText('중등 일일N제 주간 결과 (전체)', totalW/2, 38);
+    ctx.fillStyle='#94a3b8'; ctx.font='11px sans-serif';
+    ctx.fillText(dateRangeLabel+'  |  기준일 '+(checkD.getMonth()+1)+'.'
+      +(checkD.getDate())+'('+DAYS7[checkD.getDay()]+')', totalW/2, 60);
+    ctx.fillStyle='#475569'; ctx.font='10px sans-serif';
+    ctx.fillText('* 진행 전 날짜는 빈칸으로 표시됩니다', totalW/2, 80);
   }
 
-  // 헤더
-  drawCell(0, 0, '학생', {bg:'#1a1a2e', color:'#fff', bold:true});
-  dates.forEach(function(d, i){
-    drawCell(i+1, 0, mncDateLabel(d), {bg:'#1a1a2e', color:'#fff', bold:true, fontSize:12});
-  });
-  drawCell(dates.length+1, 0, '평균', {bg:'#1a1a2e', color:'#fff', bold:true});
+  var colX0 = PAD; // 이름 시작 X
+  var dateX0 = PAD + NAME_W; // 날짜 시작 X
+  var avgX0  = dateX0 + DATE_W*5; // 평균 시작 X
 
-  // 학생 행
-  students.forEach(function(s, ri){
-    var rowBg = '#fff';
-    if(s.teacher_id && teacherColorMap[s.teacher_id]){
-      rowBg = ri%2===0 ? teacherColorMap[s.teacher_id] : '#ffffff';
-    } else {
-      rowBg = ri%2===0 ? '#f9fafb' : '#ffffff';
+  function drawRect(x,y,w,h,fill,stroke){
+    ctx.fillStyle=fill||'#fff'; ctx.fillRect(x,y,w,h);
+    if(stroke!==false){ ctx.strokeStyle=stroke||'#e2e8f0'; ctx.lineWidth=0.7; ctx.strokeRect(x,y,w,h); }
+  }
+  function drawTxt(txt,x,y,align,color,font){
+    ctx.fillStyle=color||'#1e293b'; ctx.font=font||'12px sans-serif'; ctx.textAlign=align||'center';
+    ctx.fillText(txt,x,y);
+  }
+
+  var tableY = PAD + TITLE_H;
+  // 테이블 헤더
+  drawRect(colX0, tableY, totalW-PAD*2, RH, '#334155', false);
+  drawTxt('학생', colX0+8, tableY+RH/2+5, 'left', '#fff', 'bold 12px sans-serif');
+  dates.forEach(function(d,i){
+    var dd = new Date(d+'T00:00:00');
+    var isPast = d <= range.yesterday.toISOString().slice(0,10);
+    drawRect(dateX0+DATE_W*i, tableY, DATE_W, RH, isPast?'#334155':'#243046', '#475569');
+    var dLabel = (dd.getMonth()+1)+'/'+(dd.getDate());
+    var dayLbl = '('+DAYS7[dd.getDay()]+')';
+    drawTxt(dLabel, dateX0+DATE_W*i+DATE_W/2, tableY+RH/2, 'center', isPast?'#e2e8f0':'#64748b', 'bold 11px sans-serif');
+    drawTxt(dayLbl, dateX0+DATE_W*i+DATE_W/2, tableY+RH/2+13, 'center', isPast?'#cbd5e1':'#475569', '10px sans-serif');
+  });
+  drawRect(avgX0, tableY, AVG_W, RH, '#1e3a5f', false);
+  drawTxt('주간평균', avgX0+AVG_W/2, tableY+RH/2+5, 'center', '#93c5fd', 'bold 11px sans-serif');
+
+  // 헤더 아래 구분선
+  ctx.strokeStyle='#475569'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(PAD,tableY+RH); ctx.lineTo(totalW-PAD,tableY+RH); ctx.stroke();
+
+  var GROUP_COLORS=[
+    {bg:'#eff6ff',stripe:'#dbeafe',hBg:'#1d4ed8'},
+    {bg:'#f0fdf4',stripe:'#dcfce7',hBg:'#15803d'},
+    {bg:'#fffbeb',stripe:'#fef08a',hBg:'#b45309'},
+    {bg:'#fdf4ff',stripe:'#f3e8ff',hBg:'#7e22ce'},
+    {bg:'#fff1f2',stripe:'#ffe4e6',hBg:'#be123c'},
+    {bg:'#fff7ed',stripe:'#ffedd5',hBg:'#c2410c'},
+  ];
+
+  var curY = tableY + RH;
+  groups.forEach(function(g,gi){
+    var gc = GROUP_COLORS[gi%GROUP_COLORS.length];
+
+    if(mode==='all'){
+      var tName2 = g.teacher ? g.teacher.name+'T 반' : '담당 미지정';
+      drawRect(PAD, curY, totalW-PAD*2, GH, gc.hBg, false);
+      drawTxt('👨‍🏫  '+tName2+' ('+g.students.length+'명)', PAD+14, curY+GH/2+5, 'left', '#fff', 'bold 12px sans-serif');
+      curY += GH;
     }
 
-    // 이름
-    drawCell(0, ri+1, s.name, {bg:rowBg, bold:true, align:'left'});
+    g.students.forEach(function(s,ri){
+      var rowBg = ri%2===0 ? gc.bg : gc.stripe;
+      drawRect(colX0, curY, NAME_W, RH, rowBg, '#e2e8f0');
+      drawTxt(s.name, colX0+8, curY+RH/2+5, 'left', '#1e293b', 'bold 12px sans-serif');
 
-    var scores = [];
-    dates.forEach(function(d, i){
-      var c = checkMap[s.id]?.[d];
-      var text='', bg=rowBg, color='#374151';
-      if(!c || c.is_completed===null){
-        text='-'; color='#d1d5db';
-      } else if(c.is_completed===false){
-        text='미학습'; bg='#FEF2F2'; color='#B91C1C';
-      } else {
-        var sc = c.score;
-        if(sc!==null && sc!==undefined){
-          text=sc+'점';
-          bg = sc>=70 ? '#F0FDF4' : '#FEF9C3';
-          color = sc>=70 ? '#15803D' : '#92400E';
-          scores.push(sc);
-        } else {
-          text='완료'; bg='#F0FDF4'; color='#15803D';
+      var scores=[];
+      dates.forEach(function(d,di){
+        var isPast = d <= range.yesterday.toISOString().slice(0,10);
+        var c = checkMap[s.id]?.[d];
+        var cellX = dateX0+DATE_W*di;
+        var txt='', cellBg=rowBg, tc='#94a3b8', bold=false;
+
+        if(!isPast){
+          cellBg = ri%2===0?'#f1f5f9':'#e8edf2'; txt=''; tc='#cbd5e1';
+        } else if(!c){
+          txt='-';
+        } else if(c.is_completed===false){
+          txt='미학습'; cellBg='#fef2f2'; tc='#dc2626'; bold=true;
+        } else if(c.is_completed===true){
+          var sc=c.score;
+          if(sc!==null&&sc!==undefined){
+            txt=sc+'점';
+            if(sc>=70){ cellBg='#f0fdf4'; tc='#16a34a'; bold=true; scores.push(sc); }
+            else { cellBg='#fffbeb'; tc='#d97706'; bold=true; scores.push(sc); }
+          } else { txt='완료'; cellBg='#f0fdf4'; tc='#16a34a'; bold=true; }
         }
+
+        drawRect(cellX, curY, DATE_W, RH, cellBg, '#e2e8f0');
+        if(txt) drawTxt(txt, cellX+DATE_W/2, curY+RH/2+5, 'center', tc, (bold?'bold ':'')+' 12px sans-serif');
+      });
+
+      // 평균
+      if(scores.length>0){
+        var avg=Math.round(scores.reduce(function(a,b){return a+b;},0)/scores.length);
+        drawRect(avgX0, curY, AVG_W, RH, avg>=70?'#dcfce7':'#fef9c3', '#e2e8f0');
+        drawTxt(avg+'점', avgX0+AVG_W/2, curY+RH/2+5, 'center', avg>=70?'#15803d':'#92400e', 'bold 13px sans-serif');
+      } else {
+        drawRect(avgX0, curY, AVG_W, RH, rowBg, '#e2e8f0');
+        drawTxt('-', avgX0+AVG_W/2, curY+RH/2+5, 'center', '#cbd5e1', '11px sans-serif');
       }
-      drawCell(i+1, ri+1, text, {bg:bg, color:color, bold:!!c&&c.is_completed!==false, fontSize:12});
+      curY += RH;
     });
 
-    // 평균
-    var avgText = scores.length>0 ? Math.round(scores.reduce(function(a,b){return a+b;},0)/scores.length)+'점' : '-';
-    var avgBg = scores.length>0 ? (Math.round(scores.reduce(function(a,b){return a+b;},0)/scores.length)>=70?'#DCFCE7':'#FEF9C3') : rowBg;
-    var avgColor = scores.length>0 ? (Math.round(scores.reduce(function(a,b){return a+b;},0)/scores.length)>=70?'#15803D':'#92400E') : '#d1d5db';
-    drawCell(dates.length+1, ri+1, avgText, {bg:avgBg, color:avgColor, bold:true});
+    if(mode==='all' && gi<groups.length-1){
+      ctx.strokeStyle='#334155'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(PAD,curY); ctx.lineTo(totalW-PAD,curY); ctx.stroke();
+    }
   });
 
   // 외곽선
-  ctx.strokeStyle = '#6b7280';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(PAD, tableY, totalW-PAD*2, RH*ROWS);
+  ctx.strokeStyle='#334155'; ctx.lineWidth=1.5;
+  ctx.strokeRect(PAD, tableY, totalW-PAD*2, curY-tableY);
+  // 이름|날짜 세로선
+  ctx.strokeStyle='#475569'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(dateX0,tableY); ctx.lineTo(dateX0,curY); ctx.stroke();
+  // 날짜|평균 세로선
+  ctx.beginPath(); ctx.moveTo(avgX0,tableY); ctx.lineTo(avgX0,curY); ctx.stroke();
 
-  // 이미지 생성 후 표시
+  // 푸터
+  ctx.fillStyle='#94a3b8'; ctx.font='10px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('베스티안 수학학원  |  생성일 '+_mncDate, totalW/2, curY+22);
+
   var imgDataUrl = canvas.toDataURL('image/png');
   var preview = document.getElementById('mnc-summary-preview');
   if(!preview) return;
-
-  preview.innerHTML = '<div style="margin-bottom:8px">'
-    +'<img src="'+imgDataUrl+'" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08)">'
+  var fname = mode==='teacher' ? '일일N제_반별_'+_mncDate+'.png' : '일일N제_전체_'+_mncDate+'.png';
+  preview.innerHTML =
+    '<div style="margin-bottom:10px;overflow-x:auto">'
+    +'<img src="'+imgDataUrl+'" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.1)">'
     +'</div>'
     +'<div style="display:flex;gap:8px">'
-    +'<a href="'+imgDataUrl+'" download="일일N제_결과_'+_mncDate+'.png" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none">⬇️ 이미지 다운로드</a>'
-    +'<button onclick="mncShareImage(\''+mode+'\')" class="btn" style="flex:1;background:#f0f7ff;border-color:#bfdbfe;color:#1d4ed8">📋 이미지 복사</button>'
+    +'<a href="'+imgDataUrl+'" download="'+fname+'" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none">⬇️ 이미지 다운로드</a>'
+    +'<button onclick="mncShareImage()" class="btn" style="flex:1;background:#f0f7ff;border-color:#bfdbfe;color:#1d4ed8">📋 이미지 복사</button>'
     +'</div>';
 
-  // 섹션 보이기
-  document.getElementById('mnc-summary-section').style.display = 'block';
-
-  // 저장
+  document.getElementById('mnc-summary-section').style.display='block';
   window._mncLastCanvas = canvas;
 }
 
