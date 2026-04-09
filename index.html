@@ -3364,9 +3364,12 @@ async function mncLoadStudents(){
   if(error){ wrap.innerHTML='<p style="color:red">오류: '+error.message+'</p>'; return; }
   _mncStudents = students || [];
 
-  // 해당 날짜 기존 체크 데이터 조회
+  // 결과 날짜(체크날 - 1일) 기준으로 기존 데이터 조회
+  var rDate = new Date(_mncDate+'T00:00:00');
+  rDate.setDate(rDate.getDate() - 1);
+  var rDateStr = rDate.toISOString().slice(0,10);
   var {data: checks} = await db.from('middle_naje_check')
-    .select('*').eq('check_date', _mncDate);
+    .select('*').eq('check_date', rDateStr);
   _mncData = {};
   (checks||[]).forEach(function(c){ _mncData[c.student_id] = c; });
 
@@ -3486,9 +3489,11 @@ function mncRenderTable(){
     var daysArr = ['일','월','화','수','목','금','토'];
     var startD = new Date(rangeInfo.startDate);
     var endD   = new Date(rangeInfo.endDate);
-    var rangeLabel = '결과 범위: '
-      +(startD.getMonth()+1)+'월'+startD.getDate()+'일('+daysArr[startD.getDay()]+')'
-      +' ~ '+(endD.getMonth()+1)+'월'+endD.getDate()+'일('+daysArr[endD.getDay()]+')';
+    var rangeLabel = '주간 범위: '
+      +(startD.getMonth()+1)+'/'+(startD.getDate())+'('+daysArr[startD.getDay()]+')'
+      +' ~ '+(endD.getMonth()+1)+'/'+(endD.getDate())+'('+daysArr[endD.getDay()]+')'
+      +'  |  현재까지 결과: ~'+(rangeInfo.yesterday.getMonth()+1)+'/'
+      +(rangeInfo.yesterday.getDate())+'('+daysArr[rangeInfo.yesterday.getDay()]+')';
     var rl = document.getElementById('mnc-summary-range-label');
     if(rl) rl.textContent = rangeLabel;
     // 이미지 미리보기 초기화
@@ -3609,11 +3614,15 @@ function mncUpdateCheckingBanner(dateStr){
   var banner = document.getElementById('mnc-checking-banner');
   var label  = document.getElementById('mnc-checking-label');
   if(!banner||!label||!dateStr) return;
-  var d    = new Date(dateStr+'T00:00:00');
+  // 체크 날짜(오늘)가 아니라 결과 날짜(전날) 기준으로 표시
+  // 예: 4/6(월) 체크 → 4/5(일) 결과 입력 중
+  var checkDate = new Date(dateStr+'T00:00:00');
+  var resultDate = new Date(checkDate);
+  resultDate.setDate(resultDate.getDate() - 1);
   var DAYS = ['일','월','화','수','목','금','토'];
-  var dayName = DAYS[d.getDay()];
-  var dateLabel = (d.getMonth()+1)+'월 '+d.getDate()+'일('+dayName+')';
-  label.innerHTML = '📌 현재 <strong>'+dateLabel+' ('+dayName+'요일)</strong> 일일N제 학습 결과를 입력 중입니다.';
+  var resultDay = DAYS[resultDate.getDay()];
+  var resultLabel = (resultDate.getMonth()+1)+'월 '+resultDate.getDate()+'일';
+  label.innerHTML = '📌 현재 <strong>'+resultDay+'요일('+resultLabel+')</strong> 일일N제 학습 결과를 입력 중입니다.';
   banner.style.display = 'block';
 }
 
@@ -3633,9 +3642,12 @@ async function mncResetTeacher(){
   if(!studentsToReset.length){ alert('초기화할 학생이 없습니다'); return; }
 
   var ids = studentsToReset.map(function(s){ return s.id; });
+  var rDate2 = new Date(_mncDate+'T00:00:00');
+  rDate2.setDate(rDate2.getDate() - 1);
+  var rDateStr2 = rDate2.toISOString().slice(0,10);
   var {error} = await db.from('middle_naje_check')
     .delete()
-    .eq('check_date', _mncDate)
+    .eq('check_date', rDateStr2)
     .in('student_id', ids);
 
   if(error){ alert('오류: '+error.message); return; }
@@ -3685,13 +3697,18 @@ async function mncSaveAll(){
   });
   if(!toSave.length){ alert('저장할 데이터가 없습니다'); return; }
 
+  // check_date = 결과 날짜(체크날 전날) - N제 학생이 푼 날짜
+  var resultDateObj = new Date(_mncDate+'T00:00:00');
+  resultDateObj.setDate(resultDateObj.getDate() - 1);
+  var resultDateStr = resultDateObj.toISOString().slice(0,10);
+
   var upserts = toSave.map(function(sid){
     var d = _mncData[sid];
     var scoreEl = document.getElementById('mnc-score-'+sid);
     var score = scoreEl ? parseInt(scoreEl.value)||null : d.score||null;
     return {
       student_id: sid,
-      check_date: _mncDate,
+      check_date: resultDateStr,  // 결과 날짜(학생이 과제 푼 날) 저장
       is_completed: d.is_completed,
       score: d.is_completed ? score : null,
       teacher_id: (_mncStudents.find(function(s){ return s.id===sid; })||{}).teacher_id || null,
@@ -3714,37 +3731,40 @@ async function mncSaveAll(){
 ══════════════════════════════════════════ */
 
 // 체크 날짜 기준 해당 주 일~목 전체 날짜 반환
-// 예: 월요일(4/7) → 해당 주 일(4/6)~목(4/10) 5일치
-// 이미지는 항상 주간 전체(일~목)를 보여주되, 미래 날짜는 빈칸
+// 핵심: 결과 날짜(= 체크 날짜 - 1일) 기준으로 해당 주의 일~목 5일치 계산
+// 예: 체크 4/7(월) → 결과날 4/6(일) → 해당 주 일~목: 4/6~4/10
+// 예: 체크 4/8(화) → 결과날 4/7(월) → 해당 주 일~목: 4/6~4/10
 function mncGetResultDateRange(checkDateStr){
-  var checkDate = new Date(checkDateStr+'T00:00:00');
-  var checkDay  = checkDate.getDay(); // 0=일,1=월,...,6=토
+  var checkDate  = new Date(checkDateStr+'T00:00:00');
 
-  // 해당 주 일요일 찾기
-  var sunday = new Date(checkDate);
-  var daysFromSun = checkDay === 0 ? 0 : checkDay;
-  sunday.setDate(sunday.getDate() - daysFromSun);
+  // 결과 날짜 = 체크 날짜 - 1일
+  var resultDate = new Date(checkDate);
+  resultDate.setDate(resultDate.getDate() - 1);
+  var resultDay  = resultDate.getDay(); // 0=일,1=월,...,6=토
 
-  // 해당 주 목요일
+  // 결과 날짜 기준 해당 주 일요일 찾기
+  // 일요일(0)이면 그 날이 일요일, 월(1)이면 1일 전, ...
+  var sunday = new Date(resultDate);
+  sunday.setDate(sunday.getDate() - resultDay); // 항상 해당 주 일요일
+
+  // 해당 주 목요일 = 일요일 + 4
   var thursday = new Date(sunday);
   thursday.setDate(thursday.getDate() + 4);
 
-  // 일~목 5일치
+  // 일~목 5일치 날짜 배열
   var dates = [];
-  for(var i=0; i<5; i++){
+  for(var i = 0; i < 5; i++){
     var d = new Date(sunday);
     d.setDate(d.getDate() + i);
     dates.push(d.toISOString().slice(0,10));
   }
 
-  // 오늘(체크날) 기준 결과 확인 가능한 마지막 날 = 어제
-  var yesterday = new Date(checkDate);
-  yesterday.setDate(yesterday.getDate() - 1);
-
+  // 결과 확인 가능한 마지막 날 = 결과 날짜
+  // (체크 날짜가 월이면 일요일까지만 결과 있음)
   return {
     startDate: sunday,
     endDate: thursday,
-    yesterday: yesterday, // 이 날짜까지만 실제 결과 있음
+    yesterday: resultDate, // 이 날짜까지만 실제 결과 있음
     dates: dates
   };
 }
@@ -3771,11 +3791,15 @@ async function mncLoadSummaryData(){
   if(el) el.textContent = label;
 
   // 해당 범위 전체 체크 데이터 조회 (날짜 범위만으로)
+  // dates 배열은 일~목 5일치인데 실제 저장은 check_date(결과날짜) 기준으로 저장됨
+  // _mncDate는 체크하는 날(오늘), DB의 check_date도 동일하게 저장됨
+  // 따라서 이미지용 조회는 날짜 범위 전체(일~목)로 조회
   var {data: checks, error} = await db.from('middle_naje_check')
     .select('*')
     .in('check_date', range.dates);
   if(error) checks = [];
   checks = checks || [];
+  console.log('[MNC 요약] 조회 날짜:', range.dates, '결과 수:', checks.length);
 
   return {range, checks};
 }
