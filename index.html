@@ -907,7 +907,7 @@
         <!-- 필터 영역 -->
         <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <div style="display:flex;align-items:center;gap:6px;background:#f5f6fa;padding:6px 12px;border-radius:10px">
-            <span style="font-size:13px;color:#6b7280;font-weight:600">📅 입력 날짜</span>
+            <span style="font-size:13px;color:#6b7280;font-weight:600">📅 결과 날짜</span>
             <input type="date" id="mnc-date" style="border:none;background:transparent;font-size:13px;font-weight:700;color:#1a1a2e;cursor:pointer;outline:none" onchange="mncLoadStudents()">
           </div>
           <select id="mnc-teacher-filter" onchange="mncLoadStudents()" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:13px;font-weight:600;background:#fff;cursor:pointer;outline:none;color:#1a1a2e">
@@ -3395,16 +3395,36 @@ function toggleAdminNajeMenu(){
 var _origSwitchAdminTab = typeof switchAdminTab === 'function' ? switchAdminTab : null;
 
 async function initMiddleNajeCheck(){
-  // 입력 날짜 = 오늘 날짜 (UTC 기준, 타임존 무관)
+  // 결과 날짜 = 어제 날짜 (UTC 기준)
+  // 학생들이 학습한 날 기준으로 표시 → 담당자가 혼동 없도록
   var now = new Date();
   var todayUTC = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-  var todayStr = todayUTC.getUTCFullYear()+'-'
-    +String(todayUTC.getUTCMonth()+1).padStart(2,'0')+'-'
-    +String(todayUTC.getUTCDate()).padStart(2,'0');
-  _mncDate = todayStr;
+  // 어제 = 결과 날짜
+  var resultUTC = new Date(Date.UTC(todayUTC.getUTCFullYear(), todayUTC.getUTCMonth(), todayUTC.getUTCDate() - 1));
+  // 금요일(5) → 목요일(4), 토요일(6) → 목요일(4)으로 조정
+  var rd = resultUTC.getUTCDay();
+  if(rd === 5) resultUTC = new Date(Date.UTC(resultUTC.getUTCFullYear(), resultUTC.getUTCMonth(), resultUTC.getUTCDate() - 1));
+  if(rd === 6) resultUTC = new Date(Date.UTC(resultUTC.getUTCFullYear(), resultUTC.getUTCMonth(), resultUTC.getUTCDate() - 2));
+  var resultStr = resultUTC.getUTCFullYear()+'-'
+    +String(resultUTC.getUTCMonth()+1).padStart(2,'0')+'-'
+    +String(resultUTC.getUTCDate()).padStart(2,'0');
 
+  // _mncDate = 결과 날짜 + 1일 (체크 날짜) → 내부 계산용
+  // 단, 날짜 선택 UI에는 결과 날짜(학습한 날)를 표시
+  // 내부 로직: _mncDate = 선택된 결과날짜 + 1일 (체크날)
+  _mncDate = resultUTC.getUTCFullYear()+'-'
+    +String(resultUTC.getUTCMonth()+1).padStart(2,'0')+'-'
+    +String(resultUTC.getUTCDate()+1).padStart(2,'0');  // 임시, 아래에서 재설정
+
+  // UI 날짜 선택: 결과 날짜 기준으로 표시
   var dateEl = document.getElementById('mnc-date');
-  if(dateEl) dateEl.value = _mncDate;
+  if(dateEl) dateEl.value = resultStr;
+
+  // _mncDate = 결과날짜 + 1 (내부 체크날짜)
+  var checkUTC = new Date(Date.UTC(resultUTC.getUTCFullYear(), resultUTC.getUTCMonth(), resultUTC.getUTCDate() + 1));
+  _mncDate = checkUTC.getUTCFullYear()+'-'
+    +String(checkUTC.getUTCMonth()+1).padStart(2,'0')+'-'
+    +String(checkUTC.getUTCDate()).padStart(2,'0');
 
   // 오늘 날짜 라벨
   var todayEl = document.getElementById('mnc-today-label');
@@ -3431,7 +3451,17 @@ async function mncLoadTeachers(){
 }
 
 async function mncLoadStudents(){
-  _mncDate = document.getElementById('mnc-date')?.value || _mncDate;
+  // UI에서는 결과 날짜(학습한 날)를 선택
+  // 내부 _mncDate는 체크 날짜(결과날+1)로 변환
+  var selectedResultDate = document.getElementById('mnc-date')?.value;
+  if(selectedResultDate){
+    var rp = selectedResultDate.split('-');
+    var rUTC = new Date(Date.UTC(parseInt(rp[0]),parseInt(rp[1])-1,parseInt(rp[2])));
+    var cUTC = new Date(Date.UTC(rUTC.getUTCFullYear(), rUTC.getUTCMonth(), rUTC.getUTCDate()+1));
+    _mncDate = cUTC.getUTCFullYear()+'-'
+      +String(cUTC.getUTCMonth()+1).padStart(2,'0')+'-'
+      +String(cUTC.getUTCDate()).padStart(2,'0');
+  }
   if(!_mncDate) return;
 
   var teacherFilter = document.getElementById('mnc-teacher-filter')?.value || '';
@@ -3521,7 +3551,7 @@ function mncRenderTable(){
         // 점수 입력 (항상 보임)
         +'<div style="display:flex;align-items:center;gap:4px">'
         +'<input type="number" id="mnc-score-'+s.id+'" value="'+score+'" min="0" max="100" placeholder="점수" '
-        +'style="width:64px;padding:6px 6px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px;font-weight:700;text-align:center;background:#fff" '
+        +'style="width:64px;padding:6px 6px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px;font-weight:700;text-align:center;background:#fff;-webkit-appearance:none;-moz-appearance:textfield;appearance:textfield" '
         +'oninput="mncOnScoreInput(\''+s.id+'\')">'
         +'<span style="font-size:12px;color:#6b7280;font-weight:600">점</span>'
         +'</div>'
@@ -3699,16 +3729,16 @@ function mncHtmlEscape(str){
 function mncUpdateCheckingBanner(dateStr){
   var banner = document.getElementById('mnc-checking-banner');
   var label  = document.getElementById('mnc-checking-label');
-  if(!banner||!label||!dateStr) return;
-  // 체크 날짜(오늘)가 아니라 결과 날짜(전날) 기준으로 표시
-  // 예: 4/6(월) 체크 → 4/5(일) 결과 입력 중
-  var parts2 = dateStr.split('-');
-  var checkUTC = new Date(Date.UTC(parseInt(parts2[0]),parseInt(parts2[1])-1,parseInt(parts2[2])));
-  var resultDate = new Date(Date.UTC(checkUTC.getUTCFullYear(),checkUTC.getUTCMonth(),checkUTC.getUTCDate()-1));
+  if(!banner||!label) return;
+  // UI에서 선택된 결과 날짜를 직접 읽기
+  var selectedResultDate = document.getElementById('mnc-date')?.value;
+  if(!selectedResultDate) return;
+  var rp = selectedResultDate.split('-');
+  var rUTC = new Date(Date.UTC(parseInt(rp[0]),parseInt(rp[1])-1,parseInt(rp[2])));
   var DAYS = ['일','월','화','수','목','금','토'];
-  var resultDay = DAYS[resultDate.getUTCDay()];
-  var resultLabel = (resultDate.getUTCMonth()+1)+'월 '+resultDate.getUTCDate()+'일';
-  label.innerHTML = '📌 현재 <strong>'+resultDay+'요일('+resultLabel+')</strong> 일일N제 학습 결과를 입력 중입니다.';
+  var dayName = DAYS[rUTC.getUTCDay()];
+  var dateLabel = (rUTC.getUTCMonth()+1)+'월 '+rUTC.getUTCDate()+'일';
+  label.innerHTML = '📌 <strong>'+dayName+'요일 ('+dateLabel+')</strong> 일일N제 학습 결과 입력 중';
   banner.style.display = 'block';
 }
 
@@ -3923,55 +3953,49 @@ async function mncGenerateSummaryImage(mode){
   });
 
   var DAYS7 = ['일','월','화','수','목','금','토'];
+  // UI에서 선택된 결과 날짜
+  var selectedResult = document.getElementById('mnc-date')?.value || '';
+  var srp = selectedResult.split('-');
+  var srUTC = selectedResult ? new Date(Date.UTC(parseInt(srp[0]),parseInt(srp[1])-1,parseInt(srp[2]))) : null;
   var iParts = _mncDate.split('-');
   var checkD = new Date(Date.UTC(parseInt(iParts[0]),parseInt(iParts[1])-1,parseInt(iParts[2])));
-  var startD = range.startDate; // 이미 UTC Date
-  var endD   = range.endDate;   // 이미 UTC Date
-  // UTC 기준 날짜 헬퍼
+  var startD = range.startDate;
+  var endD   = range.endDate;
   function uFmt(d){ return (d.getUTCMonth()+1)+'/'+(d.getUTCDate()); }
   function uDay(d){ return DAYS7[d.getUTCDay()]; }
-  // UTC 기준 날짜 문자열 (타임존 무관)
-  var yd = range.yesterday;
-  var yesterdayStr = yd.getUTCFullYear()+'-'
-    +String(yd.getUTCMonth()+1).padStart(2,'0')+'-'
-    +String(yd.getUTCDate()).padStart(2,'0');
 
-  // 선생님별 그룹 구성
+  // 선생님별 그룹
   var groups = [];
   if(mode === 'teacher'){
-    // 반별: 현재 선택된 선생님 1개 반
     var tf = document.getElementById('mnc-teacher-filter')?.value || '';
     var tObj = _mncTeachers.find(function(t){ return t.id===tf; });
-    var stus = tf
-      ? _mncStudents.filter(function(s){ return s.teacher_id===tf; })
-      : _mncStudents;
+    var stus = tf ? _mncStudents.filter(function(s){ return s.teacher_id===tf; }) : _mncStudents;
     if(!stus.length){ alert('학생이 없습니다. 선생님을 먼저 선택하세요'); return; }
     groups.push({teacher: tObj||null, students: stus});
   } else {
-    // 전체: 선생님별로 분류
-    var order = [], map2 = {};
+    var order=[], map2={};
     _mncStudents.forEach(function(s){
-      var tid = s.teacher_id||'none';
-      if(!map2[tid]){ map2[tid]=[]; order.push(tid); }
+      var tid=s.teacher_id||'none';
+      if(!map2[tid]){map2[tid]=[];order.push(tid);}
       map2[tid].push(s);
     });
     order.forEach(function(tid){
-      var t = _mncTeachers.find(function(t){ return t.id===tid; });
-      groups.push({teacher: t||null, students: map2[tid]});
+      var t=_mncTeachers.find(function(t){return t.id===tid;});
+      groups.push({teacher:t||null, students:map2[tid]});
     });
-    if(!groups.length){ alert('학생이 없습니다'); return; }
+    if(!groups.length){alert('학생이 없습니다');return;}
   }
 
-  // ── Canvas 설정 ──
-  var PAD    = 28;
-  var RH     = 48;    // 학생 행 높이
-  var GH     = 42;    // 선생님 그룹 헤더 높이 (전체 모드)
-  var NAME_W = 90;    // 이름 컬럼
-  var IDX_W  = 36;    // 번호 컬럼 (전체 모드)
-  var DATE_W = 82;    // 날짜 컬럼
-  var AVG_W  = 72;    // 평균 컬럼
-  var TITLE_H = mode==='teacher' ? 108 : 100;
-  var FOOT_H  = 32;
+  // ── 크기 설정 (가로 넓게, 행 높이 크게) ──
+  var PAD    = 32;
+  var RH     = 56;    // 학생 행 높이 (키움)
+  var GH     = 46;    // 그룹 헤더 높이
+  var NAME_W = 110;   // 이름 컬럼
+  var IDX_W  = 40;    // 번호 컬럼
+  var DATE_W = 110;   // 날짜 컬럼 (넓게)
+  var AVG_W  = 90;    // 평균 컬럼
+  var TITLE_H = mode==='teacher' ? 110 : 100;
+  var FOOT_H  = 36;
 
   var totalRows = 0;
   groups.forEach(function(g){ totalRows += g.students.length; });
@@ -3992,86 +4016,77 @@ async function mncGenerateSummaryImage(mode){
     if(stroke!==false){ctx.strokeStyle=stroke||'#e2e8f0';ctx.lineWidth=lw||0.7;ctx.strokeRect(x,y,w,h);}
   }
   function txt(t,x,y,align,color,font){
-    ctx.fillStyle=color||'#1e293b';ctx.font=font||'12px sans-serif';
-    ctx.textAlign=align||'center';ctx.fillText(t,x,y);
+    ctx.fillStyle=color||'#1e293b';ctx.font=font||'13px sans-serif';
+    ctx.textAlign=align||'center';ctx.fillText(String(t),x,y);
   }
 
-  // ── 타이틀 배경 ──
-  // 그라디언트
+  // ── 타이틀 ──
   var grad = ctx.createLinearGradient(0,0,totalW,TITLE_H);
   grad.addColorStop(0,'#1a1a2e'); grad.addColorStop(1,'#0f3460');
   ctx.fillStyle=grad; ctx.fillRect(0,0,totalW,TITLE_H);
+  ctx.fillStyle='rgba(255,255,255,0.05)'; ctx.fillRect(0,0,totalW,32);
+  txt('BESTIAN 수학학원', totalW/2, 21, 'center', 'rgba(255,255,255,0.5)', '11px sans-serif');
 
-  // 베스티안 로고 영역 (상단 좌측 띠)
-  ctx.fillStyle='rgba(255,255,255,0.05)';
-  ctx.fillRect(0,0,totalW,32);
-  txt('BESTIAN 수학학원', totalW/2, 21, 'center', 'rgba(255,255,255,0.5)', '10px sans-serif');
+  var rangeStr = uFmt(startD)+'('+uDay(startD)+') ~ '+uFmt(endD)+'('+uDay(endD)+')';
+  var checkLabel = selectedResult ? uFmt(srUTC||checkD)+'('+uDay(srUTC||checkD)+')' : uFmt(checkD)+'('+uDay(checkD)+')';
 
   if(mode==='teacher'){
-    var tf2 = document.getElementById('mnc-teacher-filter')?.value||'';
-    var tObj2 = _mncTeachers.find(function(t){return t.id===tf2;});
-    var tName = tObj2 ? tObj2.name+'T 반' : '전체';
-    // 반 이름 크게
-    txt(tName, totalW/2, 58, 'center', '#fbbf24', 'bold 20px sans-serif');
-    txt('중등 일일N제 주간 학습 결과', totalW/2, 80, 'center', '#f8fafc', 'bold 14px sans-serif');
-    var rangeStr = uFmt(startD)+'('+uDay(startD)+') ~ '+uFmt(endD)+'('+uDay(endD)+')';
-    txt(rangeStr+'  |  기준일 '+uFmt(checkD)+'('+uDay(checkD)+')',
-      totalW/2, 97, 'center', '#94a3b8', '11px sans-serif');
+    var tf2=document.getElementById('mnc-teacher-filter')?.value||'';
+    var tObj2=_mncTeachers.find(function(t){return t.id===tf2;});
+    var tName=tObj2?tObj2.name+'T 반':'전체';
+    txt(tName, totalW/2, 58, 'center', '#fbbf24', 'bold 22px sans-serif');
+    txt('중등 일일N제 주간 학습 결과', totalW/2, 82, 'center', '#f8fafc', 'bold 15px sans-serif');
+    txt(rangeStr+'  |  기준일 '+checkLabel, totalW/2, 100, 'center', '#94a3b8', '12px sans-serif');
   } else {
-    txt('중등 일일N제 주간 학습 결과 (전체)', totalW/2, 54, 'center', '#f8fafc', 'bold 16px sans-serif');
-    var rangeStr2 = uFmt(startD)+'('+uDay(startD)+') ~ '+uFmt(endD)+'('+uDay(endD)+')';
-    txt(rangeStr2+'  |  기준일 '+uFmt(checkD)+'('+uDay(checkD)+')',
-      totalW/2, 72, 'center', '#94a3b8', '11px sans-serif');
-    txt('※ 진행 전 날짜는 회색 빈칸으로 표시됩니다', totalW/2, 90, 'center', '#64748b', '10px sans-serif');
+    txt('중등 일일N제 주간 학습 결과 (전체)', totalW/2, 50, 'center', '#f8fafc', 'bold 17px sans-serif');
+    txt(rangeStr+'  |  기준일 '+checkLabel, totalW/2, 72, 'center', '#94a3b8', '12px sans-serif');
+    txt('※ 진행 전 날짜는 회색으로 표시', totalW/2, 90, 'center', '#64748b', '11px sans-serif');
   }
 
-  // ── 테이블 헤더 ──
+  // ── 컬럼 위치 ──
   var tableY = PAD + TITLE_H;
   var nameX  = PAD;
   var dateX0 = PAD + nameColW;
   var avgX   = dateX0 + DATE_W*5;
+  // yesterday 문자열 (비교용)
+  var yd = range.yesterday;
+  var yesterdayStr = yd.getUTCFullYear()+'-'
+    +String(yd.getUTCMonth()+1).padStart(2,'0')+'-'
+    +String(yd.getUTCDate()).padStart(2,'0');
 
-  // 헤더 배경
+  // ── 테이블 헤더 ──
   drawRect(PAD, tableY, totalW-PAD*2, RH, '#1e293b', false);
-
-  // 이름(+번호) 헤더
   if(mode==='all'){
     drawRect(nameX, tableY, IDX_W, RH, '#0f172a', '#334155');
-    txt('#', nameX+IDX_W/2, tableY+RH/2+5, 'center', '#94a3b8', 'bold 11px sans-serif');
+    txt('#', nameX+IDX_W/2, tableY+RH/2+6, 'center', '#94a3b8', 'bold 12px sans-serif');
     drawRect(nameX+IDX_W, tableY, NAME_W, RH, '#0f172a', '#334155');
-    txt('학생', nameX+IDX_W+NAME_W/2, tableY+RH/2+5, 'center', '#e2e8f0', 'bold 12px sans-serif');
+    txt('학생', nameX+IDX_W+NAME_W/2, tableY+RH/2+6, 'center', '#e2e8f0', 'bold 14px sans-serif');
   } else {
     drawRect(nameX, tableY, NAME_W, RH, '#0f172a', '#334155');
-    txt('학생', nameX+NAME_W/2, tableY+RH/2+5, 'center', '#e2e8f0', 'bold 12px sans-serif');
+    txt('학생', nameX+NAME_W/2, tableY+RH/2+6, 'center', '#e2e8f0', 'bold 14px sans-serif');
   }
-
-  // 날짜 헤더
   dates.forEach(function(d,i){
-    // 날짜 문자열 직접 파싱 (타임존 무관)
-    var dp = d.split('-');
-    var dd = new Date(Date.UTC(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2])));
+    var dp=d.split('-');
+    var dd=new Date(Date.UTC(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2])));
     var isPast = d <= yesterdayStr;
     var hBg = isPast ? '#1e3a5f' : '#1c2a3a';
     drawRect(dateX0+DATE_W*i, tableY, DATE_W, RH, hBg, '#334155');
     txt((dd.getUTCMonth()+1)+'/'+(dd.getUTCDate()),
       dateX0+DATE_W*i+DATE_W/2, tableY+RH/2,
-      'center', isPast?'#e2e8f0':'#64748b', 'bold 12px sans-serif');
+      'center', isPast?'#e2e8f0':'#64748b', 'bold 14px sans-serif');
     txt('('+DAYS7[dd.getUTCDay()]+')',
-      dateX0+DATE_W*i+DATE_W/2, tableY+RH/2+14,
-      'center', isPast?'#93c5fd':'#475569', '10px sans-serif');
+      dateX0+DATE_W*i+DATE_W/2, tableY+RH/2+16,
+      'center', isPast?'#93c5fd':'#475569', '12px sans-serif');
   });
-
-  // 평균 헤더
   drawRect(avgX, tableY, AVG_W, RH, '#0f3460', '#334155');
-  txt('주간', avgX+AVG_W/2, tableY+RH/2, 'center', '#93c5fd', 'bold 11px sans-serif');
-  txt('평균', avgX+AVG_W/2, tableY+RH/2+13, 'center', '#93c5fd', '10px sans-serif');
+  txt('평균', avgX+AVG_W/2, tableY+RH/2+6, 'center', '#93c5fd', 'bold 14px sans-serif');
 
   // 헤더 아래 강조선
   ctx.strokeStyle='#3b82f6'; ctx.lineWidth=2;
   ctx.beginPath(); ctx.moveTo(PAD,tableY+RH); ctx.lineTo(totalW-PAD,tableY+RH); ctx.stroke();
 
   // ── 그룹 색상 ──
-  var GC = [
+  var GC=[
     {bg:'#eff6ff',stripe:'#dbeafe',hBg:'#1d4ed8',hText:'#fff'},
     {bg:'#f0fdf4',stripe:'#dcfce7',hBg:'#15803d',hText:'#fff'},
     {bg:'#fffbeb',stripe:'#fef3c7',hBg:'#b45309',hText:'#fff'},
@@ -4081,97 +4096,79 @@ async function mncGenerateSummaryImage(mode){
   ];
 
   var curY = tableY + RH;
-  var globalIdx = 1; // 전체 학생 번호
+  var globalIdx = 1;
 
   groups.forEach(function(g,gi){
-    var gc = GC[gi%GC.length];
-
-    // 전체 모드: 선생님 그룹 헤더
+    var gc=GC[gi%GC.length];
     if(mode==='all'){
-      var tName3 = g.teacher ? g.teacher.name+'T 반' : '담당 미지정';
+      var tName3=g.teacher?g.teacher.name+'T 반':'담당 미지정';
       drawRect(PAD, curY, totalW-PAD*2, GH, gc.hBg, false);
-      // 좌측 세로 강조
-      ctx.fillStyle = 'rgba(255,255,255,0.3)';
-      ctx.fillRect(PAD, curY, 4, GH);
-      txt('  '+tName3+' · '+g.students.length+'명', PAD+14, curY+GH/2+5,
-        'left', gc.hText, 'bold 13px sans-serif');
+      ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.fillRect(PAD,curY,4,GH);
+      txt('  '+tName3+' · '+g.students.length+'명', PAD+14, curY+GH/2+6,
+        'left', gc.hText, 'bold 14px sans-serif');
       curY += GH;
     }
 
     g.students.forEach(function(s,ri){
-      var rowBg = ri%2===0 ? gc.bg : gc.stripe;
-
-      // 번호 + 이름
+      var rowBg=ri%2===0?gc.bg:gc.stripe;
       if(mode==='all'){
         drawRect(nameX, curY, IDX_W, RH, rowBg, '#d1d5db');
-        txt(globalIdx, nameX+IDX_W/2, curY+RH/2+5, 'center', '#94a3b8', '11px sans-serif');
+        txt(globalIdx, nameX+IDX_W/2, curY+RH/2+6, 'center', '#94a3b8', '12px sans-serif');
         drawRect(nameX+IDX_W, curY, NAME_W, RH, rowBg, '#d1d5db');
-        txt(s.name, nameX+IDX_W+8, curY+RH/2+5, 'left', '#0f172a', 'bold 12px sans-serif');
+        txt(s.name, nameX+IDX_W+10, curY+RH/2+6, 'left', '#0f172a', 'bold 14px sans-serif');
         globalIdx++;
       } else {
         drawRect(nameX, curY, NAME_W, RH, rowBg, '#d1d5db');
-        txt(ri+1+'. '+s.name, nameX+8, curY+RH/2+5, 'left', '#0f172a', 'bold 12px sans-serif');
+        txt(ri+1+'. '+s.name, nameX+10, curY+RH/2+6, 'left', '#0f172a', 'bold 14px sans-serif');
       }
 
-      var scores = [];
+      var scores=[];
       dates.forEach(function(d,di){
         var isPast = d <= yesterdayStr;
-        var c = checkMap[s.id]?.[d];
-        var cellX = dateX0+DATE_W*di;
-        var cellBg, cellTxt='', cellColor='#94a3b8', bold=false;
-
+        var c=checkMap[s.id]?.[d];
+        var cellX=dateX0+DATE_W*di;
+        var cellBg,cellTxt='',cellColor='#94a3b8',bold=false;
         if(!isPast){
-          cellBg = ri%2===0 ? '#f0f4f8' : '#e8edf5';
+          cellBg=ri%2===0?'#f0f4f8':'#e8edf5';
         } else if(!c){
-          cellBg = rowBg; cellTxt='-'; cellColor='#cbd5e1';
+          cellBg=rowBg; cellTxt='-'; cellColor='#cbd5e1';
         } else if(c.is_completed===false){
           cellBg='#fef2f2'; cellTxt='미학습'; cellColor='#dc2626'; bold=true;
         } else if(c.is_completed===true){
           var sc=c.score;
           if(sc!==null&&sc!==undefined){
             cellTxt=sc+'점'; bold=true; scores.push(sc);
-            cellBg = sc>=70?'#f0fdf4':'#fffbeb';
-            cellColor = sc>=70?'#15803d':'#d97706';
+            cellBg=sc>=70?'#f0fdf4':'#fffbeb';
+            cellColor=sc>=70?'#15803d':'#d97706';
           } else {
             cellBg='#f0fdf4'; cellTxt='완료'; cellColor='#15803d'; bold=true;
           }
-        } else {
-          cellBg=rowBg;
-        }
-
+        } else { cellBg=rowBg; }
         drawRect(cellX, curY, DATE_W, RH, cellBg, '#d1d5db');
-        if(cellTxt) txt(cellTxt, cellX+DATE_W/2, curY+RH/2+5, 'center', cellColor,
-          (bold?'bold ':'')+' 12px sans-serif');
+        if(cellTxt) txt(cellTxt, cellX+DATE_W/2, curY+RH/2+6, 'center', cellColor,
+          (bold?'bold ':'')+' 14px sans-serif');
       });
 
-      // 평균
+      // 평균 (색상/게이지 없이 단순하게)
+      drawRect(avgX, curY, AVG_W, RH, rowBg, '#d1d5db');
       if(scores.length>0){
         var avg=Math.round(scores.reduce(function(a,b){return a+b;},0)/scores.length);
-        drawRect(avgX, curY, AVG_W, RH, avg>=70?'#dcfce7':'#fef9c3', '#d1d5db');
-        // 색 바
-        ctx.fillStyle = avg>=70?'#15803d':'#92400e';
-        ctx.fillRect(avgX, curY, Math.round(AVG_W*(Math.min(avg,100)/100)), 4);
-        txt(avg+'점', avgX+AVG_W/2, curY+RH/2+8, 'center',
-          avg>=70?'#15803d':'#92400e', 'bold 13px sans-serif');
+        txt(avg+'점', avgX+AVG_W/2, curY+RH/2+6, 'center', '#334155', 'bold 15px sans-serif');
       } else {
-        drawRect(avgX, curY, AVG_W, RH, rowBg, '#d1d5db');
-        txt('-', avgX+AVG_W/2, curY+RH/2+5, 'center', '#cbd5e1', '11px sans-serif');
+        txt('-', avgX+AVG_W/2, curY+RH/2+6, 'center', '#cbd5e1', '13px sans-serif');
       }
       curY += RH;
     });
 
-    // 그룹 사이 구분선
-    if(mode==='all' && gi<groups.length-1){
-      ctx.strokeStyle='#64748b'; ctx.lineWidth=1.5;
+    if(mode==='all'&&gi<groups.length-1){
+      ctx.strokeStyle='#334155'; ctx.lineWidth=2;
       ctx.beginPath(); ctx.moveTo(PAD,curY); ctx.lineTo(totalW-PAD,curY); ctx.stroke();
     }
   });
 
-  // 외곽 테두리
+  // 외곽선
   ctx.strokeStyle='#334155'; ctx.lineWidth=2;
   ctx.strokeRect(PAD, tableY, totalW-PAD*2, curY-tableY);
-
-  // 세로 구분선
   ctx.strokeStyle='#475569'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(dateX0,tableY); ctx.lineTo(dateX0,curY); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(avgX,tableY); ctx.lineTo(avgX,curY); ctx.stroke();
@@ -4181,17 +4178,13 @@ async function mncGenerateSummaryImage(mode){
 
   // 푸터
   ctx.fillStyle='#f8fafc'; ctx.fillRect(0,curY+PAD,totalW,FOOT_H);
-  txt('© BESTIAN 수학학원  |  '+_mncDate+' 기준', totalW/2, curY+PAD+FOOT_H/2+4,
-    'center', '#94a3b8', '10px sans-serif');
+  txt('© BESTIAN 수학학원  |  기준일 '+checkLabel, totalW/2, curY+PAD+FOOT_H/2+5,
+    'center', '#94a3b8', '11px sans-serif');
 
-  // ── 출력 ──
   var imgDataUrl = canvas.toDataURL('image/png');
   var preview = document.getElementById('mnc-summary-preview');
   if(!preview) return;
-  var fname = mode==='teacher'
-    ? '일일N제_반별_'+_mncDate+'.png'
-    : '일일N제_전체_'+_mncDate+'.png';
-
+  var fname = mode==='teacher'?'일일N제_반별_'+selectedResult+'.png':'일일N제_전체_'+selectedResult+'.png';
   preview.innerHTML =
     '<div style="overflow-x:auto;margin-bottom:10px">'
     +'<img src="'+imgDataUrl+'" style="max-width:100%;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.12);border:1px solid #e5e7eb">'
@@ -4200,7 +4193,6 @@ async function mncGenerateSummaryImage(mode){
     +'<a href="'+imgDataUrl+'" download="'+fname+'" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none">⬇️ 다운로드</a>'
     +'<button onclick="mncShareImage()" class="btn" style="flex:1;background:#f0f7ff;border-color:#bfdbfe;color:#1d4ed8">📋 클립보드 복사</button>'
     +'</div>';
-
   document.getElementById('mnc-summary-section').style.display='block';
   window._mncLastCanvas = canvas;
 }
