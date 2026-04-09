@@ -3533,6 +3533,8 @@ function mncRenderTable(){
     +'.mnc-tbl tr:hover td{background:#f8fafc}'
     +'.mnc-score-inp{width:60px;padding:5px 4px;border:1.5px solid #d1d5db;border-radius:6px;font-size:14px;font-weight:700;text-align:center;background:#fff;-webkit-appearance:none;-moz-appearance:textfield;appearance:textfield;outline:none}'
     +'.mnc-score-inp:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,0.15)}'
+    +'.mnc-score-inp::-webkit-outer-spin-button,.mnc-score-inp::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}'
+    +'.mnc-undone-btn:focus{outline:2px solid #f87171;outline-offset:2px}'
     +'</style>';
 
   var globalIdx = 1;
@@ -3579,6 +3581,7 @@ function mncRenderTable(){
         // 미학습 버튼
         +'<td style="text-align:center">'
         +'<button id="mnc-btn-undone-'+s.id+'" onclick="mncSetStatus(\''+s.id+'\',\'undone\')" '
+        +'onkeydown="mncBtnKeyDown(event,\''+s.id+'\',\'undone\')" tabindex="0" class="mnc-undone-btn" '
         +'style="width:100%;padding:5px 6px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid;'
         +(status==='undone'?'background:#FEE2E2;border-color:#FCA5A5;color:#B91C1C':'background:#f9fafb;border-color:#e5e7eb;color:#9ca3af')
         +'">❌</button>'
@@ -3586,6 +3589,7 @@ function mncRenderTable(){
         // 완료 버튼
         +'<td style="text-align:center">'
         +'<button id="mnc-btn-done-'+s.id+'" onclick="mncSetStatus(\''+s.id+'\',\'done\')" '
+        +'onkeydown="mncBtnKeyDown(event,\''+s.id+'\',\'done\')" tabindex="0" '
         +'style="width:100%;padding:5px 6px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid;'
         +(status==='done'?'background:#DCFCE7;border-color:#86EFAC;color:#15803D':'background:#f9fafb;border-color:#e5e7eb;color:#9ca3af')
         +'">✅</button>'
@@ -3640,18 +3644,32 @@ function mncRenderTable(){
   }
 }
 
-// 점수 키보드 단축키
-// Enter: 완료처리 + 다음 학생 포커스
-// X or x: 미학습 처리 + 다음 학생 포커스
+// 점수 입력 키보드
+// Enter → 완료 처리 + 다음 학생 점수 칸으로
+// Tab  → 옆 ❌ 버튼으로 이동 (브라우저 기본 Tab 동작)
 function mncScoreKeyDown(event, studentId){
   if(event.key === 'Enter'){
     event.preventDefault();
-    mncSetStatus(studentId, 'done');
+    var scoreEl = document.getElementById('mnc-score-'+studentId);
+    var val = parseInt(scoreEl?.value);
+    if(!isNaN(val) && val > 0){
+      mncSetStatus(studentId, 'done');
+    }
     mncFocusNextScore(studentId);
-  } else if(event.key === 'x' || event.key === 'X'){
+  }
+  // Tab은 브라우저 기본 동작 유지 → ❌ 버튼으로 포커스 이동
+}
+
+// 미학습/완료 버튼 키보드
+// Enter → 해당 상태 처리 + 다음 학생 점수 칸으로
+function mncBtnKeyDown(event, studentId, status){
+  if(event.key === 'Enter' || event.key === ' '){
     event.preventDefault();
-    document.getElementById('mnc-score-'+studentId).value = '';
-    mncSetStatus(studentId, 'undone');
+    if(status === 'undone'){
+      var scoreEl = document.getElementById('mnc-score-'+studentId);
+      if(scoreEl) scoreEl.value = '';
+    }
+    mncSetStatus(studentId, status);
     mncFocusNextScore(studentId);
   }
 }
@@ -3713,8 +3731,9 @@ function mncUpdateMent(studentId){
   var copyBtn  = document.getElementById('mnc-btn-copy-'+studentId);
 
   if(mentEl) mentEl.textContent = ment;
-  // 멘트가 있으면 행 자동으로 보여줌
-  if(mentRow) mentRow.style.display = ment ? '' : 'none';
+  // 멘트 행은 자동으로 열지 않음 - 복사 버튼으로만 접근
+  // (이미 열려있으면 내용만 업데이트)
+  if(mentRow && mentRow.style.display !== 'none') mentRow.style.display = '';
   if(copyBtn){
     var BASE2='padding:5px 8px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1.5px solid;';
     copyBtn.style.cssText = BASE2 + (ment
@@ -3850,11 +3869,38 @@ function mncToggleMent(studentId){
 }
 
 function mncCopyMent(studentId){
+  var mentRow = document.getElementById('mnc-ment-row-'+studentId);
   var el = document.getElementById('mnc-ment-'+studentId);
+
+  // 멘트가 없으면 mncUpdateMent로 생성 시도
+  if(!el||!el.textContent.trim()){
+    mncUpdateMent(studentId);
+  }
+
+  // 저장된 DB 데이터로 멘트 생성 (el이 비어있을 경우)
+  if(!el||!el.textContent.trim()){
+    var saved = _mncData[studentId];
+    if(!saved) return;
+    var s = _mncStudents.find(function(s){ return s.id===studentId; });
+    if(!s) return;
+    var status = saved.is_completed===true?'done':saved.is_completed===false?'undone':'';
+    if(!status) return;
+    var ment = mncGenerateMent(s.name, _mncDate, status, saved.score||0, studentId);
+    if(el) el.textContent = ment;
+  }
+
   if(!el||!el.textContent.trim()) return;
+
+  // 멘트 행 보여주기
+  if(mentRow) mentRow.style.display = '';
+
   navigator.clipboard.writeText(el.textContent).then(function(){
     var btn = document.getElementById('mnc-btn-copy-'+studentId);
-    if(btn){ btn.textContent='✅'; setTimeout(function(){ btn.textContent='📋'; },1500); }
+    if(btn){
+      var orig = btn.textContent;
+      btn.textContent='✅'; btn.style.color='#15803d';
+      setTimeout(function(){ btn.textContent=orig; btn.style.color=''; },1500);
+    }
   });
 }
 
