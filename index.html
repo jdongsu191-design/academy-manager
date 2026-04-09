@@ -941,16 +941,18 @@
         <!-- 결과 요약 이미지 -->
         <div id="mnc-summary-section" style="display:none;margin-top:16px">
           <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:8px">📊 결과 요약 이미지</div>
-          <div style="font-size:12px;color:#6b7280;margin-bottom:10px" id="mnc-summary-range-label"></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button onclick="mncGenerateSummaryImage('teacher')" class="btn" style="flex:1;min-width:140px;background:#f0f7ff;border-color:#bfdbfe;color:#1d4ed8;font-weight:700">
-              👨‍🏫 반별 요약 이미지
-            </button>
-            <button onclick="mncGenerateSummaryImage('all')" class="btn" style="flex:1;min-width:140px;background:#f0fdf4;border-color:#86efac;color:#15803d;font-weight:700">
-              🏫 전체 요약 이미지
+          <div style="font-size:12px;color:#6b7280;margin-bottom:8px" id="mnc-summary-range-label"></div>
+          <!-- 이미지용 별도 선생님 필터 -->
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <span style="font-size:12px;font-weight:600;color:#4b5563;white-space:nowrap">이미지 대상</span>
+            <select id="mnc-img-teacher-filter" style="flex:1;padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;background:#fff;cursor:pointer;outline:none;color:#1a1a2e">
+              <option value="">🏫 전체</option>
+            </select>
+            <button onclick="mncGenerateSummaryImage()" class="btn btn-primary" style="white-space:nowrap;font-weight:700">
+              📊 이미지 생성
             </button>
           </div>
-          <div id="mnc-summary-preview" style="margin-top:12px"></div>
+          <div id="mnc-summary-preview" style="margin-top:8px"></div>
         </div>
       </div>
 
@@ -3446,8 +3448,13 @@ async function mncLoadTeachers(){
   _mncTeachers = data;
   var sel = document.getElementById('mnc-teacher-filter');
   if(!sel) return;
-  sel.innerHTML = '<option value="">전체 선생님</option>'
+  var options = '<option value="">전체 선생님</option>'
     + data.map(t => '<option value="'+t.id+'">'+t.name+'</option>').join('');
+  sel.innerHTML = options;
+  // 이미지용 필터도 같이 채우기
+  var imgSel = document.getElementById('mnc-img-teacher-filter');
+  if(imgSel) imgSel.innerHTML = '<option value="">🏫 전체</option>'
+    + data.map(t => '<option value="'+t.id+'">👨‍🏫 '+t.name+'T 반</option>').join('');
 }
 
 async function mncLoadStudents(){
@@ -4041,11 +4048,16 @@ async function mncLoadSummaryData(){
   return {range, checks};
 }
 
-async function mncGenerateSummaryImage(mode){
+async function mncGenerateSummaryImage(){
   var summaryData = await mncLoadSummaryData();
   if(!summaryData) return;
   var {range, checks} = summaryData;
   var dates = range.dates; // 일~목 5일
+
+  // 이미지용 별도 필터에서 선생님 선택값 읽기
+  var imgTeacherFilter = document.getElementById('mnc-img-teacher-filter')?.value || '';
+  // 전체 선택이면 'all' 모드, 특정 선생님 선택이면 'teacher' 모드
+  var mode = imgTeacherFilter ? 'teacher' : 'all';
 
   var checkMap = {};
   checks.forEach(function(c){
@@ -4065,13 +4077,12 @@ async function mncGenerateSummaryImage(mode){
   function uFmt(d){ return (d.getUTCMonth()+1)+'/'+(d.getUTCDate()); }
   function uDay(d){ return DAYS7[d.getUTCDay()]; }
 
-  // 선생님별 그룹
+  // 선생님별 그룹 (이미지 필터 기준)
   var groups = [];
   if(mode === 'teacher'){
-    var tf = document.getElementById('mnc-teacher-filter')?.value || '';
-    var tObj = _mncTeachers.find(function(t){ return t.id===tf; });
-    var stus = tf ? _mncStudents.filter(function(s){ return s.teacher_id===tf; }) : _mncStudents;
-    if(!stus.length){ alert('학생이 없습니다. 선생님을 먼저 선택하세요'); return; }
+    var tObj = _mncTeachers.find(function(t){ return t.id===imgTeacherFilter; });
+    var stus = _mncStudents.filter(function(s){ return s.teacher_id===imgTeacherFilter; });
+    if(!stus.length){ alert('해당 선생님의 중등 학생이 없습니다'); return; }
     groups.push({teacher: tObj||null, students: stus});
   } else {
     var order=[], map2={};
@@ -4132,7 +4143,7 @@ async function mncGenerateSummaryImage(mode){
   var checkLabel = selectedResult ? uFmt(srUTC||checkD)+'('+uDay(srUTC||checkD)+')' : uFmt(checkD)+'('+uDay(checkD)+')';
 
   if(mode==='teacher'){
-    var tf2=document.getElementById('mnc-teacher-filter')?.value||'';
+    var tf2=imgTeacherFilter;
     var tObj2=_mncTeachers.find(function(t){return t.id===tf2;});
     var tName=tObj2?tObj2.name+'T 반':'전체';
     txt(tName, totalW/2, 58, 'center', '#fbbf24', 'bold 22px sans-serif');
@@ -4285,7 +4296,10 @@ async function mncGenerateSummaryImage(mode){
   var imgDataUrl = canvas.toDataURL('image/png');
   var preview = document.getElementById('mnc-summary-preview');
   if(!preview) return;
-  var fname = mode==='teacher'?'일일N제_반별_'+selectedResult+'.png':'일일N제_전체_'+selectedResult+'.png';
+  var imgTobj = _mncTeachers.find(function(t){return t.id===imgTeacherFilter;});
+  var fname = imgTeacherFilter
+    ? '일일N제_'+(imgTobj?imgTobj.name:'반별')+'T_'+selectedResult+'.png'
+    : '일일N제_전체_'+selectedResult+'.png';
   preview.innerHTML =
     '<div style="overflow-x:auto;margin-bottom:10px">'
     +'<img src="'+imgDataUrl+'" style="max-width:100%;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.12);border:1px solid #e5e7eb">'
