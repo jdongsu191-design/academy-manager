@@ -1641,6 +1641,19 @@
         <label>학년</label>
         <input id="edit-student-grade" placeholder="예: 고3">
       </div>
+      <div class="form-group" style="margin:0;grid-column:1/-1">
+        <label>학교 구분 <span style="color:#dc2626;font-size:11px">★ 중등 일일N제 체크에 반영</span></label>
+        <div style="display:flex;gap:8px">
+          <label style="display:flex;align-items:center;gap:6px;padding:8px 16px;border:1.5px solid #d1d5db;border-radius:8px;cursor:pointer;flex:1;font-size:13px;font-weight:600" id="edit-level-high-label">
+            <input type="radio" name="edit-school-level" id="edit-level-high" value="high" style="cursor:pointer">
+            🎓 고등
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;padding:8px 16px;border:1.5px solid #d1d5db;border-radius:8px;cursor:pointer;flex:1;font-size:13px;font-weight:600" id="edit-level-middle-label">
+            <input type="radio" name="edit-school-level" id="edit-level-middle" value="middle" style="cursor:pointer">
+            📚 중등
+          </label>
+        </div>
+      </div>
       <div class="form-group" style="margin:0">
         <label>연락처</label>
         <input id="edit-student-phone" placeholder="연락처" type="tel">
@@ -2407,6 +2420,16 @@ function openEditStudentModal(id){
   classes.forEach(c=>{
     sel.innerHTML += `<option value="${c.id}" ${c.id===s.class_id?'selected':''}>${c.name}</option>`;
   });
+  // 중등/고등 선택 설정
+  var levelVal = s.school_level || 'high';
+  document.getElementById('edit-level-high').checked   = (levelVal === 'high');
+  document.getElementById('edit-level-middle').checked = (levelVal === 'middle');
+  // 선택된 쪽 테두리 강조
+  document.getElementById('edit-level-high-label').style.borderColor   = levelVal==='high'   ? '#2563eb' : '#d1d5db';
+  document.getElementById('edit-level-high-label').style.background    = levelVal==='high'   ? '#eff6ff' : '';
+  document.getElementById('edit-level-middle-label').style.borderColor = levelVal==='middle' ? '#dc2626' : '#d1d5db';
+  document.getElementById('edit-level-middle-label').style.background  = levelVal==='middle' ? '#fef2f2' : '';
+
   // 상태 안내
   const statusRow = document.getElementById('edit-student-status-row');
   if(s.status==='inactive'){
@@ -2449,10 +2472,12 @@ async function saveEditStudent(){
 
   const btn = document.querySelector('#modal-editStudent .btn-primary');
   btn.textContent='저장 중...';btn.disabled=true;
+  const schoolLevel = document.querySelector('input[name="edit-school-level"]:checked')?.value || 'high';
   const{error} = await db.from('users').update({
     name, class_id:classId||null,
     school:school||null, grade:grade||null, phone:phone||null,
-    enrolled_at, withdrawn_at, status
+    enrolled_at, withdrawn_at, status,
+    school_level: schoolLevel
   }).eq('id',id);
   btn.textContent='저장';btn.disabled=false;
   if(error){alert('오류: '+error.message);return;}
@@ -3312,14 +3337,13 @@ function toggleAdminNajeMenu(){
 var _origSwitchAdminTab = typeof switchAdminTab === 'function' ? switchAdminTab : null;
 
 async function initMiddleNajeCheck(){
-  // 오늘 날짜 기본 설정 (어제 = 확인할 결과 날짜)
-  var yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  // 일~목만 유효 (금~토는 목요일로)
-  var day = yesterday.getDay(); // 0=일,1=월,...,6=토
-  if(day === 5) yesterday.setDate(yesterday.getDate() - 1); // 금→목
-  if(day === 6) yesterday.setDate(yesterday.getDate() - 2); // 토→목
-  _mncDate = yesterday.toISOString().slice(0,10);
+  // 입력 날짜 = 오늘 날짜 (UTC 기준, 타임존 무관)
+  var now = new Date();
+  var todayUTC = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  var todayStr = todayUTC.getUTCFullYear()+'-'
+    +String(todayUTC.getUTCMonth()+1).padStart(2,'0')+'-'
+    +String(todayUTC.getUTCDate()).padStart(2,'0');
+  _mncDate = todayStr;
 
   var dateEl = document.getElementById('mnc-date');
   if(dateEl) dateEl.value = _mncDate;
@@ -3356,9 +3380,9 @@ async function mncLoadStudents(){
   var wrap = document.getElementById('mnc-table-wrap');
   wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
 
-  // 재원 중인 학생 조회
-  var query = db.from('users').select('id,name,school,grade,teacher_id')
-    .eq('role','student').eq('status','active').order('name');
+  // 재원 중인 중등 학생만 조회 (school_level='middle')
+  var query = db.from('users').select('id,name,school,grade,teacher_id,school_level')
+    .eq('role','student').eq('status','active').eq('school_level','middle').order('name');
   if(teacherFilter) query = query.eq('teacher_id', teacherFilter);
   var {data: students, error} = await query;
   if(error){ wrap.innerHTML='<p style="color:red">오류: '+error.message+'</p>'; return; }
