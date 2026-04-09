@@ -893,24 +893,30 @@
 
       <!-- 중등 일일N제 체크 패널 -->
       <div class="panel" id="panel-admin-middle-naje">
+        <!-- 타이틀 -->
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
           <div style="font-size:20px;font-weight:700;color:#1a1a2e">✅ 중등 일일N제 체크</div>
           <div id="mnc-today-label" style="font-size:12px;color:#6b7280;font-weight:600"></div>
         </div>
-        <div style="font-size:13px;color:#6b7280;margin-bottom:14px">담당 선생님별 학생의 일일N제 학습 결과를 입력합니다</div>
+
+        <!-- 현재 입력 중인 요일 안내 배너 -->
+        <div id="mnc-checking-banner" style="display:none;padding:10px 14px;border-radius:10px;margin-bottom:12px;background:#fef9ec;border:1.5px solid #fde68a">
+          <div style="font-size:12px;color:#92400e;font-weight:600" id="mnc-checking-label"></div>
+        </div>
 
         <!-- 필터 영역 -->
         <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-          <!-- 날짜 선택 -->
           <div style="display:flex;align-items:center;gap:6px;background:#f5f6fa;padding:6px 12px;border-radius:10px">
             <span style="font-size:13px;color:#6b7280;font-weight:600">📅 결과 날짜</span>
             <input type="date" id="mnc-date" style="border:none;background:transparent;font-size:13px;font-weight:700;color:#1a1a2e;cursor:pointer;outline:none" onchange="mncLoadStudents()">
           </div>
-          <!-- 선생님 필터 -->
           <select id="mnc-teacher-filter" onchange="mncLoadStudents()" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:13px;font-weight:600;background:#fff;cursor:pointer;outline:none;color:#1a1a2e">
             <option value="">전체 선생님</option>
           </select>
-          <!-- 통계 뱃지 -->
+          <!-- 선생님별 초기화 버튼 -->
+          <button onclick="mncResetTeacher()" class="btn btn-sm" style="background:#fef2f2;border-color:#fca5a5;color:#b91c1c;font-weight:600">
+            🗑️ 선택 반 초기화
+          </button>
           <div id="mnc-stats" style="margin-left:auto;display:flex;gap:6px"></div>
         </div>
 
@@ -944,7 +950,6 @@
               🏫 전체 요약 이미지
             </button>
           </div>
-          <!-- 이미지 미리보기 -->
           <div id="mnc-summary-preview" style="margin-top:12px"></div>
         </div>
       </div>
@@ -3321,11 +3326,12 @@ async function initMiddleNajeCheck(){
 
   // 오늘 날짜 라벨
   var todayEl = document.getElementById('mnc-today-label');
+  var now = new Date();
+  var days = ['일','월','화','수','목','금','토'];
   if(todayEl){
-    var now = new Date();
-    var days = ['일','월','화','수','목','금','토'];
     todayEl.textContent = now.getFullYear()+'년 '+(now.getMonth()+1)+'월 '+now.getDate()+'일 ('+days[now.getDay()]+')';
   }
+  mncUpdateCheckingBanner(_mncDate);
 
   // 선생님 목록 로드
   await mncLoadTeachers();
@@ -3469,6 +3475,9 @@ function mncRenderTable(){
   var actEl = document.getElementById('mnc-actions');
   if(actEl) actEl.style.display = 'flex';
 
+  // 요일 배너 업데이트
+  mncUpdateCheckingBanner(_mncDate);
+
   // 요약 섹션 범위 레이블 업데이트
   var sumSec = document.getElementById('mnc-summary-section');
   if(sumSec) sumSec.style.display = 'block';
@@ -3593,6 +3602,48 @@ function mncGenerateMent(studentName, dateStr, status, score){
 
 function mncHtmlEscape(str){
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// 현재 입력 중인 요일 안내 배너 업데이트
+function mncUpdateCheckingBanner(dateStr){
+  var banner = document.getElementById('mnc-checking-banner');
+  var label  = document.getElementById('mnc-checking-label');
+  if(!banner||!label||!dateStr) return;
+  var d    = new Date(dateStr+'T00:00:00');
+  var DAYS = ['일','월','화','수','목','금','토'];
+  var dayName = DAYS[d.getDay()];
+  var dateLabel = (d.getMonth()+1)+'월 '+d.getDate()+'일('+dayName+')';
+  label.innerHTML = '📌 현재 <strong>'+dateLabel+' ('+dayName+'요일)</strong> 일일N제 학습 결과를 입력 중입니다.';
+  banner.style.display = 'block';
+}
+
+// 선생님별 초기화
+async function mncResetTeacher(){
+  var teacherFilter = document.getElementById('mnc-teacher-filter')?.value || '';
+  var tObj = _mncTeachers.find(function(t){ return t.id===teacherFilter; });
+  var tName = tObj ? tObj.name+'T 반' : '전체';
+
+  if(!_mncDate){ alert('날짜를 먼저 선택하세요'); return; }
+  if(!confirm('[초기화 확인]\n'+tName+' / '+_mncDate+'\n저장된 데이터가 삭제됩니다. 계속하시겠습니까?')){return;}
+
+  var studentsToReset = teacherFilter
+    ? _mncStudents.filter(function(s){ return s.teacher_id===teacherFilter; })
+    : _mncStudents;
+
+  if(!studentsToReset.length){ alert('초기화할 학생이 없습니다'); return; }
+
+  var ids = studentsToReset.map(function(s){ return s.id; });
+  var {error} = await db.from('middle_naje_check')
+    .delete()
+    .eq('check_date', _mncDate)
+    .in('student_id', ids);
+
+  if(error){ alert('오류: '+error.message); return; }
+
+  // 로컬 상태도 초기화
+  ids.forEach(function(id){ delete _mncData[id]; });
+  alert('✅ 초기화 완료됐습니다');
+  mncLoadStudents();
 }
 
 function mncToggleMent(studentId){
@@ -3733,7 +3784,7 @@ async function mncGenerateSummaryImage(mode){
   var summaryData = await mncLoadSummaryData();
   if(!summaryData) return;
   var {range, checks} = summaryData;
-  var dates = range.dates; // 항상 일~목 5일
+  var dates = range.dates; // 일~목 5일
 
   var checkMap = {};
   checks.forEach(function(c){
@@ -3741,206 +3792,275 @@ async function mncGenerateSummaryImage(mode){
     checkMap[c.student_id][c.check_date] = c;
   });
 
+  var DAYS7 = ['일','월','화','수','목','금','토'];
+  var checkD = new Date(_mncDate+'T00:00:00');
+  var startD = new Date(range.startDate);
+  var endD   = new Date(range.endDate);
+  var yesterdayStr = range.yesterday.toISOString().slice(0,10);
+
   // 선생님별 그룹 구성
   var groups = [];
   if(mode === 'teacher'){
-    var teacherFilter = document.getElementById('mnc-teacher-filter')?.value || '';
-    var tObj = _mncTeachers.find(function(t){ return t.id===teacherFilter; });
-    var students = _mncStudents.filter(function(s){ return !teacherFilter || s.teacher_id===teacherFilter; });
-    if(!students.length){ alert('학생이 없습니다'); return; }
-    groups.push({teacher: tObj||null, students: students});
+    // 반별: 현재 선택된 선생님 1개 반
+    var tf = document.getElementById('mnc-teacher-filter')?.value || '';
+    var tObj = _mncTeachers.find(function(t){ return t.id===tf; });
+    var stus = tf
+      ? _mncStudents.filter(function(s){ return s.teacher_id===tf; })
+      : _mncStudents;
+    if(!stus.length){ alert('학생이 없습니다. 선생님을 먼저 선택하세요'); return; }
+    groups.push({teacher: tObj||null, students: stus});
   } else {
-    var teacherOrder = [], teacherMap2 = {};
+    // 전체: 선생님별로 분류
+    var order = [], map2 = {};
     _mncStudents.forEach(function(s){
       var tid = s.teacher_id||'none';
-      if(!teacherMap2[tid]){ teacherMap2[tid]=[]; teacherOrder.push(tid); }
-      teacherMap2[tid].push(s);
+      if(!map2[tid]){ map2[tid]=[]; order.push(tid); }
+      map2[tid].push(s);
     });
-    teacherOrder.forEach(function(tid){
+    order.forEach(function(tid){
       var t = _mncTeachers.find(function(t){ return t.id===tid; });
-      groups.push({teacher: t||null, students: teacherMap2[tid]});
+      groups.push({teacher: t||null, students: map2[tid]});
     });
     if(!groups.length){ alert('학생이 없습니다'); return; }
   }
 
-  var canvas = document.createElement('canvas');
-  var ctx    = canvas.getContext('2d');
-  var PAD    = 24, RH = 46, GH = 40;
-  var TITLE_H = 100, NAME_W = 100, DATE_W = 88, AVG_W = 72, FOOTER_H = 36;
-  var DAYS7  = ['일','월','화','수','목','금','토'];
+  // ── Canvas 설정 ──
+  var PAD    = 28;
+  var RH     = 48;    // 학생 행 높이
+  var GH     = 42;    // 선생님 그룹 헤더 높이 (전체 모드)
+  var NAME_W = 90;    // 이름 컬럼
+  var IDX_W  = 36;    // 번호 컬럼 (전체 모드)
+  var DATE_W = 82;    // 날짜 컬럼
+  var AVG_W  = 72;    // 평균 컬럼
+  var TITLE_H = mode==='teacher' ? 108 : 100;
+  var FOOT_H  = 32;
 
   var totalRows = 0;
   groups.forEach(function(g){ totalRows += g.students.length; });
-  var groupHeaderRows = mode==='all' ? groups.length : 0;
-  var totalW = PAD*2 + NAME_W + DATE_W*5 + AVG_W;
-  var totalH = PAD + TITLE_H + RH + (totalRows+groupHeaderRows)*RH + FOOTER_H + PAD;
+  var groupRows = mode==='all' ? groups.length : 0;
+  var nameColW  = mode==='all' ? IDX_W+NAME_W : NAME_W;
 
-  canvas.width = totalW*2; canvas.height = totalH*2;
+  var totalW = PAD*2 + nameColW + DATE_W*5 + AVG_W;
+  var totalH = PAD + TITLE_H + RH + (totalRows+groupRows)*RH + FOOT_H + PAD;
+
+  var canvas = document.createElement('canvas');
+  canvas.width  = totalW*2;
+  canvas.height = totalH*2;
+  var ctx = canvas.getContext('2d');
   ctx.scale(2,2);
 
-  // 배경
-  ctx.fillStyle = '#f8fafc'; ctx.fillRect(0,0,totalW,totalH);
-
-  // 타이틀 바
-  ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0,0,totalW,TITLE_H);
-
-  var checkD = new Date(_mncDate+'T00:00:00');
-  var startD = new Date(range.startDate);
-  var endD   = new Date(range.endDate);
-  var dateRangeLabel = (startD.getMonth()+1)+'/'+(startD.getDate())+'('
-    +DAYS7[startD.getDay()]+') ~ '+(endD.getMonth()+1)+'/'+(endD.getDate())
-    +'('+DAYS7[endD.getDay()]+')';
-
-  ctx.textAlign = 'center';
-  if(mode==='teacher'){
-    var tf = document.getElementById('mnc-teacher-filter')?.value||'';
-    var tObj2 = _mncTeachers.find(function(t){ return t.id===tf; });
-    var tName = tObj2 ? tObj2.name+'T 반' : '전체';
-    ctx.fillStyle='#93c5fd'; ctx.font='bold 11px sans-serif';
-    ctx.fillText(tName, totalW/2, 22);
-    ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
-    ctx.fillText('중등 일일N제 주간 결과', totalW/2, 48);
-    ctx.fillStyle='#94a3b8'; ctx.font='11px sans-serif';
-    ctx.fillText(dateRangeLabel+'  |  기준일 '+(checkD.getMonth()+1)+'.'
-      +(checkD.getDate())+'('+DAYS7[checkD.getDay()]+')', totalW/2, 70);
-    ctx.fillStyle='#475569'; ctx.font='10px sans-serif';
-    ctx.fillText('* 진행 전 날짜는 빈칸으로 표시됩니다', totalW/2, 88);
-  } else {
-    ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
-    ctx.fillText('중등 일일N제 주간 결과 (전체)', totalW/2, 38);
-    ctx.fillStyle='#94a3b8'; ctx.font='11px sans-serif';
-    ctx.fillText(dateRangeLabel+'  |  기준일 '+(checkD.getMonth()+1)+'.'
-      +(checkD.getDate())+'('+DAYS7[checkD.getDay()]+')', totalW/2, 60);
-    ctx.fillStyle='#475569'; ctx.font='10px sans-serif';
-    ctx.fillText('* 진행 전 날짜는 빈칸으로 표시됩니다', totalW/2, 80);
-  }
-
-  var colX0 = PAD; // 이름 시작 X
-  var dateX0 = PAD + NAME_W; // 날짜 시작 X
-  var avgX0  = dateX0 + DATE_W*5; // 평균 시작 X
-
-  function drawRect(x,y,w,h,fill,stroke){
+  function drawRect(x,y,w,h,fill,stroke,lw){
     ctx.fillStyle=fill||'#fff'; ctx.fillRect(x,y,w,h);
-    if(stroke!==false){ ctx.strokeStyle=stroke||'#e2e8f0'; ctx.lineWidth=0.7; ctx.strokeRect(x,y,w,h); }
+    if(stroke!==false){ctx.strokeStyle=stroke||'#e2e8f0';ctx.lineWidth=lw||0.7;ctx.strokeRect(x,y,w,h);}
   }
-  function drawTxt(txt,x,y,align,color,font){
-    ctx.fillStyle=color||'#1e293b'; ctx.font=font||'12px sans-serif'; ctx.textAlign=align||'center';
-    ctx.fillText(txt,x,y);
+  function txt(t,x,y,align,color,font){
+    ctx.fillStyle=color||'#1e293b';ctx.font=font||'12px sans-serif';
+    ctx.textAlign=align||'center';ctx.fillText(t,x,y);
   }
 
+  // ── 타이틀 배경 ──
+  // 그라디언트
+  var grad = ctx.createLinearGradient(0,0,totalW,TITLE_H);
+  grad.addColorStop(0,'#1a1a2e'); grad.addColorStop(1,'#0f3460');
+  ctx.fillStyle=grad; ctx.fillRect(0,0,totalW,TITLE_H);
+
+  // 베스티안 로고 영역 (상단 좌측 띠)
+  ctx.fillStyle='rgba(255,255,255,0.05)';
+  ctx.fillRect(0,0,totalW,32);
+  txt('BESTIAN 수학학원', totalW/2, 21, 'center', 'rgba(255,255,255,0.5)', '10px sans-serif');
+
+  if(mode==='teacher'){
+    var tf2 = document.getElementById('mnc-teacher-filter')?.value||'';
+    var tObj2 = _mncTeachers.find(function(t){return t.id===tf2;});
+    var tName = tObj2 ? tObj2.name+'T 반' : '전체';
+    // 반 이름 크게
+    txt(tName, totalW/2, 58, 'center', '#fbbf24', 'bold 20px sans-serif');
+    txt('중등 일일N제 주간 학습 결과', totalW/2, 80, 'center', '#f8fafc', 'bold 14px sans-serif');
+    var rangeStr = (startD.getMonth()+1)+'/'+(startD.getDate())+'('+DAYS7[startD.getDay()]+') ~ '
+      +(endD.getMonth()+1)+'/'+(endD.getDate())+'('+DAYS7[endD.getDay()]+')';
+    txt(rangeStr+'  |  기준일 '+(checkD.getMonth()+1)+'.'+(checkD.getDate())+'('+DAYS7[checkD.getDay()]+')',
+      totalW/2, 97, 'center', '#94a3b8', '11px sans-serif');
+  } else {
+    txt('중등 일일N제 주간 학습 결과 (전체)', totalW/2, 54, 'center', '#f8fafc', 'bold 16px sans-serif');
+    var rangeStr2 = (startD.getMonth()+1)+'/'+(startD.getDate())+'('+DAYS7[startD.getDay()]+') ~ '
+      +(endD.getMonth()+1)+'/'+(endD.getDate())+'('+DAYS7[endD.getDay()]+')';
+    txt(rangeStr2+'  |  기준일 '+(checkD.getMonth()+1)+'.'+(checkD.getDate())+'('+DAYS7[checkD.getDay()]+')',
+      totalW/2, 72, 'center', '#94a3b8', '11px sans-serif');
+    txt('※ 진행 전 날짜는 회색 빈칸으로 표시됩니다', totalW/2, 90, 'center', '#64748b', '10px sans-serif');
+  }
+
+  // ── 테이블 헤더 ──
   var tableY = PAD + TITLE_H;
-  // 테이블 헤더
-  drawRect(colX0, tableY, totalW-PAD*2, RH, '#334155', false);
-  drawTxt('학생', colX0+8, tableY+RH/2+5, 'left', '#fff', 'bold 12px sans-serif');
+  var nameX  = PAD;
+  var dateX0 = PAD + nameColW;
+  var avgX   = dateX0 + DATE_W*5;
+
+  // 헤더 배경
+  drawRect(PAD, tableY, totalW-PAD*2, RH, '#1e293b', false);
+
+  // 이름(+번호) 헤더
+  if(mode==='all'){
+    drawRect(nameX, tableY, IDX_W, RH, '#0f172a', '#334155');
+    txt('#', nameX+IDX_W/2, tableY+RH/2+5, 'center', '#94a3b8', 'bold 11px sans-serif');
+    drawRect(nameX+IDX_W, tableY, NAME_W, RH, '#0f172a', '#334155');
+    txt('학생', nameX+IDX_W+NAME_W/2, tableY+RH/2+5, 'center', '#e2e8f0', 'bold 12px sans-serif');
+  } else {
+    drawRect(nameX, tableY, NAME_W, RH, '#0f172a', '#334155');
+    txt('학생', nameX+NAME_W/2, tableY+RH/2+5, 'center', '#e2e8f0', 'bold 12px sans-serif');
+  }
+
+  // 날짜 헤더
   dates.forEach(function(d,i){
     var dd = new Date(d+'T00:00:00');
-    var isPast = d <= range.yesterday.toISOString().slice(0,10);
-    drawRect(dateX0+DATE_W*i, tableY, DATE_W, RH, isPast?'#334155':'#243046', '#475569');
-    var dLabel = (dd.getMonth()+1)+'/'+(dd.getDate());
-    var dayLbl = '('+DAYS7[dd.getDay()]+')';
-    drawTxt(dLabel, dateX0+DATE_W*i+DATE_W/2, tableY+RH/2, 'center', isPast?'#e2e8f0':'#64748b', 'bold 11px sans-serif');
-    drawTxt(dayLbl, dateX0+DATE_W*i+DATE_W/2, tableY+RH/2+13, 'center', isPast?'#cbd5e1':'#475569', '10px sans-serif');
+    var isPast = d <= yesterdayStr;
+    var hBg = isPast ? '#1e3a5f' : '#1c2a3a';
+    drawRect(dateX0+DATE_W*i, tableY, DATE_W, RH, hBg, '#334155');
+    txt((dd.getMonth()+1)+'/'+(dd.getDate()),
+      dateX0+DATE_W*i+DATE_W/2, tableY+RH/2,
+      'center', isPast?'#e2e8f0':'#64748b', 'bold 12px sans-serif');
+    txt('('+DAYS7[dd.getDay()]+')',
+      dateX0+DATE_W*i+DATE_W/2, tableY+RH/2+14,
+      'center', isPast?'#93c5fd':'#475569', '10px sans-serif');
   });
-  drawRect(avgX0, tableY, AVG_W, RH, '#1e3a5f', false);
-  drawTxt('주간평균', avgX0+AVG_W/2, tableY+RH/2+5, 'center', '#93c5fd', 'bold 11px sans-serif');
 
-  // 헤더 아래 구분선
-  ctx.strokeStyle='#475569'; ctx.lineWidth=1.5;
+  // 평균 헤더
+  drawRect(avgX, tableY, AVG_W, RH, '#0f3460', '#334155');
+  txt('주간', avgX+AVG_W/2, tableY+RH/2, 'center', '#93c5fd', 'bold 11px sans-serif');
+  txt('평균', avgX+AVG_W/2, tableY+RH/2+13, 'center', '#93c5fd', '10px sans-serif');
+
+  // 헤더 아래 강조선
+  ctx.strokeStyle='#3b82f6'; ctx.lineWidth=2;
   ctx.beginPath(); ctx.moveTo(PAD,tableY+RH); ctx.lineTo(totalW-PAD,tableY+RH); ctx.stroke();
 
-  var GROUP_COLORS=[
-    {bg:'#eff6ff',stripe:'#dbeafe',hBg:'#1d4ed8'},
-    {bg:'#f0fdf4',stripe:'#dcfce7',hBg:'#15803d'},
-    {bg:'#fffbeb',stripe:'#fef08a',hBg:'#b45309'},
-    {bg:'#fdf4ff',stripe:'#f3e8ff',hBg:'#7e22ce'},
-    {bg:'#fff1f2',stripe:'#ffe4e6',hBg:'#be123c'},
-    {bg:'#fff7ed',stripe:'#ffedd5',hBg:'#c2410c'},
+  // ── 그룹 색상 ──
+  var GC = [
+    {bg:'#eff6ff',stripe:'#dbeafe',hBg:'#1d4ed8',hText:'#fff'},
+    {bg:'#f0fdf4',stripe:'#dcfce7',hBg:'#15803d',hText:'#fff'},
+    {bg:'#fffbeb',stripe:'#fef3c7',hBg:'#b45309',hText:'#fff'},
+    {bg:'#fdf4ff',stripe:'#f3e8ff',hBg:'#7e22ce',hText:'#fff'},
+    {bg:'#fff1f2',stripe:'#ffe4e6',hBg:'#be123c',hText:'#fff'},
+    {bg:'#fff7ed',stripe:'#ffedd5',hBg:'#c2410c',hText:'#fff'},
   ];
 
   var curY = tableY + RH;
-  groups.forEach(function(g,gi){
-    var gc = GROUP_COLORS[gi%GROUP_COLORS.length];
+  var globalIdx = 1; // 전체 학생 번호
 
+  groups.forEach(function(g,gi){
+    var gc = GC[gi%GC.length];
+
+    // 전체 모드: 선생님 그룹 헤더
     if(mode==='all'){
-      var tName2 = g.teacher ? g.teacher.name+'T 반' : '담당 미지정';
+      var tName3 = g.teacher ? g.teacher.name+'T 반' : '담당 미지정';
       drawRect(PAD, curY, totalW-PAD*2, GH, gc.hBg, false);
-      drawTxt('👨‍🏫  '+tName2+' ('+g.students.length+'명)', PAD+14, curY+GH/2+5, 'left', '#fff', 'bold 12px sans-serif');
+      // 좌측 세로 강조
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.fillRect(PAD, curY, 4, GH);
+      txt('  '+tName3+' · '+g.students.length+'명', PAD+14, curY+GH/2+5,
+        'left', gc.hText, 'bold 13px sans-serif');
       curY += GH;
     }
 
     g.students.forEach(function(s,ri){
       var rowBg = ri%2===0 ? gc.bg : gc.stripe;
-      drawRect(colX0, curY, NAME_W, RH, rowBg, '#e2e8f0');
-      drawTxt(s.name, colX0+8, curY+RH/2+5, 'left', '#1e293b', 'bold 12px sans-serif');
 
-      var scores=[];
+      // 번호 + 이름
+      if(mode==='all'){
+        drawRect(nameX, curY, IDX_W, RH, rowBg, '#d1d5db');
+        txt(globalIdx, nameX+IDX_W/2, curY+RH/2+5, 'center', '#94a3b8', '11px sans-serif');
+        drawRect(nameX+IDX_W, curY, NAME_W, RH, rowBg, '#d1d5db');
+        txt(s.name, nameX+IDX_W+8, curY+RH/2+5, 'left', '#0f172a', 'bold 12px sans-serif');
+        globalIdx++;
+      } else {
+        drawRect(nameX, curY, NAME_W, RH, rowBg, '#d1d5db');
+        txt(ri+1+'. '+s.name, nameX+8, curY+RH/2+5, 'left', '#0f172a', 'bold 12px sans-serif');
+      }
+
+      var scores = [];
       dates.forEach(function(d,di){
-        var isPast = d <= range.yesterday.toISOString().slice(0,10);
+        var isPast = d <= yesterdayStr;
         var c = checkMap[s.id]?.[d];
         var cellX = dateX0+DATE_W*di;
-        var txt='', cellBg=rowBg, tc='#94a3b8', bold=false;
+        var cellBg, cellTxt='', cellColor='#94a3b8', bold=false;
 
         if(!isPast){
-          cellBg = ri%2===0?'#f1f5f9':'#e8edf2'; txt=''; tc='#cbd5e1';
+          cellBg = ri%2===0 ? '#f0f4f8' : '#e8edf5';
         } else if(!c){
-          txt='-';
+          cellBg = rowBg; cellTxt='-'; cellColor='#cbd5e1';
         } else if(c.is_completed===false){
-          txt='미학습'; cellBg='#fef2f2'; tc='#dc2626'; bold=true;
+          cellBg='#fef2f2'; cellTxt='미학습'; cellColor='#dc2626'; bold=true;
         } else if(c.is_completed===true){
           var sc=c.score;
           if(sc!==null&&sc!==undefined){
-            txt=sc+'점';
-            if(sc>=70){ cellBg='#f0fdf4'; tc='#16a34a'; bold=true; scores.push(sc); }
-            else { cellBg='#fffbeb'; tc='#d97706'; bold=true; scores.push(sc); }
-          } else { txt='완료'; cellBg='#f0fdf4'; tc='#16a34a'; bold=true; }
+            cellTxt=sc+'점'; bold=true; scores.push(sc);
+            cellBg = sc>=70?'#f0fdf4':'#fffbeb';
+            cellColor = sc>=70?'#15803d':'#d97706';
+          } else {
+            cellBg='#f0fdf4'; cellTxt='완료'; cellColor='#15803d'; bold=true;
+          }
+        } else {
+          cellBg=rowBg;
         }
 
-        drawRect(cellX, curY, DATE_W, RH, cellBg, '#e2e8f0');
-        if(txt) drawTxt(txt, cellX+DATE_W/2, curY+RH/2+5, 'center', tc, (bold?'bold ':'')+' 12px sans-serif');
+        drawRect(cellX, curY, DATE_W, RH, cellBg, '#d1d5db');
+        if(cellTxt) txt(cellTxt, cellX+DATE_W/2, curY+RH/2+5, 'center', cellColor,
+          (bold?'bold ':'')+' 12px sans-serif');
       });
 
       // 평균
       if(scores.length>0){
         var avg=Math.round(scores.reduce(function(a,b){return a+b;},0)/scores.length);
-        drawRect(avgX0, curY, AVG_W, RH, avg>=70?'#dcfce7':'#fef9c3', '#e2e8f0');
-        drawTxt(avg+'점', avgX0+AVG_W/2, curY+RH/2+5, 'center', avg>=70?'#15803d':'#92400e', 'bold 13px sans-serif');
+        drawRect(avgX, curY, AVG_W, RH, avg>=70?'#dcfce7':'#fef9c3', '#d1d5db');
+        // 색 바
+        ctx.fillStyle = avg>=70?'#15803d':'#92400e';
+        ctx.fillRect(avgX, curY, Math.round(AVG_W*(Math.min(avg,100)/100)), 4);
+        txt(avg+'점', avgX+AVG_W/2, curY+RH/2+8, 'center',
+          avg>=70?'#15803d':'#92400e', 'bold 13px sans-serif');
       } else {
-        drawRect(avgX0, curY, AVG_W, RH, rowBg, '#e2e8f0');
-        drawTxt('-', avgX0+AVG_W/2, curY+RH/2+5, 'center', '#cbd5e1', '11px sans-serif');
+        drawRect(avgX, curY, AVG_W, RH, rowBg, '#d1d5db');
+        txt('-', avgX+AVG_W/2, curY+RH/2+5, 'center', '#cbd5e1', '11px sans-serif');
       }
       curY += RH;
     });
 
+    // 그룹 사이 구분선
     if(mode==='all' && gi<groups.length-1){
-      ctx.strokeStyle='#334155'; ctx.lineWidth=2;
+      ctx.strokeStyle='#64748b'; ctx.lineWidth=1.5;
       ctx.beginPath(); ctx.moveTo(PAD,curY); ctx.lineTo(totalW-PAD,curY); ctx.stroke();
     }
   });
 
-  // 외곽선
-  ctx.strokeStyle='#334155'; ctx.lineWidth=1.5;
+  // 외곽 테두리
+  ctx.strokeStyle='#334155'; ctx.lineWidth=2;
   ctx.strokeRect(PAD, tableY, totalW-PAD*2, curY-tableY);
-  // 이름|날짜 세로선
+
+  // 세로 구분선
   ctx.strokeStyle='#475569'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(dateX0,tableY); ctx.lineTo(dateX0,curY); ctx.stroke();
-  // 날짜|평균 세로선
-  ctx.beginPath(); ctx.moveTo(avgX0,tableY); ctx.lineTo(avgX0,curY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(avgX,tableY); ctx.lineTo(avgX,curY); ctx.stroke();
+  if(mode==='all'){
+    ctx.beginPath(); ctx.moveTo(nameX+IDX_W,tableY); ctx.lineTo(nameX+IDX_W,curY); ctx.stroke();
+  }
 
   // 푸터
-  ctx.fillStyle='#94a3b8'; ctx.font='10px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('베스티안 수학학원  |  생성일 '+_mncDate, totalW/2, curY+22);
+  ctx.fillStyle='#f8fafc'; ctx.fillRect(0,curY+PAD,totalW,FOOT_H);
+  txt('© BESTIAN 수학학원  |  '+_mncDate+' 기준', totalW/2, curY+PAD+FOOT_H/2+4,
+    'center', '#94a3b8', '10px sans-serif');
 
+  // ── 출력 ──
   var imgDataUrl = canvas.toDataURL('image/png');
   var preview = document.getElementById('mnc-summary-preview');
   if(!preview) return;
-  var fname = mode==='teacher' ? '일일N제_반별_'+_mncDate+'.png' : '일일N제_전체_'+_mncDate+'.png';
+  var fname = mode==='teacher'
+    ? '일일N제_반별_'+_mncDate+'.png'
+    : '일일N제_전체_'+_mncDate+'.png';
+
   preview.innerHTML =
-    '<div style="margin-bottom:10px;overflow-x:auto">'
-    +'<img src="'+imgDataUrl+'" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.1)">'
+    '<div style="overflow-x:auto;margin-bottom:10px">'
+    +'<img src="'+imgDataUrl+'" style="max-width:100%;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.12);border:1px solid #e5e7eb">'
     +'</div>'
     +'<div style="display:flex;gap:8px">'
-    +'<a href="'+imgDataUrl+'" download="'+fname+'" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none">⬇️ 이미지 다운로드</a>'
-    +'<button onclick="mncShareImage()" class="btn" style="flex:1;background:#f0f7ff;border-color:#bfdbfe;color:#1d4ed8">📋 이미지 복사</button>'
+    +'<a href="'+imgDataUrl+'" download="'+fname+'" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none">⬇️ 다운로드</a>'
+    +'<button onclick="mncShareImage()" class="btn" style="flex:1;background:#f0f7ff;border-color:#bfdbfe;color:#1d4ed8">📋 클립보드 복사</button>'
     +'</div>';
 
   document.getElementById('mnc-summary-section').style.display='block';
