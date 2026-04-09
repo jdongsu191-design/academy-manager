@@ -4465,11 +4465,20 @@ async function startNajePdfLoad(file, mode){
       const textContent = await page.getTextContent();
       const pageText = textContent.items.map(function(i){return i.str;}).join('');
 
-      // 빠른정답 페이지 감지: "빠른정답" + "N｜" 패턴이 있는 페이지만 파싱
-      // "정답 및 해설" 해설 페이지는 N｜이 있어도 스킵
+      // ── 페이지 종류 판별 ──
+      // 빠른정답 페이지: "빠른정답" 키워드가 있고 문항번호 패턴이 있음
       const isQuickAnswerPage = (/빠른정답/.test(pageText) && /[0-9]+[｜|]/.test(pageText))
         || (/정답\s*및\s*해설/.test(pageText) && /빠른정답/.test(pageText));
-      const isCommentaryPage = !/빠른정답/.test(pageText) && /정답\s*및\s*해설/.test(pageText) && /[0-9]+[｜|]/.test(pageText);
+
+      // 해설 페이지 감지 (강화): 아래 중 하나라도 해당하면 해설 페이지로 판단
+      const isCommentaryPage = !isQuickAnswerPage && (
+        // 패턴1: "정답 및 해설" 텍스트 있음 (가장 명확)
+        /정답\s*및\s*해설/.test(pageText) ||
+        // 패턴2: "풀이", "해설" + 문항번호 패턴 (풀이 설명 페이지)
+        (/풀이/.test(pageText) && /[0-9]+[｜|]/.test(pageText) && !/빠른정답/.test(pageText)) ||
+        // 패턴3: 텍스트 밀도가 높은데 문항번호가 없음 (문제 없는 해설 텍스트)
+        (/해설/.test(pageText) && !/빠른정답/.test(pageText) && pageText.length > 500 && !/[0-9]+[｜|]/.test(pageText))
+      );
 
       if(isCommentaryPage){
         continue; // 해설 페이지는 문제 이미지도, 정답도 처리 안 함
@@ -4554,20 +4563,62 @@ async function startNajePdfLoad(file, mode){
         return jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'}) || null;
       }
 
+      // ── 컬럼이 실제 문제 콘텐츠를 가지고 있는지 확인하는 함수 ──
+      // 줄칸만 있거나 텍스트가 거의 없는 컬럼은 문제가 아님
+      function colHasProblemContent(imgData, w, h){
+        const data = imgData.data;
+        // 전체 픽셀 중 어두운 픽셀(문자/선) 비율 계산
+        // 순수 줄칸: 가로선만 있어서 어두운 픽셀이 매우 적고 일정한 패턴
+        // 문제 포함: 텍스트/수식/그림으로 어두운 픽셀이 많고 불규칙
+        let darkPixels = 0;
+        const total = w * h;
+        const sampleStep = 2; // 2픽셀마다 샘플링 (속도)
+        let sampledTotal = 0;
+
+        for(let y = 0; y < h; y += sampleStep){
+          for(let x = Math.floor(w*0.05); x < Math.floor(w*0.95); x += sampleStep){
+            const i = (y * w + x) * 4;
+            const brightness = (data[i] + data[i+1] + data[i+2]) / 3;
+            if(brightness < 180) darkPixels++; // 어두운 픽셀 (텍스트/선)
+            sampledTotal++;
+          }
+        }
+        const darkRatio = darkPixels / sampledTotal;
+
+        // 줄칸만 있는 경우: 어두운 픽셀 비율이 매우 낮음 (가로선만 존재)
+        // 경험적으로 줄칸만: ~1~2%, 문제 포함: ~5% 이상
+        // 단, QR이 있는 경우는 QR 자체가 어두운 픽셀을 많이 차지하므로 별도 처리
+        if(darkRatio < 0.03){
+          // 추가 검증: njFindLineStart로 줄칸 시작점이 매우 위에 있으면 줄칸만 있는 컬럼
+          const lineStartY = njFindLineStart(imgData, w, 0, w, 0, h);
+          // 줄칸이 전체 높이의 30% 이내에서 시작하면 → 문제 없이 줄칸만 있는 컬럼
+          if(lineStartY < h * 0.30){
+            console.log('[N제] 줄칸만 있는 컬럼 감지 - 스킵 (darkRatio:', darkRatio.toFixed(3), 'lineStartY:', lineStartY, '/', h, ')');
+            return false;
+          }
+        }
+        return true;
+      }
+
       // ── 좌열 처리 ──
       const leftCvs = document.createElement('canvas');
       leftCvs.width = midX; leftCvs.height = H;
       leftCvs.getContext('2d').drawImage(cvs, 0, 0, midX, H, 0, 0, midX, H);
       const leftData = leftCvs.getContext('2d').getImageData(0, 0, midX, H);
       const leftQR = scanQR(leftData, midX, H);
-      // QR이 있으면 QR 바로 위에서 자름, 없으면 전체
-      const leftCutY = leftQR ? Math.max(30, Math.round(leftQR.location.topLeftCorner.y) - 15) : H;
-      const leftFinal = njCrop(cvs, 0, midX, 0, leftCutY);
-      najeExtractedProblems.push({
-        number: num++, canvas: leftFinal, qrUrl: leftQR ? leftQR.data : null,
-        dataUrl: leftFinal.toDataURL('image/jpeg', 0.92),
-        pageNum: p, side: 'left', ...getLevelInfo(num-1)
-      });
+
+      // 좌열: QR이 있으면 무조건 문제 있음, 없으면 콘텐츠 확인
+      if(leftQR || colHasProblemContent(leftData, midX, H)){
+        const leftCutY = leftQR ? Math.max(30, Math.round(leftQR.location.topLeftCorner.y) - 15) : H;
+        const leftFinal = njCrop(cvs, 0, midX, 0, leftCutY);
+        najeExtractedProblems.push({
+          number: num++, canvas: leftFinal, qrUrl: leftQR ? leftQR.data : null,
+          dataUrl: leftFinal.toDataURL('image/jpeg', 0.92),
+          pageNum: p, side: 'left', ...getLevelInfo(num-1)
+        });
+      } else {
+        console.log('[N제] 좌열 스킵 - 문제 콘텐츠 없음 (p'+p+')');
+      }
 
       // ── 우열 처리 ──
       const rightCvs = document.createElement('canvas');
@@ -4575,14 +4626,19 @@ async function startNajePdfLoad(file, mode){
       rightCvs.getContext('2d').drawImage(cvs, midX, 0, W-midX, H, 0, 0, W-midX, H);
       const rightData = rightCvs.getContext('2d').getImageData(0, 0, W-midX, H);
       const rightQR = scanQR(rightData, W-midX, H);
-      // QR이 있으면 QR 바로 위에서 자름, 없으면 전체
-      const rightCutY = rightQR ? Math.max(30, Math.round(rightQR.location.topLeftCorner.y) - 15) : H;
-      const rightFinal = njCrop(cvs, midX, W, 0, rightCutY);
-      najeExtractedProblems.push({
-        number: num++, canvas: rightFinal, qrUrl: rightQR ? rightQR.data : null,
-        dataUrl: rightFinal.toDataURL('image/jpeg', 0.92),
-        pageNum: p, side: 'right', ...getLevelInfo(num-1)
-      });
+
+      // 우열: QR이 있으면 무조건 문제 있음, 없으면 콘텐츠 확인
+      if(rightQR || colHasProblemContent(rightData, W-midX, H)){
+        const rightCutY = rightQR ? Math.max(30, Math.round(rightQR.location.topLeftCorner.y) - 15) : H;
+        const rightFinal = njCrop(cvs, midX, W, 0, rightCutY);
+        najeExtractedProblems.push({
+          number: num++, canvas: rightFinal, qrUrl: rightQR ? rightQR.data : null,
+          dataUrl: rightFinal.toDataURL('image/jpeg', 0.92),
+          pageNum: p, side: 'right', ...getLevelInfo(num-1)
+        });
+      } else {
+        console.log('[N제] 우열 스킵 - 문제 콘텐츠 없음 (p'+p+')');
+      }
     }
 
     progressBar.style.width = '95%';
