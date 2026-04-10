@@ -3474,10 +3474,12 @@ var _betiFilter = '';
    중등 일일N제 체크 (Middle Naje Check)
 ═══════════════════════════════════════════════════════ */
 
-var _mncData = {};        // {studentId: {is_completed, score, memo}}
+var _mncData = {};        // {dateStr: {studentId: {is_completed, score}}} 날짜×학생 매트릭스
 var _mncStudents = [];    // 학생 목록
-var _mncDate = '';        // 선택 날짜
+var _mncDate = '';        // 체크 날짜 (UI 결과날 + 1)
+var _mncResultDate = '';  // UI에서 선택한 결과 날짜 (학생이 학습한 날)
 var _mncTeachers = [];    // 선생님 목록
+var _mncDirty = {};       // {dateStr: {studentId: true}} 변경된 셀 추적
 
 // 아코디언 토글
 function toggleAdminNajeMenu(){
@@ -3564,48 +3566,50 @@ async function mncLoadStudents(){
   var adminPanel = document.getElementById('panel-admin-middle-naje');
   if(!adminPanel || !adminPanel.classList.contains('active')) return;
 
-  // UI에서는 결과 날짜(학습한 날)를 선택
-  // 내부 _mncDate는 체크 날짜(결과날+1)로 변환
-  var selectedResultDate = document.getElementById('mnc-date')?.value;
-  if(selectedResultDate){
-    var rp = selectedResultDate.split('-');
-    var rUTC = new Date(Date.UTC(parseInt(rp[0]),parseInt(rp[1])-1,parseInt(rp[2])));
-    var cUTC = new Date(Date.UTC(rUTC.getUTCFullYear(), rUTC.getUTCMonth(), rUTC.getUTCDate()+1));
-    _mncDate = cUTC.getUTCFullYear()+'-'
-      +String(cUTC.getUTCMonth()+1).padStart(2,'0')+'-'
-      +String(cUTC.getUTCDate()).padStart(2,'0');
-  }
-  if(!_mncDate) return;
+  // UI 선택값: 결과 날짜 (학생이 학습한 날)
+  _mncResultDate = document.getElementById('mnc-date')?.value || '';
+  if(!_mncResultDate) return;
+
+  // 내부 _mncDate: 체크 날짜 (결과날 + 1) - 기존 호환용으로 유지
+  var rp = _mncResultDate.split('-');
+  var rUTC = new Date(Date.UTC(parseInt(rp[0]),parseInt(rp[1])-1,parseInt(rp[2])));
+  var cUTC = new Date(Date.UTC(rUTC.getUTCFullYear(), rUTC.getUTCMonth(), rUTC.getUTCDate()+1));
+  _mncDate = cUTC.getUTCFullYear()+'-'
+    +String(cUTC.getUTCMonth()+1).padStart(2,'0')+'-'
+    +String(cUTC.getUTCDate()).padStart(2,'0');
 
   var teacherFilter = document.getElementById('mnc-teacher-filter')?.value || '';
   var wrap = document.getElementById('mnc-table-wrap');
-  wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+  if(wrap) wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
 
-  // 재원 중인 중등 학생만 조회 (school_level='middle')
+  // 재원 중인 중등 학생만 조회
   var query = db.from('users').select('id,name,school,grade,teacher_id,school_level')
     .eq('role','student').eq('status','active').eq('school_level','middle').order('name');
   if(teacherFilter) query = query.eq('teacher_id', teacherFilter);
   var {data: students, error} = await query;
-  if(error){ wrap.innerHTML='<p style="color:red">오류: '+error.message+'</p>'; return; }
+  if(error){ if(wrap) wrap.innerHTML='<p style="color:red">오류: '+error.message+'</p>'; return; }
   _mncStudents = students || [];
 
-  // 결과 날짜(체크날 - 1일) 기준으로 기존 데이터 조회 (UTC 기준)
-  var rParts = _mncDate.split('-');
-  var rDate = new Date(Date.UTC(parseInt(rParts[0]),parseInt(rParts[1])-1,parseInt(rParts[2])-1));
-  var rDateStr = rDate.getUTCFullYear()+'-'
-    +String(rDate.getUTCMonth()+1).padStart(2,'0')+'-'
-    +String(rDate.getUTCDate()).padStart(2,'0');
-  var {data: checks} = await db.from('middle_naje_check')
-    .select('*').eq('check_date', rDateStr);
-  _mncData = {};
-  (checks||[]).forEach(function(c){ _mncData[c.student_id] = c; });
-
-  // 주간 전체 데이터도 함께 로드 (카톡멘트 누적 정보용)
+  // 이번 주 일~오늘(결과날)까지 모든 날짜 데이터 한 번에 로드
   var weekRange = mncGetResultDateRange(_mncDate);
-  var {data: weekChecks} = await db.from('middle_naje_check')
+  // 오늘(결과날)까지만 조회 대상
+  var datesUpToday = weekRange.dates.filter(function(d){ return d <= _mncResultDate; });
+
+  var {data: allChecks} = await db.from('middle_naje_check')
     .select('*').in('check_date', weekRange.dates);
+
+  // _mncData = {dateStr: {studentId: checkRow}}
+  _mncData = {};
+  _mncDirty = {};
+  weekRange.dates.forEach(function(d){ _mncData[d] = {}; });
+  (allChecks||[]).forEach(function(c){
+    if(!_mncData[c.check_date]) _mncData[c.check_date] = {};
+    _mncData[c.check_date][c.student_id] = c;
+  });
+
+  // 누적 멘트용 weekData도 동일 데이터 활용
   window._mncWeekData = {};
-  (weekChecks||[]).forEach(function(c){
+  (allChecks||[]).forEach(function(c){
     if(!window._mncWeekData[c.student_id]) window._mncWeekData[c.student_id] = [];
     window._mncWeekData[c.student_id].push(c);
   });
@@ -3615,118 +3619,135 @@ async function mncLoadStudents(){
 
 function mncRenderTable(){
   var wrap = document.getElementById('mnc-table-wrap');
-  if(!wrap) return; // 패널이 비활성이면 요소가 없을 수 있음
+  if(!wrap) return;
   if(!_mncStudents.length){
     wrap.innerHTML='<div class="empty-state"><div class="ei">👤</div><p>해당 조건의 학생이 없습니다</p></div>';
     return;
   }
 
-  // 통계 업데이트
-  var totalDone   = Object.values(_mncData).filter(function(d){return d.is_completed===true;}).length;
-  var totalUndone = Object.values(_mncData).filter(function(d){return d.is_completed===false;}).length;
+  var DAYS7 = ['일','월','화','수','목','금','토'];
+  var weekRange = mncGetResultDateRange(_mncDate);
+  // 오늘(결과날)까지만 표시
+  var dates = weekRange.dates.filter(function(d){ return d <= _mncResultDate; });
+
+  if(!dates.length){
+    wrap.innerHTML='<div class="empty-state"><div class="ei">📅</div><p>표시할 날짜가 없습니다</p></div>';
+    return;
+  }
+
+  // 통계
+  var totalDone=0, totalUndone=0;
+  dates.forEach(function(d){
+    _mncStudents.forEach(function(s){
+      var c = _mncData[d] && _mncData[d][s.id];
+      if(c && c.is_completed===true) totalDone++;
+      if(c && c.is_completed===false) totalUndone++;
+    });
+  });
   var statsEl = document.getElementById('mnc-stats');
-  if(statsEl && document.getElementById('panel-admin-middle-naje')?.classList.contains('active')) statsEl.innerHTML =
-    '<span style="padding:4px 10px;background:#EAF3DE;border-radius:100px;font-size:11px;font-weight:700;color:#3B6D11">✅ 완료 '+totalDone+'명</span>'
-    +'<span style="padding:4px 10px;background:#FEF2F2;border-radius:100px;font-size:11px;font-weight:700;color:#B91C1C">❌ 미학습 '+totalUndone+'명</span>';
+  if(statsEl && document.getElementById('panel-admin-middle-naje')?.classList.contains('active'))
+    statsEl.innerHTML =
+      '<span style="padding:4px 10px;background:#EAF3DE;border-radius:100px;font-size:11px;font-weight:700;color:#3B6D11">✅ 완료 '+totalDone+'건</span>'
+      +'<span style="padding:4px 10px;background:#FEF2F2;border-radius:100px;font-size:11px;font-weight:700;color:#B91C1C">❌ 미학습 '+totalUndone+'건</span>';
 
   // 선생님별 그룹핑
-  var groups = {};
-  var groupOrder = [];
+  var groups = {}, groupOrder = [];
   _mncStudents.forEach(function(s){
     var tid = s.teacher_id||'none';
-    if(!groups[tid]){ groups[tid]={teacherName:'',students:[]}; groupOrder.push(tid); }
+    if(!groups[tid]){ groups[tid]={name:'',students:[]}; groupOrder.push(tid); }
     var t = _mncTeachers.find(function(t){ return t.id===tid; });
-    groups[tid].teacherName = t ? t.name+'T' : '담당선생님 미지정';
+    groups[tid].name = t ? t.name+'T' : '담당 미지정';
     groups[tid].students.push(s);
   });
 
+  var colW = dates.length === 1 ? '120px'
+           : dates.length === 2 ? '100px'
+           : dates.length === 3 ? '90px'
+           : dates.length === 4 ? '85px' : '80px';
+
   var html = '<style>'
     +'.mnc-tbl{width:100%;border-collapse:collapse;font-size:13px}'
-    +'.mnc-tbl th{background:#1e293b;color:#e2e8f0;padding:8px 10px;text-align:center;font-size:12px;font-weight:700;white-space:nowrap}'
-    +'.mnc-tbl td{padding:7px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}'
-    +'.mnc-tbl tr:hover td{background:#f8fafc}'
-    +'.mnc-score-inp{width:60px;padding:5px 4px;border:1.5px solid #d1d5db;border-radius:6px;font-size:14px;font-weight:700;text-align:center;background:#fff;-webkit-appearance:none;-moz-appearance:textfield;appearance:textfield;outline:none}'
-    +'.mnc-score-inp:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,0.15)}'
+    +'.mnc-tbl th{background:#1e293b;color:#e2e8f0;padding:7px 6px;text-align:center;font-size:11px;font-weight:700;white-space:nowrap}'
+    +'.mnc-tbl td{padding:5px 4px;border-bottom:1px solid #f1f5f9;text-align:center;vertical-align:middle}'
+    +'.mnc-tbl tr:hover td{background:rgba(59,130,246,0.04)}'
+    +'.mnc-score-inp{width:54px;padding:4px 3px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;font-weight:700;text-align:center;background:#fff;-webkit-appearance:none;-moz-appearance:textfield;appearance:textfield;outline:none}'
     +'.mnc-score-inp::-webkit-outer-spin-button,.mnc-score-inp::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}'
-    +'.mnc-undone-btn:focus{outline:2px solid #f87171;outline-offset:2px}'
+    +'.mnc-score-inp:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,0.15)}'
+    +'.mnc-x-btn{width:100%;padding:4px 0;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid;transition:all 0.1s}'
+    +'.today-col{background:#fffbeb!important}'
     +'</style>';
+
+  html += '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table class="mnc-tbl">';
+
+  // 헤더행: 이름 | 날짜1 | 날짜2 | ...
+  html += '<thead><tr>'
+    +'<th style="text-align:left;min-width:80px;padding-left:8px">학생</th>';
+  dates.forEach(function(d, di){
+    var dp = d.split('-');
+    var dd = new Date(Date.UTC(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2])));
+    var isToday = (d === _mncResultDate);
+    html += '<th style="min-width:'+colW+';'+(isToday?'background:#1e3a5f;':'')+'">'+
+      (dd.getUTCMonth()+1)+'/'+(dd.getUTCDate())+'<br>'+
+      '<span style="font-weight:400;font-size:10px;color:'+(isToday?'#fbbf24':'#94a3b8')+'">'+
+      '('+DAYS7[dd.getUTCDay()]+')'+(isToday?' ★':'')+
+      '</span></th>';
+  });
+  html += '</tr></thead><tbody>';
 
   var globalIdx = 1;
   groupOrder.forEach(function(tid){
     var g = groups[tid];
-    html += '<div style="margin-bottom:16px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">'
-      +'<div style="padding:8px 14px;background:#1e293b;color:#f8fafc;font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px">'
-      +'👨‍🏫 <span>'+g.teacherName+'</span>'
-      +'<span style="margin-left:4px;padding:2px 8px;background:rgba(255,255,255,0.15);border-radius:100px;font-size:11px">'+g.students.length+'명</span>'
-      +'</div>'
-      +'<table class="mnc-tbl"><thead><tr>'
-      +'<th style="width:36px">#</th>'
-      +'<th style="text-align:left;min-width:80px">학생</th>'
-      +'<th style="width:100px">점수</th>'
-      +'<th style="width:80px">미학습</th>'
-      +'<th style="width:80px">완료</th>'
-      +'<th style="width:60px">복사</th>'
-      +'</tr></thead><tbody>';
-
+    if(groupOrder.length > 1){
+      html += '<tr><td colspan="'+(dates.length+1)+'" style="padding:6px 8px;background:#1e293b;color:#f8fafc;font-size:12px;font-weight:700;text-align:left">'
+        +'👨‍🏫 '+g.name+' ('+g.students.length+'명)</td></tr>';
+    }
     g.students.forEach(function(s, si){
-      var saved  = _mncData[s.id] || {};
-      var status = saved.is_completed===true ? 'done' : saved.is_completed===false ? 'undone' : '';
-      var score  = saved.score || '';
-      var rowBg  = status==='done'?'#f0fdf4':status==='undone'?'#fef2f2':'#fff';
-
+      var rowBg = si%2===0 ? '#fff' : '#f8fafc';
       html += '<tr id="mnc-row-'+s.id+'" style="background:'+rowBg+'">'
-        // 번호
-        +'<td style="text-align:center;color:#94a3b8;font-size:12px">'+globalIdx+'</td>'
-        // 이름
-        +'<td>'
-        +'<div style="font-weight:700;color:#1e293b">'+s.name+'</div>'
+        +'<td style="text-align:left;padding-left:8px">'
+        +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+globalIdx+'. '+s.name+'</div>'
         +'<div style="font-size:10px;color:#9ca3af">'+(s.school||'')+(s.grade?' '+s.grade+'학년':'')+'</div>'
-        +'</td>'
-        // 점수 입력
-        +'<td style="text-align:center">'
-        +'<div style="display:flex;align-items:center;justify-content:center;gap:3px">'
-        +'<input type="number" id="mnc-score-'+s.id+'" value="'+score+'" min="0" max="100" placeholder="—" '
-        +'class="mnc-score-inp" '
-        +'oninput="mncOnScoreInput(\''+s.id+'\')" '
-        +'onkeydown="mncScoreKeyDown(event,\''+s.id+'\')">'
-        +'<span style="font-size:11px;color:#9ca3af">점</span>'
-        +'</div>'
-        +'</td>'
-        // 미학습 버튼
-        +'<td style="text-align:center">'
-        +'<button id="mnc-btn-undone-'+s.id+'" onclick="mncSetStatus(\''+s.id+'\',\'undone\')" '
-        +'onkeydown="mncBtnKeyDown(event,\''+s.id+'\',\'undone\')" tabindex="0" class="mnc-undone-btn" '
-        +'style="width:100%;padding:5px 6px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid;'
-        +(status==='undone'?'background:#FEE2E2;border-color:#FCA5A5;color:#B91C1C':'background:#f9fafb;border-color:#e5e7eb;color:#9ca3af')
-        +'">❌</button>'
-        +'</td>'
-        // 완료 버튼
-        +'<td style="text-align:center">'
-        +'<button id="mnc-btn-done-'+s.id+'" onclick="mncSetStatus(\''+s.id+'\',\'done\')" '
-        +'onkeydown="mncBtnKeyDown(event,\''+s.id+'\',\'done\')" tabindex="0" '
-        +'style="width:100%;padding:5px 6px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid;'
-        +(status==='done'?'background:#DCFCE7;border-color:#86EFAC;color:#15803D':'background:#f9fafb;border-color:#e5e7eb;color:#9ca3af')
-        +'">✅</button>'
-        +'</td>'
-        // 복사
-        +'<td style="text-align:center">'
-        +'<button id="mnc-btn-copy-'+s.id+'" onclick="mncCopyMent(\''+s.id+'\')" '
-        +'style="padding:5px 8px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1.5px solid;'
-        +(status?'background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8':'background:#f9fafb;border-color:#e5e7eb;color:#d1d5db;pointer-events:none')
-        +'">📋</button>'
-        +'</td>'
-        +'</tr>'
-        // 멘트 텍스트 hidden div (복사 시 참조용, 화면 표시 없음)
-        +'<tr style="display:none"><td colspan="6">'
-        +'<div id="mnc-ment-'+s.id+'"></div>'
-        +'</td></tr>';
+        +'</td>';
 
+      dates.forEach(function(d, di){
+        var isToday = (d === _mncResultDate);
+        var saved = _mncData[d] && _mncData[d][s.id];
+        var status = saved ? (saved.is_completed===true?'done':saved.is_completed===false?'undone':'') : '';
+        var score  = (saved && saved.score) || '';
+        var cellId = 'mnc-cell-'+s.id+'-'+di;
+
+        var cellBg = isToday ? '#fffef0' : '';
+        if(status==='done')   cellBg = '#f0fdf4';
+        if(status==='undone') cellBg = '#fef2f2';
+
+        html += '<td id="'+cellId+'" style="background:'+cellBg+';min-width:'+colW+'">';
+        html += '<div style="display:flex;flex-direction:column;align-items:center;gap:3px">';
+
+        // 점수 입력
+        html += '<div style="display:flex;align-items:center;gap:2px">'
+          +'<input type="number" id="mnc-score-'+s.id+'-'+di+'" value="'+score+'" min="0" max="100" placeholder="—" '
+          +'class="mnc-score-inp" data-sid="'+s.id+'" data-di="'+di+'" data-date="'+d+'"'
+          +'oninput="mncMatrixScoreInput(this)" onkeydown="mncMatrixKeyDown(event,this)">'
+          +'<span style="font-size:10px;color:#9ca3af">점</span>'
+          +'</div>';
+
+        // 미학습 버튼
+        var xActive = status==='undone';
+        html += '<button class="mnc-x-btn" id="mnc-x-'+s.id+'-'+di+'" '
+          +'data-sid="'+s.id+'" data-di="'+di+'" data-date="'+d+'" '
+          +'onclick="mncMatrixUndone(this)" '
+          +'style="background:'+(xActive?'#FEE2E2':'#f9fafb')+';border-color:'+(xActive?'#FCA5A5':'#e5e7eb')+';color:'+(xActive?'#B91C1C':'#9ca3af')+'">'+
+          (xActive?'❌ 미학습':'미학습')+'</button>';
+
+        html += '</div></td>';
+      });
+
+      html += '</tr>';
       globalIdx++;
     });
-
-    html += '</tbody></table></div>';
   });
 
+  html += '</tbody></table></div>';
   wrap.innerHTML = html;
 
   // 액션 버튼 표시
@@ -3736,29 +3757,148 @@ function mncRenderTable(){
   // 요일 배너 업데이트
   mncUpdateCheckingBanner(_mncDate);
 
-  // 요약 섹션 범위 레이블 업데이트
+  // 요약 섹션 업데이트
+  mncUpdateSummaryLabel();
+}
+
+function mncUpdateSummaryLabel(){
   var sumSec = document.getElementById('mnc-summary-section');
   if(sumSec) sumSec.style.display = 'block';
-  if(_mncDate){
-    var rangeInfo = mncGetResultDateRange(_mncDate);
-    var daysArr = ['일','월','화','수','목','금','토'];
-    var sd = rangeInfo.startDate, ed = rangeInfo.endDate, yd2 = rangeInfo.yesterday;
-    var getUDay = function(d){ return d.getUTCDay(); };
-    var rangeLabel = '주간 범위: '
-      +(sd.getUTCMonth()+1)+'/'+(sd.getUTCDate())+'('+daysArr[getUDay(sd)]+')'
-      +' ~ '+(ed.getUTCMonth()+1)+'/'+(ed.getUTCDate())+'('+daysArr[getUDay(ed)]+')'
-      +'  |  현재까지 결과: ~'+(yd2.getUTCMonth()+1)+'/'
-      +(yd2.getUTCDate())+'('+daysArr[getUDay(yd2)]+')';
-    var rl = document.getElementById('mnc-summary-range-label');
-    if(rl) rl.textContent = rangeLabel;
-    var prev = document.getElementById('mnc-summary-preview');
-    if(prev) prev.innerHTML = '';
+  if(!_mncDate) return;
+  var rangeInfo = mncGetResultDateRange(_mncDate);
+  var DAYS7 = ['일','월','화','수','목','금','토'];
+  var sd = rangeInfo.startDate, ed = rangeInfo.endDate, yd2 = rangeInfo.yesterday;
+  var rangeLabel = '주간 범위: '
+    +(sd.getUTCMonth()+1)+'/'+(sd.getUTCDate())+'('+DAYS7[sd.getUTCDay()]+')'
+    +' ~ '+(ed.getUTCMonth()+1)+'/'+(ed.getUTCDate())+'('+DAYS7[ed.getUTCDay()]+')'
+    +'  |  현재까지 결과: ~'+(yd2.getUTCMonth()+1)+'/'
+    +(yd2.getUTCDate())+'('+DAYS7[yd2.getUTCDay()]+')';
+  var rl = document.getElementById('mnc-summary-range-label');
+  if(rl) rl.textContent = rangeLabel;
+  var prev = document.getElementById('mnc-summary-preview');
+  if(prev) prev.innerHTML = '';
+}
+
+// 매트릭스 점수 입력
+function mncMatrixScoreInput(input){
+  var sid = input.dataset.sid;
+  var di  = parseInt(input.dataset.di);
+  var d   = input.dataset.date;
+  var val = parseInt(input.value);
+
+  if(!_mncData[d]) _mncData[d] = {};
+  if(!_mncData[d][sid]) _mncData[d][sid] = {student_id:sid, check_date:d};
+  if(!_mncDirty[d]) _mncDirty[d] = {};
+  _mncDirty[d][sid] = true;
+
+  if(!isNaN(val) && val > 0){
+    _mncData[d][sid].is_completed = true;
+    _mncData[d][sid].score = val;
+    mncMatrixUpdateCell(sid, di, d, 'done', val);
+  } else if(input.value === '' || val === 0){
+    // 점수 지우면 상태 초기화
+    _mncData[d][sid].is_completed = null;
+    _mncData[d][sid].score = null;
+    mncMatrixUpdateCell(sid, di, d, '', null);
   }
 }
 
-// 점수 입력 키보드
-// Enter → 완료 처리 + 다음 학생 점수 칸으로
-// Tab  → 옆 ❌ 버튼으로 이동 (브라우저 기본 Tab 동작)
+// 매트릭스 키보드
+function mncMatrixKeyDown(event, input){
+  var sid = input.dataset.sid;
+  var di  = parseInt(input.dataset.di);
+  var d   = input.dataset.date;
+
+  if(event.key === 'Enter'){
+    event.preventDefault();
+    var val = parseInt(input.value);
+    if(!isNaN(val) && val > 0){
+      if(!_mncData[d]) _mncData[d] = {};
+      if(!_mncData[d][sid]) _mncData[d][sid] = {student_id:sid, check_date:d};
+      if(!_mncDirty[d]) _mncDirty[d] = {};
+      _mncDirty[d][sid] = true;
+      _mncData[d][sid].is_completed = true;
+      _mncData[d][sid].score = val;
+      mncMatrixUpdateCell(sid, di, d, 'done', val);
+    }
+    // 다음 학생 같은 날짜 컬럼으로 이동 (DOM 순서)
+    var allInputs = Array.from(document.querySelectorAll('.mnc-score-inp[data-di="'+di+'"]'));
+    var idx = allInputs.indexOf(input);
+    if(idx >= 0 && idx < allInputs.length-1){
+      allInputs[idx+1].focus(); allInputs[idx+1].select();
+    }
+  } else if(event.key === 'Tab'){
+    // Tab: 오른쪽 날짜 컬럼으로 이동
+    event.preventDefault();
+    var nextDi = di + 1;
+    var nextInput = document.querySelector('.mnc-score-inp[data-sid="'+sid+'"][data-di="'+nextDi+'"]');
+    if(nextInput){ nextInput.focus(); nextInput.select(); }
+    else {
+      // 마지막 날짜면 다음 학생 첫 날짜로
+      var allFirstInputs = Array.from(document.querySelectorAll('.mnc-score-inp[data-di="0"]'));
+      var sidInputs = Array.from(document.querySelectorAll('.mnc-score-inp[data-sid="'+sid+'"]'));
+      var myFirst = sidInputs[0];
+      var myIdx = allFirstInputs.indexOf(myFirst);
+      if(myIdx >= 0 && myIdx < allFirstInputs.length-1){
+        allFirstInputs[myIdx+1].focus(); allFirstInputs[myIdx+1].select();
+      }
+    }
+  }
+}
+
+// 미학습 버튼 클릭
+function mncMatrixUndone(btn){
+  var sid = btn.dataset.sid;
+  var di  = parseInt(btn.dataset.di);
+  var d   = btn.dataset.date;
+  var scoreInput = document.querySelector('.mnc-score-inp[data-sid="'+sid+'"][data-di="'+di+'"]');
+
+  if(!_mncData[d]) _mncData[d] = {};
+  if(!_mncData[d][sid]) _mncData[d][sid] = {student_id:sid, check_date:d};
+  if(!_mncDirty[d]) _mncDirty[d] = {};
+  _mncDirty[d][sid] = true;
+
+  // 토글: 이미 미학습이면 해제
+  var current = _mncData[d][sid];
+  if(current.is_completed === false){
+    current.is_completed = null; current.score = null;
+    if(scoreInput) scoreInput.value = '';
+    mncMatrixUpdateCell(sid, di, d, '', null);
+  } else {
+    current.is_completed = false; current.score = null;
+    if(scoreInput) scoreInput.value = '';
+    mncMatrixUpdateCell(sid, di, d, 'undone', null);
+    // 다음 학생으로 포커스
+    var allInputs = Array.from(document.querySelectorAll('.mnc-score-inp[data-di="'+di+'"]'));
+    var curInput = document.querySelector('.mnc-score-inp[data-sid="'+sid+'"][data-di="'+di+'"]');
+    var idx = allInputs.indexOf(curInput);
+    if(idx >= 0 && idx < allInputs.length-1){
+      allInputs[idx+1].focus(); allInputs[idx+1].select();
+    }
+  }
+}
+
+// 셀 시각 업데이트
+function mncMatrixUpdateCell(sid, di, d, status, score){
+  var cellId = 'mnc-cell-'+sid+'-'+di;
+  var cell = document.getElementById(cellId);
+  var xBtn = document.getElementById('mnc-x-'+sid+'-'+di);
+  var isToday = (d === _mncResultDate);
+
+  var cellBg = isToday ? '#fffef0' : '';
+  if(status==='done')   cellBg = '#f0fdf4';
+  if(status==='undone') cellBg = '#fef2f2';
+
+  if(cell) cell.style.background = cellBg;
+  if(xBtn){
+    var xActive = status==='undone';
+    xBtn.style.background    = xActive ? '#FEE2E2' : '#f9fafb';
+    xBtn.style.borderColor   = xActive ? '#FCA5A5' : '#e5e7eb';
+    xBtn.style.color         = xActive ? '#B91C1C' : '#9ca3af';
+    xBtn.textContent         = xActive ? '❌ 미학습' : '미학습';
+  }
+}
+
 function mncScoreKeyDown(event, studentId){
   if(event.key === 'Enter'){
     event.preventDefault();
@@ -3950,8 +4090,8 @@ async function mncResetTeacher(){
   var tObj = _mncTeachers.find(function(t){ return t.id===teacherFilter; });
   var tName = tObj ? tObj.name+'T 반' : '전체';
 
-  if(!_mncDate){ alert('날짜를 먼저 선택하세요'); return; }
-  if(!confirm('[초기화 확인]\n'+tName+' / '+_mncDate+'\n저장된 데이터가 삭제됩니다. 계속하시겠습니까?')){return;}
+  if(!_mncResultDate){ alert('날짜를 먼저 선택하세요'); return; }
+  if(!confirm('[초기화 확인]\n'+tName+' / '+_mncResultDate+'\n해당 날짜 저장된 데이터가 삭제됩니다. 계속하시겠습니까?')){return;}
 
   var studentsToReset = teacherFilter
     ? _mncStudents.filter(function(s){ return s.teacher_id===teacherFilter; })
@@ -3960,20 +4100,20 @@ async function mncResetTeacher(){
   if(!studentsToReset.length){ alert('초기화할 학생이 없습니다'); return; }
 
   var ids = studentsToReset.map(function(s){ return s.id; });
-  var rParts2 = _mncDate.split('-');
-  var rDate2 = new Date(Date.UTC(parseInt(rParts2[0]),parseInt(rParts2[1])-1,parseInt(rParts2[2])-1));
-  var rDateStr2 = rDate2.getUTCFullYear()+'-'
-    +String(rDate2.getUTCMonth()+1).padStart(2,'0')+'-'
-    +String(rDate2.getUTCDate()).padStart(2,'0');
   var {error} = await db.from('middle_naje_check')
     .delete()
-    .eq('check_date', rDateStr2)
+    .eq('check_date', _mncResultDate)
     .in('student_id', ids);
 
   if(error){ alert('오류: '+error.message); return; }
 
   // 로컬 상태도 초기화
-  ids.forEach(function(id){ delete _mncData[id]; });
+  if(_mncData[_mncResultDate]){
+    ids.forEach(function(id){ delete _mncData[_mncResultDate][id]; });
+  }
+  if(_mncDirty[_mncResultDate]){
+    ids.forEach(function(id){ delete _mncDirty[_mncResultDate][id]; });
+  }
   alert('✅ 초기화 완료됐습니다');
   mncLoadStudents();
 }
@@ -3985,40 +4125,29 @@ function mncToggleMent(studentId){
 }
 
 function mncCopyMent(studentId){
-  // 멘트 텍스트 생성 (멘트 행 표시 없이 클립보드만 복사)
-  var el = document.getElementById('mnc-ment-'+studentId);
-  var ment = '';
-
-  if(el && el.textContent.trim()){
-    ment = el.textContent;
-  } else {
-    // el이 비어있으면 DB 데이터로 직접 생성
-    var saved = _mncData[studentId];
-    var s = _mncStudents.find(function(s){ return s.id===studentId; });
-    if(saved && s){
-      var status = saved.is_completed===true?'done':saved.is_completed===false?'undone':'';
-      if(status) ment = mncGenerateMent(s.name, _mncDate, status, saved.score||0, studentId);
-    }
-  }
-
+  // 현재 결과 날짜 기준으로 멘트 생성
+  var s = _mncStudents.find(function(s){ return s.id===studentId; });
+  if(!s) return;
+  var saved = _mncData[_mncResultDate] && _mncData[_mncResultDate][studentId];
+  if(!saved) return;
+  var status = saved.is_completed===true?'done':saved.is_completed===false?'undone':'';
+  if(!status) return;
+  var ment = mncGenerateMent(s.name, _mncDate, status, saved.score||0, studentId);
   if(!ment) return;
-
   navigator.clipboard.writeText(ment).then(function(){
-    var btn = document.getElementById('mnc-btn-copy-'+studentId);
-    if(btn){
-      btn.textContent='✅'; btn.style.color='#15803d';
-      setTimeout(function(){ btn.textContent='📋'; btn.style.color=''; },1500);
-    }
+    alert('✅ '+s.name+' 학생 멘트가 복사됐습니다!');
   });
 }
 
 function mncCopyAllMents(){
   var all = [];
   _mncStudents.forEach(function(s){
-    var el = document.getElementById('mnc-ment-'+s.id);
-    if(el && el.textContent.trim()){
-      all.push('【'+s.name+'】\n'+el.textContent);
-    }
+    var saved = _mncData[_mncResultDate] && _mncData[_mncResultDate][s.id];
+    if(!saved) return;
+    var status = saved.is_completed===true?'done':saved.is_completed===false?'undone':'';
+    if(!status) return;
+    var ment = mncGenerateMent(s.name, _mncDate, status, saved.score||0, s.id);
+    if(ment) all.push('【'+s.name+'】\n'+ment);
   });
   if(!all.length){ alert('입력된 멘트가 없습니다.'); return; }
   navigator.clipboard.writeText(all.join('\n\n──────────────────\n\n')).then(function(){
@@ -4030,38 +4159,35 @@ async function mncSaveAll(){
   var adminPanel = document.getElementById('panel-admin-middle-naje');
   if(!adminPanel || !adminPanel.classList.contains('active')) return;
   if(!_mncDate){ alert('날짜를 선택하세요'); return; }
-  var toSave = Object.keys(_mncData).filter(function(sid){
-    return _mncData[sid].is_completed !== undefined;
-  });
-  if(!toSave.length){ alert('저장할 데이터가 없습니다'); return; }
 
-  // check_date = 결과 날짜(체크날 전날) - N제 학생이 푼 날짜 (UTC 기준)
-  var sParts = _mncDate.split('-');
-  var resultDateObj = new Date(Date.UTC(parseInt(sParts[0]),parseInt(sParts[1])-1,parseInt(sParts[2])-1));
-  var resultDateStr = resultDateObj.getUTCFullYear()+'-'
-    +String(resultDateObj.getUTCMonth()+1).padStart(2,'0')+'-'
-    +String(resultDateObj.getUTCDate()).padStart(2,'0');
-
-  var upserts = toSave.map(function(sid){
-    var d = _mncData[sid];
-    var scoreEl = document.getElementById('mnc-score-'+sid);
-    var score = scoreEl ? parseInt(scoreEl.value)||null : d.score||null;
-    return {
-      student_id: sid,
-      check_date: resultDateStr,  // 결과 날짜(학생이 과제 푼 날) 저장
-      is_completed: d.is_completed,
-      score: d.is_completed ? score : null,
-      teacher_id: (_mncStudents.find(function(s){ return s.id===sid; })||{}).teacher_id || null,
-      created_by: currentUser?.id || null,
-      updated_at: new Date().toISOString()
-    };
+  // _mncDirty 기준으로 변경된 셀만 저장
+  var upserts = [];
+  Object.keys(_mncDirty).forEach(function(d){
+    Object.keys(_mncDirty[d]).forEach(function(sid){
+      var c = _mncData[d] && _mncData[d][sid];
+      if(!c || c.is_completed === null || c.is_completed === undefined) return;
+      var scoreEl = document.querySelector('.mnc-score-inp[data-sid="'+sid+'"][data-date="'+d+'"]');
+      var score = scoreEl ? parseInt(scoreEl.value)||null : c.score||null;
+      upserts.push({
+        student_id: sid,
+        check_date: d,
+        is_completed: c.is_completed,
+        score: c.is_completed===true ? score : null,
+        teacher_id: (_mncStudents.find(function(s){ return s.id===sid; })||{}).teacher_id || null,
+        created_by: currentUser?.id || null,
+        updated_at: new Date().toISOString()
+      });
+    });
   });
+
+  if(!upserts.length){ alert('변경된 데이터가 없습니다'); return; }
 
   var {error} = await db.from('middle_naje_check')
     .upsert(upserts, {onConflict:'student_id,check_date'});
 
   if(error){ alert('저장 오류: '+error.message); return; }
-  alert('✅ '+upserts.length+'명 데이터가 저장됐습니다!');
+  _mncDirty = {};
+  alert('✅ '+upserts.length+'건 저장됐습니다!');
   mncLoadStudents();
 }
 
