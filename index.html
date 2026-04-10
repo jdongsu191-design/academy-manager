@@ -507,11 +507,17 @@
         </div>
         <div class="card">
           <div class="card-title">학생 목록
-            <button class="btn btn-primary btn-sm" onclick="openModal('addStudent')">+ 학생 추가</button>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button class="btn btn-sm" id="btn-show-withdrawn" onclick="toggleWithdrawnView()" style="font-size:12px;background:#fef2f2;border-color:#fca5a5;color:#dc2626">퇴원 학생 보기</button>
+              <button class="btn btn-primary btn-sm" id="btn-add-student" onclick="openModal('addStudent')">+ 학생 추가</button>
+            </div>
           </div>
           <div class="search-row">
             <input class="search-input" id="studentSearch" placeholder="이름 검색..." oninput="renderStudents()">
             <select class="filter" id="classFilter" onchange="renderStudents()"><option value="">전체</option></select>
+          </div>
+          <div id="withdrawn-notice" style="display:none;padding:8px 12px;background:#fef2f2;border-radius:8px;margin-bottom:8px;font-size:12px;color:#dc2626;font-weight:600">
+            📋 퇴원 학생 목록 — 재입학 처리 후 재원 학생으로 전환됩니다
           </div>
           <div id="studentList"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
         </div>
@@ -2125,6 +2131,15 @@ function logout(){
   // 학생 목록 초기화
   var stuList = document.getElementById('studentList');
   if(stuList) stuList.innerHTML = '';
+  // 퇴원 학생 모드 초기화
+  _showWithdrawn = false;
+  _withdrawnStudents = [];
+  var wdBtn = document.getElementById('btn-show-withdrawn');
+  if(wdBtn){ wdBtn.textContent='퇴원 학생 보기'; wdBtn.style.cssText='font-size:12px;background:#fef2f2;border-color:#fca5a5;color:#dc2626'; }
+  var wdNotice = document.getElementById('withdrawn-notice');
+  if(wdNotice) wdNotice.style.display='none';
+  var addBtn2 = document.getElementById('btn-add-student');
+  if(addBtn2) addBtn2.style.display='';
   // 숙제 목록 초기화
   var hwList = document.getElementById('homeworkList');
   if(hwList) hwList.innerHTML = '';
@@ -2515,11 +2530,81 @@ function renderClassList(){
   classes.forEach(c=>{cf.innerHTML+=`<option value="${c.id}">${c.name}</option>`;});
 }
 
+var _showWithdrawn = false; // 퇴원 학생 보기 모드
+
+function toggleWithdrawnView(){
+  _showWithdrawn = !_showWithdrawn;
+  const btn = document.getElementById('btn-show-withdrawn');
+  const notice = document.getElementById('withdrawn-notice');
+  const addBtn = document.getElementById('btn-add-student');
+  if(_showWithdrawn){
+    btn.textContent = '재원 학생 보기';
+    btn.style.cssText = 'font-size:12px;background:#f0fdf4;border-color:#86efac;color:#16a34a';
+    if(notice) notice.style.display = 'block';
+    if(addBtn) addBtn.style.display = 'none';
+  } else {
+    btn.textContent = '퇴원 학생 보기';
+    btn.style.cssText = 'font-size:12px;background:#fef2f2;border-color:#fca5a5;color:#dc2626';
+    if(notice) notice.style.display = 'none';
+    if(addBtn) addBtn.style.display = '';
+  }
+  loadWithdrawnStudents();
+}
+
+var _withdrawnStudents = []; // 퇴원 학생 목록 캐시
+
+async function loadWithdrawnStudents(){
+  if(!_showWithdrawn){ renderStudents(); return; }
+  const {data} = await db.from('users')
+    .select('*').eq('role','student').eq('status','inactive')
+    .eq('teacher_id', currentUser.id).order('withdrawn_at',{ascending:false});
+  _withdrawnStudents = data || [];
+  renderStudents();
+}
+
 function renderStudents(){
   const q=document.getElementById('studentSearch').value.toLowerCase();
   const cf=document.getElementById('classFilter').value;
-  const f=students.filter(s=>s.name.toLowerCase().includes(q)&&(!cf||s.class_id===cf||s.class_id2===cf));
   const el=document.getElementById('studentList');
+
+  // 퇴원 학생 모드
+  if(_showWithdrawn){
+    const f=_withdrawnStudents.filter(s=>s.name.toLowerCase().includes(q));
+    if(!f.length){
+      el.innerHTML='<div class="empty-state"><div class="ei">📋</div><p>퇴원 학생이 없습니다</p></div>';
+      return;
+    }
+    el.innerHTML=f.map(s=>{
+      const schoolGrade=[s.school,s.grade].filter(Boolean).join(' ');
+      const avatarHtml=s.profile_image_url
+        ?`<div class="avatar student" style="overflow:hidden;padding:0"><img src="${s.profile_image_url}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"></div>`
+        :`<div class="avatar student" style="background:#f3f4f6;color:#9ca3af">${s.name[0]}</div>`;
+      return`<div class="user-item" style="opacity:0.85;border-left:3px solid #fca5a5">
+        ${avatarHtml}
+        <div class="user-info">
+          <div class="user-name">${s.name}
+            <span class="badge" style="background:#fef2f2;color:#dc2626">퇴원</span>
+            ${schoolGrade?`<span class="badge" style="background:#f5f6fa;color:#4b5563">${schoolGrade}</span>`:''}
+          </div>
+          <div class="user-meta">
+            ${s.phone||'연락처 없음'}
+            ${s.enrolled_at?` · 입학 ${s.enrolled_at}`:''}
+            ${s.withdrawn_at?` · <span style="color:#dc2626">퇴원 ${s.withdrawn_at}</span>`:''}
+          </div>
+        </div>
+        <div class="user-actions">
+          <button class="btn btn-sm" onclick="reEnrollStudent('${s.id}','${s.name.replace(/'/g,"\'")}')"
+            style="background:#f0fdf4;border-color:#86efac;color:#16a34a;font-weight:700">
+            재입학
+          </button>
+        </div>
+      </div>`;
+    }).join('');
+    return;
+  }
+
+  // 일반 재원 학생 모드
+  const f=students.filter(s=>s.name.toLowerCase().includes(q)&&(!cf||s.class_id===cf||s.class_id2===cf));
   if(!f.length){el.innerHTML='<div class="empty-state"><p>학생이 없습니다</p></div>';return;}
   el.innerHTML=f.map(s=>{
     const cls=classes.find(c=>c.id===s.class_id);
@@ -2959,20 +3044,26 @@ async function saveNajeAssignment(){
 }
 
 // 재입학 처리
-async function reEnrollStudent(id){
+async function reEnrollStudent(id, name){
   const today = new Date().toISOString().split('T')[0];
-  const newDate = prompt('재입학일을 입력하세요 (YYYY-MM-DD)', today);
-  if(!newDate) return;
-  if(!confirm(`${newDate}로 재입학 처리할까요?\n퇴원일이 초기화되고 재학 상태로 변경됩니다.`)) return;
+  const label = name ? `[${name}] ` : '';
+  const newDate = prompt(`${label}재입학일을 입력하세요 (YYYY-MM-DD)`, today);
+  if(newDate === null) return;
+  const dateVal = newDate.trim() || today;
+  if(!confirm(`${label}${dateVal}로 재입학 처리할까요?\n퇴원일이 초기화되고 재학 상태로 변경됩니다.`)) return;
   const{error} = await db.from('users').update({
     status: 'active',
-    enrolled_at: newDate,
+    enrolled_at: dateVal,
     withdrawn_at: null
   }).eq('id', id);
   if(error){alert('오류: '+error.message);return;}
+  // 퇴원 목록에서 제거 후 갱신
+  _withdrawnStudents = _withdrawnStudents.filter(s=>s.id!==id);
   closeModal('editStudent');
   await loadTeacherData();
-  alert(`✅ 재입학 처리 완료! (입학일: ${newDate})`);
+  // 퇴원 학생 보기 모드면 목록 갱신
+  if(_showWithdrawn) renderStudents();
+  alert(`✅ 재입학 처리 완료! (입학일: ${dateVal})`);
 }
 
 // ===== 선생님 숙제 (자기 반만) =====
