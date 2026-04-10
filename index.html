@@ -474,6 +474,9 @@
         <button class="at-menu-item" id="amenu-beti" onclick="switchAdminTab('admin-beti',this);initAdminBeti()" style="display:none">
           <span class="at-menu-icon">📝</span>베티모의고사
         </button>
+        <button class="at-menu-item" id="amenu-worklog" onclick="switchAdminTab('admin-worklog',this);initAdminWorklog()">
+          <span class="at-menu-icon">📋</span>업무일지 조회
+        </button>
       </div>
     </nav>
     <div class="at-footer">
@@ -1218,6 +1221,39 @@
         </div>
       </div>
     </div>
+
+      <!-- 관리자 업무일지 조회 패널 -->
+      <div class="panel" id="panel-admin-worklog">
+        <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a2e">📋 업무일지 조회</div>
+        <div style="font-size:13px;color:#6b7280;margin-bottom:16px">선생님별 업무일지를 조회합니다 (읽기 전용)</div>
+
+        <!-- 필터 -->
+        <div class="card" style="margin-bottom:12px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <div style="flex:1;min-width:140px">
+              <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">선생님 선택</div>
+              <select id="awl-teacher-select" onchange="awlLoadDayLogs()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+                <option value="">선생님을 선택하세요</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:140px">
+              <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">날짜</div>
+              <input type="date" id="awl-date" onchange="awlLoadDayLogs()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+            </div>
+          </div>
+        </div>
+
+        <!-- 날짜별 업무일지 목록 -->
+        <div id="awl-logs-section" style="display:none;margin-bottom:12px">
+          <div class="card" style="background:#f0fdf4;border:1.5px solid #86efac">
+            <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:10px">📋 저장된 업무일지</div>
+            <div id="awl-logs-list" style="display:flex;flex-direction:column;gap:6px"></div>
+          </div>
+        </div>
+
+        <!-- 업무일지 상세 내용 (읽기 전용) -->
+        <div id="awl-detail" style="display:none"></div>
+      </div>
 
 
   </div><!-- /at-content -->
@@ -2196,6 +2232,168 @@ function switchTeacherTab(tab, el){
   // 앱 내 네비게이션 히스토리에 추가
   _navPush('teacher', tab);
 }
+/* ── 관리자 업무일지 조회 ── */
+async function initAdminWorklog(){
+  // 선생님 목록 채우기
+  const sel = document.getElementById('awl-teacher-select');
+  sel.innerHTML = '<option value="">선생님을 선택하세요</option>';
+  (allUsers||[]).filter(u=>u.role==='teacher').sort((a,b)=>a.name.localeCompare(b.name,'ko')).forEach(t=>{
+    sel.innerHTML += `<option value="${t.id}">${t.name} 선생님</option>`;
+  });
+  // 오늘 날짜 기본값
+  const today = new Date().toISOString().split('T')[0];
+  document.getElementById('awl-date').value = today;
+  document.getElementById('awl-logs-section').style.display = 'none';
+  document.getElementById('awl-detail').style.display = 'none';
+  document.getElementById('awl-detail').innerHTML = '';
+}
+
+async function awlLoadDayLogs(){
+  const teacherId = document.getElementById('awl-teacher-select').value;
+  const date      = document.getElementById('awl-date').value;
+  const section   = document.getElementById('awl-logs-section');
+  const listEl    = document.getElementById('awl-logs-list');
+  const detailEl  = document.getElementById('awl-detail');
+
+  detailEl.style.display = 'none';
+  detailEl.innerHTML = '';
+
+  if(!teacherId || !date){ section.style.display='none'; return; }
+
+  const {data: logs, error} = await db.from('work_logs')
+    .select('*').eq('teacher_id', teacherId).eq('log_date', date).order('created_at');
+
+  if(error || !logs || !logs.length){
+    section.style.display = 'none';
+    listEl.innerHTML = '';
+    detailEl.style.display = 'block';
+    detailEl.innerHTML = '<div class="empty-state"><div class="ei">📋</div><p style="color:#9ca3af">해당 날짜에 저장된 업무일지가 없습니다</p></div>';
+    return;
+  }
+
+  // 반 목록 (전체 allClasses에서)
+  section.style.display = 'block';
+  listEl.innerHTML = logs.map(log => {
+    const cls = (allClasses||[]).find(c=>c.id===log.class_id);
+    const clsName = cls?.name || '알 수 없는 반';
+    const clsInfo = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
+    return `<div onclick="awlShowDetail('${log.id}')"
+      style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1.5px solid #86efac;border-radius:10px;background:#fff;cursor:pointer;transition:background 0.15s"
+      onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background='#fff'">
+      <span style="font-size:18px">📋</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:700;color:#1e293b">${clsName}</div>
+        ${clsInfo?`<div style="font-size:11px;color:#9ca3af">${clsInfo}</div>`:''}
+      </div>
+      <span style="font-size:12px;color:#6b7280">조회 ›</span>
+    </div>`;
+  }).join('');
+}
+
+async function awlShowDetail(logId){
+  const detailEl = document.getElementById('awl-detail');
+  detailEl.style.display = 'block';
+  detailEl.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+
+  // 업무일지 + 학생 데이터 조회
+  const {data: log} = await db.from('work_logs').select('*').eq('id', logId).single();
+  const {data: stus} = await db.from('work_log_students')
+    .select('*, users(name, school, grade)').eq('log_id', logId);
+
+  if(!log){ detailEl.innerHTML = '<div class="empty-state"><p>조회 오류</p></div>'; return; }
+
+  const cls = (allClasses||[]).find(c=>c.id===log.class_id);
+  const teacher = (allUsers||[]).find(u=>u.id===log.teacher_id);
+  const dp = log.log_date.split('-');
+  const dayNames=['일','월','화','수','목','금','토'];
+  const d = new Date(log.log_date);
+  const dateLabel = `${dp[0]}/${String(+dp[1]).padStart(2,'0')}/${String(+dp[2]).padStart(2,'0')} (${dayNames[d.getDay()]})`;
+
+  const studentRows = (stus||[]).map((s,i)=>{
+    const u = s.users||{};
+    const schoolGrade = [u.school,u.grade].filter(Boolean).join(' ');
+    const att = s.attendance==='present'?'정시':s.attendance==='late'?'지각':s.attendance==='absent'?'결석':'-';
+    const attColor = s.attendance==='absent'?'color:#ef4444;font-weight:600':s.attendance==='late'?'color:#f97316':'';
+    const hw = s.homework_done?'완료':'미완료';
+    const hwColor = s.homework_done?'color:#16a34a;font-weight:600':'color:#ef4444';
+    return `<tr style="background:${i%2===0?'#fff':'#f8fbff'}">
+      <td style="padding:7px 8px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280">${schoolGrade}</td>
+      <td style="padding:7px 8px;border:1px solid #e5e7eb;font-weight:600">${u.name||''}</td>
+      <td style="padding:7px 8px;border:1px solid #e5e7eb;text-align:center;${attColor}">${att}</td>
+      <td style="padding:7px 8px;border:1px solid #e5e7eb;text-align:center">${s.n_count!=null?s.n_count:'-'}</td>
+      <td style="padding:7px 8px;border:1px solid #e5e7eb;text-align:center;${hwColor}">${hw}</td>
+      <td style="padding:7px 8px;border:1px solid #e5e7eb;text-align:center;color:#374151">${s.test_score||'-'}</td>
+      <td style="padding:7px 8px;border:1px solid #e5e7eb;font-size:12px;color:#4b5563">${s.note||''}</td>
+    </tr>`;
+  }).join('');
+
+  const clsName = cls?.name||'알 수 없는 반';
+  const clsInfo = [cls?.class_days,cls?.class_time].filter(Boolean).join(' · ');
+  const teacherName = teacher?.name||'알 수 없음';
+
+  detailEl.innerHTML = `
+    <div class="card">
+      <!-- 헤더 -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #178EF5">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:#178EF5">📋 업무일지 <span style="font-size:12px;color:#9ca3af;font-weight:400">(읽기 전용)</span></div>
+          <div style="font-size:13px;color:#6b7280;margin-top:2px">${teacherName} 선생님${clsInfo?' · '+clsInfo:''}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:16px;font-weight:700;color:#1a1a2e">${clsName}</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px">${dateLabel}</div>
+        </div>
+      </div>
+
+      <!-- 학생 출결표 -->
+      <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px">학생 출결 · 과제</div>
+      <div style="overflow-x:auto;margin-bottom:14px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:#E6F1FB">
+              <th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:left">학교/학년</th>
+              <th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:left">이름</th>
+              <th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">출석</th>
+              <th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">N제</th>
+              <th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">숙제</th>
+              <th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">TEST</th>
+              <th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:left">특이사항</th>
+            </tr>
+          </thead>
+          <tbody>${studentRows||'<tr><td colspan="7" style="padding:14px;text-align:center;color:#9ca3af;border:1px solid #e5e7eb">등록된 학생 없음</td></tr>'}</tbody>
+        </table>
+      </div>
+
+      <!-- 수업 내용 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px">
+          <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:5px">📖 진도</div>
+          <div style="font-size:13px;color:#1a1a2e;white-space:pre-wrap;min-height:24px">${log.progress||'<span style="color:#d1d5db">-</span>'}</div>
+        </div>
+        <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px">
+          <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:5px">📝 숙제</div>
+          <div style="font-size:13px;color:#1a1a2e;white-space:pre-wrap;min-height:24px">${log.homework||'<span style="color:#d1d5db">-</span>'}</div>
+        </div>
+      </div>
+
+      <!-- 기타 -->
+      ${(log.trial_class||log.new_student||log.dropout||log.memo)?`
+      <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px">
+        <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:6px">기타</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;margin-bottom:${log.memo?'6px':'0'}">
+          ${log.trial_class?`<span><span style="color:#6b7280">시범수업</span> <strong>${log.trial_class}</strong></span>`:''}
+          ${log.new_student?`<span><span style="color:#6b7280">신입생</span> <strong>${log.new_student}</strong></span>`:''}
+          ${log.dropout?`<span><span style="color:#6b7280">퇴원생</span> <strong>${log.dropout}</strong></span>`:''}
+        </div>
+        ${log.memo?`<div style="font-size:12px;color:#4b5563"><span style="color:#6b7280">메모</span> ${log.memo}</div>`:''}
+      </div>`:''}
+    </div>`;
+
+  // 부드럽게 스크롤
+  detailEl.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+
 function switchAdminTab(tab, el){
   document.querySelectorAll('#adminApp .panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-'+tab).classList.add('active');
