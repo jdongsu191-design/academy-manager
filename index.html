@@ -519,7 +519,7 @@
               <input type="date" id="wl-date" onchange="loadWorkLog()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
             </div>
             <button class="btn btn-primary btn-sm" onclick="saveWorkLog()">💾 저장</button>
-            <button class="btn btn-sm" id="wl-copy-btn" onclick="copyWorkLogImage()" style="display:none;background:#25D366;color:#fff;border-color:#25D366">📋 카톡 복사</button>
+            <button class="btn btn-sm" id="wl-copy-btn" onclick="copyWorkLogImage()" style="display:none;background:#25D366;color:#fff;border-color:#25D366">📤 공유/복사</button>
           </div>
         </div>
 
@@ -4905,7 +4905,7 @@ async function mnrGenerateImage(){
     +'</div>'
     +'<div style="display:flex;gap:8px">'
     +'<a href="'+imgUrl+'" download="'+fname+'" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none">⬇️ 다운로드</a>'
-    +'<button onclick="mnrCopyImage(\''+imgUrl+'\')" class="btn" style="flex:1;background:#f0f7ff;border-color:#bfdbfe;color:#1d4ed8">📋 클립보드 복사</button>'
+    +'<button onclick="mnrCopyImage(\''+imgUrl+'\')" class="btn" style="flex:1;background:#f0f7ff;border-color:#bfdbfe;color:#1d4ed8">📤 공유/복사</button>'
     +'</div>';
 }
 
@@ -4913,9 +4913,17 @@ async function mnrCopyImage(dataUrl){
   try{
     var res = await fetch(dataUrl);
     var blob = await res.blob();
+    var file = new File([blob], 'naje_result.png', {type:'image/png'});
+    // 모바일: Web Share API
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:'N제 결과', text:'일일N제 결과 이미지'});
+      return;
+    }
+    // PC: 클립보드
     await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
     alert('✅ 이미지가 복사됐습니다! 카톡에 붙여넣기 하세요.');
   }catch(e){
+    if(e.name==='AbortError') return;
     alert('클립보드 복사 실패: '+e.message+'\n다운로드 버튼을 이용해주세요.');
   }
 }
@@ -7336,30 +7344,57 @@ async function copyWorkLogImage(){
       logging: false
     });
 
-    // 4. 클립보드에 복사
+    // 4. 환경에 따라 공유/복사/다운로드 분기
     canvas.toBlob(async (blob) => {
-      try{
-        await navigator.clipboard.write([
-          new ClipboardItem({'image/png': blob})
-        ]);
-        btn.textContent = '✅ 복사됨!';
-        btn.style.background = '#128c7e';
-        setTimeout(()=>{
+      const dateStr = date.replace(/-/g,'');
+      const fileName = `업무일지_${className}_${dateStr}.png`;
+      const file = new File([blob], fileName, {type:'image/png'});
+
+      // ① 모바일: Web Share API (카톡 등 앱으로 직접 공유)
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        try{
+          await navigator.share({files:[file], title:'업무일지', text:className+' 업무일지'});
           btn.textContent = '📋 카톡 복사';
           btn.style.background = '#25D366';
           btn.disabled = false;
-        }, 2500);
-      }catch(clipErr){
-        // 클립보드 API 미지원 시 다운로드로 대체
-        const a = document.createElement('a');
-        a.href = canvas.toDataURL('image/png');
-        const dateStr = date.replace(/-/g,'');
-        a.download = `업무일지_${className}_${dateStr}.png`;
-        a.click();
-        btn.textContent = '📋 카톡 복사';
-        btn.disabled = false;
-        alert('클립보드 복사가 지원되지 않아 이미지를 다운로드했습니다.\n다운로드된 이미지를 카톡에 공유하세요!');
+          return;
+        }catch(shareErr){
+          if(shareErr.name === 'AbortError'){ // 사용자가 공유 취소
+            btn.textContent = '📋 카톡 복사';
+            btn.style.background = '#25D366';
+            btn.disabled = false;
+            return;
+          }
+          // 공유 실패 → 아래 방식으로 fallback
+        }
       }
+
+      // ② PC: 클립보드 이미지 복사
+      if(navigator.clipboard && navigator.clipboard.write){
+        try{
+          await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+          btn.textContent = '✅ 복사됨!';
+          btn.style.background = '#128c7e';
+          setTimeout(()=>{
+            btn.textContent = '📋 카톡 복사';
+            btn.style.background = '#25D366';
+            btn.disabled = false;
+          }, 2500);
+          return;
+        }catch(clipErr){
+          // 클립보드 실패 → 다운로드로 fallback
+        }
+      }
+
+      // ③ fallback: 다운로드
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      a.download = fileName;
+      a.click();
+      btn.textContent = '📋 카톡 복사';
+      btn.style.background = '#25D366';
+      btn.disabled = false;
+      alert('이미지를 다운로드했습니다.\n갤러리에서 카톡으로 공유해주세요!');
     }, 'image/png');
 
   }catch(err){
