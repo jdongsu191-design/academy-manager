@@ -536,17 +536,17 @@
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
             <div style="flex:1;min-width:120px">
               <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">반 선택</div>
-              <select id="wl-class-select" onchange="loadWorkLog()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+              <select id="wl-class-select" onchange="loadWorkLog();wlShowClassBtn()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
                 <option value="">반을 선택하세요</option>
               </select>
             </div>
             <div style="flex:1;min-width:120px">
               <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">날짜</div>
-              <input type="date" id="wl-date" onchange="loadWorkLog()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+              <input type="date" id="wl-date" onchange="loadWorkLog();wlShowAllBtn()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
             </div>
             <button class="btn btn-primary btn-sm" onclick="saveWorkLog()">💾 저장</button>
-            <button class="btn btn-sm" id="wl-copy-btn" onclick="copyWorkLogImage()" style="display:none;background:#25D366;color:#fff;border-color:#25D366">📤 이 반 공유</button>
-            <button class="btn btn-sm" id="wl-copy-all-btn" onclick="copyAllWorkLogImage()" style="display:none;background:#1d4ed8;color:#fff;border-color:#1d4ed8">🗂️ 날짜 전체</button>
+            <button class="btn btn-sm" id="wl-copy-btn" onclick="copyWorkLogImage()" style="display:none;background:#25D366;color:#fff;border-color:#25D366">📊 해당 반 이미지 생성</button>
+            <button class="btn btn-sm" id="wl-copy-all-btn" onclick="copyAllWorkLogImage()" style="display:none;background:#1d4ed8;color:#fff;border-color:#1d4ed8">📋 금일 업무일지 이미지 생성</button>
           </div>
         </div>
 
@@ -7532,270 +7532,135 @@ async function copyAllWorkLogImage(){
   const btn = document.getElementById('wl-copy-all-btn');
   const date = document.getElementById('wl-date').value;
   if(!date){ alert('날짜를 선택하세요'); return; }
-
   btn.textContent = '⏳ 생성 중...'; btn.disabled = true;
 
   try{
-    // 해당 날짜에 저장된 모든 반 업무일지 조회
+    // 해당 날짜의 모든 반 업무일지 조회
     const {data: logs, error} = await db.from('work_logs')
-      .select('*')
-      .eq('teacher_id', currentUser.id)
-      .eq('log_date', date)
-      .order('created_at');
-
+      .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
     if(error) throw error;
     if(!logs || !logs.length){
       alert('해당 날짜에 저장된 업무일지가 없습니다.');
-      btn.textContent = '🗂️ 날짜 전체'; btn.disabled = false;
-      return;
+      btn.textContent = '📋 금일 업무일지 이미지 생성'; btn.disabled = false; return;
     }
 
-    // 각 반의 학생 데이터 조회 (users join으로 이름 포함)
-    const {data: wlStudentsAll} = await db.from('work_log_students')
-      .select('*, users(name, school, grade)')
-      .in('log_id', logs.map(l => l.id))
-      .order('created_at');
+    // 학생 데이터 (이름 포함)
+    const {data: stuRows} = await db.from('work_log_students')
+      .select('*, users(name)').in('log_id', logs.map(l=>l.id)).order('created_at');
 
-    // Canvas 설정
-    const PAD = 28, TITLE_H = 90;
-    const TABLE_PAD = 16;
-    const ROW_H = 38;
-    const COL_WIDTHS = [160, 70, 70, 70, 120]; // 이름, 출석, N제, 숙제, 과제
-    const TABLE_W = COL_WIDTHS.reduce((a,b)=>a+b,0) + TABLE_PAD*2;
-    const CARD_W = Math.max(680, TABLE_W + PAD*2);
-
-    // 각 카드 높이 계산
-    function getCardH(log, stuCount){
-      const INFO_H = 60; // 수업 진도/메모 요약
-      return TITLE_H + TABLE_PAD + (ROW_H * (stuCount + 1)) + TABLE_PAD + INFO_H + PAD;
-    }
-
-    // 전체 캔버스 크기
-    const SCALE = 2;
-    const cardInfos = logs.map(log => {
-      const cls = classes.find(c => c.id === log.class_id);
-      const stus = (wlStudentsAll||[]).filter(s => s.log_id === log.id);
-      return { log, cls, stus };
-    });
-
-    const totalH = PAD + cardInfos.reduce((sum, {stus}) => sum + getCardH(null, stus.length), 0) + PAD * (cardInfos.length - 1);
-
-    const canvas = document.createElement('canvas');
-    canvas.width  = CARD_W * SCALE;
-    canvas.height = totalH * SCALE;
-    const ctx = canvas.getContext('2d');
-    ctx.scale(SCALE, SCALE);
-
-    // 배경
-    ctx.fillStyle = '#f5f6fa';
-    ctx.fillRect(0, 0, CARD_W, totalH);
-
-    // 상단 헤더
-    const grad = ctx.createLinearGradient(0,0,CARD_W,0);
-    grad.addColorStop(0,'#1a1a2e'); grad.addColorStop(1,'#0f3460');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, CARD_W, 60);
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('BESTIAN 수학학원  ·  ' + currentUser.name + ' T', CARD_W/2, 28);
-    ctx.font = '13px sans-serif';
-    ctx.fillStyle = '#94a3b8';
+    // 임시 렌더링 컨테이너
+    const wrap = document.getElementById('wl-image-render');
     const dp = date.split('-');
-    ctx.fillText(dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일 업무일지', CARD_W/2, 50);
+    const dateLabel = dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일';
 
-    let curY = 60 + PAD;
+    wrap.style.cssText = 'position:fixed;left:-9999px;top:0;background:#f5f6fa;padding:16px;width:700px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
 
-    // 각 반 카드 그리기
-    cardInfos.forEach(({log, cls, stus}, ci) => {
-      const className  = cls?.name || '알 수 없는 반';
-      const classInfo  = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
-      const cardH      = getCardH(log, stus.length);
+    let html = `<div style="background:linear-gradient(135deg,#1a1a2e,#0f3460);padding:20px 24px;border-radius:12px;margin-bottom:14px;text-align:center">
+      <div style="color:#fff;font-size:18px;font-weight:700">BESTIAN 수학학원 · ${currentUser.name} T</div>
+      <div style="color:#94a3b8;font-size:13px;margin-top:4px">${dateLabel} 업무일지</div>
+    </div>`;
 
-      // 카드 배경
-      ctx.fillStyle = '#fff';
-      ctx.shadowColor = 'rgba(0,0,0,0.07)';
-      ctx.shadowBlur  = 8;
-      roundRect(ctx, PAD, curY, CARD_W - PAD*2, cardH, 12);
-      ctx.fill();
-      ctx.shadowBlur = 0;
+    logs.forEach(log => {
+      const cls = classes.find(c=>c.id===log.class_id);
+      const stus = (stuRows||[]).filter(s=>s.log_id===log.id);
+      const clsName = cls?.name || '반 정보 없음';
+      const clsInfo = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
 
-      // 반 제목 바
-      const barGrad = ctx.createLinearGradient(PAD, curY, CARD_W-PAD, curY);
-      barGrad.addColorStop(0, '#1e3a5f'); barGrad.addColorStop(1, '#1d4ed8');
-      ctx.fillStyle = barGrad;
-      roundRectTop(ctx, PAD, curY, CARD_W-PAD*2, TITLE_H-10, 12);
-      ctx.fill();
+      html += `<div style="background:#fff;border-radius:12px;margin-bottom:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
+        <div style="background:linear-gradient(135deg,#1e3a5f,#1d4ed8);padding:14px 18px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="color:#fff;font-size:15px;font-weight:700">${clsName}</div>
+            ${clsInfo?`<div style="color:#93c5fd;font-size:12px;margin-top:2px">${clsInfo}</div>`:''}
+          </div>
+          <div style="color:#94a3b8;font-size:13px">${stus.length}명</div>
+        </div>`;
 
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 17px sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText(className, PAD+16, curY+30);
-      if(classInfo){
-        ctx.font = '12px sans-serif';
-        ctx.fillStyle = '#93c5fd';
-        ctx.fillText(classInfo, PAD+16, curY+50);
-      }
-      ctx.font = '12px sans-serif';
-      ctx.fillStyle = '#94a3b8';
-      ctx.textAlign = 'right';
-      ctx.fillText(stus.length + '명', CARD_W-PAD-16, curY+30);
+      if(stus.length){
+        html += `<table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:#1e293b">
+            <th style="padding:8px 12px;color:#e2e8f0;text-align:left;font-weight:600">이름</th>
+            <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:52px">출석</th>
+            <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:52px">N제</th>
+            <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:52px">숙제</th>
+            <th style="padding:8px 12px;color:#e2e8f0;text-align:left;font-weight:600">비고</th>
+          </tr></thead><tbody>`;
 
-      // 학생 테이블
-      const tX = PAD + TABLE_PAD;
-      const tY = curY + TITLE_H;
-      const tW = CARD_W - PAD*2 - TABLE_PAD*2;
-      const cols = ['이름','출석','N제','숙제','비고'];
-      const cWidths = [tW - 60*3 - 100, 60, 60, 60, 100];
-
-      // 헤더행
-      ctx.fillStyle = '#1e293b';
-      ctx.fillRect(tX, tY, tW, ROW_H);
-      let cx = tX;
-      cols.forEach((col, i) => {
-        ctx.fillStyle = '#e2e8f0';
-        ctx.font = 'bold 11px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(col, cx + cWidths[i]/2, tY + ROW_H/2 + 4);
-        cx += cWidths[i];
-      });
-
-      // 학생 행
-      stus.forEach((stu, si) => {
-        const rowY = tY + ROW_H * (si+1);
-        ctx.fillStyle = si%2===0 ? '#f8fafc' : '#fff';
-        ctx.fillRect(tX, rowY, tW, ROW_H);
-
-        // 구분선
-        ctx.strokeStyle = '#f1f5f9';
-        ctx.lineWidth = 0.7;
-        ctx.beginPath(); ctx.moveTo(tX, rowY); ctx.lineTo(tX+tW, rowY); ctx.stroke();
-
-        cx = tX;
-        const cells = [
-          stu.users?.name || '',
-          stu.attendance==='present'?'✅':stu.attendance==='late'?'⏰':stu.attendance==='absent'?'❌':'-',
-          stu.n_count!=null?stu.n_count+'개':'-',
-          stu.homework_done?'✅':'❌',
-          stu.note||''
-        ];
-        cells.forEach((val, i) => {
-          ctx.fillStyle = i===0 ? '#1e293b' : '#374151';
-          ctx.font = i===0 ? 'bold 12px sans-serif' : '12px sans-serif';
-          ctx.textAlign = i===0 ? 'left' : 'center';
-          const maxW = cWidths[i] - 8;
-          const tx = i===0 ? cx+8 : cx+cWidths[i]/2;
-          // 텍스트 말줄임
-          let text = val;
-          if(ctx.measureText(text).width > maxW){
-            while(ctx.measureText(text+'…').width > maxW && text.length > 0)
-              text = text.slice(0, -1);
-            text += '…';
-          }
-          ctx.fillText(text, tx, rowY + ROW_H/2 + 4);
-          cx += cWidths[i];
+        stus.forEach((s, i) => {
+          const att = s.attendance==='present'?'✅':s.attendance==='absent'?'❌':s.attendance==='late'?'⏰':'-';
+          const naje = s.n_count!=null ? s.n_count+'개' : '-';
+          const hw = s.homework_done ? '✅' : '❌';
+          const bg = i%2===0 ? '#fff' : '#f8fafc';
+          html += `<tr style="background:${bg}">
+            <td style="padding:8px 12px;color:#1e293b;font-weight:600;border-bottom:1px solid #f1f5f9">${s.users?.name||''}</td>
+            <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9">${att}</td>
+            <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9;color:#374151">${naje}</td>
+            <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9">${hw}</td>
+            <td style="padding:8px 12px;color:#6b7280;border-bottom:1px solid #f1f5f9;font-size:11px">${s.note||''}</td>
+          </tr>`;
         });
-
-        // 세로 구분선
-        cx = tX;
-        [0,1,2,3].forEach(i => {
-          cx += cWidths[i];
-          ctx.strokeStyle = '#e5e7eb';
-          ctx.lineWidth = 0.5;
-          ctx.beginPath(); ctx.moveTo(cx, tY); ctx.lineTo(cx, tY+ROW_H*(stus.length+1)); ctx.stroke();
-        });
-      });
-
-      // 외곽선
-      ctx.strokeStyle = '#e2e8f0';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(tX, tY, tW, ROW_H*(stus.length+1));
-
-      // 수업 진도/메모 요약
-      const infoY = tY + ROW_H*(stus.length+1) + 10;
-      ctx.fillStyle = '#6b7280';
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'left';
-      const parts = [];
-      if(log.progress) parts.push('📖 '+log.progress);
-      if(log.homework) parts.push('📝 숙제: '+log.homework);
-      if(log.trial_class) parts.push('🆕 시범: '+log.trial_class);
-      if(log.memo)     parts.push('📌 '+log.memo);
-      const infoText = parts.join('   ');
-      if(infoText){
-        // 텍스트 말줄임
-        let t = infoText;
-        const mw = CARD_W - PAD*2 - TABLE_PAD*2 - 16;
-        if(ctx.measureText(t).width > mw){
-          while(ctx.measureText(t+'…').width > mw && t.length > 0) t = t.slice(0,-1);
-          t += '…';
-        }
-        ctx.fillText(t, PAD+TABLE_PAD+8, infoY+16);
+        html += '</tbody></table>';
+      } else {
+        html += `<div style="padding:16px;color:#9ca3af;font-size:13px;text-align:center">등록된 학생 없음</div>`;
       }
 
-      curY += cardH + PAD;
+      const infoParts = [];
+      if(log.progress) infoParts.push('📖 '+log.progress);
+      if(log.homework) infoParts.push('📝 숙제: '+log.homework);
+      if(log.trial_class) infoParts.push('🆕 시범: '+log.trial_class);
+      if(log.new_student) infoParts.push('👤 신입: '+log.new_student);
+      if(log.memo) infoParts.push('📌 '+log.memo);
+      if(infoParts.length){
+        html += `<div style="padding:10px 16px;background:#f8fafc;border-top:1px solid #e5e7eb;font-size:11px;color:#6b7280">${infoParts.join('  ·  ')}</div>`;
+      }
+
+      html += '</div>';
     });
 
-    // 푸터
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('© BESTIAN 수학학원  |  ' + date, CARD_W/2, totalH - 12);
+    html += `<div style="text-align:center;font-size:10px;color:#9ca3af;padding:8px">© BESTIAN 수학학원 | ${date}</div>`;
 
-    // 이미지 공유/복사
-    const isMobile = window.innerWidth <= 680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    wrap.innerHTML = html;
+
+    // html2canvas로 이미지 생성
+    const canvas = await html2canvas(wrap, {
+      backgroundColor: '#f5f6fa', scale: 2,
+      useCORS: true, logging: false,
+      width: 700
+    });
+    wrap.innerHTML = '';
+
+    // 공유/복사
+    const isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     canvas.toBlob(async (blob) => {
-      const fileName = '업무일지_전체_'+date.replace(/-/g,'')+'.png';
+      const fileName = '금일업무일지_'+date.replace(/-/g,'')+'.png';
       if(isMobile){
         const file = new File([blob], fileName, {type:'image/png'});
         if(navigator.canShare && navigator.canShare({files:[file]})){
           try{
-            await navigator.share({files:[file], title:'업무일지 전체', text:date+' 업무일지 전체'});
-            btn.textContent = '🗂️ 날짜 전체'; btn.disabled = false;
-            return;
-          }catch(e){ if(e.name==='AbortError'){ btn.textContent = '🗂️ 날짜 전체'; btn.disabled = false; return; } }
+            await navigator.share({files:[file], title:'금일 업무일지', text:dateLabel+' 업무일지'});
+            btn.textContent='📋 금일 업무일지 이미지 생성'; btn.disabled=false; return;
+          }catch(e){ if(e.name==='AbortError'){btn.textContent='📋 금일 업무일지 이미지 생성';btn.disabled=false;return;} }
         }
       }
       if(navigator.clipboard && navigator.clipboard.write){
         try{
-          await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
-          btn.textContent = '✅ 복사됨!';
-          setTimeout(()=>{ btn.textContent='🗂️ 날짜 전체'; btn.disabled=false; }, 2500);
+          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+          btn.textContent='✅ 복사됨!';
+          setTimeout(()=>{btn.textContent='📋 금일 업무일지 이미지 생성';btn.disabled=false;},2500);
           return;
         }catch(e){}
       }
-      const a = document.createElement('a');
-      a.href = canvas.toDataURL('image/png');
-      a.download = fileName; a.click();
-      btn.textContent = '🗂️ 날짜 전체'; btn.disabled = false;
+      const a=document.createElement('a'); a.href=canvas.toDataURL('image/png'); a.download=fileName; a.click();
+      btn.textContent='📋 금일 업무일지 이미지 생성'; btn.disabled=false;
       alert('이미지를 다운로드했습니다.');
     }, 'image/png');
 
   }catch(err){
     alert('오류: '+err.message);
-    btn.textContent = '🗂️ 날짜 전체'; btn.disabled = false;
+    console.error(err);
+    btn.textContent='📋 금일 업무일지 이미지 생성'; btn.disabled=false;
   }
 }
 
-// Canvas 둥근 모서리 헬퍼
-function roundRect(ctx, x, y, w, h, r){
-  ctx.beginPath();
-  ctx.moveTo(x+r, y);
-  ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
-  ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
-  ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
-  ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
-  ctx.closePath();
-}
-function roundRectTop(ctx, x, y, w, h, r){
-  ctx.beginPath();
-  ctx.moveTo(x+r, y);
-  ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
-  ctx.lineTo(x+w, y+h);
-  ctx.lineTo(x, y+h);
-  ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
-  ctx.closePath();
-}
 
 
 async function copyWorkLogImage(){
@@ -8120,6 +7985,24 @@ function initWorkLog(){
   document.getElementById('wl-date').value = today;
   document.getElementById('wl-main').style.display = 'none';
   document.getElementById('wl-empty').style.display = 'block';
+  // 날짜가 있으면 금일 전체 버튼 표시 (반 선택 안해도)
+  const allBtn = document.getElementById('wl-copy-all-btn');
+  if(allBtn) allBtn.style.display = 'inline-flex';
+  // 개별 버튼은 숨김 (반 선택 전)
+  const btn = document.getElementById('wl-copy-btn');
+  if(btn) btn.style.display = 'none';
+}
+
+// 버튼 표시 헬퍼
+function wlShowAllBtn(){
+  const allBtn = document.getElementById('wl-copy-all-btn');
+  const date = document.getElementById('wl-date').value;
+  if(allBtn) allBtn.style.display = date ? 'inline-flex' : 'none';
+}
+function wlShowClassBtn(){
+  const btn = document.getElementById('wl-copy-btn');
+  const classId = document.getElementById('wl-class-select').value;
+  if(btn) btn.style.display = classId ? 'inline-flex' : 'none';
 }
 
 // 업무일지 로드 (반 + 날짜 선택 시)
