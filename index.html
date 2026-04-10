@@ -7558,7 +7558,7 @@ async function copyAllWorkLogImage(){
       const cls = classes.find(c=>c.id===log.class_id);
       // log별 개별 조회 (.in() 미지원 우회, order 제거)
       const {data: stus} = await db.from('work_log_students')
-        .select('*, users(name)').eq('log_id', log.id);
+        .select('*, users(name, school, grade)').eq('log_id', log.id);
 
       // 각 카드를 독립적인 div로 생성 (body에 직접 붙여서 html2canvas 정확도 높임)
       const tempDiv = document.createElement('div');
@@ -7629,68 +7629,99 @@ async function copyAllWorkLogImage(){
 
 // 개별 반 업무일지 카드 HTML 생성 (copyWorkLogImage와 공유)
 function buildWorkLogCardHTML(log, cls, stus, dateLabel, teacherName){
-  const clsName = cls?.name || '반 정보 없음';
-  const clsInfo = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
+  const clsName  = cls?.name || '반 정보 없음';
+  const clsInfo  = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
 
-  let tableRows = '';
-  stus.forEach((s,i) => {
-    const att = s.attendance==='present'?'✅출석':s.attendance==='absent'?'❌결석':s.attendance==='late'?'⏰지각':'-';
-    const naje = s.n_count!=null ? s.n_count+'개' : '-';
-    const hw = s.homework_done ? '✅' : '❌';
-    const score = s.test_score || '';
-    const note = s.note || '';
-    const bg = i%2===0 ? '#fff' : '#f8fafc';
-    tableRows += `<tr style="background:${bg}">
-      <td style="padding:8px 10px;color:#1e293b;font-weight:600;border-bottom:1px solid #f1f5f9;white-space:nowrap">${s.users?.name||''}</td>
-      <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9;font-size:13px">${att}</td>
-      <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9;color:#374151">${naje}</td>
-      <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9">${hw}</td>
-      <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9;color:#374151">${score}</td>
-      <td style="padding:8px 10px;color:#6b7280;border-bottom:1px solid #f1f5f9;font-size:12px">${note}</td>
+  // ── 학생 행 (copyWorkLogImage와 완전히 동일한 컬럼/포맷) ──
+  const studentRows = stus.map((s, i) => {
+    const u         = s.users || {};
+    const name      = u.name || '';
+    const schoolGrade = [u.school, u.grade].filter(Boolean).join(' ');
+    const att       = s.attendance==='present' ? '정시'
+                    : s.attendance==='late'    ? '지각'
+                    : s.attendance==='absent'  ? '결석' : '-';
+    const attColor  = s.attendance==='absent'  ? '#ef4444'
+                    : s.attendance==='late'    ? '#f97316' : '';
+    const nCount    = s.n_count != null ? String(s.n_count) : '';
+    const hw        = s.homework_done ? '완료' : '미완료';
+    const hwColor   = s.homework_done ? '#3B6D11' : '#ef4444';
+    const score     = s.test_score || '';
+    const note      = s.note || '';
+    const rowBg     = i%2===0 ? '#fff' : '#f8fbff';
+    return `<tr style="background:${rowBg}">
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;color:#6b7280;font-size:12px">${schoolGrade}</td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;font-weight:600">${name}</td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;color:${attColor};font-weight:${attColor?'600':'400'}">${att}</td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">${nCount}</td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;color:${hwColor};font-weight:600">${hw}</td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">${score}</td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;color:#4b5563;font-size:12px">${note}</td>
     </tr>`;
-  });
+  }).join('');
 
-  const infoParts = [];
-  if(log.progress) infoParts.push('<span>📖 진도</span> '+log.progress);
-  if(log.homework) infoParts.push('<span>📝 숙제</span> '+log.homework);
-  if(log.trial_class) infoParts.push('<span>🆕 시범</span> '+log.trial_class);
-  if(log.new_student) infoParts.push('<span>👤 신입</span> '+log.new_student);
-  if(log.dropout) infoParts.push('<span>🚪 퇴원</span> '+log.dropout);
-  if(log.memo) infoParts.push('<span>📌 메모</span> '+log.memo);
+  const progress   = log.progress || '';
+  const homework   = log.homework || '';
+  const trial      = log.trial_class || '';
+  const newStudent = log.new_student || '';
+  const dropout    = log.dropout || '';
+  const memo       = log.memo || '';
+  const hasExtra   = trial || newStudent || dropout || memo;
 
-  return `<div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.1)">
-    <div style="background:linear-gradient(135deg,#1a1a2e,#0f3460);padding:14px 20px">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div style="color:#fbbf24;font-size:11px;font-weight:600;margin-bottom:2px">BESTIAN 수학학원 · ${teacherName} T</div>
-          <div style="color:#fff;font-size:17px;font-weight:700">${clsName}</div>
-          ${clsInfo?`<div style="color:#93c5fd;font-size:12px;margin-top:2px">${clsInfo}</div>`:''}
-        </div>
-        <div style="text-align:right">
-          <div style="color:#94a3b8;font-size:11px">${dateLabel}</div>
-          <div style="color:#e2e8f0;font-size:13px;font-weight:600;margin-top:2px">${stus.length}명</div>
-        </div>
+  return `<div style="background:#fff;padding:16px;min-width:660px">
+    <!-- 헤더 -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #178EF5">
+      <div>
+        <div style="font-size:20px;font-weight:700;color:#178EF5">📋 업무일지</div>
+        <div style="font-size:13px;color:#6b7280;margin-top:2px">${teacherName} 선생님${clsInfo?' · '+clsInfo:''}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:18px;font-weight:700;color:#1a1a2e">${clsName}</div>
+        <div style="font-size:13px;color:#6b7280;margin-top:2px">${dateLabel}</div>
       </div>
     </div>
-    ${stus.length ? `
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
+
+    <!-- 학생 테이블 -->
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px">
       <thead>
-        <tr style="background:#1e293b">
-          <th style="padding:8px 10px;color:#e2e8f0;text-align:left;font-weight:600">이름</th>
-          <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:70px">출결</th>
-          <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:50px">N제</th>
-          <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:44px">숙제</th>
-          <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:50px">TEST</th>
-          <th style="padding:8px 10px;color:#e2e8f0;text-align:left;font-weight:600">특이사항</th>
+        <tr style="background:#E6F1FB">
+          <th style="padding:7px 8px;text-align:left;border:1px solid #d0e4f7;color:#185FA5">학교/학년</th>
+          <th style="padding:7px 8px;text-align:left;border:1px solid #d0e4f7;color:#185FA5">이름</th>
+          <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">출석</th>
+          <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">N제</th>
+          <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">숙제</th>
+          <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">TEST</th>
+          <th style="padding:7px 8px;text-align:left;border:1px solid #d0e4f7;color:#185FA5">특이사항</th>
         </tr>
       </thead>
-      <tbody>${tableRows}</tbody>
-    </table>` : '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:13px">등록된 학생 없음</div>'}
-    ${infoParts.length ? `
-    <div style="padding:12px 20px;background:#f8fafc;border-top:1px solid #e5e7eb">
-      ${infoParts.map(p=>`<div style="font-size:12px;color:#4b5563;margin-bottom:4px">${p}</div>`).join('')}
+      <tbody>${studentRows || '<tr><td colspan="7" style="padding:14px;text-align:center;color:#9ca3af;border:1px solid #e5e7eb">등록된 학생 없음</td></tr>'}</tbody>
+    </table>
+
+    <!-- 진도/숙제 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px">
+        <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:5px">📖 진도</div>
+        <div style="font-size:13px;color:#1a1a2e;white-space:pre-wrap">${progress||'-'}</div>
+      </div>
+      <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px">
+        <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:5px">📝 숙제</div>
+        <div style="font-size:13px;color:#1a1a2e;white-space:pre-wrap">${homework||'-'}</div>
+      </div>
+    </div>
+
+    <!-- 기타 -->
+    ${hasExtra ? `
+    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px">
+      <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:6px">기타</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px">
+        ${trial      ? `<span><span style="color:#6b7280">시범수업</span> <strong>${trial}</strong></span>`      : ''}
+        ${newStudent ? `<span><span style="color:#6b7280">신입생</span> <strong>${newStudent}</strong></span>`   : ''}
+        ${dropout    ? `<span><span style="color:#6b7280">퇴원생</span> <strong>${dropout}</strong></span>`     : ''}
+      </div>
+      ${memo ? `<div style="margin-top:6px;font-size:12px;color:#4b5563"><span style="color:#6b7280">메모</span> ${memo}</div>` : ''}
     </div>` : ''}
-    <div style="padding:8px 20px;background:#f1f5f9;text-align:right;font-size:10px;color:#94a3b8">
+
+    <!-- 하단 -->
+    <div style="margin-top:12px;text-align:right;font-size:11px;color:#9ca3af">
       학원 관리 시스템 · ${new Date().toLocaleString('ko-KR')}
     </div>
   </div>`;
