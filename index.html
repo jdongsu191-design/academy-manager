@@ -533,7 +533,7 @@
       <div class="panel" id="panel-worklog">
         <!-- 상단: 반 선택 + 날짜 -->
         <div class="card" style="margin-bottom:12px">
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
             <div style="flex:1;min-width:120px">
               <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">반 선택</div>
               <select id="wl-class-select" onchange="loadWorkLog();wlShowClassBtn()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
@@ -544,9 +544,11 @@
               <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">날짜</div>
               <input type="date" id="wl-date" onchange="loadWorkLog();wlShowAllBtn()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
             </div>
-            <button class="btn btn-primary btn-sm" onclick="saveWorkLog()">💾 저장</button>
-            <button class="btn btn-sm" id="wl-copy-btn" onclick="copyWorkLogImage()" style="display:none;background:#25D366;color:#fff;border-color:#25D366">📊 해당 반 이미지 생성</button>
-            <button class="btn btn-sm" id="wl-copy-all-btn" onclick="copyAllWorkLogImage()" style="display:none;background:#1d4ed8;color:#fff;border-color:#1d4ed8">📋 금일 업무일지 이미지 생성</button>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="saveWorkLog()" style="flex:1;min-width:80px">💾 저장</button>
+            <button class="btn" id="wl-copy-btn" onclick="copyWorkLogImage()" style="display:none;flex:1;min-width:120px;background:#25D366;color:#fff;border-color:#25D366;font-weight:700">📊 해당 반 이미지</button>
+            <button class="btn" id="wl-copy-all-btn" onclick="copyAllWorkLogImage()" style="display:none;flex:2;min-width:160px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700">📋 금일 업무일지 이미지</button>
           </div>
         </div>
 
@@ -7541,127 +7543,152 @@ async function copyAllWorkLogImage(){
     if(error) throw error;
     if(!logs || !logs.length){
       alert('해당 날짜에 저장된 업무일지가 없습니다.');
-      btn.textContent = '📋 금일 업무일지 이미지 생성'; btn.disabled = false; return;
+      btn.textContent = '📋 금일 업무일지 이미지'; btn.disabled = false; return;
     }
 
-    // 학생 데이터 (이름 포함)
+    // 각 반의 학생 데이터
     const {data: stuRows} = await db.from('work_log_students')
       .select('*, users(name)').in('log_id', logs.map(l=>l.id)).order('created_at');
 
-    // 임시 렌더링 컨테이너
     const wrap = document.getElementById('wl-image-render');
-    const dp = date.split('-');
-    const dateLabel = dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일';
+    const canvases = [];
 
-    wrap.style.cssText = 'position:fixed;left:-9999px;top:0;background:#f5f6fa;padding:16px;width:700px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
-
-    let html = `<div style="background:linear-gradient(135deg,#1a1a2e,#0f3460);padding:20px 24px;border-radius:12px;margin-bottom:14px;text-align:center">
-      <div style="color:#fff;font-size:18px;font-weight:700">BESTIAN 수학학원 · ${currentUser.name} T</div>
-      <div style="color:#94a3b8;font-size:13px;margin-top:4px">${dateLabel} 업무일지</div>
-    </div>`;
-
-    logs.forEach(log => {
+    // 각 반별로 개별 이미지 생성
+    for(const log of logs){
       const cls = classes.find(c=>c.id===log.class_id);
       const stus = (stuRows||[]).filter(s=>s.log_id===log.id);
-      const clsName = cls?.name || '반 정보 없음';
-      const clsInfo = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
+      const dp = date.split('-');
+      const dateLabel = dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일';
 
-      html += `<div style="background:#fff;border-radius:12px;margin-bottom:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
-        <div style="background:linear-gradient(135deg,#1e3a5f,#1d4ed8);padding:14px 18px;display:flex;justify-content:space-between;align-items:center">
-          <div>
-            <div style="color:#fff;font-size:15px;font-weight:700">${clsName}</div>
-            ${clsInfo?`<div style="color:#93c5fd;font-size:12px;margin-top:2px">${clsInfo}</div>`:''}
-          </div>
-          <div style="color:#94a3b8;font-size:13px">${stus.length}명</div>
-        </div>`;
+      wrap.style.cssText = 'position:fixed;left:-9999px;top:0;background:#fff;padding:20px;width:700px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+      wrap.innerHTML = buildWorkLogCardHTML(log, cls, stus, dateLabel, currentUser.name);
 
-      if(stus.length){
-        html += `<table style="width:100%;border-collapse:collapse;font-size:12px">
-          <thead><tr style="background:#1e293b">
-            <th style="padding:8px 12px;color:#e2e8f0;text-align:left;font-weight:600">이름</th>
-            <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:52px">출석</th>
-            <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:52px">N제</th>
-            <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:52px">숙제</th>
-            <th style="padding:8px 12px;color:#e2e8f0;text-align:left;font-weight:600">비고</th>
-          </tr></thead><tbody>`;
+      const canvas = await html2canvas(wrap, {
+        backgroundColor:'#fff', scale:2, useCORS:true, logging:false, width:700
+      });
+      canvases.push(canvas);
+      wrap.innerHTML = '';
+    }
 
-        stus.forEach((s, i) => {
-          const att = s.attendance==='present'?'✅':s.attendance==='absent'?'❌':s.attendance==='late'?'⏰':'-';
-          const naje = s.n_count!=null ? s.n_count+'개' : '-';
-          const hw = s.homework_done ? '✅' : '❌';
-          const bg = i%2===0 ? '#fff' : '#f8fafc';
-          html += `<tr style="background:${bg}">
-            <td style="padding:8px 12px;color:#1e293b;font-weight:600;border-bottom:1px solid #f1f5f9">${s.users?.name||''}</td>
-            <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9">${att}</td>
-            <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9;color:#374151">${naje}</td>
-            <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9">${hw}</td>
-            <td style="padding:8px 12px;color:#6b7280;border-bottom:1px solid #f1f5f9;font-size:11px">${s.note||''}</td>
-          </tr>`;
-        });
-        html += '</tbody></table>';
-      } else {
-        html += `<div style="padding:16px;color:#9ca3af;font-size:13px;text-align:center">등록된 학생 없음</div>`;
-      }
+    // 모든 캔버스를 세로로 합치기
+    const GAP = 16; // 카드 사이 간격
+    const totalW = canvases[0].width;
+    const totalH = canvases.reduce((sum,c)=>sum+c.height,0) + GAP*(canvases.length-1);
 
-      const infoParts = [];
-      if(log.progress) infoParts.push('📖 '+log.progress);
-      if(log.homework) infoParts.push('📝 숙제: '+log.homework);
-      if(log.trial_class) infoParts.push('🆕 시범: '+log.trial_class);
-      if(log.new_student) infoParts.push('👤 신입: '+log.new_student);
-      if(log.memo) infoParts.push('📌 '+log.memo);
-      if(infoParts.length){
-        html += `<div style="padding:10px 16px;background:#f8fafc;border-top:1px solid #e5e7eb;font-size:11px;color:#6b7280">${infoParts.join('  ·  ')}</div>`;
-      }
+    const merged = document.createElement('canvas');
+    merged.width = totalW; merged.height = totalH;
+    const mctx = merged.getContext('2d');
+    mctx.fillStyle = '#f5f6fa';
+    mctx.fillRect(0,0,totalW,totalH);
 
-      html += '</div>';
+    let curY = 0;
+    canvases.forEach((c, i) => {
+      mctx.drawImage(c, 0, curY);
+      curY += c.height + GAP*2; // scale:2이므로 GAP*2
     });
-
-    html += `<div style="text-align:center;font-size:10px;color:#9ca3af;padding:8px">© BESTIAN 수학학원 | ${date}</div>`;
-
-    wrap.innerHTML = html;
-
-    // html2canvas로 이미지 생성
-    const canvas = await html2canvas(wrap, {
-      backgroundColor: '#f5f6fa', scale: 2,
-      useCORS: true, logging: false,
-      width: 700
-    });
-    wrap.innerHTML = '';
 
     // 공유/복사
     const isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-    canvas.toBlob(async (blob) => {
-      const fileName = '금일업무일지_'+date.replace(/-/g,'')+'.png';
+    const dp = date.split('-');
+    const fileName = '금일업무일지_'+date.replace(/-/g,'')+'.png';
+
+    merged.toBlob(async (blob) => {
       if(isMobile){
         const file = new File([blob], fileName, {type:'image/png'});
         if(navigator.canShare && navigator.canShare({files:[file]})){
           try{
-            await navigator.share({files:[file], title:'금일 업무일지', text:dateLabel+' 업무일지'});
-            btn.textContent='📋 금일 업무일지 이미지 생성'; btn.disabled=false; return;
-          }catch(e){ if(e.name==='AbortError'){btn.textContent='📋 금일 업무일지 이미지 생성';btn.disabled=false;return;} }
+            await navigator.share({files:[file], title:'금일 업무일지'});
+            btn.textContent='📋 금일 업무일지 이미지'; btn.disabled=false; return;
+          }catch(e){ if(e.name==='AbortError'){btn.textContent='📋 금일 업무일지 이미지';btn.disabled=false;return;} }
         }
       }
       if(navigator.clipboard && navigator.clipboard.write){
         try{
           await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
           btn.textContent='✅ 복사됨!';
-          setTimeout(()=>{btn.textContent='📋 금일 업무일지 이미지 생성';btn.disabled=false;},2500);
+          setTimeout(()=>{btn.textContent='📋 금일 업무일지 이미지';btn.disabled=false;},2500);
           return;
         }catch(e){}
       }
-      const a=document.createElement('a'); a.href=canvas.toDataURL('image/png'); a.download=fileName; a.click();
-      btn.textContent='📋 금일 업무일지 이미지 생성'; btn.disabled=false;
+      const a=document.createElement('a'); a.href=merged.toDataURL(); a.download=fileName; a.click();
+      btn.textContent='📋 금일 업무일지 이미지'; btn.disabled=false;
       alert('이미지를 다운로드했습니다.');
     }, 'image/png');
 
   }catch(err){
-    alert('오류: '+err.message);
-    console.error(err);
-    btn.textContent='📋 금일 업무일지 이미지 생성'; btn.disabled=false;
+    alert('오류: '+err.message); console.error(err);
+    btn.textContent='📋 금일 업무일지 이미지'; btn.disabled=false;
   }
 }
 
+// 개별 반 업무일지 카드 HTML 생성 (copyWorkLogImage와 공유)
+function buildWorkLogCardHTML(log, cls, stus, dateLabel, teacherName){
+  const clsName = cls?.name || '반 정보 없음';
+  const clsInfo = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
 
+  let tableRows = '';
+  stus.forEach((s,i) => {
+    const att = s.attendance==='present'?'✅출석':s.attendance==='absent'?'❌결석':s.attendance==='late'?'⏰지각':'-';
+    const naje = s.n_count!=null ? s.n_count+'개' : '-';
+    const hw = s.homework_done ? '✅' : '❌';
+    const score = s.test_score || '';
+    const note = s.note || '';
+    const bg = i%2===0 ? '#fff' : '#f8fafc';
+    tableRows += `<tr style="background:${bg}">
+      <td style="padding:8px 10px;color:#1e293b;font-weight:600;border-bottom:1px solid #f1f5f9;white-space:nowrap">${s.users?.name||''}</td>
+      <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9;font-size:13px">${att}</td>
+      <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9;color:#374151">${naje}</td>
+      <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9">${hw}</td>
+      <td style="padding:8px;text-align:center;border-bottom:1px solid #f1f5f9;color:#374151">${score}</td>
+      <td style="padding:8px 10px;color:#6b7280;border-bottom:1px solid #f1f5f9;font-size:12px">${note}</td>
+    </tr>`;
+  });
+
+  const infoParts = [];
+  if(log.progress) infoParts.push('<span>📖 진도</span> '+log.progress);
+  if(log.homework) infoParts.push('<span>📝 숙제</span> '+log.homework);
+  if(log.trial_class) infoParts.push('<span>🆕 시범</span> '+log.trial_class);
+  if(log.new_student) infoParts.push('<span>👤 신입</span> '+log.new_student);
+  if(log.dropout) infoParts.push('<span>🚪 퇴원</span> '+log.dropout);
+  if(log.memo) infoParts.push('<span>📌 메모</span> '+log.memo);
+
+  return `<div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.1)">
+    <div style="background:linear-gradient(135deg,#1a1a2e,#0f3460);padding:14px 20px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="color:#fbbf24;font-size:11px;font-weight:600;margin-bottom:2px">BESTIAN 수학학원 · ${teacherName} T</div>
+          <div style="color:#fff;font-size:17px;font-weight:700">${clsName}</div>
+          ${clsInfo?`<div style="color:#93c5fd;font-size:12px;margin-top:2px">${clsInfo}</div>`:''}
+        </div>
+        <div style="text-align:right">
+          <div style="color:#94a3b8;font-size:11px">${dateLabel}</div>
+          <div style="color:#e2e8f0;font-size:13px;font-weight:600;margin-top:2px">${stus.length}명</div>
+        </div>
+      </div>
+    </div>
+    ${stus.length ? `
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="background:#1e293b">
+          <th style="padding:8px 10px;color:#e2e8f0;text-align:left;font-weight:600">이름</th>
+          <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:70px">출결</th>
+          <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:50px">N제</th>
+          <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:44px">숙제</th>
+          <th style="padding:8px;color:#e2e8f0;text-align:center;font-weight:600;width:50px">TEST</th>
+          <th style="padding:8px 10px;color:#e2e8f0;text-align:left;font-weight:600">특이사항</th>
+        </tr>
+      </thead>
+      <tbody>${tableRows}</tbody>
+    </table>` : '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:13px">등록된 학생 없음</div>'}
+    ${infoParts.length ? `
+    <div style="padding:12px 20px;background:#f8fafc;border-top:1px solid #e5e7eb">
+      ${infoParts.map(p=>`<div style="font-size:12px;color:#4b5563;margin-bottom:4px">${p}</div>`).join('')}
+    </div>` : ''}
+    <div style="padding:8px 20px;background:#f1f5f9;text-align:right;font-size:10px;color:#94a3b8">
+      학원 관리 시스템 · ${new Date().toLocaleString('ko-KR')}
+    </div>
+  </div>`;
+}
 
 async function copyWorkLogImage(){
   const btn = document.getElementById('wl-copy-btn');
