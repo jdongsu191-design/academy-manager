@@ -474,6 +474,9 @@
         <button class="at-menu-item" id="amenu-beti" onclick="switchAdminTab('admin-beti',this);initAdminBeti()" style="display:none">
           <span class="at-menu-icon">📝</span>베티모의고사
         </button>
+        <button class="at-menu-item" id="amenu-branches" onclick="switchAdminTab('admin-branches',this);initAdminBranches()">
+          <span class="at-menu-icon">🏢</span>분원 관리
+        </button>
         <button class="at-menu-item" id="amenu-worklog" onclick="switchAdminTab('admin-worklog',this);initAdminWorklog()">
           <span class="at-menu-icon">📋</span>업무일지 조회
         </button>
@@ -1220,6 +1223,37 @@
       </div>
     </div>
 
+      <!-- 관리자 분원 관리 패널 -->
+      <div class="panel" id="panel-admin-branches">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div>
+            <div style="font-size:20px;font-weight:700;color:#1a1a2e">🏢 분원 관리</div>
+            <div style="font-size:13px;color:#6b7280;margin-top:4px">분원 등록 및 선생님 근무지 배정</div>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="openAddBranchModal()">+ 분원 추가</button>
+        </div>
+
+        <!-- 분원 목록 -->
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-title">📍 분원 목록</div>
+          <div id="branch-list"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
+        </div>
+
+        <!-- 분원별 선생님 목록 -->
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <div class="card-title" style="margin:0">👨‍🏫 선생님 계정</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap" id="branch-filter-btns">
+              <button onclick="filterTeachersByBranch('')" id="bfbtn-all"
+                style="padding:5px 12px;border-radius:100px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid var(--primary);background:var(--primary);color:#fff">
+                전체
+              </button>
+            </div>
+          </div>
+          <div id="teacherAccountList"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
+        </div>
+      </div>
+
       <!-- 관리자 업무일지 조회 패널 -->
       <div class="panel" id="panel-admin-worklog">
         <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a2e">📋 업무일지 조회</div>
@@ -1827,6 +1861,54 @@
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-full" onclick="closeModal('addStudent')">취소</button>
       <button class="btn btn-primary btn-full" onclick="addStudentsBulk()">추가 완료</button>
+    </div>
+  </div>
+</div>
+
+<!-- 모달: 분원 추가 -->
+<div class="modal-backdrop" id="modal-addBranch">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>🏢 분원 추가</h3>
+    <div class="form-group"><label>분원 이름 *</label><input id="inp-branch-name" placeholder="예: 청라점, 검단점"></div>
+    <div class="form-group"><label>주소 (선택)</label><input id="inp-branch-address" placeholder="예: 인천 서구 청라동 123"></div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn btn-full" onclick="closeModal('addBranch')">취소</button>
+      <button class="btn btn-primary btn-full" onclick="addBranch()">추가</button>
+    </div>
+  </div>
+</div>
+
+<!-- 모달: 분원 수정 -->
+<div class="modal-backdrop" id="modal-editBranch">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>✏️ 분원 수정</h3>
+    <input type="hidden" id="edit-branch-id">
+    <div class="form-group"><label>분원 이름 *</label><input id="edit-branch-name" placeholder="분원 이름"></div>
+    <div class="form-group"><label>주소 (선택)</label><input id="edit-branch-address" placeholder="주소"></div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn btn-full" onclick="closeModal('editBranch')">취소</button>
+      <button class="btn btn-primary btn-full" onclick="saveEditBranch()">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 모달: 선생님 분원 배정 -->
+<div class="modal-backdrop" id="modal-assignBranch">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3 id="assign-branch-title">🏢 분원 배정</h3>
+    <input type="hidden" id="assign-teacher-id">
+    <div class="form-group">
+      <label>근무 분원 선택</label>
+      <select id="assign-branch-select" style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+        <option value="">미배정</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn btn-full" onclick="closeModal('assignBranch')">취소</button>
+      <button class="btn btn-primary btn-full" onclick="saveAssignBranch()">저장</button>
     </div>
   </div>
 </div>
@@ -2489,6 +2571,159 @@ async function awlShowDetail(logId){
 }
 
 
+/* ── 분원 관리 ── */
+window._allBranches = [];
+
+async function initAdminBranches(){
+  await loadBranches();
+  renderBranchFilterBtns();
+  renderTeacherAccounts('');
+}
+
+async function loadBranches(){
+  var {data, error} = await db.from('branches').select('*').order('name');
+  if(error){ console.error(error); return; }
+  window._allBranches = data || [];
+  renderBranchList();
+}
+
+function renderBranchList(){
+  var el = document.getElementById('branch-list');
+  if(!el) return;
+  var branches = window._allBranches;
+  if(!branches.length){
+    el.innerHTML = '<div class="empty-state"><div class="ei">🏢</div><p>등록된 분원이 없습니다</p></div>';
+    return;
+  }
+  el.innerHTML = branches.map(function(b){
+    var teacherCount = (allUsers||[]).filter(function(u){ return u.role==='teacher' && u.branch_id===b.id; }).length;
+    return '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:#fff">'
+      +'<span style="font-size:22px">🏢</span>'
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="font-size:14px;font-weight:700;color:#1e293b">'+b.name+'</div>'
+        +(b.address?'<div style="font-size:12px;color:#9ca3af">'+b.address+'</div>':'')
+        +'<div style="font-size:11px;color:#6b7280;margin-top:2px">👨‍🏫 선생님 '+teacherCount+'명</div>'
+      +'</div>'
+      +'<div style="display:flex;gap:6px">'
+        +'<button data-bid="'+b.id+'" data-bname="'+b.name+'" data-baddr="'+(b.address||'')+'" onclick="openEditBranchModal(this.dataset.bid,this.dataset.bname,this.dataset.baddr)" '
+          +'style="padding:4px 10px;border:1px solid #93c5fd;border-radius:6px;background:#f0f7ff;color:#1d4ed8;font-size:12px;cursor:pointer">수정</button>'
+        +'<button data-bid="'+b.id+'" data-bname="'+b.name+'" onclick="deleteBranch(this.dataset.bid,this.dataset.bname)" '
+          +'style="padding:4px 10px;border:1px solid #fca5a5;border-radius:6px;background:#fff0f0;color:#dc2626;font-size:12px;cursor:pointer">삭제</button>'
+      +'</div>'
+    +'</div>';
+  }).join('');
+}
+
+function renderBranchFilterBtns(){
+  var container = document.getElementById('branch-filter-btns');
+  if(!container) return;
+  var BASE_OFF = 'padding:5px 12px;border-radius:100px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid #d1d5db;background:#fff;color:#6b7280';
+  var BASE_ON  = 'padding:5px 12px;border-radius:100px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid var(--primary);background:var(--primary);color:#fff';
+  var btns = '<button onclick="filterTeachersByBranch(\'\')" id="bfbtn-all" style="'+BASE_ON+'">전체</button>';
+  (window._allBranches||[]).forEach(function(b){
+    btns += '<button data-bid="'+b.id+'" onclick="filterTeachersByBranch(this.dataset.bid)" id="bfbtn-'+b.id+'" style="'+BASE_OFF+'">'+b.name+'</button>';
+  });
+  btns += '<button onclick="filterTeachersByBranch(\'__none__\')" id="bfbtn-none" style="'+BASE_OFF+'">미배정</button>';
+  container.innerHTML = btns;
+}
+
+function filterTeachersByBranch(branchId){
+  // 버튼 active 상태
+  var allBtns = document.querySelectorAll('[id^="bfbtn-"]');
+  allBtns.forEach(function(btn){
+    var isActive = false;
+    if(branchId==='' && btn.id==='bfbtn-all') isActive=true;
+    if(branchId==='__none__' && btn.id==='bfbtn-none') isActive=true;
+    if(branchId && branchId!=='__none__' && btn.id==='bfbtn-'+branchId) isActive=true;
+    btn.style.background   = isActive ? 'var(--primary)' : '#fff';
+    btn.style.color        = isActive ? '#fff' : '#6b7280';
+    btn.style.borderColor  = isActive ? 'var(--primary)' : '#d1d5db';
+  });
+  renderTeacherAccounts(branchId);
+}
+
+// 분원 추가
+function openAddBranchModal(){
+  document.getElementById('inp-branch-name').value = '';
+  document.getElementById('inp-branch-address').value = '';
+  openModal('addBranch');
+}
+
+async function addBranch(){
+  var name = document.getElementById('inp-branch-name').value.trim();
+  if(!name){ alert('분원 이름을 입력하세요'); return; }
+  var address = document.getElementById('inp-branch-address').value.trim();
+  var {error} = await db.from('branches').insert({name, address:address||null});
+  if(error){ alert('오류: '+error.message); return; }
+  closeModal('addBranch');
+  await loadBranches();
+  renderBranchFilterBtns();
+}
+
+// 분원 수정
+function openEditBranchModal(id, name, address){
+  document.getElementById('edit-branch-id').value = id;
+  document.getElementById('edit-branch-name').value = name;
+  document.getElementById('edit-branch-address').value = address||'';
+  openModal('editBranch');
+}
+
+async function saveEditBranch(){
+  var id = document.getElementById('edit-branch-id').value;
+  var name = document.getElementById('edit-branch-name').value.trim();
+  if(!name){ alert('분원 이름을 입력하세요'); return; }
+  var address = document.getElementById('edit-branch-address').value.trim();
+  var {error} = await db.from('branches').update({name, address:address||null}).eq('id',id);
+  if(error){ alert('오류: '+error.message); return; }
+  closeModal('editBranch');
+  await loadBranches();
+  renderBranchFilterBtns();
+  renderTeacherAccounts('');
+}
+
+// 분원 삭제
+async function deleteBranch(id, name){
+  if(!confirm('['+name+'] 분원을 삭제할까요?\n소속 선생님의 분원 배정은 초기화됩니다.')) return;
+  var {error} = await db.from('branches').delete().eq('id',id);
+  var {error} = await db.from('branches').delete().eq('id',id);
+  if(error){ alert('오류: '+error.message); return; }
+  await loadAdminData();
+  await loadBranches();
+  renderBranchFilterBtns();
+  renderTeacherAccounts('');
+}
+
+// 선생님 분원 배정
+function openAssignBranchModal(teacherId, teacherName){
+  document.getElementById('assign-teacher-id').value = teacherId;
+  document.getElementById('assign-branch-title').textContent = '🏢 '+teacherName+' 선생님 분원 배정';
+  var sel = document.getElementById('assign-branch-select');
+  sel.innerHTML = '<option value="">미배정</option>';
+  (window._allBranches||[]).forEach(function(b){
+    sel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+  });
+  // 현재 배정된 분원 선택
+  var teacher = (allUsers||[]).find(function(u){ return u.id===teacherId; });
+  if(teacher && teacher.branch_id) sel.value = teacher.branch_id;
+  openModal('assignBranch');
+}
+
+async function saveAssignBranch(){
+  var teacherId = document.getElementById('assign-teacher-id').value;
+  var branchId  = document.getElementById('assign-branch-select').value || null;
+  var {error} = await db.from('users').update({branch_id: branchId}).eq('id', teacherId);
+  if(error){ alert('오류: '+error.message); return; }
+  closeModal('assignBranch');
+  await loadAdminData();
+  renderBranchList();
+  renderTeacherAccounts('');
+  alert('✅ 분원 배정이 완료됐습니다!');
+}
+
+// loadAdminData에서 branches도 함께 로드
+var _origLoadAdminData = null;
+
+
 function switchAdminTab(tab, el){
   document.querySelectorAll('#adminApp .panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-'+tab).classList.add('active');
@@ -2518,11 +2753,13 @@ function closeStSidebar(){
 }
 
 async function loadAdminData(){
-  const[uRes,cRes]=await Promise.all([
+  const[uRes,cRes,bRes]=await Promise.all([
     db.from('users').select('*').in('role',['teacher','student']).order('created_at',{ascending:false}),
-    db.from('classes').select('*').order('name')
+    db.from('classes').select('*').order('name'),
+    db.from('branches').select('*').order('name')
   ]);
   allUsers=uRes.data||[];allClasses=cRes.data||[];
+  window._allBranches = bRes.data||[];
   document.getElementById('adm-teachers').textContent=allUsers.filter(u=>u.role==='teacher'&&u.status==='active').length;
   document.getElementById('adm-students').textContent=allUsers.filter(u=>u.role==='student'&&u.status==='active').length;
   const pending=allUsers.filter(u=>u.status==='pending');
@@ -2562,19 +2799,33 @@ function renderPendingList(pending){
   </div>`).join('');
 }
 
-function renderTeacherAccounts(){
-  const t=allUsers.filter(u=>u.role==='teacher');
+function renderTeacherAccounts(filterBranchId){
+  var t = allUsers.filter(function(u){ return u.role==='teacher'; });
+  if(filterBranchId === '__none__'){
+    t = t.filter(function(u){ return !u.branch_id; });
+  } else if(filterBranchId) {
+    t = t.filter(function(u){ return u.branch_id === filterBranchId; });
+  }
   const el=document.getElementById('teacherAccountList');
   if(!t.length){el.innerHTML='<div class="empty-state"><p>선생님 없음</p></div>';return;}
-  el.innerHTML=t.map(u=>`<div class="user-item">
-    <div class="avatar teacher">${u.name[0]}</div>
-    <div class="user-info"><div class="user-name">${u.name} ${badge(u.status)}</div><div class="user-meta">@${u.username}${u.phone?' · '+u.phone:''}</div></div>
-    <div class="user-actions" style="display:flex;flex-direction:column;gap:3px">
-      <button class="btn btn-sm" onclick="openEditTeacherModal('${u.id}','${(u.name||'').replace(/'/g,"\\'")}','${u.username||''}','${u.phone||''}','${u.school_level||'high'}')" style="background:#f0f7ff;border-color:#93c5fd;color:#1d4ed8">수정</button>
-      ${u.status==='active'?`<button class="btn btn-danger btn-sm" onclick="deactivateUser('${u.id}')">비활성</button>`:`<button class="btn btn-success btn-sm" onclick="approveUser('${u.id}')">활성화</button>`}
-      <button class="btn btn-sm" onclick="deleteTeacher('${u.id}','${(u.name||'').replace(/'/g,"\\'")}')" style="background:#fff0f0;border-color:#fca5a5;color:#dc2626;font-size:11px">삭제</button>
-    </div>
-  </div>`).join('');
+  el.innerHTML=t.map(function(u){
+    const br = (window._allBranches||[]).find(function(b){ return b.id===u.branch_id; });
+    const brBadge = br ? '<span style="font-size:10px;padding:2px 8px;border-radius:100px;background:#fef3c7;color:#92400e;font-weight:700">🏢 '+br.name+'</span>' : '<span style="font-size:10px;color:#9ca3af">미배정</span>';
+    const safeName = (u.name||'').replace(/'/g,'&#39;');
+    return '<div class="user-item">'
+      +'<div class="avatar teacher">'+u.name[0]+'</div>'
+      +'<div class="user-info">'
+        +'<div class="user-name">'+u.name+' '+badge(u.status)+' '+brBadge+'</div>'
+        +'<div class="user-meta">@'+u.username+(u.phone?' · '+u.phone:'')+'</div>'
+      +'</div>'
+      +'<div class="user-actions" style="display:flex;flex-direction:column;gap:3px">'
+        +'<button class="btn btn-sm" onclick="openEditTeacherModal(this.dataset.id,this.dataset.name,this.dataset.uname,this.dataset.phone,this.dataset.level)" data-id="'+u.id+'" data-name="'+safeName+'" data-uname="'+u.username+'" data-phone="'+(u.phone||'')+'" data-level="'+(u.school_level||'high')+'" style="background:#f0f7ff;border-color:#93c5fd;color:#1d4ed8">수정</button>'
+        +'<button class="btn btn-sm" onclick="openAssignBranchModal(this.dataset.id,this.dataset.name)" data-id="'+u.id+'" data-name="'+safeName+'" style="background:#fffbeb;border-color:#fde68a;color:#92400e">🏢 분원</button>'
+        +(u.status==='active'?'<button class="btn btn-danger btn-sm" data-id="'+u.id+'" onclick="deactivateUser(this.dataset.id)">비활성</button>':'<button class="btn btn-success btn-sm" data-id="'+u.id+'" onclick="approveUser(this.dataset.id)">활성화</button>')
+        +'<button class="btn btn-sm" onclick="deleteTeacher(this.dataset.id,this.dataset.name)" data-id="'+u.id+'" data-name="'+safeName+'" style="background:#fff0f0;border-color:#fca5a5;color:#dc2626;font-size:11px">삭제</button>'
+      +'</div>'
+    +'</div>';
+  }).join('');
 }
 
 var _admStatusFilter = '';
