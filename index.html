@@ -892,14 +892,7 @@
               <input type="date" id="wn-date" onchange="wnLoad()"
                 style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
             </div>
-            <div style="flex:1;min-width:120px">
-              <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">분원</div>
-              <select id="wn-branch-filter" onchange="wnLoad()"
-                style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
-                <option value="">전체</option>
-              </select>
-            </div>
-            <div style="flex:1;min-width:120px">
+            <div style="flex:1;min-width:140px">
               <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">선생님</div>
               <select id="wn-teacher-filter" onchange="wnLoad()"
                 style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
@@ -9348,7 +9341,6 @@ async function wnLoadFilters(){
 
 async function wnLoadData(){
   var date = document.getElementById('wn-date').value;
-  var branchId  = document.getElementById('wn-branch-filter').value;
   var teacherId = document.getElementById('wn-teacher-filter').value;
   var wrap = document.getElementById('wn-table-wrap');
 
@@ -9591,45 +9583,47 @@ var _wnStudents = [];  // 현재 표시 중인 학생 목록
 var _wnData = {};      // {student_id: record}
 
 async function initWeekendNaje(){
-  // 오늘 기준 가장 가까운 토요일 날짜 기본값
+  // 가장 최근 지난 토요일 (오늘이 토요일이면 오늘)
   var today = new Date();
   var day = today.getDay();
-  var diff = day === 6 ? 0 : (day === 0 ? -1 : 6 - day);
   var sat = new Date(today);
-  sat.setDate(today.getDate() + diff - (diff === 0 ? 0 : 0));
-  // 가장 최근 지난 토요일 또는 오늘이 토요일이면 오늘
-  if(day !== 6) sat.setDate(today.getDate() - (day === 0 ? 1 : day + 1));
+  if(day !== 6) sat.setDate(today.getDate() - (day === 0 ? 1 : day));
   var dateStr = sat.toISOString().split('T')[0];
-
   document.getElementById('wn-date').value = dateStr;
 
-  // 분원 필터 채우기 (선생님 자신의 분원 목록)
-  var branchSel = document.getElementById('wn-branch-filter');
-  branchSel.innerHTML = '<option value="">전체 분원</option>';
-  (window._allBranches||[]).forEach(function(b){
-    branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
-  });
-
-  // 선생님 필터 채우기
+  // 선생님 필터: 본인 소속 분원의 선생님들 + 본인 먼저 기본 선택
   await wnLoadTeacherFilter();
   await wnLoad();
 }
 
 async function wnLoadTeacherFilter(){
-  // 선생님 목록은 allUsers에서 (관리자면 전체, 선생님이면 본인만)
   var teacherSel = document.getElementById('wn-teacher-filter');
-  teacherSel.innerHTML = '<option value="">전체 선생님</option>';
-  // 전체 선생님 목록 조회
-  var {data: teachers} = await db.from('users')
-    .select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
-  (teachers||[]).forEach(function(t){
-    teacherSel.innerHTML += '<option value="'+t.id+'">'+t.name+' T</option>';
+
+  // 본인 branch_id 조회
+  var myBranchId = currentUser.branch_id || null;
+
+  // 같은 분원 선생님들만 조회 (분원 없으면 본인만)
+  var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
+  if(myBranchId) tQuery = tQuery.eq('branch_id', myBranchId);
+  else tQuery = tQuery.eq('id', currentUser.id);
+
+  var {data: teachers} = await tQuery;
+  teachers = teachers || [];
+
+  // 본인이 목록에 없으면 추가
+  if(!teachers.find(function(t){ return t.id===currentUser.id; })){
+    teachers.unshift({id:currentUser.id, name:currentUser.name});
+  }
+
+  teacherSel.innerHTML = '<option value="">전체 (분원)</option>';
+  teachers.forEach(function(t){
+    var selected = t.id === currentUser.id ? ' selected' : '';
+    teacherSel.innerHTML += '<option value="'+t.id+'"'+selected+'>'+t.name+' T</option>';
   });
 }
 
 async function wnLoad(){
   var date = document.getElementById('wn-date').value;
-  var branchId  = document.getElementById('wn-branch-filter').value;
   var teacherId = document.getElementById('wn-teacher-filter').value;
   var wrap = document.getElementById('wn-table-wrap');
   var actions = document.getElementById('wn-actions');
@@ -9642,21 +9636,14 @@ async function wnLoad(){
 
   wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
 
-  // 학생 조회 (전체 재원 학생)
+  // 학생 조회 - 선생님 필터 (기본: 본인 학생)
   var stuQuery = db.from('users').select('*')
     .eq('role','student').eq('status','active').order('name');
   if(teacherId) stuQuery = stuQuery.eq('teacher_id', teacherId);
+  else stuQuery = stuQuery.eq('teacher_id', currentUser.id); // 기본: 본인 학생
 
   var {data: stuList} = await stuQuery;
   stuList = stuList || [];
-
-  // 분원 필터 (teacher의 branch_id 기준)
-  if(branchId){
-    var {data: branchTeachers} = await db.from('users')
-      .select('id').eq('role','teacher').eq('branch_id', branchId);
-    var btIds = new Set((branchTeachers||[]).map(function(t){ return t.id; }));
-    stuList = stuList.filter(function(s){ return btIds.has(s.teacher_id); });
-  }
 
   _wnStudents = stuList;
 
