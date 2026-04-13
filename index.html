@@ -844,20 +844,24 @@
           </div>
         </div>
 
-        <!-- 날짜 + 필터 -->
+        <!-- 날짜 + 필터 + 버튼 -->
         <div class="card" style="margin-bottom:12px">
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-            <div style="flex:1;min-width:140px">
+            <div style="flex:1;min-width:130px">
               <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">날짜 (토요일)</div>
               <input type="date" id="wn-date" onchange="wnLoad()"
                 style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
             </div>
-            <div style="flex:1;min-width:140px">
+            <div style="flex:1;min-width:130px">
               <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">선생님</div>
               <select id="wn-teacher-filter" onchange="wnLoad()"
                 style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
                 <option value="">전체 (분원)</option>
               </select>
+            </div>
+            <div style="display:flex;gap:8px;flex:1;min-width:220px;align-self:flex-end">
+              <button id="wn-save-btn" onclick="wnSaveAll()" class="btn btn-primary" style="flex:1;padding:9px 0;font-weight:700">💾 전체 저장</button>
+              <button id="wn-img-btn" onclick="wnGenerateImage()" class="btn" style="flex:1;padding:9px 0;background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;text-align:center">📊 이미지 생성</button>
             </div>
           </div>
         </div>
@@ -867,12 +871,6 @@
           <div id="wn-table-wrap">
             <div class="empty-state"><div class="ei">📅</div><p>날짜를 선택하면 학생 목록이 표시됩니다</p></div>
           </div>
-        </div>
-
-        <!-- 저장 + 이미지 버튼 -->
-        <div id="wn-actions" style="display:none;margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-          <button onclick="wnSaveAll()" class="btn btn-primary" style="flex:1;min-width:120px">💾 전체 저장</button>
-          <button onclick="wnCopyImage()" class="btn" style="flex:1;min-width:120px;background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;text-align:center;justify-content:center;display:flex;align-items:center;gap:6px">📊 이미지 생성</button>
         </div>
       </div>
 
@@ -9288,33 +9286,38 @@ async function initWeekendNaje(){
   await wnLoadData();
 }
 
-async function wnLoadFilters(){
-  // 분원 필터
-  var branchSel = document.getElementById('wn-branch-filter');
-  if(branchSel){
-    branchSel.innerHTML = '<option value="">전체 분원</option>';
-    (window._allBranches||[]).forEach(function(b){
-      branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
-    });
-  }
+// onchange="wnLoad()" 에서 호출
+async function wnLoad(){
+  await wnLoadData();
+}
 
-  // 선생님 필터: 전체 선생님 조회
-  var {data: teachers} = await db.from('users')
-    .select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
+async function wnLoadFilters(){
+  // 선생님 필터: 본인 소속 분원의 선생님들만
+  var myBranchId = currentUser.branch_id || null;
+  var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
+  if(myBranchId) tQuery = tQuery.eq('branch_id', myBranchId);
+  var {data: teachers} = await tQuery;
   _wnAllTeachers = teachers || [];
+
+  // 본인이 목록에 없으면 추가
+  if(!_wnAllTeachers.find(function(t){ return t.id===currentUser.id; })){
+    _wnAllTeachers.unshift({id:currentUser.id, name:currentUser.name, branch_id:myBranchId});
+  }
 
   var teacherSel = document.getElementById('wn-teacher-filter');
   if(teacherSel){
-    teacherSel.innerHTML = '<option value="">전체 선생님</option>';
+    teacherSel.innerHTML = '<option value="">전체 (분원)</option>';
     _wnAllTeachers.forEach(function(t){
-      teacherSel.innerHTML += '<option value="'+t.id+'">'+t.name+' T</option>';
+      var selected = t.id === currentUser.id ? ' selected' : '';
+      teacherSel.innerHTML += '<option value="'+t.id+'"'+selected+'>'+t.name+' T</option>';
     });
   }
 }
 
 async function wnLoadData(){
   var date = document.getElementById('wn-date').value;
-  var teacherId = document.getElementById('wn-teacher-filter').value;
+  var teacherSel = document.getElementById('wn-teacher-filter');
+  var teacherId = teacherSel ? teacherSel.value : currentUser.id;
   var wrap = document.getElementById('wn-table-wrap');
 
   if(!date){
@@ -9324,34 +9327,31 @@ async function wnLoadData(){
 
   wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
 
-  // 학생 조회 (분원, 선생님 필터)
-  var query = db.from('users').select('id,name,school,grade,teacher_id,branch_id,weekend_level,weekend_attend_time')
+  var query = db.from('users').select('id,name,school,grade,teacher_id,weekend_level,weekend_attend_time')
     .eq('role','student').eq('status','active');
 
   if(teacherId){
     query = query.eq('teacher_id', teacherId);
-  } else if(branchId){
-    // 해당 분원 선생님들의 학생
-    var branchTeacherIds = _wnAllTeachers.filter(function(t){ return t.branch_id===branchId; }).map(function(t){ return t.id; });
+  } else {
+    // 전체(분원): 분원 선생님 전체 학생
+    var branchTeacherIds = _wnAllTeachers.map(function(t){ return t.id; });
     if(branchTeacherIds.length) query = query.in('teacher_id', branchTeacherIds);
+    else query = query.eq('teacher_id', currentUser.id);
   }
 
   var {data: students} = await query.order('name');
   _wnStudents = students || [];
 
-  // 기존 저장된 데이터 조회
-  var {data: records} = await db.from('weekend_naje')
-    .select('*').eq('session_date', date)
-    .in('student_id', _wnStudents.map(function(s){ return s.id; }));
-
+  // 기존 저장 데이터 조회
   _wnData = {};
-  (records||[]).forEach(function(r){ _wnData[r.student_id] = r; });
+  if(_wnStudents.length){
+    var {data: records} = await db.from('weekend_naje')
+      .select('*').eq('session_date', date)
+      .in('student_id', _wnStudents.map(function(s){ return s.id; }));
+    (records||[]).forEach(function(r){ _wnData[r.student_id] = r; });
+  }
 
   wnRenderTable();
-
-  // 이미지 버튼 표시
-  var imgBtn = document.getElementById('wn-img-btn');
-  if(imgBtn) imgBtn.style.display = _wnStudents.length ? 'inline-flex' : 'none';
 }
 
 function wnRenderTable(){
@@ -9603,272 +9603,6 @@ async function wnGenerateImage(){
     alert('오류: '+err.message);
     btn.textContent='📊 이미지 생성'; btn.disabled=false;
   }
-}
-
-
-/* ═══════════════════════════════════════
-   주말 N제 (Weekend Naje)
-═══════════════════════════════════════ */
-var _wnStudents = [];  // 현재 표시 중인 학생 목록
-var _wnData = {};      // {student_id: record}
-
-async function initWeekendNaje(){
-  // 가장 최근 지난 토요일 (오늘이 토요일이면 오늘)
-  var today = new Date();
-  var day = today.getDay();
-  var sat = new Date(today);
-  if(day !== 6) sat.setDate(today.getDate() - (day === 0 ? 1 : day));
-  var dateStr = sat.toISOString().split('T')[0];
-  document.getElementById('wn-date').value = dateStr;
-
-  // 선생님 필터: 본인 소속 분원의 선생님들 + 본인 먼저 기본 선택
-  await wnLoadTeacherFilter();
-  await wnLoad();
-}
-
-async function wnLoadTeacherFilter(){
-  var teacherSel = document.getElementById('wn-teacher-filter');
-
-  // 본인 branch_id 조회
-  var myBranchId = currentUser.branch_id || null;
-
-  // 같은 분원 선생님들만 조회 (분원 없으면 본인만)
-  var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
-  if(myBranchId) tQuery = tQuery.eq('branch_id', myBranchId);
-  else tQuery = tQuery.eq('id', currentUser.id);
-
-  var {data: teachers} = await tQuery;
-  teachers = teachers || [];
-
-  // 본인이 목록에 없으면 추가
-  if(!teachers.find(function(t){ return t.id===currentUser.id; })){
-    teachers.unshift({id:currentUser.id, name:currentUser.name});
-  }
-
-  teacherSel.innerHTML = '<option value="">전체 (분원)</option>';
-  teachers.forEach(function(t){
-    var selected = t.id === currentUser.id ? ' selected' : '';
-    teacherSel.innerHTML += '<option value="'+t.id+'"'+selected+'>'+t.name+' T</option>';
-  });
-}
-
-async function wnLoad(){
-  var date = document.getElementById('wn-date').value;
-  var teacherId = document.getElementById('wn-teacher-filter').value;
-  var wrap = document.getElementById('wn-table-wrap');
-  var actions = document.getElementById('wn-actions');
-
-  if(!date){
-    wrap.innerHTML = '<div class="empty-state"><div class="ei">📅</div><p>날짜를 선택해 주세요</p></div>';
-    if(actions) actions.style.display = 'none';
-    return;
-  }
-
-  wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
-
-  // 학생 조회 - 선생님 필터 (기본: 본인 학생)
-  var stuQuery = db.from('users').select('*')
-    .eq('role','student').eq('status','active').order('name');
-  if(teacherId) stuQuery = stuQuery.eq('teacher_id', teacherId);
-  else stuQuery = stuQuery.eq('teacher_id', currentUser.id); // 기본: 본인 학생
-
-  var {data: stuList} = await stuQuery;
-  stuList = stuList || [];
-
-  _wnStudents = stuList;
-
-  // 해당 날짜 기존 데이터 조회
-  var stuIds = stuList.map(function(s){ return s.id; });
-  _wnData = {};
-  if(stuIds.length){
-    var {data: records} = await db.from('weekend_naje')
-      .select('*').eq('session_date', date).in('student_id', stuIds);
-    (records||[]).forEach(function(r){ _wnData[r.student_id] = r; });
-  }
-
-  wnRenderTable();
-  if(actions) actions.style.display = stuList.length ? 'flex' : 'none';
-}
-
-function wnRenderTable(){
-  var wrap = document.getElementById('wn-table-wrap');
-  if(!_wnStudents.length){
-    wrap.innerHTML = '<div class="empty-state"><div class="ei">👤</div><p>해당 조건의 학생이 없습니다</p></div>';
-    return;
-  }
-
-  var html = '<style>'
-    +'.wn-tbl{width:100%;border-collapse:collapse;font-size:13px}'
-    +'.wn-tbl th{background:#1e293b;color:#e2e8f0;padding:8px 6px;text-align:center;font-size:11px;font-weight:700;white-space:nowrap}'
-    +'.wn-tbl td{padding:5px 4px;border-bottom:1px solid #f1f5f9;vertical-align:middle}'
-    +'.wn-inp{width:100%;padding:5px 6px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12px;outline:none;background:#fff;box-sizing:border-box}'
-    +'.wn-inp:focus{border-color:var(--primary)}'
-    +'.wn-sel{width:100%;padding:5px 4px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12px;outline:none;background:#fff;cursor:pointer}'
-    +'</style>'
-    +'<table class="wn-tbl"><thead><tr>'
-    +'<th style="text-align:left;min-width:60px">학교</th>'
-    +'<th style="min-width:36px">학년</th>'
-    +'<th style="text-align:left;min-width:60px">이름</th>'
-    +'<th style="min-width:70px">Level</th>'
-    +'<th style="min-width:60px">출석시간</th>'
-    +'<th style="min-width:60px">출석</th>'
-    +'<th style="min-width:60px">숙제</th>'
-    +'<th style="min-width:60px">본시</th>'
-    +'<th style="min-width:60px">재시</th>'
-    +'<th style="min-width:80px">비고</th>'
-    +'</tr></thead><tbody>';
-
-  _wnStudents.forEach(function(s, i){
-    var r = _wnData[s.id] || {};
-    var rowBg = i%2===0 ? '#fff' : '#f8fafc';
-    var att = r.attendance || 'present';
-    var hw  = r.homework_done !== undefined ? r.homework_done : false;
-
-    html += '<tr style="background:'+rowBg+'" id="wn-row-'+s.id+'">'
-      +'<td style="padding:5px 6px;font-size:12px;color:#6b7280">'+( s.school||'' )+'</td>'
-      +'<td style="text-align:center;font-size:12px;color:#6b7280">'+( s.grade||'' )+'</td>'
-      +'<td style="padding:5px 6px;font-weight:700;color:#1e293b;white-space:nowrap">'+s.name+'</td>'
-      +'<td><input class="wn-inp" data-sid="'+s.id+'" data-field="level" value="'+(r.level||s.weekend_level||'')+'" placeholder="레벨"></td>'
-      +'<td><input class="wn-inp" data-sid="'+s.id+'" data-field="attend_time" value="'+(r.attend_time||s.weekend_attend_time||'')+'" placeholder="10:00"></td>'
-      +'<td><select class="wn-sel" data-sid="'+s.id+'" data-field="attendance">'
-        +'<option value="present"'+(att==='present'?' selected':'')+'>출석</option>'
-        +'<option value="late"'+(att==='late'?' selected':'')+'>지각</option>'
-        +'<option value="absent"'+(att==='absent'?' selected':'')+'>결석</option>'
-      +'</select></td>'
-      +'<td><select class="wn-sel" data-sid="'+s.id+'" data-field="homework_done">'
-        +'<option value="true"'+(hw?' selected':'')+'>완료</option>'
-        +'<option value="false"'+(!hw?' selected':'')+'>미완료</option>'
-      +'</select></td>'
-      +'<td><input class="wn-inp" data-sid="'+s.id+'" data-field="score_first" value="'+(r.score_first||'')+'" placeholder="본시"></td>'
-      +'<td><input class="wn-inp" data-sid="'+s.id+'" data-field="score_retry" value="'+(r.score_retry||'')+'" placeholder="재시"></td>'
-      +'<td><input class="wn-inp" data-sid="'+s.id+'" data-field="note" value="'+(r.note||'')+'" placeholder="비고"></td>'
-    +'</tr>';
-  });
-
-  html += '</tbody></table>';
-  wrap.innerHTML = html;
-}
-
-async function wnSaveAll(){
-  var date = document.getElementById('wn-date').value;
-  if(!date){ alert('날짜를 선택하세요'); return; }
-  var btn = document.querySelector('#wn-actions .btn-primary');
-  btn.textContent = '⏳ 저장 중...'; btn.disabled = true;
-
-  var upserts = [];
-  _wnStudents.forEach(function(s){
-    // 각 행의 입력값 수집
-    function val(field){
-      var el = document.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]');
-      return el ? el.value : '';
-    }
-    var hwVal = val('homework_done');
-    upserts.push({
-      student_id:   s.id,
-      session_date: date,
-      level:        val('level')||null,
-      attend_time:  val('attend_time')||null,
-      attendance:   val('attendance')||'present',
-      homework_done: hwVal === 'true',
-      score_first:  val('score_first')||null,
-      score_retry:  val('score_retry')||null,
-      note:         val('note')||null,
-      created_by:   currentUser.id,
-      updated_at:   new Date().toISOString()
-    });
-  });
-
-  var {error} = await db.from('weekend_naje').upsert(upserts,
-    {onConflict:'student_id,session_date'});
-
-  btn.textContent = '💾 전체 저장'; btn.disabled = false;
-  if(error){ alert('저장 오류: '+error.message); return; }
-  alert('✅ 저장 완료!');
-  await wnLoad();
-}
-
-async function wnCopyImage(){
-  var date = document.getElementById('wn-date').value;
-  if(!_wnStudents.length){ alert('표시된 학생이 없습니다'); return; }
-  var btn = document.querySelector('#wn-actions button:last-child');
-  btn.textContent = '⏳ 생성 중...'; btn.disabled = true;
-
-  var dp = date.split('-');
-  var dayNames = ['일','월','화','수','목','금','토'];
-  var d = new Date(date);
-  var dateLabel = dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일 ('+dayNames[d.getDay()]+')';
-
-  var rows = _wnStudents.map(function(s, i){
-    function val(field){
-      var el = document.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]');
-      return el ? el.value : '';
-    }
-    var att = val('attendance');
-    var attLabel = att==='present'?'출석':att==='late'?'지각':'결석';
-    var attColor = att==='absent'?'color:#ef4444':att==='late'?'color:#f97316':'';
-    var hw = val('homework_done')==='true';
-    var bg = i%2===0?'#fff':'#f8fafc';
-    return '<tr style="background:'+bg+'">'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280">'+( s.school||'' )+'</td>'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280;text-align:center">'+( s.grade||'' )+'</td>'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;font-weight:700;color:#1e293b">'+s.name+'</td>'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">'+val('level')+'</td>'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">'+val('attend_time')+'</td>'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;'+attColor+';font-weight:600">'+attLabel+'</td>'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;'+(hw?'color:#16a34a':'color:#ef4444')+';font-weight:600">'+(hw?'완료':'미완료')+'</td>'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">'+val('score_first')+'</td>'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">'+val('score_retry')+'</td>'
-      +'<td style="padding:6px 8px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280">'+val('note')+'</td>'
-    +'</tr>';
-  }).join('');
-
-  var tempDiv = document.createElement('div');
-  tempDiv.style.cssText = 'position:absolute;left:-9999px;top:0;width:900px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:20px';
-  tempDiv.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #178EF5">'
-    +'<div><div style="font-size:18px;font-weight:700;color:#178EF5">📅 주말 N제</div>'
-    +'<div style="font-size:12px;color:#6b7280">'+currentUser.name+' 선생님</div></div>'
-    +'<div style="text-align:right;font-size:14px;font-weight:700;color:#1a1a2e">'+dateLabel+'</div></div>'
-    +'<table style="width:100%;border-collapse:collapse;font-size:13px">'
-    +'<thead><tr style="background:#E6F1FB">'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:left">학교</th>'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">학년</th>'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:left">이름</th>'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">Level</th>'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">출석시간</th>'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">출석</th>'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">숙제</th>'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">본시</th>'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:center">재시</th>'
-    +'<th style="padding:7px 8px;border:1px solid #d0e4f7;color:#185FA5;text-align:left">비고</th>'
-    +'</tr></thead><tbody>'+rows+'</tbody></table>'
-    +'<div style="margin-top:10px;text-align:right;font-size:10px;color:#9ca3af">학원 관리 시스템 · '+new Date().toLocaleString('ko-KR')+'</div>';
-  document.body.appendChild(tempDiv);
-
-  var canvas = await html2canvas(tempDiv, {backgroundColor:'#fff', scale:2, useCORS:true, logging:false, width:900, height:tempDiv.scrollHeight});
-  document.body.removeChild(tempDiv);
-
-  var isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-  var fileName = '주말N제_'+date.replace(/-/g,'')+'.png';
-  canvas.toBlob(async function(blob){
-    if(isMobile){
-      var file = new File([blob], fileName, {type:'image/png'});
-      if(navigator.canShare && navigator.canShare({files:[file]})){
-        try{ await navigator.share({files:[file], title:'주말 N제'}); btn.textContent='📊 이미지 생성'; btn.disabled=false; return; }
-        catch(e){ if(e.name==='AbortError'){btn.textContent='📊 이미지 생성'; btn.disabled=false; return;} }
-      }
-    }
-    if(navigator.clipboard && navigator.clipboard.write){
-      try{
-        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-        btn.textContent='✅ 복사됨!';
-        setTimeout(function(){ btn.textContent='📊 이미지 생성'; btn.disabled=false; }, 2500);
-        return;
-      }catch(e){}
-    }
-    var a=document.createElement('a'); a.href=canvas.toDataURL(); a.download=fileName; a.click();
-    btn.textContent='📊 이미지 생성'; btn.disabled=false;
-    alert('이미지를 다운로드했습니다.');
-  }, 'image/png');
 }
 
 
