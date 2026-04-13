@@ -852,12 +852,18 @@
               <input type="date" id="wn-date" onchange="wnLoad()"
                 style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
             </div>
-            <div style="flex:1;min-width:130px">
+            <div style="flex:1;min-width:150px;position:relative">
               <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">선생님</div>
-              <select id="wn-teacher-filter" onchange="wnLoad()"
-                style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
-                <option value="">전체 (분원)</option>
-              </select>
+              <button id="wn-teacher-btn" onclick="wnToggleTeacherDropdown(event)"
+                style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:13px;outline:none;background:#fff;cursor:pointer;text-align:left;display:flex;align-items:center;justify-content:space-between">
+                <span id="wn-teacher-label">전체</span><span style="font-size:10px;color:#9ca3af">▼</span>
+              </button>
+              <div id="wn-teacher-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:200;background:#fff;border:1.5px solid var(--border);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.12);max-height:220px;overflow-y:auto;margin-top:4px;padding:6px 0">
+                <label style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:13px" onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background=''">
+                  <input type="checkbox" id="wn-chk-all" onchange="wnTeacherAllToggle(this)" style="accent-color:#16a34a"> <span>전체</span>
+                </label>
+                <div id="wn-teacher-chk-list"></div>
+              </div>
             </div>
             <div style="display:flex;gap:8px;flex:1;min-width:220px;align-self:flex-end">
               <button id="wn-save-btn" onclick="wnSaveAll()" class="btn btn-primary" style="flex:1;padding:9px 0;font-weight:700">💾 전체 저장</button>
@@ -5244,7 +5250,7 @@ function mncRenderTable(){
     });
   });
 
-  html += '</tbody></table></div>';
+  html += '</tbody></table>';
   wrap.innerHTML = html;
 
   // 액션 버튼 표시
@@ -6325,7 +6331,7 @@ function mnrRenderTable(dates){
       (avg!==null?avg+'점':'-')+'</td></tr>';
   });
 
-  html += '</tbody></table></div>';
+  html += '</tbody></table>';
   wrap.innerHTML = html;
 }
 
@@ -8667,7 +8673,7 @@ async function openAssignAnswerModal(mode){
       + '</tr>';
   });
 
-  html += '</tbody></table></div>';
+  html += '</tbody></table>';
   body.innerHTML = html;
   footer.style.display = 'flex';
 }
@@ -9292,7 +9298,7 @@ async function wnLoad(){
 }
 
 async function wnLoadFilters(){
-  // 선생님 필터: 본인 소속 분원의 선생님들만
+  // 선생님 필터: 본인 소속 분원의 선생님들
   var myBranchId = currentUser.branch_id || null;
   var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
   if(myBranchId) tQuery = tQuery.eq('branch_id', myBranchId);
@@ -9304,20 +9310,80 @@ async function wnLoadFilters(){
     _wnAllTeachers.unshift({id:currentUser.id, name:currentUser.name, branch_id:myBranchId});
   }
 
-  var teacherSel = document.getElementById('wn-teacher-filter');
-  if(teacherSel){
-    teacherSel.innerHTML = '<option value="">전체 (분원)</option>';
-    _wnAllTeachers.forEach(function(t){
-      var selected = t.id === currentUser.id ? ' selected' : '';
-      teacherSel.innerHTML += '<option value="'+t.id+'"'+selected+'>'+t.name+' T</option>';
-    });
+  wnRenderTeacherCheckboxes();
+}
+
+function wnRenderTeacherCheckboxes(){
+  var list = document.getElementById('wn-teacher-chk-list');
+  if(!list) return;
+  list.innerHTML = _wnAllTeachers.map(function(t){
+    var checked = (t.id === currentUser.id) ? ' checked' : '';
+    return '<label style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:13px" '
+      +'onmouseover="this.style.background=\'#f0fdf4\'" onmouseout="this.style.background=\'\'">'
+      +'<input type="checkbox" class="wn-teacher-chk" value="'+t.id+'"'+checked+' '
+        +'onchange="wnTeacherChkChange()" style="accent-color:#16a34a"> '
+      +'<span>'+t.name+' T</span>'
+    +'</label>';
+  }).join('');
+  wnUpdateTeacherLabel();
+}
+
+function wnToggleTeacherDropdown(e){
+  e.stopPropagation();
+  var dd = document.getElementById('wn-teacher-dropdown');
+  var isOpen = dd.style.display !== 'none';
+  dd.style.display = isOpen ? 'none' : 'block';
+  if(!isOpen){
+    // 바깥 클릭 시 닫기
+    setTimeout(function(){
+      document.addEventListener('click', function handler(ev){
+        if(!dd.contains(ev.target) && ev.target.id !== 'wn-teacher-btn'){
+          dd.style.display = 'none';
+        }
+        document.removeEventListener('click', handler);
+      });
+    }, 10);
   }
+}
+
+function wnTeacherAllToggle(chkAll){
+  document.querySelectorAll('.wn-teacher-chk').forEach(function(c){ c.checked = chkAll.checked; });
+  wnUpdateTeacherLabel();
+  wnLoadData();
+}
+
+function wnTeacherChkChange(){
+  var all = document.querySelectorAll('.wn-teacher-chk');
+  var allChk = document.getElementById('wn-chk-all');
+  var checked = Array.from(all).filter(function(c){ return c.checked; });
+  if(allChk) allChk.checked = checked.length === all.length;
+  wnUpdateTeacherLabel();
+  wnLoadData();
+}
+
+function wnUpdateTeacherLabel(){
+  var all = document.querySelectorAll('.wn-teacher-chk');
+  var checked = Array.from(all).filter(function(c){ return c.checked; });
+  var label = document.getElementById('wn-teacher-label');
+  if(!label) return;
+  if(checked.length === 0 || checked.length === all.length){
+    label.textContent = '전체';
+  } else if(checked.length === 1){
+    var id = checked[0].value;
+    var t = _wnAllTeachers.find(function(t){ return t.id===id; });
+    label.textContent = t ? t.name+' T' : '1명';
+  } else {
+    label.textContent = checked.length+'명 선택';
+  }
+}
+
+function wnGetSelectedTeacherIds(){
+  var checked = Array.from(document.querySelectorAll('.wn-teacher-chk:checked'));
+  return checked.map(function(c){ return c.value; });
 }
 
 async function wnLoadData(){
   var date = document.getElementById('wn-date').value;
-  var teacherSel = document.getElementById('wn-teacher-filter');
-  var teacherId = teacherSel ? teacherSel.value : currentUser.id;
   var wrap = document.getElementById('wn-table-wrap');
 
   if(!date){
@@ -9327,16 +9393,20 @@ async function wnLoadData(){
 
   wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
 
+  // 체크박스에서 선택된 선생님 ID 목록
+  var selectedIds = typeof wnGetSelectedTeacherIds === 'function' ? wnGetSelectedTeacherIds() : [];
+  if(!selectedIds.length){
+    selectedIds = _wnAllTeachers.map(function(t){ return t.id; });
+    if(!selectedIds.length) selectedIds = [currentUser.id];
+  }
+
   var query = db.from('users').select('id,name,school,grade,teacher_id,weekend_level,weekend_attend_time')
     .eq('role','student').eq('status','active');
 
-  if(teacherId){
-    query = query.eq('teacher_id', teacherId);
+  if(selectedIds.length === 1){
+    query = query.eq('teacher_id', selectedIds[0]);
   } else {
-    // 전체(분원): 분원 선생님 전체 학생
-    var branchTeacherIds = _wnAllTeachers.map(function(t){ return t.id; });
-    if(branchTeacherIds.length) query = query.in('teacher_id', branchTeacherIds);
-    else query = query.eq('teacher_id', currentUser.id);
+    query = query.in('teacher_id', selectedIds);
   }
 
   var {data: students} = await query.order('name');
@@ -9374,29 +9444,36 @@ function wnRenderTable(){
   ];
 
   var html = '<style>'
-    +'.wn-tbl{width:100%;border-collapse:collapse;font-size:12px;min-width:900px}'
-    +'.wn-tbl th{background:#166534;color:#f0fdf4;padding:7px 6px;text-align:center;font-size:11px;font-weight:700;white-space:nowrap}'
+    +'.wn-tbl{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}'
+    +'.wn-tbl th{background:#166534;color:#f0fdf4;padding:6px 3px;text-align:center;font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden}'
     +'.wn-tbl tr:nth-child(even){background:#f0fdf4}'
     +'.wn-tbl tr:nth-child(odd){background:#fff}'
-    +'.wn-tbl td{padding:5px 4px;border-bottom:1px solid #dcfce7;vertical-align:middle;text-align:center}'
-    +'.wn-inp{width:100%;padding:5px 6px;border:1.5px solid #bbf7d0;border-radius:6px;font-size:12px;outline:none;background:#fff;box-sizing:border-box;text-align:center}'
+    +'.wn-tbl td{padding:4px 3px;border-bottom:1px solid #dcfce7;vertical-align:middle;text-align:center;overflow:hidden}'
+    +'.wn-inp{width:100%;padding:4px 4px;border:1.5px solid #bbf7d0;border-radius:5px;font-size:11px;outline:none;background:#fff;box-sizing:border-box;text-align:center}'
     +'.wn-inp:focus{border-color:#16a34a;box-shadow:0 0 0 2px rgba(22,163,74,0.15)}'
-    +'.wn-sel{width:100%;padding:5px 4px;border:1.5px solid #bbf7d0;border-radius:6px;font-size:12px;outline:none;background:#fff;cursor:pointer}'
+    +'.wn-sel{width:100%;padding:4px 2px;border:1.5px solid #bbf7d0;border-radius:5px;font-size:11px;outline:none;background:#fff;cursor:pointer}'
     +'.wn-sel:focus{border-color:#16a34a}'
     +'</style>';
 
-  html += '<div style="overflow-x:auto"><table class="wn-tbl"><thead><tr>'
-    +'<th style="text-align:left;min-width:60px;padding-left:8px">학교</th>'
-    +'<th style="min-width:40px">학년</th>'
-    +'<th style="text-align:left;min-width:70px">이름</th>'
-    +'<th style="min-width:80px">Level</th>'
-    +'<th style="min-width:70px">출석시간</th>'
-    +'<th style="min-width:70px">출석</th>'
-    +'<th style="min-width:70px">숙제</th>'
-    +'<th style="min-width:70px">본시</th>'
-    +'<th style="min-width:70px">재시</th>'
-    +'<th style="min-width:50px">결과</th>'
-    +'<th style="min-width:160px">비고</th>'
+  html += '<table class="wn-tbl"><colgroup>'
+    +'<col style="width:9%"><col style="width:6%"><col style="width:9%">'  // 학교 학년 이름
+    +'<col style="width:8%"><col style="width:8%">'  // Level 출석시간
+    +'<col style="width:8%"><col style="width:8%">'  // 출석 숙제
+    +'<col style="width:7%"><col style="width:7%">'  // 본시 재시
+    +'<col style="width:6%">'  // 결과
+    +'<col style="width:24%">'  // 비고
+    +'</colgroup><thead><tr>'
+    +'<th style="text-align:left;padding-left:6px">학교</th>'
+    +'<th>학년</th>'
+    +'<th style="text-align:left;padding-left:4px">이름</th>'
+    +'<th>Level</th>'
+    +'<th>출석시간</th>'
+    +'<th>출석</th>'
+    +'<th>숙제</th>'
+    +'<th>본시</th>'
+    +'<th>재시</th>'
+    +'<th>결과</th>'
+    +'<th style="text-align:left;padding-left:6px">비고</th>'
     +'</tr></thead><tbody>';
 
   _wnStudents.forEach(function(s, i){
@@ -9436,7 +9513,7 @@ function wnRenderTable(){
     +'</tr>';
   });
 
-  html += '</tbody></table></div>';
+  html += '</tbody></table>';
   wrap.innerHTML = html;
   wnInitKeyNav(); // 탭/엔터 이동 초기화
 }
@@ -9444,23 +9521,52 @@ function wnRenderTable(){
 // 탭/엔터 키 네비게이션
 function wnInitKeyNav(){
   var focusables = Array.from(document.querySelectorAll('.wn-focusable'));
-  var cols = 8; // level, attend_time, attendance, homework_done, score_first, score_retry, result, note
+  // 컬럼 순서: 0=level, 1=attend_time, 2=attendance, 3=homework_done, 4=score_first, 5=score_retry, 6=result, 7=note
+  var cols = 8;
+  // select 열 인덱스 (행 내 기준)
+  var selectCols = {2: true, 3: true, 6: true}; // attendance, homework_done, result
+
   focusables.forEach(function(el, idx){
-    el.addEventListener('keydown', function(e){
-      var next = null;
-      if(e.key === 'Tab'){
-        e.preventDefault();
-        next = e.shiftKey ? focusables[idx-1] : focusables[idx+1];
-      } else if(e.key === 'Enter'){
-        e.preventDefault();
-        // 엔터: 다음 행의 출석(attendance) 컬럼으로 이동
-        // attendance는 각 행에서 3번째 focusable (idx % cols === 2)
-        var colIdx = idx % cols;
-        var nextRowStart = idx - colIdx + cols; // 다음 행 첫 번째 focusable
-        next = focusables[nextRowStart + 2]; // 다음 행의 attendance (3번째)
-      }
-      if(next){ next.focus(); }
-    });
+    var colIdx = idx % cols;
+    var isSelect = el.tagName === 'SELECT';
+
+    if(isSelect){
+      // select: 첫 번째 엔터 → 드롭다운 열기(기본동작 허용), 두 번째 엔터(닫힌 후) → 다음 행 출석으로
+      el.addEventListener('keydown', function(e){
+        if(e.key === 'Tab'){
+          e.preventDefault();
+          var next = e.shiftKey ? focusables[idx-1] : focusables[idx+1];
+          if(next) next.focus();
+        } else if(e.key === 'Enter'){
+          // select가 열려있지 않은 상태에서 엔터 → 다음 행 attendance로
+          // select는 열림 여부를 직접 알 수 없으므로: size 속성으로 판단
+          // 대신 change 이벤트 이후 엔터를 감지하는 방식 사용
+          // 여기서는 단순히: 엔터 누르면 기본동작(드롭다운) 허용, 그 다음 change 후 포커스 이동
+          // 아무것도 하지 않으면 드롭다운이 열리고, 선택 후 자동으로 change 이벤트 발생
+          // change 이벤트에서 다음 행으로 이동
+        }
+      });
+      // select에서 값 선택 완료(change) 시 → 다음 행 attendance로 이동
+      el.addEventListener('change', function(){
+        var nextRowAttIdx = idx - colIdx + cols + 2; // 다음 행의 attendance(col=2)
+        var next = focusables[nextRowAttIdx];
+        if(next) setTimeout(function(){ next.focus(); }, 50);
+      });
+    } else {
+      // input: Tab → 옆 셀, Enter → 다음 행 attendance
+      el.addEventListener('keydown', function(e){
+        var next = null;
+        if(e.key === 'Tab'){
+          e.preventDefault();
+          next = e.shiftKey ? focusables[idx-1] : focusables[idx+1];
+        } else if(e.key === 'Enter'){
+          e.preventDefault();
+          var nextRowAttIdx = idx - colIdx + cols + 2;
+          next = focusables[nextRowAttIdx];
+        }
+        if(next) next.focus();
+      });
+    }
   });
 }
 
