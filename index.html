@@ -1874,7 +1874,7 @@
     <div id="csm-panel-xlsx" style="display:none">
       <div style="background:#f0f4f8;border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;color:#4b5563;line-height:1.8">
         📋 <strong>엑셀에서 복사 후 붙여넣기</strong><br>
-        A열(학교명) · B열(학년) · C열(이름) 데이터 셀만 선택 후<br>
+        A열(학교명) · B열(이름) · C열(학년) 데이터 셀만 선택 후<br>
         Ctrl+C → 아래 칸에 Ctrl+V
       </div>
       <textarea id="csm-paste-area"
@@ -2812,24 +2812,38 @@ function csmParsePaste(){
   var parsed = [];
   lines.forEach(function(line){
     if(!line.trim()) return;
-    var cols = line.split('\t');
-    // A=학교, B=학년, C=이름 (3컬럼 이상)
+    var cols = line.split('\t').map(function(c){ return c.trim(); });
+
     if(cols.length >= 3){
-      var school = String(cols[0]||'').trim();
-      var grade  = String(cols[1]||'').trim();
-      var name   = String(cols[2]||'').trim();
-      if(name) parsed.push({school, grade, name});
+      var school = cols[0];
+      var name   = cols[1]; // B열 = 이름
+      var grade  = cols[2]; // C열 = 학년
+
+      // 헤더 행 자동 필터: 숫자가 아닌 학년 or 이름이 '이름'/'학년' 등 텍스트면 건너뜀
+      var isHeader = (grade && isNaN(grade) && !/학년/.test(grade) && grade.length > 2)
+                  || name === '이름' || school === '학교명' || school === '학교';
+      if(isHeader) return;
+
+      // 학년이 숫자인지 확인 (숫자면 그대로, 아니면 빈값)
+      var gradeNum = grade.replace(/[^0-9]/g, '');
+      if(name) parsed.push({school: school, grade: gradeNum, name: name});
+
+    } else if(cols.length === 2){
+      // 이름 + 학년만
+      var name  = cols[0];
+      var grade = cols[1].replace(/[^0-9]/g, '');
+      if(name && name !== '이름') parsed.push({school:'', grade: grade, name: name});
+
     } else if(cols.length === 1){
-      // 이름만 있는 경우
-      var name = cols[0].trim();
-      if(name) parsed.push({school:'', grade:'', name});
+      var name = cols[0];
+      if(name && name !== '이름') parsed.push({school:'', grade:'', name: name});
     }
   });
 
   _csmXlsxData = parsed;
 
   if(!parsed.length){
-    preview.innerHTML = '<div style="color:#dc2626;font-size:13px;padding:10px">❌ 인식된 학생이 없습니다.<br>A열(학교), B열(학년), C열(이름) 셀을 선택해서 복사해주세요.</div>';
+    preview.innerHTML = '<div style="color:#dc2626;font-size:13px;padding:10px">❌ 인식된 학생이 없습니다.<br>A열(학교), B열(이름), C열(학년) 셀을 선택해서 복사해주세요.</div>';
     uploadBtn.style.display = 'none';
     return;
   }
@@ -2878,14 +2892,17 @@ async function csmUploadXlsx(){
         .eq('teacher_id',currentUser.id).eq('status','active');
 
       if(existing && existing.length > 0){
-        // 이미 존재 → 반 배정만 업데이트
+        // 이미 존재 → 반 배정 확인 후 업데이트
         var s = existing[0];
+        // 이미 이 반(class_id or class_id2)에 있으면 skip
+        if(s.class_id === _csmClassId || s.class_id2 === _csmClassId){
+          skip++; continue;
+        }
         var updateObj = {};
         if(!s.class_id) updateObj.class_id = _csmClassId;
-        else if(!s.class_id2 && s.class_id !== _csmClassId) updateObj.class_id2 = _csmClassId;
-        else { skip++; continue; } // 이미 이 반에 있음
+        else updateObj.class_id2 = _csmClassId; // class_id가 있으면 class_id2에 배정
+        if(d.school) { updateObj.school = d.school; updateObj.grade = d.grade||null; }
         await db.from('users').update(updateObj).eq('id',s.id);
-        if(d.school) await db.from('users').update({school:d.school, grade:d.grade||null}).eq('id',s.id);
         ok++;
       } else {
         // 신규 학생 생성
