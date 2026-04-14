@@ -1302,7 +1302,7 @@
         </div>
 
         <!-- 학생 체크 테이블 -->
-        <div id="mnc-table-wrap" style="overflow-x:auto">
+        <div id="mnc-table-wrap" style="overflow-x:auto;overflow-y:auto;max-height:60vh;border:1px solid var(--border);border-radius:10px">
           <div class="empty-state" style="padding:40px">
             <div class="ei">📅</div>
             <p>날짜를 선택하면 학생 목록이 표시됩니다</p>
@@ -5709,7 +5709,8 @@ function mncRenderTable(){
         +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+globalIdx+'. '+s.name+'</div>'
         +'<div style="font-size:10px;color:#9ca3af">'+(s.school||'')+(s.grade?' '+s.grade+'학년':'')+'</div>'
         +'<input type="text" class="mnc-note-inp" data-sid="'+s.id+'" value="'+savedNote.replace(/"/g,'&quot;')+'" placeholder="특이사항" '
-        +'style="width:100%;margin-top:3px;padding:2px 5px;border:1px solid #e2e8f0;border-radius:4px;font-size:10px;outline:none;background:#f8fafc;color:#374151;box-sizing:border-box">'
+        +'oninput="mncMarkNoteDirty(\''+s.id+'\')" '
+        +'style="width:90px;margin-top:3px;padding:2px 5px;border:1px solid #e2e8f0;border-radius:4px;font-size:10px;outline:none;background:#f8fafc;color:#374151;box-sizing:border-box">'
         +'<button onclick="mncCopyMent(\''+s.id+'\')" style="margin-top:3px;padding:2px 7px;font-size:10px;font-weight:700;border:1px solid #fde68a;border-radius:5px;background:#fef9ec;color:#92400e;cursor:pointer;white-space:nowrap">📋 멘트</button>'
         +'</td>';
 
@@ -6231,24 +6232,36 @@ async function mncSaveAll(){
   if(!adminPanel || !adminPanel.classList.contains('active')) return;
   if(!_mncDate){ alert('날짜를 선택하세요'); return; }
 
-  // _mncDirty 기준으로 변경된 셀만 저장
+  // 특이사항만 변경된 학생도 포함 (_mncNoteDirty)
+  // _mncDirty 기준으로 변경된 셀 + 특이사항 변경 셀 통합
+  var allDirtySids = new Set();
+  Object.keys(_mncDirty).forEach(function(d){
+    if(d === _mncDate) Object.keys(_mncDirty[d]).forEach(function(sid){ allDirtySids.add(sid); });
+  });
+  (window._mncNoteDirty||[]).forEach(function(sid){ allDirtySids.add(sid); });
+
   var upserts = [];
-  var deletes = []; // X 해제된 항목 → DB에서 삭제
+  var deletes = [];
+
+  // 날짜별 dirty (score/status 변경)
   Object.keys(_mncDirty).forEach(function(d){
     Object.keys(_mncDirty[d]).forEach(function(sid){
       var c = _mncData[d] && _mncData[d][sid];
-      // is_completed가 null → X해제 등으로 초기화된 경우 → DB에서 삭제
       if(!c || c.is_completed === null || c.is_completed === undefined){
         deletes.push({student_id: sid, check_date: d});
         return;
       }
       var scoreEl = document.querySelector('.mnc-score-inp[data-sid="'+sid+'"][data-date="'+d+'"]');
       var score = scoreEl ? parseInt(scoreEl.value)||null : c.score||null;
-      var noteEl = document.querySelector('.mnc-note-inp[data-sid="'+sid+'"]');
-      var note = noteEl ? noteEl.value.trim() || null : c.note||null;
+      // 현재 날짜면 특이사항도 같이
+      var note = c.note||null;
+      if(d === _mncDate){
+        var noteEl = document.querySelector('.mnc-note-inp[data-sid="'+sid+'"]');
+        if(noteEl) note = noteEl.value.trim() || null;
+        allDirtySids.delete(sid); // 이미 처리
+      }
       upserts.push({
-        student_id: sid,
-        check_date: d,
+        student_id: sid, check_date: d,
         is_completed: c.is_completed,
         score: c.is_completed===true ? score : null,
         note: note,
@@ -6259,26 +6272,57 @@ async function mncSaveAll(){
     });
   });
 
+  // 특이사항만 변경된 학생 처리
+  allDirtySids.forEach(function(sid){
+    var c = _mncData[_mncDate] && _mncData[_mncDate][sid];
+    var noteEl = document.querySelector('.mnc-note-inp[data-sid="'+sid+'"]');
+    var note = noteEl ? noteEl.value.trim() || null : null;
+    if(c && (c.is_completed === true || c.is_completed === false)){
+      // 기존 레코드 있음 → upsert
+      var scoreEl = document.querySelector('.mnc-score-inp[data-sid="'+sid+'"][data-date="'+_mncDate+'"]');
+      var score = scoreEl ? parseInt(scoreEl.value)||null : c.score||null;
+      upserts.push({
+        student_id: sid, check_date: _mncDate,
+        is_completed: c.is_completed,
+        score: c.is_completed===true ? score : null,
+        note: note,
+        teacher_id: (_mncStudents.find(function(s){ return s.id===sid; })||{}).teacher_id || null,
+        created_by: currentUser?.id || null,
+        updated_at: new Date().toISOString()
+      });
+    } else {
+      // 레코드 없이 특이사항만 → is_completed null로 upsert (note만 저장)
+      upserts.push({
+        student_id: sid, check_date: _mncDate,
+        is_completed: null, score: null, note: note,
+        teacher_id: (_mncStudents.find(function(s){ return s.id===sid; })||{}).teacher_id || null,
+        created_by: currentUser?.id || null,
+        updated_at: new Date().toISOString()
+      });
+    }
+  });
+
   if(!upserts.length && !deletes.length){ alert('변경된 데이터가 없습니다'); return; }
 
-  // 삭제 처리 (X 해제)
   for(var i=0; i<deletes.length; i++){
     var del = deletes[i];
-    await db.from('middle_naje_check')
-      .delete()
-      .eq('student_id', del.student_id)
-      .eq('check_date', del.check_date);
+    await db.from('middle_naje_check').delete()
+      .eq('student_id', del.student_id).eq('check_date', del.check_date);
   }
-
-  // upsert 처리
   if(upserts.length){
     var {error} = await db.from('middle_naje_check')
       .upsert(upserts, {onConflict:'student_id,check_date'});
     if(error){ alert('저장 오류: '+error.message); return; }
   }
   _mncDirty = {};
+  window._mncNoteDirty = [];
   alert('✅ '+upserts.length+'건 저장됐습니다!');
   mncLoadStudents();
+}
+
+function mncMarkNoteDirty(sid){
+  if(!window._mncNoteDirty) window._mncNoteDirty = [];
+  if(!window._mncNoteDirty.includes(sid)) window._mncNoteDirty.push(sid);
 }
 
 
