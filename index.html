@@ -3683,6 +3683,38 @@ function renderAdminHomework(){
 
 // ===== 선생님 데이터 =====
 async function loadTeacherData(){
+  // 업무일지 패널이 열려있으면 입력 내용 보존
+  var _wlSnapshot = null;
+  var wlPanel = document.getElementById('panel-worklog');
+  if(wlPanel && wlPanel.classList.contains('active')){
+    _wlSnapshot = {
+      classId : (document.getElementById('wl-class-select')||{}).value || '',
+      date    : (document.getElementById('wl-date')||{}).value || '',
+      progress: (document.getElementById('wl-progress')||{}).value || '',
+      homework: (document.getElementById('wl-homework')||{}).value || '',
+      memo    : (document.getElementById('wl-memo')||{}).value || '',
+      trial   : (document.getElementById('wl-trial')||{}).value || '',
+      newStu  : (document.getElementById('wl-new-student')||{}).value || '',
+      dropout : (document.getElementById('wl-dropout')||{}).value || '',
+    };
+    // 학생별 입력값도 보존
+    var tbody = document.getElementById('wl-student-tbody');
+    if(tbody){
+      _wlSnapshot.studentRows = Array.from(tbody.querySelectorAll('tr')).map(function(tr){
+        var sid = tr.dataset.sid;
+        if(!sid) return null;
+        return {
+          sid     : sid,
+          attend  : (tr.querySelector('[data-field="attendance"]')||{}).value || '',
+          nCount  : (tr.querySelector('[data-field="ncount"]')||{}).value || '',
+          hwDone  : (tr.querySelector('[data-field="hw_done"]')||{}).value || '',
+          score   : (tr.querySelector('[data-field="test_score"]')||{}).value || '',
+          note    : (tr.querySelector('[data-field="note"]')||{}).value || '',
+        };
+      }).filter(Boolean);
+    }
+  }
+
   const[cRes,sRes,hRes,subRes]=await Promise.all([
     db.from('classes').select('*').eq('teacher_id',currentUser.id).eq('active',true).order('name'),
     db.from('users').select('*').eq('role','student').eq('status','active').eq('teacher_id',currentUser.id).order('name'),
@@ -3696,6 +3728,46 @@ async function loadTeacherData(){
   document.getElementById('st-hw').textContent=homeworks.length;
   // 전반 In 요청 로드
   loadTransferRequests();
+
+  // 업무일지 내용 복원
+  if(_wlSnapshot){
+    var restoreWl = function(){
+      var prog = document.getElementById('wl-progress');
+      var hw   = document.getElementById('wl-homework');
+      var memo = document.getElementById('wl-memo');
+      var trial= document.getElementById('wl-trial');
+      var newS = document.getElementById('wl-new-student');
+      var drop = document.getElementById('wl-dropout');
+      if(prog) prog.value = _wlSnapshot.progress;
+      if(hw)   hw.value   = _wlSnapshot.homework;
+      if(memo) memo.value = _wlSnapshot.memo;
+      if(trial)trial.value= _wlSnapshot.trial;
+      if(newS) newS.value = _wlSnapshot.newStu;
+      if(drop) drop.value = _wlSnapshot.dropout;
+      // 학생별 입력값 복원
+      if(_wlSnapshot.studentRows && _wlSnapshot.studentRows.length){
+        var tbody2 = document.getElementById('wl-student-tbody');
+        if(tbody2){
+          _wlSnapshot.studentRows.forEach(function(row){
+            var tr = tbody2.querySelector('tr[data-sid="'+row.sid+'"]');
+            if(!tr) return;
+            var att = tr.querySelector('[data-field="attendance"]');
+            var nc  = tr.querySelector('[data-field="ncount"]');
+            var hd  = tr.querySelector('[data-field="hw_done"]');
+            var sc  = tr.querySelector('[data-field="test_score"]');
+            var nt  = tr.querySelector('[data-field="note"]');
+            if(att) att.value = row.attend;
+            if(nc)  nc.value  = row.nCount;
+            if(hd)  hd.value  = row.hwDone;
+            if(sc)  sc.value  = row.score;
+            if(nt)  nt.value  = row.note;
+          });
+        }
+      }
+    };
+    // loadWorkLog가 비동기로 실행될 수 있으므로 약간 후에 복원
+    setTimeout(restoreWl, 300);
+  }
 }
 
 /* ── 붙여넣기 학생 일괄 업로드 ── */
@@ -10528,20 +10600,41 @@ async function wnGenerateImage(){
 
 
 function initWorkLog(){
-  // 반 셀렉트 채우기
   const sel = document.getElementById('wl-class-select');
+  const currentVal = sel ? sel.value : '';
+
+  // 반 셀렉트 채우기 (현재 선택값 보존)
   sel.innerHTML = '<option value="">반을 선택하세요</option>';
   classes.forEach(c => {
     sel.innerHTML += `<option value="${c.id}">${c.name}</option>`;
   });
-  // 오늘 날짜 기본값
-  const today = new Date().toISOString().split('T')[0];
-  document.getElementById('wl-date').value = today;
-  document.getElementById('wl-main').style.display = 'none';
-  document.getElementById('wl-empty').style.display = 'block';
+
+  // 이미 반이 선택된 상태였으면 복원 (업무일지 내용이 날아가지 않게)
+  if(currentVal){
+    sel.value = currentVal;
+    // 내용이 이미 로드된 상태면 재로드 하지 않음
+    const wlMain = document.getElementById('wl-main');
+    if(wlMain && wlMain.style.display !== 'none'){
+      // 이미 업무일지가 표시 중 → 그대로 유지, 재로드 안 함
+      wlLoadDayLogs();
+      return;
+    }
+  }
+
+  // 오늘 날짜 기본값 (날짜가 비어있을 때만)
+  const wlDate = document.getElementById('wl-date');
+  if(!wlDate.value){
+    const today = new Date().toISOString().split('T')[0];
+    wlDate.value = today;
+  }
+
+  document.getElementById('wl-main').style.display = currentVal ? 'block' : 'none';
+  document.getElementById('wl-empty').style.display = currentVal ? 'none' : 'block';
+
   // 개별 버튼은 숨김 (반 선택 전)
   const btn = document.getElementById('wl-copy-btn');
-  if(btn) btn.style.display = 'none';
+  if(btn) btn.style.display = currentVal ? 'inline-flex' : 'none';
+
   // 오늘 날짜 업무일지 목록 로드
   wlLoadDayLogs();
 }
