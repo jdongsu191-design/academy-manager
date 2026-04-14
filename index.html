@@ -5606,11 +5606,12 @@ async function mncLoadStudents(){
     _mncData[c.check_date][c.student_id] = c;
   });
 
-  // 누적 멘트용 weekData도 동일 데이터 활용
+  // 누적 멘트용 weekData도 동일 데이터 활용 (깊은 복사로 저장해서 현재 입력값 오염 방지)
   window._mncWeekData = {};
   (allChecks||[]).forEach(function(c){
     if(!window._mncWeekData[c.student_id]) window._mncWeekData[c.student_id] = [];
-    window._mncWeekData[c.student_id].push(c);
+    // 객체를 복사해서 저장 (_mncData와 참조 분리)
+    window._mncWeekData[c.student_id].push(Object.assign({}, c));
   });
 
   mncRenderTable();
@@ -6239,10 +6240,15 @@ async function mncSaveAll(){
 
   // _mncDirty 기준으로 변경된 셀만 저장
   var upserts = [];
+  var deletes = []; // X 해제된 항목 → DB에서 삭제
   Object.keys(_mncDirty).forEach(function(d){
     Object.keys(_mncDirty[d]).forEach(function(sid){
       var c = _mncData[d] && _mncData[d][sid];
-      if(!c || c.is_completed === null || c.is_completed === undefined) return;
+      // is_completed가 null → X해제 등으로 초기화된 경우 → DB에서 삭제
+      if(!c || c.is_completed === null || c.is_completed === undefined){
+        deletes.push({student_id: sid, check_date: d});
+        return;
+      }
       var scoreEl = document.querySelector('.mnc-score-inp[data-sid="'+sid+'"][data-date="'+d+'"]');
       var score = scoreEl ? parseInt(scoreEl.value)||null : c.score||null;
       upserts.push({
@@ -6257,12 +6263,23 @@ async function mncSaveAll(){
     });
   });
 
-  if(!upserts.length){ alert('변경된 데이터가 없습니다'); return; }
+  if(!upserts.length && !deletes.length){ alert('변경된 데이터가 없습니다'); return; }
 
-  var {error} = await db.from('middle_naje_check')
-    .upsert(upserts, {onConflict:'student_id,check_date'});
+  // 삭제 처리 (X 해제)
+  for(var i=0; i<deletes.length; i++){
+    var del = deletes[i];
+    await db.from('middle_naje_check')
+      .delete()
+      .eq('student_id', del.student_id)
+      .eq('check_date', del.check_date);
+  }
 
-  if(error){ alert('저장 오류: '+error.message); return; }
+  // upsert 처리
+  if(upserts.length){
+    var {error} = await db.from('middle_naje_check')
+      .upsert(upserts, {onConflict:'student_id,check_date'});
+    if(error){ alert('저장 오류: '+error.message); return; }
+  }
   _mncDirty = {};
   alert('✅ '+upserts.length+'건 저장됐습니다!');
   mncLoadStudents();
