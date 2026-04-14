@@ -2570,7 +2570,31 @@
   </div>
 </div>
 
-<!-- 모달: 숙제 출제 -->
+<!-- 모달: 퇴원 처리 (중앙 팝업) -->
+<div id="modal-withdraw" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#fff;border-radius:20px;padding:28px 24px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,0.2);position:relative">
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="font-size:36px;margin-bottom:8px">🎓</div>
+      <div style="font-size:18px;font-weight:700;color:#1a1a2e" id="withdraw-student-name-label">퇴원 처리</div>
+      <div style="font-size:13px;color:#6b7280;margin-top:4px">학생 데이터는 보존됩니다</div>
+    </div>
+    <input type="hidden" id="withdraw-student-id">
+    <div style="margin-bottom:14px">
+      <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:6px">퇴원일 *</label>
+      <input type="date" id="withdraw-date"
+        style="width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;outline:none;box-sizing:border-box;background:#f9fafb">
+    </div>
+    <div style="margin-bottom:20px">
+      <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:6px">퇴원사유</label>
+      <textarea id="withdraw-reason" placeholder="퇴원사유를 입력하세요 (선택사항)"
+        style="width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:13px;outline:none;box-sizing:border-box;background:#f9fafb;resize:none;height:80px;line-height:1.5"></textarea>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button onclick="closeWithdrawModal()" style="flex:1;padding:11px 0;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;font-weight:600;background:#fff;color:#6b7280;cursor:pointer">취소</button>
+      <button onclick="confirmWithdraw()" style="flex:1;padding:11px 0;border:none;border-radius:10px;font-size:14px;font-weight:700;background:#dc2626;color:#fff;cursor:pointer">퇴원 처리</button>
+    </div>
+  </div>
+</div>
 <div class="modal-backdrop" id="modal-addHomework">
   <div class="modal">
     <div class="modal-handle"></div>
@@ -4089,7 +4113,7 @@ function renderStudents(){
       </div>
       <div class="user-actions">
         <button class="btn btn-sm" onclick="openEditStudentModal('${s.id}')">수정</button>
-        <button class="btn btn-danger btn-sm" onclick="removeStudent('${s.id}')">삭제</button>
+        <button class="btn btn-danger btn-sm" onclick="openWithdrawModal('${s.id}','${s.name.replace(/'/g,"\\'")}')">퇴원</button>
       </div>
     </div>`;
   }).join('');
@@ -4306,16 +4330,36 @@ async function addStudentsBulk(){
   await loadTeacherData();
 }
 
-async function removeStudent(id){
-  const today = new Date().toISOString().split('T')[0];
-  const withdrawnDate = prompt('퇴원일을 입력하세요 (YYYY-MM-DD)', today);
-  if(withdrawnDate === null) return; // 취소
-  if(!confirm('퇴원 처리할까요?\n학생 데이터는 보존되며 목록에서 숨겨집니다.'))return;
-  await db.from('users').update({
-    status:'inactive',
-    withdrawn_at: withdrawnDate || today
-  }).eq('id',id);
+function openWithdrawModal(id, name){
+  document.getElementById('withdraw-student-id').value = id;
+  document.getElementById('withdraw-student-name-label').textContent = name + ' 학생 퇴원 처리';
+  document.getElementById('withdraw-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('withdraw-reason').value = '';
+  var modal = document.getElementById('modal-withdraw');
+  modal.style.display = 'flex';
+  // 바깥 클릭 시 닫기
+  modal.onclick = function(e){ if(e.target === modal) closeWithdrawModal(); };
+}
+
+function closeWithdrawModal(){
+  document.getElementById('modal-withdraw').style.display = 'none';
+}
+
+async function confirmWithdraw(){
+  var id = document.getElementById('withdraw-student-id').value;
+  var date = document.getElementById('withdraw-date').value;
+  var reason = document.getElementById('withdraw-reason').value.trim();
+  if(!date){ alert('퇴원일을 입력하세요'); return; }
+  var btn = document.querySelector('#modal-withdraw button[onclick="confirmWithdraw()"]');
+  btn.textContent = '처리 중...'; btn.disabled = true;
+  var updateData = { status:'inactive', withdrawn_at: date };
+  if(reason) updateData.withdraw_reason = reason;
+  var {error} = await db.from('users').update(updateData).eq('id', id);
+  btn.textContent = '퇴원 처리'; btn.disabled = false;
+  if(error){ alert('오류: '+error.message); return; }
+  closeWithdrawModal();
   await loadTeacherData();
+  alert('✅ 퇴원 처리가 완료됐습니다.');
 }
 
 // 학생 정보 수정 모달 열기
