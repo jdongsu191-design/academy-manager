@@ -4344,7 +4344,7 @@ function renderStudents(){
       </label>
       ${avatarHtml}
       <div class="user-info">
-        <div class="user-name">${s.name} ${cls?`<span class="badge badge-blue">${cls.name}</span>`:''}${cls2?`<span class="badge" style="background:#dbeafe;color:#1e40af">${cls2.name}</span>`:''}${schoolGrade?`<span class="badge" style="background:#f5f6fa;color:#4b5563;margin-left:4px">${schoolGrade}</span>`:''}${s.naje_step!=null?`<span class="badge" style="background:#EBF5FF;color:#185FA5;margin-left:4px">📄 ${s.naje_step<=10?s.naje_step+'단계':'전체'}</span>`:''}</div>
+        <div class="user-name">${s.name} ${cls?`<span class="badge badge-blue">${cls.name}</span>`:''}${cls2?`<span class="badge" style="background:#dbeafe;color:#1e40af">${cls2.name}</span>`:''}${schoolGrade?`<span class="badge" style="background:#f5f6fa;color:#4b5563;margin-left:4px">${schoolGrade}</span>`:''}${s.naje_steps&&s.naje_steps.length?`<span class="badge" style="background:#EBF5FF;color:#185FA5;margin-left:4px">📄 ${s.naje_steps.length>=10?'전체':s.naje_steps.length+'단계'}</span>`:''}</div>
         <div class="user-meta">
           ${s.phone||'연락처 없음'}
           ${s.enrolled_at?` · 입학 ${s.enrolled_at}`:''}
@@ -14129,18 +14129,18 @@ async function generateMonthlyReport(){
 
   // 이달 활동 학생 (재원 + 이달 퇴원)
   var {data: allStudents} = await db.from('users')
-    .select('id,name,school,grade,teacher_id,class_id,status,enrolled_at,withdrawn_at,naje_step,withdraw_reason')
+    .select('id,name,school,grade,teacher_id,class_id,status,enrolled_at,withdrawn_at,naje_steps,withdraw_reason')
     .eq('role','student')
     .or('status.eq.active,and(status.eq.inactive,withdrawn_at.gte.'+monthStart+')');
 
   // 이달 신입
   var {data: newStudents} = await db.from('users')
-    .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_step')
+    .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_steps')
     .eq('role','student').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
 
   // 이달 전반
   var {data: transfers} = await db.from('transfer_requests')
-    .select('*, student:student_id(id,name,school,grade,naje_step), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
+    .select('*, student:student_id(id,name,school,grade,naje_steps), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
     .eq('status','approved')
     .gte('responded_at', monthStart+'T00:00:00')
     .lte('responded_at', monthEnd+'T23:59:59');
@@ -14187,7 +14187,7 @@ function mrGetTeacherReport(tid){
   var classMap = {};
   (d.classes||[]).forEach(function(c){ classMap[c.id]=c; });
 
-  function najeLabel(step){ if(step==null) return '-'; return step<=10?step+'단계':'전체'; }
+  function najeLabel(step){ if(!step||!step.length) return '-'; if(step.length>=10) return '전체'; return step.map(function(s){return s+'단계';}).join(', '); }
   function sg(s){ return [s.school,s.grade].filter(Boolean).join(' ')||'-'; }
   function getBranch(t){
     if(!t.branch_id||!window._allBranches) return '';
@@ -14284,13 +14284,13 @@ function mrBuildReportHTML(r, d, branchName, forImage){
   // 1일 시작
   sections += sectionHeader('▣ 1일 시작 수강생', startStudents.length, '#1e293b');
   sections += studentTable(startStudents, ['학교/학년','이름','N제 단계','상태'],
-    function(s){ return td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')+td(s.status==='active'?'재원':'퇴원','color:'+(s.status==='active'?'#16a34a':'#dc2626')); },
+    function(s){ return td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_steps),'color:#185FA5')+td(s.status==='active'?'재원':'퇴원','color:'+(s.status==='active'?'#16a34a':'#dc2626')); },
     '해당 학생 없음');
 
   // 신입
   sections += sectionHeader('▣ 신입', myNew.length, '#15803d');
   sections += studentTable(myNew, ['학교/학년','이름','N제 단계','입학일'],
-    function(s){ return td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')+td(s.enrolled_at||'-'); },
+    function(s){ return td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_steps),'color:#185FA5')+td(s.enrolled_at||'-'); },
     '신입 없음');
 
   // 전반 IN
@@ -14308,7 +14308,7 @@ function mrBuildReportHTML(r, d, branchName, forImage){
       +myIn.map(function(t,i){
         var s=t.student||{};
         return '<tr style="background:'+(i%2===0?'#fff':'#f8fafc')+'">'
-          +td(sg(s))+td((s.name||'-'),'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')
+          +td(sg(s))+td((s.name||'-'),'font-weight:600')+td(najeLabel(s.naje_steps),'color:#185FA5')
           +td(t.from_teacher?t.from_teacher.name+' T':'-')
         +'</tr>';
       }).join('')+'</tbody></table>';
@@ -14329,7 +14329,7 @@ function mrBuildReportHTML(r, d, branchName, forImage){
       +'</tr></thead><tbody>'
       +myWithdrawn.map(function(s,i){
         return '<tr style="background:'+(i%2===0?'#fff':'#f8fafc')+'">'
-          +td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')
+          +td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_steps),'color:#185FA5')
           +td(s.withdrawn_at||'-')+td(s.withdraw_reason||'-','color:#9ca3af')
         +'</tr>';
       }).join('')+'</tbody></table>';
@@ -14350,7 +14350,7 @@ function mrBuildReportHTML(r, d, branchName, forImage){
       +myOut.map(function(t,i){
         var s=t.student||{};
         return '<tr style="background:'+(i%2===0?'#fff':'#f8fafc')+'">'
-          +td(sg(s))+td((s.name||'-'),'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')
+          +td(sg(s))+td((s.name||'-'),'font-weight:600')+td(najeLabel(s.naje_steps),'color:#185FA5')
           +td((t.to_teacher?t.to_teacher.name+' T':'-')+(t.to_class?' ('+t.to_class.name+')':''))
         +'</tr>';
       }).join('')+'</tbody></table>';
@@ -14359,7 +14359,7 @@ function mrBuildReportHTML(r, d, branchName, forImage){
   // 말일 수강생
   sections += sectionHeader('▣ 말일 수강생', endStudents.length, '#0284c7');
   sections += studentTable(endStudents, ['학교/학년','이름','N제 단계','상태'],
-    function(s){ return td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')+td('재원','color:#16a34a'); },
+    function(s){ return td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_steps),'color:#185FA5')+td('재원','color:#16a34a'); },
     '해당 학생 없음');
 
   var header = '<div style="background:linear-gradient(135deg,#1e293b,#0f3460);color:#fff;padding:20px 24px;border-radius:14px 14px 0 0;margin-bottom:0">'
