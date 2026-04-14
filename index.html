@@ -464,8 +464,12 @@
     </div>
     <div class="signup-form" id="studentLoginForm">
       <div class="input-group">
+        <label>분원 선택</label>
+        <select id="studentBranchSelect" onchange="loadTeachersByBranch()"><option value="">분원을 선택하세요...</option></select>
+      </div>
+      <div class="input-group">
         <label>선생님 선택</label>
-        <select id="studentTeacherSelect" onchange="loadClassesByTeacher()"><option value="">선생님을 선택하세요...</option></select>
+        <select id="studentTeacherSelect" onchange="loadClassesByTeacher()" disabled><option value="">분원 선택 후 선택하세요</option></select>
       </div>
       <div class="input-group">
         <label>반 선택</label>
@@ -2874,11 +2878,52 @@ function showSignup(){document.getElementById('loginForm').classList.add('hidden
 function showLogin(){document.getElementById('loginForm').classList.remove('hidden');document.getElementById('signupForm').classList.remove('active');}
 
 async function loadClassesForLogin(){
-  // 선생님 목록 로드
-  const{data}=await db.from('users').select('id,name').eq('role','teacher').eq('status','active').order('name');
-  const sel=document.getElementById('studentTeacherSelect');
-  sel.innerHTML='<option value="">선생님을 선택하세요...</option>';
-  (data||[]).forEach(t=>{sel.innerHTML+=`<option value="${t.id}">${t.name} 선생님</option>`;});
+  // 활성화된 분원 목록 로드
+  const branchSel = document.getElementById('studentBranchSelect');
+  branchSel.innerHTML = '<option value="">분원을 선택하세요...</option>';
+
+  // active 컬럼이 있으면 필터, 없으면 전체 (컬럼 없을 때 대비)
+  let branchQuery = db.from('branches').select('id,name,active').order('name');
+  const {data: branches} = await branchQuery;
+  (branches||[]).forEach(b => {
+    // active 컬럼 없거나 true인 분원만 표시
+    if(b.active === false) return;
+    branchSel.innerHTML += `<option value="${b.id}">${b.name}</option>`;
+  });
+
+  // 선생님/반 셀렉트 초기화
+  const teacherSel = document.getElementById('studentTeacherSelect');
+  teacherSel.innerHTML = '<option value="">분원 선택 후 선택하세요</option>';
+  teacherSel.disabled = true;
+  const classSel = document.getElementById('studentClassSelect');
+  classSel.innerHTML = '<option value="">선생님 선택 후 반을 선택하세요</option>';
+  classSel.disabled = true;
+}
+
+async function loadTeachersByBranch(){
+  const branchId = document.getElementById('studentBranchSelect').value;
+  const teacherSel = document.getElementById('studentTeacherSelect');
+  const classSel = document.getElementById('studentClassSelect');
+
+  // 선생님/반 초기화
+  classSel.innerHTML = '<option value="">선생님 선택 후 반을 선택하세요</option>';
+  classSel.disabled = true;
+
+  if(!branchId){
+    teacherSel.innerHTML = '<option value="">분원 선택 후 선택하세요</option>';
+    teacherSel.disabled = true;
+    return;
+  }
+
+  const {data} = await db.from('users')
+    .select('id,name').eq('role','teacher').eq('status','active')
+    .eq('branch_id', branchId).order('name');
+
+  teacherSel.innerHTML = '<option value="">선생님을 선택하세요...</option>';
+  (data||[]).forEach(t => {
+    teacherSel.innerHTML += `<option value="${t.id}">${t.name} 선생님</option>`;
+  });
+  teacherSel.disabled = false;
 }
 
 async function loadClassesByTeacher(){
@@ -3298,16 +3343,22 @@ function renderBranchList(){
   el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px">'
     + branches.map(function(b){
     var teacherCount = (allUsers||[]).filter(function(u){ return u.role==='teacher' && u.branch_id===b.id; }).length;
-    return '<div style="border:1.5px solid #e2e8f0;border-radius:14px;padding:16px 14px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.06);display:flex;flex-direction:column;gap:8px">'
-      +'<div style="font-size:28px;text-align:center">🏢</div>'
+    var isActive = b.active !== false; // active 컬럼 없으면 기본 true
+    return '<div style="border:1.5px solid '+(isActive?'#e2e8f0':'#f1f5f9')+';border-radius:14px;padding:16px 14px;background:'+(isActive?'#fff':'#f8fafc')+';box-shadow:0 1px 4px rgba(0,0,0,0.06);display:flex;flex-direction:column;gap:8px;opacity:'+(isActive?'1':'0.65')+'">'
+      +'<div style="font-size:28px;text-align:center">'+(isActive?'🏢':'🔒')+'</div>'
       +'<div style="text-align:center">'
         +'<div style="font-size:14px;font-weight:700;color:#1e293b">'+b.name+'</div>'
         +(b.address?'<div style="font-size:11px;color:#9ca3af;margin-top:2px">'+b.address+'</div>':'')
         +'<div style="font-size:12px;color:#3b82f6;font-weight:600;margin-top:4px">👨‍🏫 '+teacherCount+'명</div>'
+        +'<div style="margin-top:6px">'
+          +'<span style="display:inline-block;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:700;background:'+(isActive?'#dcfce7':'#f1f5f9')+';color:'+(isActive?'#16a34a':'#94a3b8')+'">'+(isActive?'● 활성화':'○ 비활성화')+'</span>'
+        +'</div>'
       +'</div>'
-      +'<div style="display:flex;gap:6px;justify-content:center">'
+      +'<div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">'
         +'<button data-bid="'+b.id+'" data-bname="'+b.name+'" data-baddr="'+(b.address||'')+'" onclick="openEditBranchModal(this.dataset.bid,this.dataset.bname,this.dataset.baddr)" '
           +'style="flex:1;padding:5px 0;border:1px solid #93c5fd;border-radius:7px;background:#f0f7ff;color:#1d4ed8;font-size:12px;cursor:pointer;font-weight:600">수정</button>'
+        +'<button data-bid="'+b.id+'" data-bactive="'+(isActive?'true':'false')+'" onclick="toggleBranchActive(this.dataset.bid,this.dataset.bactive===\'true\')" '
+          +'style="flex:1;padding:5px 0;border:1px solid '+(isActive?'#fde68a':'#bbf7d0')+';border-radius:7px;background:'+(isActive?'#fffbeb':'#f0fdf4')+';color:'+(isActive?'#b45309':'#16a34a')+';font-size:12px;cursor:pointer;font-weight:600">'+(isActive?'비활성화':'활성화')+'</button>'
         +'<button data-bid="'+b.id+'" data-bname="'+b.name+'" onclick="deleteBranch(this.dataset.bid,this.dataset.bname)" '
           +'style="flex:1;padding:5px 0;border:1px solid #fca5a5;border-radius:7px;background:#fff0f0;color:#dc2626;font-size:12px;cursor:pointer;font-weight:600">삭제</button>'
       +'</div>'
@@ -3354,11 +3405,30 @@ async function addBranch(){
   var name = document.getElementById('inp-branch-name').value.trim();
   if(!name){ alert('분원 이름을 입력하세요'); return; }
   var address = document.getElementById('inp-branch-address').value.trim();
-  var {error} = await db.from('branches').insert({name, address:address||null});
+  var {error} = await db.from('branches').insert({name, address:address||null, active:true});
   if(error){ alert('오류: '+error.message); return; }
   closeModal('addBranch');
   await loadBranches();
   renderBranchFilterBtns();
+}
+
+async function toggleBranchActive(id, currentActive){
+  var newActive = !currentActive;
+  var label = newActive ? '활성화' : '비활성화';
+  if(!confirm('이 분원을 '+label+'하시겠습니까?\n'+(newActive?'학생 로그인 시 분원 목록에 표시됩니다.':'학생 로그인 시 분원 목록에서 숨겨집니다.'))) return;
+  var {error} = await db.from('branches').update({active: newActive}).eq('id', id);
+  if(error){
+    // active 컬럼 없을 경우 안내
+    if(error.message && error.message.includes('active')){
+      alert('⚠️ DB에 active 컬럼이 없습니다.\nSupabase 대시보드에서 다음 SQL을 실행해 주세요:\n\nALTER TABLE branches ADD COLUMN active boolean NOT NULL DEFAULT true;');
+    } else {
+      alert('오류: '+error.message);
+    }
+    return;
+  }
+  await loadBranches();
+  renderBranchList();
+  alert('✅ '+label+' 처리 완료!');
 }
 
 // 분원 수정
