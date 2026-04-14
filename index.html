@@ -570,6 +570,9 @@
         <button class="at-menu-item" id="amenu-worklog" onclick="switchAdminTab('admin-worklog',this);initAdminWorklog()">
           <span class="at-menu-icon">📋</span>업무일지 조회
         </button>
+        <button class="at-menu-item" id="amenu-monthly-report" onclick="switchAdminTab('admin-monthly-report',this);initMonthlyReport()">
+          <span class="at-menu-icon">📊</span>월별 수강인원
+        </button>
         <!-- 관리자 주말 프로그램 아코디언 -->
         <div id="amenu-weekend-group">
           <button class="at-menu-item" id="amenu-weekend-toggle" onclick="toggleAdminWeekendMenu()"
@@ -1722,6 +1725,48 @@
         </div>
         <div id="awby-table-wrap">
           <div class="empty-state"><div class="ei">📝</div><p>날짜를 선택하면 결과가 표시됩니다</p></div>
+        </div>
+      </div>
+
+      <!-- 관리자 월별 수강인원 패널 -->
+      <div class="panel" id="panel-admin-monthly-report">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:20px;font-weight:700;color:#1a1a2e">📊 월별 수강인원</div>
+            <div style="font-size:13px;color:#6b7280;margin-top:4px">선생님별 월간 수강인원 현황 엑셀 생성</div>
+          </div>
+        </div>
+        <!-- 필터 카드 -->
+        <div class="card" style="margin-bottom:14px">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+            <div style="flex:1;min-width:120px">
+              <div style="font-size:12px;color:#6b7280;font-weight:500;margin-bottom:5px">연도</div>
+              <select id="mr-year" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff"></select>
+            </div>
+            <div style="flex:1;min-width:120px">
+              <div style="font-size:12px;color:#6b7280;font-weight:500;margin-bottom:5px">월</div>
+              <select id="mr-month" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+                <option value="1">1월</option><option value="2">2월</option><option value="3">3월</option>
+                <option value="4">4월</option><option value="5">5월</option><option value="6">6월</option>
+                <option value="7">7월</option><option value="8">8월</option><option value="9">9월</option>
+                <option value="10">10월</option><option value="11">11월</option><option value="12">12월</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:120px">
+              <div style="font-size:12px;color:#6b7280;font-weight:500;margin-bottom:5px">분원</div>
+              <select id="mr-branch" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+                <option value="">전체 분원</option>
+              </select>
+            </div>
+            <button onclick="generateMonthlyReport()" style="padding:9px 20px;border:none;border-radius:10px;background:#178EF5;color:#fff;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap">
+              📥 엑셀 다운로드
+            </button>
+          </div>
+        </div>
+        <!-- 미리보기 -->
+        <div id="mr-preview" class="card" style="display:none">
+          <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:12px" id="mr-preview-title">미리보기</div>
+          <div id="mr-preview-content"></div>
         </div>
       </div>
 
@@ -13996,6 +14041,231 @@ function autoFormatGrade(el){
   if(/^[1-6]$/.test(v)){
     el.value = v + '학년';
   }
+}
+
+/* ══════════════════════════════════════════
+   월별 수강인원 보고서 (관리자)
+══════════════════════════════════════════ */
+async function initMonthlyReport(){
+  var now = new Date();
+  var yearSel = document.getElementById('mr-year');
+  if(yearSel && !yearSel.options.length){
+    for(var y=now.getFullYear(); y>=2024; y--){
+      yearSel.innerHTML += '<option value="'+y+'">'+y+'년</option>';
+    }
+  }
+  var monthSel = document.getElementById('mr-month');
+  if(monthSel) monthSel.value = String(now.getMonth()+1);
+  var branchSel = document.getElementById('mr-branch');
+  if(branchSel){
+    branchSel.innerHTML = '<option value="">전체 분원</option>';
+    (window._allBranches||[]).forEach(function(b){
+      branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+    });
+  }
+}
+
+async function generateMonthlyReport(){
+  var year  = parseInt(document.getElementById('mr-year').value);
+  var month = parseInt(document.getElementById('mr-month').value);
+  var branchId = document.getElementById('mr-branch').value;
+  var monthStart = year+'-'+String(month).padStart(2,'0')+'-01';
+  var lastDay = new Date(year, month, 0).getDate();
+  var monthEnd = year+'-'+String(month).padStart(2,'0')+'-'+String(lastDay).padStart(2,'0');
+
+  var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
+  if(branchId) tQuery = tQuery.eq('branch_id', branchId);
+  var {data: teachers} = await tQuery;
+  if(!teachers||!teachers.length){ alert('선생님이 없습니다'); return; }
+
+  var {data: classes} = await db.from('classes').select('id,name,teacher_id').eq('active',true);
+
+  var {data: allStudents} = await db.from('users')
+    .select('id,name,school,grade,teacher_id,class_id,status,enrolled_at,withdrawn_at,naje_step,withdraw_reason')
+    .eq('role','student')
+    .or('status.eq.active,and(status.eq.inactive,withdrawn_at.gte.'+monthStart+')');
+
+  var {data: newStudents} = await db.from('users')
+    .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_step')
+    .eq('role','student').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
+
+  var {data: transfers} = await db.from('transfer_requests')
+    .select('*, student:student_id(id,name,school,grade,naje_step), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
+    .eq('status','approved')
+    .gte('responded_at', monthStart+'T00:00:00')
+    .lte('responded_at', monthEnd+'T23:59:59');
+
+  if(typeof XLSX === 'undefined'){
+    await new Promise(function(resolve){
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+      s.onload = resolve;
+      document.head.appendChild(s);
+    });
+  }
+
+  var wb = XLSX.utils.book_new();
+  var classMap = {};
+  (classes||[]).forEach(function(c){ classMap[c.id] = c; });
+
+  function najeLabel(step){ if(step==null) return ''; return step<=10?step+'단계':'전체'; }
+  function schoolGrade(s){ return [s.school,s.grade].filter(Boolean).join(' '); }
+  function getBranch(tid){
+    var t = teachers.find(function(x){ return x.id===tid; });
+    if(!t||!t.branch_id||!window._allBranches) return '';
+    var br = window._allBranches.find(function(b){ return b.id===t.branch_id; });
+    return br ? br.name : '';
+  }
+  function groupByClass(students){
+    var groups = {}, keys = [];
+    students.forEach(function(s){
+      var cls = classMap[s.class_id];
+      var key = cls ? cls.name : '반 미지정';
+      if(!groups[key]){ groups[key]=[]; keys.push(key); }
+      groups[key].push(s);
+    });
+    return {groups, keys};
+  }
+
+  // 선생님별 시트
+  teachers.forEach(function(teacher){
+    var myStudents = (allStudents||[]).filter(function(s){ return s.teacher_id === teacher.id; });
+    var startStudents = myStudents.filter(function(s){ var ea=s.enrolled_at; return !ea||ea<monthStart; });
+    var myNew = (newStudents||[]).filter(function(s){ return s.teacher_id === teacher.id; });
+    var myWithdrawn = myStudents.filter(function(s){ return s.status==='inactive'&&s.withdrawn_at&&s.withdrawn_at>=monthStart; });
+    var myTransferIn = (transfers||[]).filter(function(t){ return t.to_teacher&&t.to_teacher.id===teacher.id; });
+    var myTransferOut = (transfers||[]).filter(function(t){ return t.from_teacher&&t.from_teacher.id===teacher.id; });
+    var endStudents = myStudents.filter(function(s){ return s.status==='active'; });
+    var branchName = getBranch(teacher.id);
+
+    var rows = [];
+    rows.push([null,'['+( branchName||'OO관')+'] '+month+'월 '+teacher.name+' 선생님 수강인원']);
+    rows.push([null,'구분','1일 시작 수강생','신입','재입학','전반(IN)','퇴원','전반(OUT)','말일 수강생','비고']);
+    rows.push([null,'인원 수',startStudents.length+'명',myNew.length+'명','',myTransferIn.length+'명',myWithdrawn.length+'명',myTransferOut.length+'명',endStudents.length+'명','']);
+    rows.push([]);
+
+    // 1일 시작
+    rows.push([null,'▣ 1일 시작 수강생 ('+startStudents.length+'명)']);
+    var sg = groupByClass(startStudents);
+    sg.keys.forEach(function(cname){
+      rows.push([null, cname]);
+      rows.push([null,'학교/학년','이름','N제 단계','상태','특이사항']);
+      sg.groups[cname].forEach(function(s){
+        rows.push([null, schoolGrade(s), s.name, najeLabel(s.naje_step), s.status==='active'?'재원':'퇴원','']);
+      });
+      rows.push([]);
+    });
+
+    // 신입
+    rows.push([null,'▣ 신입 ('+myNew.length+'명)']);
+    if(myNew.length){
+      rows.push([null,'학교/학년','이름','N제 단계','입학일','특이사항']);
+      myNew.forEach(function(s){ rows.push([null, schoolGrade(s), s.name, najeLabel(s.naje_step), s.enrolled_at||'','']); });
+    }
+    rows.push([]);
+
+    // 전반 IN
+    rows.push([null,'▣ 전반(IN) ('+myTransferIn.length+'명)']);
+    if(myTransferIn.length){
+      rows.push([null,'학교/학년','이름','N제 단계','보내는 반','특이사항']);
+      myTransferIn.forEach(function(t){
+        var s=t.student||{};
+        rows.push([null, schoolGrade(s), s.name||'', najeLabel(s.naje_step), t.from_teacher?t.from_teacher.name+' T':'','']);
+      });
+    }
+    rows.push([]);
+
+    // 퇴원
+    rows.push([null,'▣ 퇴원 ('+myWithdrawn.length+'명)']);
+    if(myWithdrawn.length){
+      rows.push([null,'학교/학년','이름','N제 단계','퇴원일','사유']);
+      myWithdrawn.forEach(function(s){ rows.push([null, schoolGrade(s), s.name, najeLabel(s.naje_step), s.withdrawn_at||'', s.withdraw_reason||'']); });
+    }
+    rows.push([]);
+
+    // 전반 OUT
+    rows.push([null,'▣ 전반(OUT) ('+myTransferOut.length+'명)']);
+    if(myTransferOut.length){
+      rows.push([null,'학교/학년','이름','N제 단계','받는 반','특이사항']);
+      myTransferOut.forEach(function(t){
+        var s=t.student||{};
+        rows.push([null, schoolGrade(s), s.name||'', najeLabel(s.naje_step), (t.to_teacher?t.to_teacher.name+' T':'')+(t.to_class?' ('+t.to_class.name+')':''),'']);
+      });
+    }
+    rows.push([]);
+
+    // 말일 수강생
+    rows.push([null,'▣ 말일 수강생 ('+endStudents.length+'명)']);
+    var eg = groupByClass(endStudents);
+    eg.keys.forEach(function(cname){
+      rows.push([null, cname]);
+      rows.push([null,'학교/학년','이름','N제 단계','상태','특이사항']);
+      eg.groups[cname].forEach(function(s){ rows.push([null, schoolGrade(s), s.name, najeLabel(s.naje_step),'재원','']); });
+      rows.push([]);
+    });
+
+    var ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:3},{wch:20},{wch:14},{wch:10},{wch:10},{wch:10},{wch:14},{wch:14},{wch:14},{wch:16}];
+    var sheetName = teacher.name.length>28?teacher.name.slice(0,28):teacher.name;
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  });
+
+  // 전체 요약 시트
+  var sumRows = [];
+  sumRows.push([year+'년 '+month+'월 전체 수강인원 현황']);
+  sumRows.push(['선생님','분원','1일 시작','신입','전반IN','퇴원','전반OUT','말일 수강생']);
+  teachers.forEach(function(teacher){
+    var myStudents = (allStudents||[]).filter(function(s){ return s.teacher_id===teacher.id; });
+    sumRows.push([
+      teacher.name,
+      getBranch(teacher.id),
+      myStudents.filter(function(s){ var ea=s.enrolled_at; return !ea||ea<monthStart; }).length,
+      (newStudents||[]).filter(function(s){ return s.teacher_id===teacher.id; }).length,
+      (transfers||[]).filter(function(t){ return t.to_teacher&&t.to_teacher.id===teacher.id; }).length,
+      myStudents.filter(function(s){ return s.status==='inactive'&&s.withdrawn_at&&s.withdrawn_at>=monthStart; }).length,
+      (transfers||[]).filter(function(t){ return t.from_teacher&&t.from_teacher.id===teacher.id; }).length,
+      myStudents.filter(function(s){ return s.status==='active'; }).length
+    ]);
+  });
+
+  var wsSummary = XLSX.utils.aoa_to_sheet(sumRows);
+  wsSummary['!cols'] = [{wch:14},{wch:12},{wch:10},{wch:8},{wch:8},{wch:8},{wch:8},{wch:12}];
+  XLSX.utils.book_append_sheet(wb, wsSummary, '전체요약');
+
+  var fileName = year+'년_'+month+'월_수강인원.xlsx';
+  XLSX.writeFile(wb, fileName);
+
+  // 미리보기
+  var preview = document.getElementById('mr-preview');
+  var previewTitle = document.getElementById('mr-preview-title');
+  var previewContent = document.getElementById('mr-preview-content');
+  if(preview){
+    preview.style.display='block';
+    previewTitle.textContent = year+'년 '+month+'월 전체 요약';
+    previewContent.innerHTML = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
+      +'<thead><tr style="background:#1e293b;color:#f8fafc">'
+      +'<th style="padding:8px 10px;text-align:left">선생님</th><th style="padding:8px 10px;text-align:left">분원</th>'
+      +'<th style="padding:8px 10px;text-align:center">1일 시작</th><th style="padding:8px 10px;text-align:center">신입</th>'
+      +'<th style="padding:8px 10px;text-align:center">전반IN</th><th style="padding:8px 10px;text-align:center">퇴원</th>'
+      +'<th style="padding:8px 10px;text-align:center">전반OUT</th>'
+      +'<th style="padding:8px 10px;text-align:center;color:#fbbf24;font-weight:700">말일 수강생</th>'
+      +'</tr></thead><tbody>'
+      +sumRows.slice(2).map(function(r,i){
+        var bg=i%2===0?'#fff':'#f8fafc';
+        return '<tr style="background:'+bg+'">'
+          +'<td style="padding:7px 10px;font-weight:600">'+r[0]+'</td>'
+          +'<td style="padding:7px 10px;color:#6b7280">'+r[1]+'</td>'
+          +'<td style="padding:7px 10px;text-align:center">'+r[2]+'</td>'
+          +'<td style="padding:7px 10px;text-align:center;color:#16a34a;font-weight:600">'+r[3]+'</td>'
+          +'<td style="padding:7px 10px;text-align:center;color:#1d4ed8">'+r[4]+'</td>'
+          +'<td style="padding:7px 10px;text-align:center;color:#dc2626">'+r[5]+'</td>'
+          +'<td style="padding:7px 10px;text-align:center;color:#6b7280">'+r[6]+'</td>'
+          +'<td style="padding:7px 10px;text-align:center;font-weight:700">'+r[7]+'</td>'
+        +'</tr>';
+      }).join('')
+      +'</tbody></table></div>';
+  }
+  alert('✅ '+fileName+' 다운로드 완료!\n선생님 '+teachers.length+'명 시트 + 전체 요약 시트 생성됨');
 }
 </script>
 </body>
