@@ -5581,7 +5581,7 @@ async function mncLoadStudents(){
   if(wrap) wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
 
   // 재원 중인 중등 학생만 조회
-  var query = db.from('users').select('id,name,school,grade,teacher_id,school_level')
+  var query = db.from('users').select('id,name,school,grade,teacher_id,school_level,mnc_note')
     .eq('role','student').eq('status','active')
     .in('school_level',['middle','both']).order('name');
   if(teacherFilter) query = query.eq('teacher_id', teacherFilter);
@@ -5703,7 +5703,7 @@ function mncRenderTable(){
     }
     g.students.forEach(function(s, si){
       var rowBg = si%2===0 ? '#fff' : '#f8fafc';
-      var savedNote = String((_mncData[_mncDate]&&_mncData[_mncDate][s.id]&&_mncData[_mncDate][s.id].note)||'');
+      var savedNote = String(s.mnc_note||'');
       html += '<tr id="mnc-row-'+s.id+'" style="background:'+rowBg+'">'
         +'<td style="text-align:left;padding-left:8px;min-width:110px">'
         +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+globalIdx+'. '+s.name+'</div>'
@@ -6232,18 +6232,9 @@ async function mncSaveAll(){
   if(!adminPanel || !adminPanel.classList.contains('active')) return;
   if(!_mncDate){ alert('날짜를 선택하세요'); return; }
 
-  // 특이사항만 변경된 학생도 포함 (_mncNoteDirty)
-  // _mncDirty 기준으로 변경된 셀 + 특이사항 변경 셀 통합
-  var allDirtySids = new Set();
-  Object.keys(_mncDirty).forEach(function(d){
-    if(d === _mncDate) Object.keys(_mncDirty[d]).forEach(function(sid){ allDirtySids.add(sid); });
-  });
-  (window._mncNoteDirty||[]).forEach(function(sid){ allDirtySids.add(sid); });
-
+  // ── 1. 출결/점수 변경 저장 (_mncDirty 기준) ──
   var upserts = [];
   var deletes = [];
-
-  // 날짜별 dirty (score/status 변경)
   Object.keys(_mncDirty).forEach(function(d){
     Object.keys(_mncDirty[d]).forEach(function(sid){
       var c = _mncData[d] && _mncData[d][sid];
@@ -6253,18 +6244,10 @@ async function mncSaveAll(){
       }
       var scoreEl = document.querySelector('.mnc-score-inp[data-sid="'+sid+'"][data-date="'+d+'"]');
       var score = scoreEl ? parseInt(scoreEl.value)||null : c.score||null;
-      // 현재 날짜면 특이사항도 같이
-      var note = c.note||null;
-      if(d === _mncDate){
-        var noteEl = document.querySelector('.mnc-note-inp[data-sid="'+sid+'"]');
-        if(noteEl) note = noteEl.value.trim() || null;
-        allDirtySids.delete(sid); // 이미 처리
-      }
       upserts.push({
         student_id: sid, check_date: d,
         is_completed: c.is_completed,
         score: c.is_completed===true ? score : null,
-        note: note,
         teacher_id: (_mncStudents.find(function(s){ return s.id===sid; })||{}).teacher_id || null,
         created_by: currentUser?.id || null,
         updated_at: new Date().toISOString()
@@ -6272,51 +6255,47 @@ async function mncSaveAll(){
     });
   });
 
-  // 특이사항만 변경된 학생 처리
-  allDirtySids.forEach(function(sid){
-    var c = _mncData[_mncDate] && _mncData[_mncDate][sid];
-    var noteEl = document.querySelector('.mnc-note-inp[data-sid="'+sid+'"]');
-    var note = noteEl ? noteEl.value.trim() || null : null;
-    if(c && (c.is_completed === true || c.is_completed === false)){
-      // 기존 레코드 있음 → upsert
-      var scoreEl = document.querySelector('.mnc-score-inp[data-sid="'+sid+'"][data-date="'+_mncDate+'"]');
-      var score = scoreEl ? parseInt(scoreEl.value)||null : c.score||null;
-      upserts.push({
-        student_id: sid, check_date: _mncDate,
-        is_completed: c.is_completed,
-        score: c.is_completed===true ? score : null,
-        note: note,
-        teacher_id: (_mncStudents.find(function(s){ return s.id===sid; })||{}).teacher_id || null,
-        created_by: currentUser?.id || null,
-        updated_at: new Date().toISOString()
-      });
-    } else {
-      // 레코드 없이 특이사항만 → is_completed null로 upsert (note만 저장)
-      upserts.push({
-        student_id: sid, check_date: _mncDate,
-        is_completed: null, score: null, note: note,
-        teacher_id: (_mncStudents.find(function(s){ return s.id===sid; })||{}).teacher_id || null,
-        created_by: currentUser?.id || null,
-        updated_at: new Date().toISOString()
-      });
+  // ── 2. 특이사항 변경 저장 (_mncNoteDirty 기준 → users.mnc_note) ──
+  var noteDirty = window._mncNoteDirty || [];
+  var noteErrors = [];
+  for(var ni=0; ni<noteDirty.length; ni++){
+    var nsid = noteDirty[ni];
+    var noteEl = document.querySelector('.mnc-note-inp[data-sid="'+nsid+'"]');
+    if(!noteEl) continue;
+    var noteVal = noteEl.value.trim() || null;
+    var {error: ne} = await db.from('users').update({mnc_note: noteVal}).eq('id', nsid);
+    if(ne) noteErrors.push(ne.message);
+    else {
+      // 메모리에도 반영
+      var stu = _mncStudents.find(function(s){ return s.id===nsid; });
+      if(stu) stu.mnc_note = noteVal;
     }
-  });
+  }
 
-  if(!upserts.length && !deletes.length){ alert('변경된 데이터가 없습니다'); return; }
+  if(!upserts.length && !deletes.length && !noteDirty.length){
+    alert('변경된 데이터가 없습니다'); return;
+  }
 
+  // 삭제 처리
   for(var i=0; i<deletes.length; i++){
     var del = deletes[i];
     await db.from('middle_naje_check').delete()
       .eq('student_id', del.student_id).eq('check_date', del.check_date);
   }
+
+  // upsert 처리
   if(upserts.length){
     var {error} = await db.from('middle_naje_check')
       .upsert(upserts, {onConflict:'student_id,check_date'});
     if(error){ alert('저장 오류: '+error.message); return; }
   }
+
+  if(noteErrors.length){ alert('특이사항 저장 오류: '+noteErrors.join(', ')); return; }
+
   _mncDirty = {};
   window._mncNoteDirty = [];
-  alert('✅ '+upserts.length+'건 저장됐습니다!');
+  var total = upserts.length + deletes.length + noteDirty.length;
+  alert('✅ 저장 완료! (출결/점수 '+upserts.length+'건, 특이사항 '+noteDirty.length+'건)');
   mncLoadStudents();
 }
 
@@ -6603,8 +6582,7 @@ async function mncGenerateSummaryImage(){
         drawRect(nameX+IDX_W, curY, NAME_W, RH, rowBg, '#d1d5db');
         txt(s.name, nameX+IDX_W+10, curY+RH/2-2, 'left', '#0f172a', 'bold 17px sans-serif');
         // 특이사항 이름 아래 표시
-        var noteRec2 = checkMap[s.id]&&checkMap[s.id][_mncDate];
-        var noteT2 = noteRec2&&noteRec2.note ? noteRec2.note : '';
+        var noteT2 = s.mnc_note || '';
         var noteInp2 = document.querySelector('.mnc-note-inp[data-sid="'+s.id+'"]');
         if(noteInp2) noteT2 = noteInp2.value.trim();
         if(noteT2) txt(noteT2, nameX+IDX_W+10, curY+RH/2+16, 'left', '#6b7280', '12px sans-serif');
@@ -6612,8 +6590,7 @@ async function mncGenerateSummaryImage(){
       } else {
         drawRect(nameX, curY, NAME_W, RH, rowBg, '#d1d5db');
         txt(ri+1+'. '+s.name, nameX+10, curY+RH/2-2, 'left', '#0f172a', 'bold 17px sans-serif');
-        var noteRec3 = checkMap[s.id]&&checkMap[s.id][_mncDate];
-        var noteT3 = noteRec3&&noteRec3.note ? noteRec3.note : '';
+        var noteT3 = s.mnc_note || '';
         var noteInp3 = document.querySelector('.mnc-note-inp[data-sid="'+s.id+'"]');
         if(noteInp3) noteT3 = noteInp3.value.trim();
         if(noteT3) txt(noteT3, nameX+10, curY+RH/2+16, 'left', '#6b7280', '12px sans-serif');
