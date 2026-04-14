@@ -1733,17 +1733,17 @@
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
           <div>
             <div style="font-size:20px;font-weight:700;color:#1a1a2e">📊 월별 수강인원</div>
-            <div style="font-size:13px;color:#6b7280;margin-top:4px">선생님별 월간 수강인원 현황 엑셀 생성</div>
+            <div style="font-size:13px;color:#6b7280;margin-top:4px">선생님별 월간 수강인원 현황</div>
           </div>
         </div>
         <!-- 필터 카드 -->
         <div class="card" style="margin-bottom:14px">
-          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
-            <div style="flex:1;min-width:120px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <div style="flex:1;min-width:100px">
               <div style="font-size:12px;color:#6b7280;font-weight:500;margin-bottom:5px">연도</div>
               <select id="mr-year" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff"></select>
             </div>
-            <div style="flex:1;min-width:120px">
+            <div style="flex:1;min-width:100px">
               <div style="font-size:12px;color:#6b7280;font-weight:500;margin-bottom:5px">월</div>
               <select id="mr-month" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
                 <option value="1">1월</option><option value="2">2월</option><option value="3">3월</option>
@@ -1752,22 +1752,42 @@
                 <option value="10">10월</option><option value="11">11월</option><option value="12">12월</option>
               </select>
             </div>
-            <div style="flex:1;min-width:120px">
+            <div style="flex:1;min-width:100px">
               <div style="font-size:12px;color:#6b7280;font-weight:500;margin-bottom:5px">분원</div>
               <select id="mr-branch" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
                 <option value="">전체 분원</option>
               </select>
             </div>
-            <button onclick="generateMonthlyReport()" style="padding:9px 20px;border:none;border-radius:10px;background:#178EF5;color:#fff;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap">
-              📥 엑셀 다운로드
+            <div style="flex:1;min-width:100px">
+              <div style="font-size:12px;color:#6b7280;font-weight:500;margin-bottom:5px">선생님</div>
+              <select id="mr-teacher" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
+                <option value="">전체 선생님</option>
+              </select>
+            </div>
+            <button onclick="generateMonthlyReport()" id="mr-btn-view"
+              style="padding:9px 20px;border:none;border-radius:10px;background:#178EF5;color:#fff;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap">
+              🔍 조회
             </button>
           </div>
         </div>
-        <!-- 미리보기 -->
-        <div id="mr-preview" class="card" style="display:none">
-          <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:12px" id="mr-preview-title">미리보기</div>
-          <div id="mr-preview-content"></div>
+        <!-- 결과 뷰 -->
+        <div id="mr-result" style="display:none">
+          <!-- 선생님 탭 -->
+          <div id="mr-teacher-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+          <!-- 현재 선생님 현황표 -->
+          <div id="mr-content-wrap"></div>
+          <!-- 이미지 액션 버튼 -->
+          <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+            <button onclick="mrCopyImage()" style="padding:9px 18px;border:none;border-radius:10px;background:#1e293b;color:#fff;font-size:13px;font-weight:700;cursor:pointer">
+              📋 이미지 복사
+            </button>
+            <button onclick="mrDownloadImage()" style="padding:9px 18px;border:1.5px solid var(--border);border-radius:10px;background:#fff;color:#374151;font-size:13px;font-weight:700;cursor:pointer">
+              💾 이미지 저장
+            </button>
+          </div>
         </div>
+        <!-- 이미지 렌더용 숨김 영역 -->
+        <div id="mr-image-render" style="position:fixed;left:-9999px;top:0;width:900px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:0"></div>
       </div>
 
     </div><!-- /adminApp -->
@@ -14046,6 +14066,9 @@ function autoFormatGrade(el){
 /* ══════════════════════════════════════════
    월별 수강인원 보고서 (관리자)
 ══════════════════════════════════════════ */
+var _mrData = null; // 로드된 데이터 캐시
+var _mrCurrentTeacherId = null;
+
 async function initMonthlyReport(){
   var now = new Date();
   var yearSel = document.getElementById('mr-year');
@@ -14056,216 +14079,357 @@ async function initMonthlyReport(){
   }
   var monthSel = document.getElementById('mr-month');
   if(monthSel) monthSel.value = String(now.getMonth()+1);
+
+  // 분원 셀렉트
   var branchSel = document.getElementById('mr-branch');
   if(branchSel){
     branchSel.innerHTML = '<option value="">전체 분원</option>';
     (window._allBranches||[]).forEach(function(b){
       branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
     });
+    branchSel.onchange = mrFilterTeachers;
   }
+  mrFilterTeachers();
+}
+
+function mrFilterTeachers(){
+  var branchId = document.getElementById('mr-branch')?.value || '';
+  var tSel = document.getElementById('mr-teacher');
+  if(!tSel) return;
+  tSel.innerHTML = '<option value="">전체 선생님</option>';
+  (allUsers||[]).filter(function(u){
+    return u.role==='teacher' && (!branchId || u.branch_id===branchId);
+  }).sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); })
+  .forEach(function(t){
+    tSel.innerHTML += '<option value="'+t.id+'">'+t.name+' T</option>';
+  });
 }
 
 async function generateMonthlyReport(){
   var year  = parseInt(document.getElementById('mr-year').value);
   var month = parseInt(document.getElementById('mr-month').value);
-  var branchId = document.getElementById('mr-branch').value;
+  var branchId   = document.getElementById('mr-branch').value;
+  var teacherId  = document.getElementById('mr-teacher').value;
   var monthStart = year+'-'+String(month).padStart(2,'0')+'-01';
-  var lastDay = new Date(year, month, 0).getDate();
-  var monthEnd = year+'-'+String(month).padStart(2,'0')+'-'+String(lastDay).padStart(2,'0');
+  var lastDay    = new Date(year, month, 0).getDate();
+  var monthEnd   = year+'-'+String(month).padStart(2,'0')+'-'+String(lastDay).padStart(2,'0');
 
+  var btn = document.getElementById('mr-btn-view');
+  btn.textContent = '⏳ 조회 중...'; btn.disabled = true;
+
+  // 선생님 목록
   var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
-  if(branchId) tQuery = tQuery.eq('branch_id', branchId);
+  if(branchId)  tQuery = tQuery.eq('branch_id', branchId);
+  if(teacherId) tQuery = tQuery.eq('id', teacherId);
   var {data: teachers} = await tQuery;
-  if(!teachers||!teachers.length){ alert('선생님이 없습니다'); return; }
+  if(!teachers||!teachers.length){ alert('선생님이 없습니다'); btn.textContent='🔍 조회'; btn.disabled=false; return; }
 
+  // 반 목록
   var {data: classes} = await db.from('classes').select('id,name,teacher_id').eq('active',true);
 
+  // 이달 활동 학생 (재원 + 이달 퇴원)
   var {data: allStudents} = await db.from('users')
     .select('id,name,school,grade,teacher_id,class_id,status,enrolled_at,withdrawn_at,naje_step,withdraw_reason')
     .eq('role','student')
     .or('status.eq.active,and(status.eq.inactive,withdrawn_at.gte.'+monthStart+')');
 
+  // 이달 신입
   var {data: newStudents} = await db.from('users')
     .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_step')
     .eq('role','student').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
 
+  // 이달 전반
   var {data: transfers} = await db.from('transfer_requests')
     .select('*, student:student_id(id,name,school,grade,naje_step), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
     .eq('status','approved')
     .gte('responded_at', monthStart+'T00:00:00')
     .lte('responded_at', monthEnd+'T23:59:59');
 
-  if(typeof XLSX === 'undefined'){
-    await new Promise(function(resolve){
-      var s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
-      s.onload = resolve;
-      document.head.appendChild(s);
-    });
-  }
+  _mrData = { year, month, monthStart, monthEnd, teachers, classes, allStudents, newStudents, transfers };
+  _mrCurrentTeacherId = teachers[0].id;
 
-  var wb = XLSX.utils.book_new();
+  btn.textContent = '🔍 조회'; btn.disabled = false;
+
+  // 선생님 탭 렌더
+  var tabs = document.getElementById('mr-teacher-tabs');
+  tabs.innerHTML = teachers.map(function(t){
+    var branchName = '';
+    if(t.branch_id && window._allBranches){
+      var br = window._allBranches.find(function(b){ return b.id===t.branch_id; });
+      branchName = br ? br.name : '';
+    }
+    return '<button class="mr-tab-btn" data-tid="'+t.id+'" onclick="mrSwitchTeacher(\''+t.id+'\')"'
+      +' style="padding:7px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid var(--border);background:#fff;color:#374151;white-space:nowrap">'
+      +t.name+' T'+(branchName?' <span style="font-size:10px;color:#9ca3af">'+branchName+'</span>':'')
+    +'</button>';
+  }).join('');
+
+  document.getElementById('mr-result').style.display = 'block';
+  mrSwitchTeacher(teachers[0].id);
+}
+
+function mrSwitchTeacher(tid){
+  _mrCurrentTeacherId = tid;
+  // 탭 active 스타일
+  document.querySelectorAll('.mr-tab-btn').forEach(function(b){
+    var active = b.dataset.tid === tid;
+    b.style.background = active ? '#1e293b' : '#fff';
+    b.style.color = active ? '#fff' : '#374151';
+    b.style.borderColor = active ? '#1e293b' : 'var(--border)';
+  });
+  mrRenderTeacherReport(tid);
+}
+
+function mrGetTeacherReport(tid){
+  var d = _mrData;
+  var teacher = d.teachers.find(function(t){ return t.id===tid; });
+  if(!teacher) return null;
   var classMap = {};
-  (classes||[]).forEach(function(c){ classMap[c.id] = c; });
+  (d.classes||[]).forEach(function(c){ classMap[c.id]=c; });
 
-  function najeLabel(step){ if(step==null) return ''; return step<=10?step+'단계':'전체'; }
-  function schoolGrade(s){ return [s.school,s.grade].filter(Boolean).join(' '); }
-  function getBranch(tid){
-    var t = teachers.find(function(x){ return x.id===tid; });
-    if(!t||!t.branch_id||!window._allBranches) return '';
+  function najeLabel(step){ if(step==null) return '-'; return step<=10?step+'단계':'전체'; }
+  function sg(s){ return [s.school,s.grade].filter(Boolean).join(' ')||'-'; }
+  function getBranch(t){
+    if(!t.branch_id||!window._allBranches) return '';
     var br = window._allBranches.find(function(b){ return b.id===t.branch_id; });
     return br ? br.name : '';
   }
   function groupByClass(students){
-    var groups = {}, keys = [];
+    var groups={}, keys=[];
     students.forEach(function(s){
-      var cls = classMap[s.class_id];
-      var key = cls ? cls.name : '반 미지정';
-      if(!groups[key]){ groups[key]=[]; keys.push(key); }
-      groups[key].push(s);
+      var cn = classMap[s.class_id]?classMap[s.class_id].name:'반 미지정';
+      if(!groups[cn]){ groups[cn]=[]; keys.push(cn); }
+      groups[cn].push(s);
     });
-    return {groups, keys};
+    return {groups,keys};
   }
 
-  // 선생님별 시트
-  teachers.forEach(function(teacher){
-    var myStudents = (allStudents||[]).filter(function(s){ return s.teacher_id === teacher.id; });
-    var startStudents = myStudents.filter(function(s){ var ea=s.enrolled_at; return !ea||ea<monthStart; });
-    var myNew = (newStudents||[]).filter(function(s){ return s.teacher_id === teacher.id; });
-    var myWithdrawn = myStudents.filter(function(s){ return s.status==='inactive'&&s.withdrawn_at&&s.withdrawn_at>=monthStart; });
-    var myTransferIn = (transfers||[]).filter(function(t){ return t.to_teacher&&t.to_teacher.id===teacher.id; });
-    var myTransferOut = (transfers||[]).filter(function(t){ return t.from_teacher&&t.from_teacher.id===teacher.id; });
-    var endStudents = myStudents.filter(function(s){ return s.status==='active'; });
-    var branchName = getBranch(teacher.id);
+  var myStudents   = (d.allStudents||[]).filter(function(s){ return s.teacher_id===tid; });
+  var startStudents= myStudents.filter(function(s){ var ea=s.enrolled_at; return !ea||ea<d.monthStart; });
+  var myNew        = (d.newStudents||[]).filter(function(s){ return s.teacher_id===tid; });
+  var myWithdrawn  = myStudents.filter(function(s){ return s.status==='inactive'&&s.withdrawn_at&&s.withdrawn_at>=d.monthStart; });
+  var myIn         = (d.transfers||[]).filter(function(t){ return t.to_teacher&&t.to_teacher.id===tid; });
+  var myOut        = (d.transfers||[]).filter(function(t){ return t.from_teacher&&t.from_teacher.id===tid; });
+  var endStudents  = myStudents.filter(function(s){ return s.status==='active'; });
 
-    var rows = [];
-    rows.push([null,'['+( branchName||'OO관')+'] '+month+'월 '+teacher.name+' 선생님 수강인원']);
-    rows.push([null,'구분','1일 시작 수강생','신입','재입학','전반(IN)','퇴원','전반(OUT)','말일 수강생','비고']);
-    rows.push([null,'인원 수',startStudents.length+'명',myNew.length+'명','',myTransferIn.length+'명',myWithdrawn.length+'명',myTransferOut.length+'명',endStudents.length+'명','']);
-    rows.push([]);
+  return { teacher, getBranch, sg, najeLabel, groupByClass,
+    startStudents, myNew, myWithdrawn, myIn, myOut, endStudents };
+}
 
-    // 1일 시작
-    rows.push([null,'▣ 1일 시작 수강생 ('+startStudents.length+'명)']);
-    var sg = groupByClass(startStudents);
-    sg.keys.forEach(function(cname){
-      rows.push([null, cname]);
-      rows.push([null,'학교/학년','이름','N제 단계','상태','특이사항']);
-      sg.groups[cname].forEach(function(s){
-        rows.push([null, schoolGrade(s), s.name, najeLabel(s.naje_step), s.status==='active'?'재원':'퇴원','']);
-      });
-      rows.push([]);
+function mrRenderTeacherReport(tid){
+  var r = mrGetTeacherReport(tid);
+  if(!r) return;
+  var d = _mrData;
+  var branchName = r.getBranch(r.teacher);
+
+  var html = mrBuildReportHTML(r, d, branchName, false);
+  document.getElementById('mr-content-wrap').innerHTML = html;
+}
+
+function mrBuildReportHTML(r, d, branchName, forImage){
+  var {teacher,sg,najeLabel,groupByClass,startStudents,myNew,myWithdrawn,myIn,myOut,endStudents} = r;
+  var px = forImage ? '' : '';
+
+  function sectionHeader(title, count, color){
+    return '<div style="background:'+color+';color:#fff;padding:7px 14px;font-size:13px;font-weight:700;border-radius:8px 8px 0 0;margin-top:12px">'
+      +title+' <span style="background:rgba(255,255,255,0.25);border-radius:100px;padding:1px 8px;font-size:12px">'+count+'명</span></div>';
+  }
+  function studentTable(students, cols, rowFn, emptyMsg){
+    if(!students.length) return '<div style="padding:10px 14px;font-size:12px;color:#9ca3af;border:1px solid #e5e7eb;border-radius:0 0 8px 8px">'+emptyMsg+'</div>';
+    var g = groupByClass(students);
+    var html = '';
+    g.keys.forEach(function(cname){
+      html += '<div style="padding:4px 14px 2px;background:#f8fafc;font-size:11px;font-weight:700;color:#374151;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;border-top:1px solid #f1f5f9">'+cname+'</div>';
+      html += '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;font-size:12px">'
+        +'<thead><tr style="background:#f1f5f9">'
+        +cols.map(function(c){ return '<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600;white-space:nowrap">'+c+'</th>'; }).join('')
+        +'</tr></thead><tbody>'
+        +g.groups[cname].map(function(s,i){
+          return '<tr style="background:'+(i%2===0?'#fff':'#f8fafc')+';border-top:1px solid #f1f5f9">'+rowFn(s)+'</tr>';
+        }).join('')
+        +'</tbody></table>';
     });
+    return html;
+  }
+  function td(v,opts){ return '<td style="padding:5px 10px;'+(opts||'')+'">'+v+'</td>'; }
 
-    // 신입
-    rows.push([null,'▣ 신입 ('+myNew.length+'명)']);
-    if(myNew.length){
-      rows.push([null,'학교/학년','이름','N제 단계','입학일','특이사항']);
-      myNew.forEach(function(s){ rows.push([null, schoolGrade(s), s.name, najeLabel(s.naje_step), s.enrolled_at||'','']); });
-    }
-    rows.push([]);
+  // 요약 카드
+  var summary = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:4px">'
+    +[
+      {label:'1일 시작', val:startStudents.length, color:'#1e293b'},
+      {label:'신입',     val:myNew.length,         color:'#16a34a'},
+      {label:'전반 IN',  val:myIn.length,          color:'#1d4ed8'},
+      {label:'퇴원',     val:myWithdrawn.length,   color:'#dc2626'},
+    ].map(function(item){
+      return '<div style="background:#f8fafc;border:1.5px solid #e5e7eb;border-radius:10px;padding:10px 12px;text-align:center">'
+        +'<div style="font-size:20px;font-weight:800;color:'+item.color+'">'+item.val+'</div>'
+        +'<div style="font-size:11px;color:#6b7280;margin-top:2px">'+item.label+'</div>'
+        +'</div>';
+    }).join('')
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">'
+    +[
+      {label:'전반 OUT', val:myOut.length,        color:'#9333ea'},
+      {label:'말일 수강생', val:endStudents.length, color:'#0284c7', highlight:true},
+    ].map(function(item){
+      return '<div style="background:'+(item.highlight?'#eff6ff':'#f8fafc')+';border:1.5px solid '+(item.highlight?'#bfdbfe':'#e5e7eb')+';border-radius:10px;padding:10px 12px;text-align:center">'
+        +'<div style="font-size:20px;font-weight:800;color:'+item.color+'">'+item.val+'</div>'
+        +'<div style="font-size:11px;color:#6b7280;margin-top:2px">'+item.label+'</div>'
+        +'</div>';
+    }).join('')
+    +'</div>';
 
-    // 전반 IN
-    rows.push([null,'▣ 전반(IN) ('+myTransferIn.length+'명)']);
-    if(myTransferIn.length){
-      rows.push([null,'학교/학년','이름','N제 단계','보내는 반','특이사항']);
-      myTransferIn.forEach(function(t){
-        var s=t.student||{};
-        rows.push([null, schoolGrade(s), s.name||'', najeLabel(s.naje_step), t.from_teacher?t.from_teacher.name+' T':'','']);
-      });
-    }
-    rows.push([]);
+  var sections = '';
 
-    // 퇴원
-    rows.push([null,'▣ 퇴원 ('+myWithdrawn.length+'명)']);
-    if(myWithdrawn.length){
-      rows.push([null,'학교/학년','이름','N제 단계','퇴원일','사유']);
-      myWithdrawn.forEach(function(s){ rows.push([null, schoolGrade(s), s.name, najeLabel(s.naje_step), s.withdrawn_at||'', s.withdraw_reason||'']); });
-    }
-    rows.push([]);
+  // 1일 시작
+  sections += sectionHeader('▣ 1일 시작 수강생', startStudents.length, '#1e293b');
+  sections += studentTable(startStudents, ['학교/학년','이름','N제 단계','상태'],
+    function(s){ return td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')+td(s.status==='active'?'재원':'퇴원','color:'+(s.status==='active'?'#16a34a':'#dc2626')); },
+    '해당 학생 없음');
 
-    // 전반 OUT
-    rows.push([null,'▣ 전반(OUT) ('+myTransferOut.length+'명)']);
-    if(myTransferOut.length){
-      rows.push([null,'학교/학년','이름','N제 단계','받는 반','특이사항']);
-      myTransferOut.forEach(function(t){
-        var s=t.student||{};
-        rows.push([null, schoolGrade(s), s.name||'', najeLabel(s.naje_step), (t.to_teacher?t.to_teacher.name+' T':'')+(t.to_class?' ('+t.to_class.name+')':''),'']);
-      });
-    }
-    rows.push([]);
+  // 신입
+  sections += sectionHeader('▣ 신입', myNew.length, '#15803d');
+  sections += studentTable(myNew, ['학교/학년','이름','N제 단계','입학일'],
+    function(s){ return td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')+td(s.enrolled_at||'-'); },
+    '신입 없음');
 
-    // 말일 수강생
-    rows.push([null,'▣ 말일 수강생 ('+endStudents.length+'명)']);
-    var eg = groupByClass(endStudents);
-    eg.keys.forEach(function(cname){
-      rows.push([null, cname]);
-      rows.push([null,'학교/학년','이름','N제 단계','상태','특이사항']);
-      eg.groups[cname].forEach(function(s){ rows.push([null, schoolGrade(s), s.name, najeLabel(s.naje_step),'재원','']); });
-      rows.push([]);
-    });
-
-    var ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [{wch:3},{wch:20},{wch:14},{wch:10},{wch:10},{wch:10},{wch:14},{wch:14},{wch:14},{wch:16}];
-    var sheetName = teacher.name.length>28?teacher.name.slice(0,28):teacher.name;
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  });
-
-  // 전체 요약 시트
-  var sumRows = [];
-  sumRows.push([year+'년 '+month+'월 전체 수강인원 현황']);
-  sumRows.push(['선생님','분원','1일 시작','신입','전반IN','퇴원','전반OUT','말일 수강생']);
-  teachers.forEach(function(teacher){
-    var myStudents = (allStudents||[]).filter(function(s){ return s.teacher_id===teacher.id; });
-    sumRows.push([
-      teacher.name,
-      getBranch(teacher.id),
-      myStudents.filter(function(s){ var ea=s.enrolled_at; return !ea||ea<monthStart; }).length,
-      (newStudents||[]).filter(function(s){ return s.teacher_id===teacher.id; }).length,
-      (transfers||[]).filter(function(t){ return t.to_teacher&&t.to_teacher.id===teacher.id; }).length,
-      myStudents.filter(function(s){ return s.status==='inactive'&&s.withdrawn_at&&s.withdrawn_at>=monthStart; }).length,
-      (transfers||[]).filter(function(t){ return t.from_teacher&&t.from_teacher.id===teacher.id; }).length,
-      myStudents.filter(function(s){ return s.status==='active'; }).length
-    ]);
-  });
-
-  var wsSummary = XLSX.utils.aoa_to_sheet(sumRows);
-  wsSummary['!cols'] = [{wch:14},{wch:12},{wch:10},{wch:8},{wch:8},{wch:8},{wch:8},{wch:12}];
-  XLSX.utils.book_append_sheet(wb, wsSummary, '전체요약');
-
-  var fileName = year+'년_'+month+'월_수강인원.xlsx';
-  XLSX.writeFile(wb, fileName);
-
-  // 미리보기
-  var preview = document.getElementById('mr-preview');
-  var previewTitle = document.getElementById('mr-preview-title');
-  var previewContent = document.getElementById('mr-preview-content');
-  if(preview){
-    preview.style.display='block';
-    previewTitle.textContent = year+'년 '+month+'월 전체 요약';
-    previewContent.innerHTML = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
-      +'<thead><tr style="background:#1e293b;color:#f8fafc">'
-      +'<th style="padding:8px 10px;text-align:left">선생님</th><th style="padding:8px 10px;text-align:left">분원</th>'
-      +'<th style="padding:8px 10px;text-align:center">1일 시작</th><th style="padding:8px 10px;text-align:center">신입</th>'
-      +'<th style="padding:8px 10px;text-align:center">전반IN</th><th style="padding:8px 10px;text-align:center">퇴원</th>'
-      +'<th style="padding:8px 10px;text-align:center">전반OUT</th>'
-      +'<th style="padding:8px 10px;text-align:center;color:#fbbf24;font-weight:700">말일 수강생</th>'
+  // 전반 IN
+  sections += sectionHeader('▣ 전반(IN)', myIn.length, '#1d4ed8');
+  if(!myIn.length){
+    sections += '<div style="padding:10px 14px;font-size:12px;color:#9ca3af;border:1px solid #e5e7eb;border-radius:0 0 8px 8px">전반(IN) 없음</div>';
+  } else {
+    sections += '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;font-size:12px">'
+      +'<thead><tr style="background:#f1f5f9">'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">학교/학년</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">이름</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">N제 단계</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">보내는 선생님</th>'
       +'</tr></thead><tbody>'
-      +sumRows.slice(2).map(function(r,i){
-        var bg=i%2===0?'#fff':'#f8fafc';
-        return '<tr style="background:'+bg+'">'
-          +'<td style="padding:7px 10px;font-weight:600">'+r[0]+'</td>'
-          +'<td style="padding:7px 10px;color:#6b7280">'+r[1]+'</td>'
-          +'<td style="padding:7px 10px;text-align:center">'+r[2]+'</td>'
-          +'<td style="padding:7px 10px;text-align:center;color:#16a34a;font-weight:600">'+r[3]+'</td>'
-          +'<td style="padding:7px 10px;text-align:center;color:#1d4ed8">'+r[4]+'</td>'
-          +'<td style="padding:7px 10px;text-align:center;color:#dc2626">'+r[5]+'</td>'
-          +'<td style="padding:7px 10px;text-align:center;color:#6b7280">'+r[6]+'</td>'
-          +'<td style="padding:7px 10px;text-align:center;font-weight:700">'+r[7]+'</td>'
+      +myIn.map(function(t,i){
+        var s=t.student||{};
+        return '<tr style="background:'+(i%2===0?'#fff':'#f8fafc')+'">'
+          +td(sg(s))+td((s.name||'-'),'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')
+          +td(t.from_teacher?t.from_teacher.name+' T':'-')
         +'</tr>';
-      }).join('')
-      +'</tbody></table></div>';
+      }).join('')+'</tbody></table>';
   }
-  alert('✅ '+fileName+' 다운로드 완료!\n선생님 '+teachers.length+'명 시트 + 전체 요약 시트 생성됨');
+
+  // 퇴원
+  sections += sectionHeader('▣ 퇴원', myWithdrawn.length, '#dc2626');
+  if(!myWithdrawn.length){
+    sections += '<div style="padding:10px 14px;font-size:12px;color:#9ca3af;border:1px solid #e5e7eb;border-radius:0 0 8px 8px">퇴원 없음</div>';
+  } else {
+    sections += '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;font-size:12px">'
+      +'<thead><tr style="background:#f1f5f9">'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">학교/학년</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">이름</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">N제 단계</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">퇴원일</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">사유</th>'
+      +'</tr></thead><tbody>'
+      +myWithdrawn.map(function(s,i){
+        return '<tr style="background:'+(i%2===0?'#fff':'#f8fafc')+'">'
+          +td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')
+          +td(s.withdrawn_at||'-')+td(s.withdraw_reason||'-','color:#9ca3af')
+        +'</tr>';
+      }).join('')+'</tbody></table>';
+  }
+
+  // 전반 OUT
+  sections += sectionHeader('▣ 전반(OUT)', myOut.length, '#7e22ce');
+  if(!myOut.length){
+    sections += '<div style="padding:10px 14px;font-size:12px;color:#9ca3af;border:1px solid #e5e7eb;border-radius:0 0 8px 8px">전반(OUT) 없음</div>';
+  } else {
+    sections += '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;font-size:12px">'
+      +'<thead><tr style="background:#f1f5f9">'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">학교/학년</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">이름</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">N제 단계</th>'
+      +'<th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:600">받는 선생님</th>'
+      +'</tr></thead><tbody>'
+      +myOut.map(function(t,i){
+        var s=t.student||{};
+        return '<tr style="background:'+(i%2===0?'#fff':'#f8fafc')+'">'
+          +td(sg(s))+td((s.name||'-'),'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')
+          +td((t.to_teacher?t.to_teacher.name+' T':'-')+(t.to_class?' ('+t.to_class.name+')':''))
+        +'</tr>';
+      }).join('')+'</tbody></table>';
+  }
+
+  // 말일 수강생
+  sections += sectionHeader('▣ 말일 수강생', endStudents.length, '#0284c7');
+  sections += studentTable(endStudents, ['학교/학년','이름','N제 단계','상태'],
+    function(s){ return td(sg(s))+td(s.name,'font-weight:600')+td(najeLabel(s.naje_step),'color:#185FA5')+td('재원','color:#16a34a'); },
+    '해당 학생 없음');
+
+  var header = '<div style="background:linear-gradient(135deg,#1e293b,#0f3460);color:#fff;padding:20px 24px;border-radius:14px 14px 0 0;margin-bottom:0">'
+    +'<div style="font-size:11px;color:rgba(255,255,255,0.5);letter-spacing:1px;margin-bottom:4px">BESTIAN 수학학원</div>'
+    +'<div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:8px">'
+      +'<div>'
+        +'<div style="font-size:22px;font-weight:800">'+d.year+'년 '+d.month+'월 수강인원 현황</div>'
+        +'<div style="font-size:14px;color:rgba(255,255,255,0.7);margin-top:4px">'+teacher.name+' 선생님'+(branchName?' · '+branchName:'')+'</div>'
+      +'</div>'
+      +'<div style="text-align:right;font-size:12px;color:rgba(255,255,255,0.5)">'+d.monthStart+' ~ '+d.monthEnd+'</div>'
+    +'</div>'
+  +'</div>';
+
+  return '<div style="border-radius:14px;overflow:hidden;border:1px solid #e5e7eb">'
+    +header
+    +'<div style="padding:16px 16px 0">'
+    +summary
+    +sections
+    +'<div style="height:16px"></div>'
+    +'</div></div>';
+}
+
+async function mrCopyImage(){
+  await mrExportImage(true);
+}
+async function mrDownloadImage(){
+  await mrExportImage(false);
+}
+
+async function mrExportImage(copy){
+  if(!_mrCurrentTeacherId||!_mrData){ alert('먼저 조회해주세요'); return; }
+  var r = mrGetTeacherReport(_mrCurrentTeacherId);
+  var branchName = r.getBranch(r.teacher);
+  var html = mrBuildReportHTML(r, _mrData, branchName, true);
+
+  var wrap = document.getElementById('mr-image-render');
+  wrap.style.padding = '0';
+  wrap.innerHTML = html;
+
+  var canvas = await html2canvas(wrap, {
+    backgroundColor:'#fff', scale:2, useCORS:true, logging:false,
+    width:900, height:wrap.scrollHeight
+  });
+  wrap.innerHTML = '';
+
+  var isMobile = window.innerWidth<=680||/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+  var fileName = _mrData.year+'년_'+_mrData.month+'월_'+r.teacher.name+'_수강인원.png';
+
+  canvas.toBlob(async function(blob){
+    if(copy){
+      if(navigator.clipboard&&navigator.clipboard.write){
+        try{
+          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+          alert('✅ 이미지가 클립보드에 복사됐습니다!');
+          return;
+        }catch(e){}
+      }
+    }
+    if(isMobile&&navigator.canShare){
+      var file=new File([blob],fileName,{type:'image/png'});
+      if(navigator.canShare({files:[file]})){
+        try{ await navigator.share({files:[file]}); return; }catch(e){}
+      }
+    }
+    var a=document.createElement('a');
+    a.href=canvas.toDataURL();
+    a.download=fileName;
+    a.click();
+    if(copy) alert('✅ 이미지를 저장했습니다 (클립보드 복사 불가)');
+  },'image/png');
 }
 </script>
 </body>
