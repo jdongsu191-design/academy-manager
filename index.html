@@ -15716,13 +15716,10 @@ function syllabusAddCourse(){
     najeTime: '',
     mogiTime: '',
     scope: '',
-    appeal: ['학교별 부교재 변형문제 제공/시험','숙제 문항에 대한 해설영상 제공','학생별 대입 상담 진행 / 자료제공'],
+    appeal: ['','',''],
     appealText: '',
-    // photo, curriculum은 선생님 공통(_sylTeacherPhoto, _sylTeacherCurriculum)에서 사용
     feature: '',
-    schedule: [
-      {date:'',day:'',flag:'',main:''},
-    ],
+    schedule: [{date:'',day:'',flag:'',main:''}],
     weekend: [{text:''}],
     curriculum: [
       {period:'1–2월',content:''},{period:'3–4월',content:''},
@@ -15731,10 +15728,7 @@ function syllabusAddCourse(){
     ],
   });
   sylRenderCourseList();
-  setTimeout(function(){
-    var el = document.getElementById('syl-card-'+id);
-    if(el) el.scrollIntoView({behavior:'smooth',block:'start'});
-  }, 100);
+  // 스크롤 없이 추가 — 목록 하단에 자연스럽게 붙음
 }
 
 function sylDeleteCourse(id){
@@ -15803,6 +15797,7 @@ function sylCourseCardHTML(c,ci){
       +'</div>'
       +'<div style="display:flex;gap:6px">'
         +'<button data-cid="'+cid+'" onclick="sylPreview(this.dataset.cid)" style="padding:5px 12px;border:1px solid #93c5fd;border-radius:7px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer">👁 미리보기</button>'
+        +'<button data-cid="'+cid+'" onclick="sylSaveSingleCourse(this)" style="padding:5px 12px;border:1px solid #a78bfa;border-radius:7px;background:#f5f3ff;color:#7c3aed;font-size:12px;font-weight:700;cursor:pointer">💾 저장</button>'
         +'<button data-cid="'+cid+'" onclick="sylDeleteCourse(this.dataset.cid)" style="padding:5px 12px;border:1px solid #fca5a5;border-radius:7px;background:#fff0f0;color:#dc2626;font-size:12px;font-weight:700;cursor:pointer">삭제</button>'
       +'</div>'
     +'</div>'
@@ -15943,7 +15938,50 @@ function sylCourseCardHTML(c,ci){
         })()
       +'</div>'
     +'</div>'
+    // 카드 하단 강좌 추가 버튼
+    +'<div style="border-top:1.5px dashed #d0dde6;margin-top:14px;padding-top:12px;display:flex;justify-content:center">'
+      +'<button onclick="syllabusAddCourse()" style="padding:7px 20px;background:#f0f9ff;color:#0369a1;border:1.5px solid #7dd3fc;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">+ 이 아래에 강좌 추가</button>'
+    +'</div>'
   +'</div>';
+}
+
+// ── 강좌별 개별 저장 ────────────────────────────────────────
+async function sylSaveSingleCourse(btn){
+  if(!_sylTeacherName){
+    var dn = document.getElementById('syl-direct-name');
+    _sylTeacherName = dn ? dn.value.trim() : '';
+  }
+  if(!_sylTeacherName){ alert('선생님 이름을 먼저 입력해주세요'); return; }
+  var origText = btn.textContent;
+  btn.textContent = '저장 중...'; btn.disabled = true;
+  try {
+    var _sylPeriod2 = sylGetPeriod();
+    var payload = {
+      teacher_name: _sylTeacherName,
+      teacher_id: _sylTeacherId || null,
+      period: _sylPeriod2,
+      courses: _sylCourses,
+      curriculum: _sylTeacherCurriculum,
+      teacher_photo: _sylTeacherPhoto || null,
+      brand_color: window._sylBrandColor || '#1F3A51',
+      accent_color: window._sylAccentColor || '#c8a96e',
+    };
+    var recordId = document.getElementById('syl-record-id')?.textContent || '';
+    var res;
+    if(recordId){
+      res = await db.from('syllabuses').update({...payload, updated_at: new Date().toISOString()}).eq('id', recordId).select().single();
+    } else {
+      res = await db.from('syllabuses').insert(payload).select().single();
+      if(res.data?.id) document.getElementById('syl-record-id').textContent = res.data.id;
+    }
+    if(res.error) throw res.error;
+    btn.textContent = '✅ 저장됨';
+    setTimeout(function(){ btn.textContent = origText; btn.disabled = false; }, 1500);
+    sylLoadSavedList();
+  } catch(e){
+    alert('저장 실패: '+e.message);
+    btn.textContent = origText; btn.disabled = false;
+  }
 }
 
 // ── 데이터 업데이트 헬퍼 ────────────────────────────────────
@@ -16254,29 +16292,16 @@ function sylOnDateChange(el){
 function sylDateKeydown(el, event){
   if(event.key === 'Enter'){
     event.preventDefault();
-    // 현재 행의 다음 행 날짜 칸으로 포커스
+    // 요일 자동 반영 (onchange가 blur에만 동작할 수 있으므로 명시적 호출)
+    sylOnDateChange(el);
+    // 다음 행 날짜 칸으로 포커스 이동 (없으면 그냥 유지)
     var row = el.closest('tr');
     var nextRow = row ? row.nextElementSibling : null;
     if(nextRow){
       var nextDate = nextRow.querySelector('input[data-field="date"]');
-      if(nextDate){ nextDate.focus(); return; }
+      if(nextDate){ nextDate.focus(); }
     }
-    // 다음 행 없으면 현재 강좌에 행 추가
-    var cid = el.dataset.cid;
-    if(cid){
-      sylAddScheduleRow(cid);
-      setTimeout(function(){
-        var tbody = el.closest('tbody');
-        if(tbody){
-          var rows = tbody.querySelectorAll('tr');
-          var lastRow = rows[rows.length-1];
-          if(lastRow){
-            var dateInp = lastRow.querySelector('input[data-field="date"]');
-            if(dateInp) dateInp.focus();
-          }
-        }
-      }, 120);
-    }
+    // 마지막 행이어도 자동 추가 안 함
   }
 }
 
@@ -16466,140 +16491,84 @@ function sylGetSummaryHTML(){
   var period = sylGetPeriod();
   var globalBrand = window._sylBrandColor || '#1F3A51';
   var globalAccent = window._sylAccentColor || '#c8a96e';
-  var curriculum = _sylTeacherCurriculum || [];
   var photo = _sylTeacherPhoto || '';
 
-  // 선생님 사진
   var photoHTML = photo
     ? '<img src="'+photo+'" style="max-width:120px;max-height:120px;object-fit:contain;display:block">'
     : '<div style="width:80px;height:80px;border-radius:50%;border:2px dashed rgba(255,255,255,0.3);display:flex;align-items:center;justify-content:center;font-size:30px">👤</div>';
 
-  // 연간 커리큘럼 HTML (공통)
-  var currHTML = curriculum.map(function(cu,ci){
-    var hl = ci===2;
-    return '<div style="border-right:'+(ci<5?'1px solid rgba(255,255,255,0.15)':'none')+'">'
-      +'<div style="background:rgba(255,255,255,0.12);padding:4px 6px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.1)">'
-        +'<div style="font-size:8.5px;font-weight:800;color:'+(hl?globalAccent:'rgba(255,255,255,0.9)')+'">'+cu.period+'</div>'
-      +'</div>'
-      +'<div style="background:#fff;padding:5px 4px;text-align:center;min-height:32px;display:flex;align-items:center;justify-content:center">'
-        +'<div style="font-size:8.5px;font-weight:700;color:#1e293b;line-height:1.4">'+(cu.content||'—')+'</div>'
-      +'</div>'
-    +'</div>';
-  }).join('');
-
-  // 강좌 카드 (2열 그리드)
   var courseCards = _sylCourses.map(function(c, ci){
     var brand = c.brandColor || globalBrand;
     var accent = c.accentColor || globalAccent;
 
-    // 어필 멘트
     var appealItems = [];
     if(c.appealText && c.appealText.trim()){
       appealItems = c.appealText.split('\n').filter(function(x){ return x.trim(); });
     } else if(c.appeal && c.appeal.length){
-      appealItems = c.appeal;
+      appealItems = c.appeal.filter(function(x){ return x && x.trim(); });
     }
 
-    // 회차별 일정 미니 표 (최대 8행)
-    var schedRows = (c.schedule||[]).slice(0,8).map(function(s,si){
-      var isHoli = s.flag==='H';
-      var bg = isHoli ? '#fff8ed' : (si%2===1 ? '#f8fafc' : '#fff');
-      var mainTxt = (s.main||'').replace(/\n/g,'<br>');
-      return '<tr style="border-bottom:1px solid #e2e8f0">'
-        +'<td style="padding:5px 7px;vertical-align:top;white-space:nowrap;background:'+bg+';border-right:1px solid #e2e8f0;min-width:52px">'
-          +'<div style="font-size:10px;font-weight:700;color:'+brand+'">'+s.date+'</div>'
-          +'<div style="font-size:8.5px;color:#64748b">'+s.day+'</div>'
-          +(isHoli?'<div style="font-size:7.5px;color:#dc2626;font-weight:700">휴강</div>':'')
+    var infoRows = [
+      {label:'대상 학년', val: c.grade,    icon:'👥'},
+      {label:'수업 시간', val: c.time,     icon:'🕐'},
+      {label:'주교재',   val: c.mainBook, icon:'📖'},
+      {label:'부교재',   val: c.subBook,  icon:'📄'},
+      {label:'N제 시간', val: c.najeTime, icon:'📝'},
+      {label:'모의고사', val: c.mogiTime, icon:'📊'},
+    ].filter(function(r){ return r.val && r.val.trim(); });
+
+    var infoHTML = infoRows.map(function(r, ri){
+      var borderB = ri < infoRows.length-1 ? 'border-bottom:1px solid #f1f5f9;' : '';
+      return '<tr style="'+borderB+'">'
+        +'<td style="padding:7px 11px;vertical-align:middle;white-space:nowrap;font-size:8.5px;font-weight:700;color:#64748b;background:#f8fafc;border-right:1px solid #e2e8f0;min-width:62px">'
+          +r.icon+' '+r.label
         +'</td>'
-        +'<td style="padding:5px 7px;vertical-align:top;font-size:9.5px;color:#1e293b;line-height:1.5;background:'+bg+'">'+mainTxt+'</td>'
+        +'<td style="padding:7px 11px;font-size:10px;font-weight:600;color:#1e293b;line-height:1.5">'
+          +r.val
+        +'</td>'
       +'</tr>';
     }).join('');
 
-    var hasMore = (c.schedule||[]).length > 8;
-
-    // 주말학습 미니
-    var weekendRows = (c.weekend||[]).slice(0,4).map(function(w,wi){
-      var wt = (w.text||w.w1||'').replace(/\n/g,'<br>');
-      if(!wt) return '';
-      return '<tr style="border-bottom:1px solid #e2e8f0">'
-        +'<td style="padding:4px 7px;font-size:8.5px;font-weight:700;color:'+brand+';white-space:nowrap;background:#f8fafc;border-right:1px solid #e2e8f0">'+(wi+1)+'주</td>'
-        +'<td style="padding:4px 7px;font-size:8.5px;color:#334155;line-height:1.55">'+wt+'</td>'
-      +'</tr>';
-    }).filter(Boolean).join('');
-
-    // 기본정보 칩
-    var chips = [
-      {icon:'👥', val: c.grade},
-      {icon:'🕐', val: c.time},
-      {icon:'📖', val: c.mainBook},
-      {icon:'📄', val: c.subBook},
-      {icon:'📝', val: c.najeTime},
-      {icon:'📊', val: c.mogiTime},
-    ].filter(function(x){ return x.val && x.val.trim(); });
-
-    return '<div style="border:1.5px solid #e2e8f0;border-radius:12px;overflow:hidden;display:flex;flex-direction:column">'
-      // 카드 헤더 (강좌별 컨셉컬러)
-      +'<div style="background:'+brand+';padding:12px 14px">'
-        +'<div style="font-size:8.5px;font-weight:700;letter-spacing:2px;color:'+accent+';text-transform:uppercase;margin-bottom:3px">강좌 '+(ci+1)+'</div>'
-        +'<div style="font-size:15px;font-weight:900;color:#fff;line-height:1.2">'+c.title+'</div>'
-        // 어필멘트
-        +(appealItems.length ? '<div style="margin-top:8px;display:flex;flex-direction:column;gap:3px">'
-          +appealItems.slice(0,3).map(function(a,ai){
-            return '<div style="display:flex;align-items:center;gap:5px;font-size:8.5px;color:rgba(255,255,255,0.9)">'
-              +'<span style="width:14px;height:14px;background:'+accent+';color:'+brand+';border-radius:50%;font-size:7.5px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">'+(ai+1)+'</span>'
-              +a+'</div>';
-          }).join('')
-        +'</div>' : '')
+    return '<div style="border:2px solid '+brand+';border-radius:12px;overflow:hidden">'
+      +'<div style="background:'+brand+';padding:14px 16px">'
+        +'<div style="font-size:8px;font-weight:700;letter-spacing:2px;color:'+accent+';text-transform:uppercase;margin-bottom:4px">강좌 '+(ci+1)+'</div>'
+        +'<div style="font-size:17px;font-weight:900;color:#fff;line-height:1.2;margin-bottom:'+(appealItems.length?'10':'0')+'px">'+c.title+'</div>'
+        +(appealItems.length
+          ? '<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15)">'
+            +appealItems.slice(0,3).map(function(a,ai){
+              return '<div style="display:flex;align-items:flex-start;gap:6px;font-size:9px;color:rgba(255,255,255,0.93);line-height:1.45">'
+                +'<span style="width:15px;height:15px;background:'+accent+';color:'+brand+';border-radius:50%;font-size:8px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">'+(ai+1)+'</span>'
+                +'<span>'+a+'</span></div>';
+            }).join('')
+          +'</div>' : '')
       +'</div>'
-      // 기본정보 칩
-      +'<div style="padding:8px 10px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;flex-wrap:wrap;gap:4px">'
-        +chips.map(function(ch){
-          return '<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;background:#fff;border:1px solid #e2e8f0;border-radius:20px;font-size:8.5px;color:#334155;font-weight:500">'
-            +ch.icon+' '+ch.val+'</span>';
-        }).join('')
+      +'<div style="background:#fff">'
+        +'<table style="border-collapse:collapse;width:100%"><tbody>'+infoHTML+'</tbody></table>'
       +'</div>'
-      // 진도계획 (위)
-      +'<div>'
-        +'<div style="background:'+brand+';padding:5px 10px;font-size:8px;font-weight:700;color:rgba(255,255,255,0.9)">📋 회차별 진도 계획</div>'
-        +'<table style="border-collapse:collapse;width:100%"><tbody>'+schedRows+'</tbody></table>'
-        +(hasMore?'<div style="padding:4px 8px;font-size:8px;color:#9ca3af;text-align:center">+ '+(c.schedule.length-8)+'회 더</div>':'')
-      +'</div>'
-      // 주말학습 (아래)
-      +(weekendRows?'<div style="border-top:1.5px solid #e2e8f0">'
-        +'<div style="background:#1e40af;padding:5px 10px;font-size:8px;font-weight:700;color:rgba(255,255,255,0.9)">📅 주말 학습</div>'
-        +'<table style="border-collapse:collapse;width:100%"><tbody>'+weekendRows+'</tbody></table>'
-      +'</div>' : '')
     +'</div>';
   }).join('');
 
-  // 컬럼 수 결정
   var cols = _sylCourses.length === 1 ? 1 : 2;
 
   return `<div id="syl-summary-page" style="width:794px;background:#fff;font-family:'Noto Sans KR',sans-serif;margin:0 auto">
-  <!-- 페이지 헤더 -->
-  <div style="background:${globalBrand};padding:20px 28px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px">
+  <div style="background:${globalBrand};padding:22px 28px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px">
     <div style="flex:1;padding-bottom:4px">
-      <div style="font-size:9px;font-weight:700;letter-spacing:3px;color:${globalAccent};text-transform:uppercase;margin-bottom:5px">베스티안 수학학원 · ${period} 강좌 안내</div>
-      <div style="font-size:28px;font-weight:900;color:#fff;line-height:1.1;letter-spacing:-0.5px">${teacherName} <span style="font-size:15px;font-weight:400;color:rgba(255,255,255,0.7)">선생님</span></div>
-      <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-top:4px">총 ${_sylCourses.length}개 강좌 운영</div>
+      <div style="font-size:9px;font-weight:700;letter-spacing:3px;color:${globalAccent};text-transform:uppercase;margin-bottom:6px">베스티안 수학학원 · ${period} 강좌 안내</div>
+      <div style="font-size:30px;font-weight:900;color:#fff;line-height:1.1;letter-spacing:-0.5px">${teacherName} <span style="font-size:15px;font-weight:400;color:rgba(255,255,255,0.65)">선생님</span></div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.55);margin-top:5px">총 ${_sylCourses.length}개 강좌 운영</div>
     </div>
     <div style="align-self:flex-end">${photoHTML}</div>
   </div>
   <div style="height:3px;background:linear-gradient(90deg,${globalAccent} 0%,#e8d5a8 60%,transparent 100%)"></div>
-
-  <!-- 강좌 카드 그리드 -->
-  <div style="padding:14px 20px;display:grid;grid-template-columns:repeat(${cols},1fr);gap:14px">
+  <div style="padding:18px 20px;display:grid;grid-template-columns:repeat(${cols},1fr);gap:16px">
     ${courseCards}
   </div>
-
-  <!-- 푸터 -->
   <div style="background:#f4f7fa;border-top:1px solid #e2e8f0;padding:8px 28px;display:flex;align-items:center;justify-content:space-between">
     <div style="font-size:10px;font-weight:800;color:${globalBrand}">베스티안 수학학원</div>
     <div style="font-size:8.5px;color:#64748b">${period} · 강좌 요약</div>
   </div>
 </div>`;
 }
-
 function syllabusSummaryPreview(){
   if(!_sylCourses.length){ alert('강좌를 먼저 추가하세요'); return; }
   var html = sylGetSummaryHTML();
