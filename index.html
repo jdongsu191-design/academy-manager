@@ -16625,10 +16625,9 @@ async function syllabusSummaryExport(type){
   var canvas = await sylCaptureA4(el.outerHTML, 0.95);
 
   if(type === 'jpg'){
-    var a = document.createElement('a');
-    a.href = canvas.toDataURL('image/jpeg', 0.95);
-    a.download = filename+'.jpg';
-    a.click();
+    canvas.toBlob(async function(blob){
+      await sylSaveFile(blob, filename+'.jpg', 'image/jpeg', 'jpg');
+    }, 'image/jpeg', 0.95);
   } else {
     if(typeof window.jspdf === 'undefined'){
       await new Promise(function(resolve, reject){
@@ -16643,10 +16642,45 @@ async function syllabusSummaryExport(type){
     var pdf = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
     var pdf2 = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
     pdf2.addImage(imgData, 'JPEG', 0, 0, 210, 297);
-    pdf2.save(filename+'.pdf');
+    var pdf2Blob = pdf2.output('blob');
+    await sylSaveFile(pdf2Blob, filename+'.pdf', 'application/pdf', 'pdf');
   }
 }
 
+
+// ── 파일 저장 헬퍼 (저장 위치 지정 다이얼로그) ───────────────
+async function sylSaveFile(blob, suggestedName, mimeType, ext){
+  // File System Access API 지원 시 → 저장 위치 직접 지정
+  if(window.showSaveFilePicker){
+    try {
+      var typeMap = {
+        'image/jpeg': [{description:'JPEG 이미지', accept:{'image/jpeg':['.jpg','.jpeg']}}],
+        'application/zip': [{description:'ZIP 파일', accept:{'application/zip':['.zip']}}],
+        'application/pdf': [{description:'PDF 파일', accept:{'application/pdf':['.pdf']}}],
+      };
+      var handle = await window.showSaveFilePicker({
+        suggestedName: suggestedName,
+        types: typeMap[mimeType] || [{description:'파일', accept:{[mimeType]:['.'+ext]}}],
+        startIn: 'downloads',
+      });
+      var writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch(e){
+      if(e.name === 'AbortError') return false; // 취소
+      console.warn('showSaveFilePicker 실패, fallback:', e);
+    }
+  }
+  // Fallback: 기존 a.click() 방식
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = suggestedName;
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  return true;
+}
 
 // ── A4 캡처 헬퍼 ────────────────────────────────────────────
 async function sylCaptureA4(html, quality){
@@ -16766,7 +16800,8 @@ async function syllabusExportPDF(){
     if(i > 0) pdf.addPage();
     pdf.addImage(imgData, 'JPEG', 0, 0, pW, pH);
   }
-  pdf.save(teacherName+'_'+period+'_진도계획서.pdf');
+  var pdfBlob = pdf.output('blob');
+  await sylSaveFile(pdfBlob, teacherName+'_'+period+'_진도계획서.pdf', 'application/pdf', 'pdf');
 }
 
 async function syllabusExportZIP(){
@@ -16806,11 +16841,7 @@ async function syllabusExportZIP(){
     var teacherName = (_sylTeacherName||'선생님').replace(/[\/:*?"<>|]/g,'_');
     var period = (_sylPeriod||'진도계획서').replace(/[\/:*?"<>|]/g,'_');
     var zipBlob = await zip.generateAsync({type:'blob'});
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(zipBlob);
-    a.download = teacherName+'_'+period+'_진도계획서.zip';
-    a.click();
-    URL.revokeObjectURL(a.href);
+    await sylSaveFile(zipBlob, teacherName+'_'+period+'_진도계획서.zip', 'application/zip', 'zip');
     alert('✅ ZIP 파일이 저장됐습니다!');
   } catch(e){
     alert('오류: '+e.message);
