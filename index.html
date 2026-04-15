@@ -16620,24 +16620,7 @@ async function syllabusSummaryExport(type){
   var filename = teacherName+'_'+period+'_강좌요약';
 
   // A4 794×1123 기준으로 캡처
-  var contentH2 = el.scrollHeight;
-  var a4H2 = 1123;
-  var scaleRatio2 = contentH2 > a4H2 ? a4H2 / contentH2 : 1;
-  // 요약도 A4 wrapper에 넣어서 캡처
-  var wrapper2 = document.createElement('div');
-  wrapper2.style.cssText = 'position:fixed;top:0;left:-9999px;width:794px;height:'+a4H2+'px;overflow:hidden;background:#fff;z-index:-2';
-  var inner2 = document.createElement('div');
-  inner2.style.cssText = 'width:794px;transform-origin:top left;transform:scale('+scaleRatio2+')';
-  inner2.innerHTML = el.outerHTML;
-  wrapper2.appendChild(inner2);
-  document.body.appendChild(wrapper2);
-  await new Promise(function(r){ setTimeout(r, 300); });
-  var canvas = await html2canvas(wrapper2, {
-    scale: 2, useCORS: true, backgroundColor: '#fff',
-    width: 794, height: a4H2,
-    windowWidth: 794, windowHeight: a4H2
-  });
-  document.body.removeChild(wrapper2);
+  var canvas = await sylCaptureA4(el.outerHTML, 0.95);
 
   if(type === 'jpg'){
     var a = document.createElement('a');
@@ -16660,6 +16643,56 @@ async function syllabusSummaryExport(type){
     pdf2.addImage(imgData, 'JPEG', 0, 0, 210, 297);
     pdf2.save(filename+'.pdf');
   }
+}
+
+
+// ── A4 캡처 헬퍼 ────────────────────────────────────────────
+async function sylCaptureA4(html, quality){
+  quality = quality || 0.95;
+  var A4W = 794, A4H = 1123;
+  
+  // 1) 임시 div에 렌더링 (실제 크기로)
+  var tmp = document.createElement('div');
+  tmp.style.cssText = 'position:fixed;top:0;left:-9999px;width:794px;background:#fff;z-index:9998;font-family:Noto Sans KR,sans-serif';
+  tmp.innerHTML = html;
+  document.body.appendChild(tmp);
+  await new Promise(function(r){ setTimeout(r, 400); });
+  
+  var fullH = tmp.scrollHeight;
+  
+  // 2) 전체 캡처 (scale:2 for 고해상도)
+  var fullCanvas = await html2canvas(tmp, {
+    scale: 2,
+    useCORS: true,
+    backgroundColor: '#ffffff',
+    width: A4W,
+    height: fullH,
+    scrollX: 0,
+    scrollY: 0,
+    windowWidth: A4W,
+    windowHeight: fullH
+  });
+  document.body.removeChild(tmp);
+  
+  // 3) A4 비율 캔버스로 리사이즈 (zoom 비율로 그리기)
+  var a4Canvas = document.createElement('canvas');
+  a4Canvas.width  = A4W * 2;   // @2x
+  a4Canvas.height = A4H * 2;   // @2x
+  var ctx = a4Canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, a4Canvas.width, a4Canvas.height);
+  
+  // fullCanvas → a4Canvas에 맞게 그리기 (비율 유지 축소)
+  var scaleX = (A4W * 2) / fullCanvas.width;
+  var scaleY = (A4H * 2) / fullCanvas.height;
+  var scale  = Math.min(scaleX, scaleY);  // 비율 유지
+  var dw = fullCanvas.width  * scale;
+  var dh = fullCanvas.height * scale;
+  var dx = ((A4W * 2) - dw) / 2;  // 수평 중앙
+  var dy = 0;                       // 상단 정렬
+  ctx.drawImage(fullCanvas, 0, 0, fullCanvas.width, fullCanvas.height, dx, dy, dw, dh);
+  
+  return a4Canvas;
 }
 
 function sylPreview(id){
@@ -16726,33 +16759,8 @@ async function syllabusExportPDF(){
   for(var i=0; i<_sylCourses.length; i++){
     var c = _sylCourses[i];
     var html = sylGetCourseHTML(c);
-    var tmp = document.createElement('div');
-    tmp.style.cssText = 'position:fixed;top:0;left:-9999px;width:794px;background:#fff;z-index:-1';
-    tmp.innerHTML = html;
-    document.body.appendChild(tmp);
-    await new Promise(function(r){ setTimeout(r, 300); });
-    var contentH = tmp.scrollHeight;
-    var a4H = 1123;
-    var scaleRatio = contentH > a4H ? a4H / contentH : 1;
-    // A4 wrapper
-    var wrapper = document.createElement('div');
-    wrapper.style.cssText = 'position:fixed;top:0;left:-9999px;width:794px;height:'+a4H+'px;overflow:hidden;background:#fff;z-index:-2';
-    var inner = document.createElement('div');
-    inner.style.cssText = 'width:794px;transform-origin:top left;transform:scale('+scaleRatio+')';
-    inner.innerHTML = html;
-    wrapper.appendChild(inner);
-    document.body.appendChild(wrapper);
-    await new Promise(function(r){ setTimeout(r, 300); });
-    var canvas = await html2canvas(wrapper, {
-      scale: 2, useCORS: true, backgroundColor: '#ffffff',
-      width: 794, height: a4H,
-      windowWidth: 794, windowHeight: a4H
-    });
-    document.body.removeChild(wrapper);
-    document.body.removeChild(tmp);
-
+    var canvas = await sylCaptureA4(html, 0.95);
     var imgData = canvas.toDataURL('image/jpeg', 0.95);
-    // 정확히 A4: 210×297mm
     if(i > 0) pdf.addPage();
     pdf.addImage(imgData, 'JPEG', 0, 0, pW, pH);
   }
@@ -16786,32 +16794,7 @@ async function syllabusExportZIP(){
     for(var i=0; i<_sylCourses.length; i++){
       var c = _sylCourses[i];
       var html = sylGetCourseHTML(c);
-      var tmp = document.createElement('div');
-      tmp.style.cssText = 'position:fixed;top:0;left:-9999px;width:794px;background:#fff;z-index:-1';
-      tmp.innerHTML = html;
-      document.body.appendChild(tmp);
-      await new Promise(function(r){ setTimeout(r, 300); });
-      var contentH = tmp.scrollHeight;
-      // A4 비율에 맞도록 scale 계산 (콘텐츠가 794px 너비에서 몇 배인지)
-      // A4: 794×1123px 기준, 콘텐츠가 크면 축소
-      var a4H = 1123;
-      var scaleRatio = contentH > a4H ? a4H / contentH : 1;
-      // scale-down된 wrapper 생성
-      var wrapper = document.createElement('div');
-      wrapper.style.cssText = 'position:fixed;top:0;left:-9999px;width:794px;height:'+a4H+'px;overflow:hidden;background:#fff;z-index:-2';
-      var inner = document.createElement('div');
-      inner.style.cssText = 'width:794px;transform-origin:top left;transform:scale('+scaleRatio+')';
-      inner.innerHTML = html;
-      wrapper.appendChild(inner);
-      document.body.appendChild(wrapper);
-      await new Promise(function(r){ setTimeout(r, 300); });
-      var canvas = await html2canvas(wrapper, {
-        scale: 2, useCORS: true, backgroundColor: '#ffffff',
-        width: 794, height: a4H,
-        windowWidth: 794, windowHeight: a4H
-      });
-      document.body.removeChild(wrapper);
-      document.body.removeChild(tmp);
+      var canvas = await sylCaptureA4(html, 0.95);
 
       var blob = await new Promise(function(r){ canvas.toBlob(r,'image/jpeg',0.95); });
       var fname = (i+1)+'_'+(c.title||('강좌'+(i+1))).replace(/[\/:*?"<>|]/g,'_')+'.jpg';
