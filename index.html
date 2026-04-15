@@ -1215,12 +1215,27 @@
               </div>
             </div>
 
-            <!-- 우: 저장된 목록 -->
+            <!-- 우: 저장된 목록 + 새로 만들기 -->
             <div>
-              <div style="font-size:12px;font-weight:700;color:#1F3A51;margin-bottom:8px;letter-spacing:0.3px">
-                📁 저장된 진도계획서 <span id="t-syl-saved-count" style="font-size:11px;color:#9ca3af;font-weight:400"></span>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <div style="font-size:12px;font-weight:700;color:#1F3A51;letter-spacing:0.3px">
+                  📁 저장된 진도계획서 <span id="t-syl-saved-count" style="font-size:11px;color:#9ca3af;font-weight:400"></span>
+                </div>
+                <button onclick="sylNewDocPrompt()" style="padding:4px 10px;background:#1F3A51;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer">+ 새로 만들기</button>
               </div>
-              <div id="t-syl-saved-list" style="display:flex;flex-direction:column;gap:5px;max-height:180px;overflow-y:auto">
+              <!-- 새 진도계획서 생성 폼 (기본 숨김) -->
+              <div id="t-syl-new-form" style="display:none;background:#f0f9ff;border:1.5px solid #7dd3fc;border-radius:8px;padding:10px;margin-bottom:8px">
+                <div style="font-size:11px;font-weight:700;color:#0369a1;margin-bottom:8px">새 진도계획서 만들기</div>
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+                  <select id="t-syl-new-year" style="padding:5px 8px;border:1.5px solid #7dd3fc;border-radius:6px;font-size:12px;outline:none;background:#fff"></select>
+                  <select id="t-syl-new-month" style="padding:5px 8px;border:1.5px solid #7dd3fc;border-radius:6px;font-size:12px;outline:none;background:#fff"></select>
+                </div>
+                <div style="display:flex;gap:6px">
+                  <button onclick="sylCreateNewDoc()" style="flex:1;padding:6px;background:#0369a1;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">✓ 생성</button>
+                  <button onclick="document.getElementById('t-syl-new-form').style.display='none'" style="padding:6px 10px;background:#fff;color:#6b7280;border:1px solid #d0dde6;border-radius:6px;font-size:12px;cursor:pointer">취소</button>
+                </div>
+              </div>
+              <div id="t-syl-saved-list" style="display:flex;flex-direction:column;gap:5px;max-height:160px;overflow-y:auto">
                 <div style="font-size:12px;color:#9ca3af">불러오는 중...</div>
               </div>
             </div>
@@ -15420,6 +15435,85 @@ var _sylTeacherCurriculum = [
 
 // ── 초기화 ──────────────────────────────────────────────────
 // ── 선생님용 진도계획서 초기화 ───────────────────────────────
+// ── 새 진도계획서 생성 (문서 먼저) ──────────────────────────
+function sylNewDocPrompt(){
+  var form = document.getElementById('t-syl-new-form');
+  if(!form) return;
+  // 연/월 드롭다운 채우기
+  var newYear = document.getElementById('t-syl-new-year');
+  var newMonth = document.getElementById('t-syl-new-month');
+  if(newYear && !newYear.options.length){
+    var curYear = new Date().getFullYear();
+    for(var y = curYear-1; y <= curYear+2; y++){
+      newYear.innerHTML += '<option value="'+y+'년"'+(y===curYear?' selected':'')+'>'+y+'년</option>';
+    }
+    var curMonth = new Date().getMonth()+1;
+    for(var m = 1; m <= 12; m++){
+      newMonth.innerHTML += '<option value="'+m+'월"'+(m===curMonth?' selected':'')+'>'+m+'월</option>';
+    }
+  }
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+async function sylCreateNewDoc(){
+  var newYear = document.getElementById('t-syl-new-year')?.value || '';
+  var newMonth = document.getElementById('t-syl-new-month')?.value || '';
+  if(!newYear || !newMonth){ alert('연도와 월을 선택해주세요'); return; }
+  var period = newYear + ' ' + newMonth;
+
+  // 빈 레코드 먼저 DB에 생성
+  var payload = {
+    teacher_name: currentUser.name || '',
+    teacher_id: currentUser.id,
+    period: period,
+    courses: [],
+    branch: currentUser.branch || null,
+    brand_color: '#1F3A51',
+    accent_color: '#c8a96e',
+  };
+  try {
+    var {data, error} = await db.from('syllabuses').insert(payload).select().single();
+    if(error) throw error;
+
+    // 생성된 레코드로 바로 편집 모드 전환
+    _sylTeacherName = currentUser.name || '';
+    _sylTeacherId = currentUser.id;
+    _sylCourses = [];
+    _sylPeriod = period;
+    window._sylBrandColor = '#1F3A51';
+    window._sylAccentColor = '#c8a96e';
+    _sylTeacherPhoto = '';
+    _sylTeacherCurriculum = [
+      {period:'1–2월',content:''},{period:'3–4월',content:''},
+      {period:'5–6월',content:''},{period:'7–8월',content:''},
+      {period:'9–10월',content:''},{period:'11–12월',content:''},
+    ];
+
+    // record-id 설정
+    var rid = document.getElementById('t-syl-record-id');
+    if(rid) rid.textContent = data.id;
+
+    // 기간 드롭다운 반영
+    var ty = document.getElementById('t-syl-year');
+    var tm = document.getElementById('t-syl-month');
+    if(ty) ty.value = newYear;
+    if(tm) tm.value = newMonth;
+
+    // 이름 표시
+    var nameEl = document.getElementById('t-syl-teacher-name-display');
+    if(nameEl) nameEl.textContent = _sylTeacherName + ' 선생님';
+
+    // 폼 닫기
+    document.getElementById('t-syl-new-form').style.display = 'none';
+
+    sylRenderCourseList();
+    sylRenderTeacherPhotoPreview();
+    sylLoadTeacherSavedList();
+  } catch(e){
+    alert('생성 실패: '+e.message);
+  }
+}
+
 function initTeacherSyllabus(){
   // 선생님 정보 고정
   _sylTeacherId = currentUser.id;
@@ -15850,13 +15944,15 @@ async function sylLoadRecord(id){
         if(directDiv) directDiv.style.display = 'flex';
       }
     }
-    // 기간 복원
+    // 기간 복원 (값 포맷: "2026년 5월")
     if(_sylPeriod){
-      var parts = _sylPeriod.replace('년','').replace('월','').trim().split(' ');
+      var parts = _sylPeriod.match(/(\d+)년\s*(\d+)월/);
       var yrSel = document.getElementById('syl-year');
       var mnSel = document.getElementById('syl-month');
-      if(yrSel && parts[0]) yrSel.value = parts[0].trim();
-      if(mnSel && parts[1]) mnSel.value = parts[1].trim();
+      if(parts){
+        if(yrSel) yrSel.value = parts[1]+'년';
+        if(mnSel) mnSel.value = parts[2]+'월';
+      }
     }
     // 색상 복원
     if(data.brand_color) window._sylBrandColor = data.brand_color;
@@ -15914,30 +16010,27 @@ function sylInitPeriodDropdown(){
   var curYear = new Date().getFullYear();
   yearSel.innerHTML = '';
   for(var y = curYear-1; y <= curYear+2; y++){
-    yearSel.innerHTML += '<option value="'+y+'"'+(y===curYear?' selected':'')+'>'+y+'년</option>';
+    yearSel.innerHTML += '<option value="'+y+'년"'+(y===curYear?' selected':'')+'>'+y+'년</option>';
   }
   monthSel.innerHTML = '';
   var curMonth = new Date().getMonth()+1;
   for(var m = 1; m <= 12; m++){
-    monthSel.innerHTML += '<option value="'+m+'"'+(m===curMonth?' selected':'')+'>'+m+'월</option>';
+    monthSel.innerHTML += '<option value="'+m+'월"'+(m===curMonth?' selected':'')+'>'+m+'월</option>';
   }
 }
 
 function sylGetPeriod(){
-  // 선생님 패널 (t-syl-year/month) 우선, 없으면 관리자 패널 (syl-year/month)
   var tYearSel = document.getElementById('t-syl-year');
   var tMonthSel = document.getElementById('t-syl-month');
   var yearSel = document.getElementById('syl-year');
   var monthSel = document.getElementById('syl-month');
   // 선생님 패널이 활성화되어 있으면 t-syl 사용
-  if(tYearSel && tMonthSel && tYearSel.value){
-    var panelSyl = document.getElementById('panel-syllabus');
-    if(panelSyl && panelSyl.classList.contains('active')){
-      return tYearSel.value + ' ' + tMonthSel.value;
-    }
+  var panelSyl = document.getElementById('panel-syllabus');
+  if(tYearSel && tMonthSel && tYearSel.value && panelSyl && panelSyl.classList.contains('active')){
+    return tYearSel.value + '년 ' + tMonthSel.value;
   }
   if(yearSel && monthSel && yearSel.value){
-    return yearSel.value + '년 ' + monthSel.value + '월';
+    return yearSel.value + ' ' + monthSel.value;
   }
   return document.getElementById('syl-period')?.value || '';
 }
