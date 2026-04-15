@@ -1673,12 +1673,16 @@
         <!-- 선생님 선택 -->
         <div class="card" style="margin-bottom:14px">
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-            <div style="font-size:13px;font-weight:700;color:#1F3A51">선생님 선택</div>
+            <div style="font-size:13px;font-weight:700;color:#1F3A51;white-space:nowrap">선생님</div>
             <select id="syl-teacher-select" onchange="syllabusOnTeacherChange()" style="padding:8px 14px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;background:#fff;min-width:160px">
-              <option value="">선생님을 선택하세요</option>
+              <option value="">직접 입력 (선택 안 함)</option>
             </select>
-            <div style="font-size:13px;font-weight:700;color:#1F3A51;margin-left:8px">월/기간</div>
-            <input type="text" id="syl-period" placeholder="예: 2025년 5월" style="padding:8px 14px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;width:140px">
+            <div id="syl-direct-name-div" style="display:flex;align-items:center;gap:6px">
+              <input type="text" id="syl-direct-name" placeholder="선생님 이름 직접 입력" style="padding:8px 14px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;width:180px">
+            </div>
+            <div style="font-size:13px;font-weight:700;color:#1F3A51;white-space:nowrap;margin-left:8px">기간</div>
+            <select id="syl-year" style="padding:8px 12px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;background:#fff"></select>
+            <select id="syl-month" style="padding:8px 12px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;background:#fff"></select>
           </div>
         </div>
 
@@ -15256,26 +15260,60 @@ function initSyllabus(){
   // 선생님 셀렉트 채우기
   var sel = document.getElementById('syl-teacher-select');
   if(!sel) return;
-  sel.innerHTML = '<option value="">선생님을 선택하세요</option>';
+  sel.innerHTML = '<option value="">직접 입력 (선택 안 함)</option>';
   (allUsers||[]).filter(function(u){ return u.role==='teacher' && u.status==='active'; })
     .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); })
     .forEach(function(t){ sel.innerHTML += '<option value="'+t.id+'">'+t.name+' 선생님</option>'; });
   _sylCourses = [];
+  _sylTeacherId = '';
+  _sylTeacherName = '';
   sylRenderCourseList();
+  // 연도/월 드롭다운 초기화
+  sylInitPeriodDropdown();
+}
+
+function sylInitPeriodDropdown(){
+  var yearSel = document.getElementById('syl-year');
+  var monthSel = document.getElementById('syl-month');
+  if(!yearSel || !monthSel) return;
+  var curYear = new Date().getFullYear();
+  yearSel.innerHTML = '';
+  for(var y = curYear-1; y <= curYear+2; y++){
+    yearSel.innerHTML += '<option value="'+y+'"'+(y===curYear?' selected':'')+'>'+y+'년</option>';
+  }
+  monthSel.innerHTML = '';
+  var curMonth = new Date().getMonth()+1;
+  for(var m = 1; m <= 12; m++){
+    monthSel.innerHTML += '<option value="'+m+'"'+(m===curMonth?' selected':'')+'>'+m+'월</option>';
+  }
+}
+
+function sylGetPeriod(){
+  var yearSel = document.getElementById('syl-year');
+  var monthSel = document.getElementById('syl-month');
+  if(yearSel && monthSel){
+    return yearSel.value + '년 ' + monthSel.value + '월';
+  }
+  return document.getElementById('syl-period')?.value || '';
 }
 
 function syllabusOnTeacherChange(){
   var sel = document.getElementById('syl-teacher-select');
   _sylTeacherId = sel.value;
   var opt = sel.options[sel.selectedIndex];
-  _sylTeacherName = opt ? opt.text.replace(' 선생님','') : '';
-  _sylCourses = [];
-  sylRenderCourseList();
+  _sylTeacherName = opt && sel.value ? opt.text.replace(' 선생님','') : '';
+  // 직접입력 이름 필드 표시/숨김
+  var directDiv = document.getElementById('syl-direct-name-div');
+  if(directDiv) directDiv.style.display = sel.value ? 'none' : 'flex';
 }
 
 // ── 강좌 추가 ────────────────────────────────────────────────
 function syllabusAddCourse(){
-  if(!_sylTeacherId){ alert('선생님을 먼저 선택하세요'); return; }
+  // 직접 입력 이름 반영
+  if(!_sylTeacherId){
+    var directName = document.getElementById('syl-direct-name');
+    _sylTeacherName = directName ? directName.value.trim() : '';
+  }
   var id = 'course_' + Date.now();
   _sylCourses.push({
     id: id,
@@ -15304,8 +15342,10 @@ function syllabusAddCourse(){
   });
   sylRenderCourseList();
   // 새 카드로 스크롤
-  var el = document.getElementById('syl-card-'+id);
-  if(el) el.scrollIntoView({behavior:'smooth',block:'start'});
+  setTimeout(function(){
+    var el = document.getElementById('syl-card-'+id);
+    if(el) el.scrollIntoView({behavior:'smooth',block:'start'});
+  }, 100);
 }
 
 function sylDeleteCourse(id){
@@ -15327,6 +15367,7 @@ function sylRenderCourseList(){
 
 function sylCourseCardHTML(c,ci){
   var cid = c.id;
+  var st = 'width:100%;padding:7px 10px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none';
   var schedRows = c.schedule.map(function(s,si){
     var selOpts = '<option value=""'+(s.flag===''?' selected':'')+'>-</option>'
       +'<option value="S"'+(s.flag==='S'?' selected':'')+'>특별</option>'
@@ -15470,7 +15511,7 @@ function sylDeleteScheduleRow(id, si){
 // ── 미리보기 & HTML 생성 ────────────────────────────────────
 function sylGetCourseHTML(c){
   var teacherName = _sylTeacherName || '선생님';
-  var period = document.getElementById('syl-period')?.value || _sylPeriod || '';
+  var period = sylGetPeriod();
 
   var infoRows = [
     ['담당 강사', teacherName],
