@@ -1206,7 +1206,7 @@
                 <div style="font-size:13px;font-weight:700;color:#1F3A51;margin-left:8px">기간</div>
                 <select id="t-syl-year" style="padding:8px 12px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;background:#fff"></select>
                 <select id="t-syl-month" style="padding:8px 12px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;background:#fff"></select>
-                <div id="syl-record-id" style="display:none"></div>
+                <div id="t-syl-record-id" style="display:none"></div>
               </div>
               <!-- 사진 업로드 -->
               <div style="padding-top:14px;border-top:1px solid #e5e7eb;display:flex;align-items:center;gap:16px">
@@ -1755,7 +1755,7 @@
               </select>
             </div>
           </div>
-          <div id="syl-saved-list" style="display:flex;flex-wrap:wrap;gap:8px">
+          <div id="syl-saved-list" style="display:flex;flex-direction:column;gap:6px">
             <div style="font-size:12px;color:#9ca3af;padding:8px">불러오는 중...</div>
           </div>
         </div>
@@ -15407,11 +15407,11 @@ function initTeacherSyllabus(){
   var nameEl = document.getElementById('t-syl-teacher-name-display');
   if(nameEl) nameEl.textContent = _sylTeacherName + ' 선생님';
 
-  // record-id 초기화
-  var rid = document.getElementById('syl-record-id');
+  // 선생님 패널 전용 record-id 초기화
+  var rid = document.getElementById('t-syl-record-id');
   if(rid) rid.textContent = '';
 
-  // 기간 드롭다운 (선생님용 별도 셀렉트)
+  // 기간 드롭다운 초기화
   var yearSel = document.getElementById('t-syl-year');
   var monthSel = document.getElementById('t-syl-month');
   if(yearSel && monthSel){
@@ -15423,13 +15423,12 @@ function initTeacherSyllabus(){
     }
     monthSel.innerHTML = '';
     ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'].forEach(function(m,i){
-      monthSel.innerHTML += '<option value="'+(i+1)+'월" '+(i+1===now.getMonth()+1?'selected':'')+'">'+m+'</option>';
+      monthSel.innerHTML += '<option value="'+(i+1)+'월" '+(i+1===now.getMonth()+1?'selected':'')+'>'+m+'</option>';
     });
   }
 
   sylRenderCourseList();
   sylRenderTeacherPhotoPreview();
-  // 선생님 본인 데이터만 로드
   sylLoadTeacherSavedList();
 }
 
@@ -15450,7 +15449,7 @@ async function sylLoadTeacherSavedList(){
       listEl.innerHTML = '<div style="font-size:12px;color:#9ca3af;padding:4px">저장된 진도계획서가 없습니다</div>';
       return;
     }
-    var currentId = document.getElementById('syl-record-id')?.textContent || '';
+    var currentId = document.getElementById('t-syl-record-id')?.textContent || '';
     // 월별 그룹화
     var groups = {};
     data.forEach(function(row){
@@ -15466,13 +15465,13 @@ async function sylLoadTeacherSavedList(){
         var isActive = row.id === currentId;
         var dt = new Date(row.updated_at);
         var dtStr = dt.getFullYear()+'.'+(dt.getMonth()+1).toString().padStart(2,'0')+'.'+dt.getDate().toString().padStart(2,'0');
-        html += '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid '+(isActive?'#7c3aed':'#e2e8f0')+';border-radius:8px;background:'+(isActive?'#ede9fe':'#fff')+';cursor:pointer;margin-bottom:4px" onclick="sylLoadRecord(\''+row.id+'\')">'
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid '+(isActive?'#7c3aed':'#e2e8f0')+';border-radius:8px;background:'+(isActive?'#ede9fe':'#fff')+';cursor:pointer;margin-bottom:4px" onclick="sylLoadTeacherRecord(\''+row.id+'\')">'
           +'<div style="flex:1;min-width:0">'
             +'<div style="font-size:12px;font-weight:600;color:#1F3A51">'+row.period+'</div>'
             +'<div style="font-size:9.5px;color:#9ca3af;margin-top:1px">수정: '+dtStr+'</div>'
           +'</div>'
           +(isActive?'<span style="font-size:9px;background:#7c3aed;color:#fff;border-radius:4px;padding:1px 6px">편집중</span>':'')
-          +'<button onclick="event.stopPropagation();sylDeleteRecord(\''+row.id+'\')" style="padding:2px 7px;border:1px solid #fca5a5;border-radius:5px;background:#fff0f0;color:#dc2626;font-size:9.5px;cursor:pointer">삭제</button>'
+          +'<button onclick="event.stopPropagation();sylDeleteRecord(\''+row.id+'\');sylLoadTeacherSavedList()" style="padding:2px 7px;border:1px solid #fca5a5;border-radius:5px;background:#fff0f0;color:#dc2626;font-size:9.5px;cursor:pointer">삭제</button>'
         +'</div>';
       });
       html += '</div>';
@@ -15480,6 +15479,40 @@ async function sylLoadTeacherSavedList(){
     listEl.innerHTML = html;
   } catch(e){
     listEl.innerHTML = '<div style="font-size:12px;color:#dc2626;padding:4px">불러오기 실패: '+e.message+'</div>';
+  }
+}
+
+// 선생님 패널용 레코드 불러오기 (t-syl-record-id 사용)
+async function sylLoadTeacherRecord(id){
+  try {
+    var {data, error} = await db.from('syllabuses').select('*').eq('id', id).single();
+    if(error) throw error;
+    _sylTeacherName = data.teacher_name || currentUser.name || '';
+    _sylTeacherId = data.teacher_id || currentUser.id;
+    _sylCourses = data.courses || [];
+    _sylPeriod = data.period || '';
+    if(data.brand_color) window._sylBrandColor = data.brand_color;
+    if(data.accent_color) window._sylAccentColor = data.accent_color;
+    if(data.curriculum && Array.isArray(data.curriculum)) _sylTeacherCurriculum = data.curriculum;
+    _sylTeacherPhoto = data.teacher_photo || '';
+    // 선생님 패널 record-id 저장
+    var rid = document.getElementById('t-syl-record-id');
+    if(rid) rid.textContent = id;
+    // 기간 드롭다운 반영
+    if(_sylPeriod){
+      var parts = _sylPeriod.match(/(\d+)년\s*(\d+)월/);
+      if(parts){
+        var yrSel = document.getElementById('t-syl-year');
+        var mnSel = document.getElementById('t-syl-month');
+        if(yrSel) yrSel.value = parts[1];
+        if(mnSel) mnSel.value = parts[2]+'월';
+      }
+    }
+    sylRenderCourseList();
+    sylRenderTeacherPhotoPreview();
+    sylLoadTeacherSavedList();
+  } catch(e){
+    alert('불러오기 실패: '+e.message);
   }
 }
 
@@ -15723,20 +15756,23 @@ async function syllabusSave(){
   };
   if(btn){ btn.textContent='저장 중...'; btn.disabled=true; }
   try {
-    var recordId = document.getElementById('syl-record-id')?.textContent || '';
+    // 역할에 따라 record-id 참조 구분
+    var isTeacherPanel = (currentUser?.role === 'teacher');
+    var recordIdEl = document.getElementById(isTeacherPanel ? 't-syl-record-id' : 'syl-record-id');
+    var recordId = recordIdEl?.textContent || '';
     var res;
     if(recordId){
       res = await db.from('syllabuses').update({...payload, updated_at: new Date().toISOString()}).eq('id', recordId).select().single();
     } else {
       res = await db.from('syllabuses').insert(payload).select().single();
-      if(res.data && res.data.id){
-        document.getElementById('syl-record-id').textContent = res.data.id;
+      if(res.data && res.data.id && recordIdEl){
+        recordIdEl.textContent = res.data.id;
       }
     }
     if(res.error) throw res.error;
     alert('✅ 저장됐습니다!');
     // 현재 역할에 맞는 목록 갱신
-    if(currentUser?.role === 'teacher'){
+    if(isTeacherPanel){
       sylLoadTeacherSavedList();
     } else {
       sylLoadSavedList();
@@ -15819,16 +15855,22 @@ async function sylDeleteRecord(id){
   try {
     var {error} = await db.from('syllabuses').delete().eq('id', id);
     if(error) throw error;
-    // 현재 편집 중인 레코드가 삭제된 경우 초기화
-    var ridEl = document.getElementById('syl-record-id');
-    if(ridEl && ridEl.textContent === id){
-      ridEl.textContent = '';
-      _sylCourses = [];
-      _sylTeacherName = '';
-      _sylTeacherId = '';
-      sylRenderCourseList();
+    // 두 패널 모두 확인
+    ['syl-record-id', 't-syl-record-id'].forEach(function(rid){
+      var el = document.getElementById(rid);
+      if(el && el.textContent === id){
+        el.textContent = '';
+        _sylCourses = [];
+        if(rid === 'syl-record-id') _sylTeacherName = '';
+        sylRenderCourseList();
+      }
+    });
+    // 역할에 따라 목록 갱신
+    if(currentUser?.role === 'teacher'){
+      sylLoadTeacherSavedList();
+    } else {
+      sylLoadSavedList();
     }
-    sylLoadSavedList();
   } catch(e){
     alert('삭제 실패: '+e.message);
   }
@@ -15851,9 +15893,19 @@ function sylInitPeriodDropdown(){
 }
 
 function sylGetPeriod(){
+  // 선생님 패널 (t-syl-year/month) 우선, 없으면 관리자 패널 (syl-year/month)
+  var tYearSel = document.getElementById('t-syl-year');
+  var tMonthSel = document.getElementById('t-syl-month');
   var yearSel = document.getElementById('syl-year');
   var monthSel = document.getElementById('syl-month');
-  if(yearSel && monthSel){
+  // 선생님 패널이 활성화되어 있으면 t-syl 사용
+  if(tYearSel && tMonthSel && tYearSel.value){
+    var panelSyl = document.getElementById('panel-syllabus');
+    if(panelSyl && panelSyl.classList.contains('active')){
+      return tYearSel.value + ' ' + tMonthSel.value;
+    }
+  }
+  if(yearSel && monthSel && yearSel.value){
     return yearSel.value + '년 ' + monthSel.value + '월';
   }
   return document.getElementById('syl-period')?.value || '';
@@ -16174,6 +16226,7 @@ async function sylSaveSingleCourse(btn){
   var origText = btn.textContent;
   btn.textContent = '저장 중...'; btn.disabled = true;
   try {
+    var isTeacherPanel2 = (currentUser?.role === 'teacher');
     var _sylPeriod2 = sylGetPeriod();
     var payload = {
       teacher_name: _sylTeacherName,
@@ -16184,19 +16237,21 @@ async function sylSaveSingleCourse(btn){
       teacher_photo: _sylTeacherPhoto || null,
       brand_color: window._sylBrandColor || '#1F3A51',
       accent_color: window._sylAccentColor || '#c8a96e',
+      branch: currentUser?.branch || null,
     };
-    var recordId = document.getElementById('syl-record-id')?.textContent || '';
+    var recordIdEl2 = document.getElementById(isTeacherPanel2 ? 't-syl-record-id' : 'syl-record-id');
+    var recordId = recordIdEl2?.textContent || '';
     var res;
     if(recordId){
       res = await db.from('syllabuses').update({...payload, updated_at: new Date().toISOString()}).eq('id', recordId).select().single();
     } else {
       res = await db.from('syllabuses').insert(payload).select().single();
-      if(res.data?.id) document.getElementById('syl-record-id').textContent = res.data.id;
+      if(res.data?.id && recordIdEl2) recordIdEl2.textContent = res.data.id;
     }
     if(res.error) throw res.error;
     btn.textContent = '✅ 저장됨';
     setTimeout(function(){ btn.textContent = origText; btn.disabled = false; }, 1500);
-    sylLoadSavedList();
+    if(isTeacherPanel2){ sylLoadTeacherSavedList(); } else { sylLoadSavedList(); }
   } catch(e){
     alert('저장 실패: '+e.message);
     btn.textContent = origText; btn.disabled = false;
