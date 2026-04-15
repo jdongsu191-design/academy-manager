@@ -1661,12 +1661,24 @@
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
           <div>
             <div style="font-size:20px;font-weight:700;color:#1a1a2e">📄 진도계획서 제작</div>
-            <div style="font-size:13px;color:#6b7280;margin-top:4px">선생님별 강좌 진도계획서를 작성하고 이미지로 출력합니다</div>
+            <div style="font-size:13px;color:#6b7280;margin-top:4px">선생님별 강좌 진도계획서를 작성하고 저장·출력합니다</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button onclick="syllabusAddCourse()" style="padding:8px 16px;background:#1F3A51;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">+ 강좌 추가</button>
-            <button id="syl-zip-btn" onclick="syllabusExport('zip')" style="padding:8px 16px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">📦 JPG ZIP 저장</button>
-            <button onclick="syllabusExport('pdf')" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">📄 PDF 저장</button>
+            <button id="syl-save-btn" onclick="syllabusSave()" style="padding:8px 16px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button>
+            <button id="syl-zip-btn" onclick="syllabusExport('zip')" style="padding:8px 16px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">📦 JPG ZIP</button>
+            <button onclick="syllabusExport('pdf')" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">📄 PDF</button>
+          </div>
+        </div>
+
+        <!-- 저장된 목록 -->
+        <div id="syl-saved-list-wrap" style="margin-bottom:14px">
+          <div style="font-size:12px;font-weight:700;color:#1F3A51;margin-bottom:8px;display:flex;align-items:center;gap:8px">
+            📁 저장된 진도계획서
+            <span id="syl-saved-count" style="font-size:11px;font-weight:400;color:#6b7280"></span>
+          </div>
+          <div id="syl-saved-list" style="display:flex;flex-wrap:wrap;gap:8px">
+            <div style="font-size:12px;color:#9ca3af;padding:8px">불러오는 중...</div>
           </div>
         </div>
 
@@ -1683,6 +1695,7 @@
             <div style="font-size:13px;font-weight:700;color:#1F3A51;white-space:nowrap;margin-left:8px">기간</div>
             <select id="syl-year" style="padding:8px 12px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;background:#fff"></select>
             <select id="syl-month" style="padding:8px 12px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;background:#fff"></select>
+            <div id="syl-record-id" style="display:none"></div>
           </div>
         </div>
 
@@ -15267,9 +15280,160 @@ function initSyllabus(){
   _sylCourses = [];
   _sylTeacherId = '';
   _sylTeacherName = '';
+  document.getElementById('syl-record-id').textContent = '';
   sylRenderCourseList();
   // 연도/월 드롭다운 초기화
   sylInitPeriodDropdown();
+  // 저장된 목록 불러오기
+  sylLoadSavedList();
+}
+
+// ── 저장된 목록 불러오기 ────────────────────────────────────
+async function sylLoadSavedList(){
+  var listEl = document.getElementById('syl-saved-list');
+  var countEl = document.getElementById('syl-saved-count');
+  if(!listEl) return;
+  listEl.innerHTML = '<div style="font-size:12px;color:#9ca3af;padding:4px">불러오는 중...</div>';
+  try {
+    var {data, error} = await db.from('syllabuses')
+      .select('id, teacher_name, period, created_at, updated_at')
+      .order('updated_at', {ascending: false});
+    if(error) throw error;
+    if(!data || !data.length){
+      listEl.innerHTML = '<div style="font-size:12px;color:#9ca3af;padding:4px">저장된 진도계획서가 없습니다</div>';
+      if(countEl) countEl.textContent = '';
+      return;
+    }
+    if(countEl) countEl.textContent = '(총 '+data.length+'개)';
+    listEl.innerHTML = data.map(function(row){
+      var dt = new Date(row.updated_at);
+      var dtStr = dt.getFullYear()+'.'+(dt.getMonth()+1).toString().padStart(2,'0')+'.'+dt.getDate().toString().padStart(2,'0');
+      var isActive = document.getElementById('syl-record-id')?.textContent === row.id;
+      return '<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;border:1.5px solid '+(isActive?'#7c3aed':'#d0dde6')+';border-radius:8px;background:'+(isActive?'#f5f3ff':'#f8fafc')+';cursor:pointer" onclick="sylLoadRecord(\''+row.id+'\')">'
+        +'<div style="flex:1;min-width:0">'
+          +'<div style="font-size:12px;font-weight:700;color:#1F3A51;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+row.teacher_name+' 선생님</div>'
+          +'<div style="font-size:10px;color:#6b7280;margin-top:1px">'+row.period+' · '+dtStr+'</div>'
+        +'</div>'
+        +'<button onclick="event.stopPropagation();sylDeleteRecord(\''+row.id+'\')" style="padding:2px 7px;border:1px solid #fca5a5;border-radius:5px;background:#fff0f0;color:#dc2626;font-size:10px;cursor:pointer;white-space:nowrap">삭제</button>'
+      +'</div>';
+    }).join('');
+  } catch(e){
+    listEl.innerHTML = '<div style="font-size:12px;color:#dc2626;padding:4px">불러오기 실패: '+e.message+'</div>';
+  }
+}
+
+// ── 저장 (신규/수정) ────────────────────────────────────────
+async function syllabusSave(){
+  var btn = document.getElementById('syl-save-btn');
+  if(!_sylCourses.length){ alert('저장할 강좌가 없습니다'); return; }
+  // 직접 입력 이름 동기화
+  if(!_sylTeacherId){
+    var dn = document.getElementById('syl-direct-name');
+    _sylTeacherName = dn ? dn.value.trim() : '';
+  }
+  if(!_sylTeacherName){ alert('선생님 이름을 입력해주세요'); return; }
+  _sylPeriod = sylGetPeriod();
+  var payload = {
+    teacher_name: _sylTeacherName,
+    period: _sylPeriod,
+    courses: _sylCourses
+  };
+  if(btn){ btn.textContent='저장 중...'; btn.disabled=true; }
+  try {
+    var recordId = document.getElementById('syl-record-id')?.textContent || '';
+    var res;
+    if(recordId){
+      // 기존 레코드 수정
+      res = await db.from('syllabuses').update({...payload, updated_at: new Date().toISOString()}).eq('id', recordId).select().single();
+    } else {
+      // 신규 저장
+      res = await db.from('syllabuses').insert(payload).select().single();
+      if(res.data && res.data.id){
+        document.getElementById('syl-record-id').textContent = res.data.id;
+      }
+    }
+    if(res.error) throw res.error;
+    alert('✅ 저장됐습니다!');
+    sylLoadSavedList();
+  } catch(e){
+    alert('저장 실패: '+e.message);
+  } finally {
+    if(btn){ btn.textContent='💾 저장'; btn.disabled=false; }
+  }
+}
+
+// ── 저장된 레코드 불러오기 ──────────────────────────────────
+async function sylLoadRecord(id){
+  try {
+    var {data, error} = await db.from('syllabuses').select('*').eq('id', id).single();
+    if(error) throw error;
+    // 데이터 복원
+    _sylTeacherName = data.teacher_name || '';
+    _sylPeriod = data.period || '';
+    _sylCourses = data.courses || [];
+    // 현재 편집 ID 기록
+    var ridEl = document.getElementById('syl-record-id');
+    if(ridEl) ridEl.textContent = id;
+    // UI 복원
+    var sel = document.getElementById('syl-teacher-select');
+    if(sel){
+      // 선생님 셀렉트에서 일치하는 이름 찾기
+      var found = false;
+      Array.from(sel.options).forEach(function(opt){
+        if(opt.text === _sylTeacherName+' 선생님'){
+          sel.value = opt.value;
+          _sylTeacherId = opt.value;
+          found = true;
+          var directDiv = document.getElementById('syl-direct-name-div');
+          if(directDiv) directDiv.style.display = 'none';
+        }
+      });
+      if(!found){
+        sel.value = '';
+        _sylTeacherId = '';
+        var dn = document.getElementById('syl-direct-name');
+        if(dn) dn.value = _sylTeacherName;
+        var directDiv = document.getElementById('syl-direct-name-div');
+        if(directDiv) directDiv.style.display = 'flex';
+      }
+    }
+    // 기간 복원
+    if(_sylPeriod){
+      var parts = _sylPeriod.replace('년','').replace('월','').trim().split(' ');
+      var yrSel = document.getElementById('syl-year');
+      var mnSel = document.getElementById('syl-month');
+      if(yrSel && parts[0]) yrSel.value = parts[0].trim();
+      if(mnSel && parts[1]) mnSel.value = parts[1].trim();
+    }
+    sylRenderCourseList();
+    sylLoadSavedList(); // 활성 항목 표시 갱신
+    // 편집 영역으로 스크롤
+    var courseListEl = document.getElementById('syl-course-list');
+    if(courseListEl) courseListEl.scrollIntoView({behavior:'smooth', block:'start'});
+  } catch(e){
+    alert('불러오기 실패: '+e.message);
+  }
+}
+
+// ── 레코드 삭제 ─────────────────────────────────────────────
+async function sylDeleteRecord(id){
+  if(!confirm('이 진도계획서를 삭제할까요?')) return;
+  try {
+    var {error} = await db.from('syllabuses').delete().eq('id', id);
+    if(error) throw error;
+    // 현재 편집 중인 레코드가 삭제된 경우 초기화
+    var ridEl = document.getElementById('syl-record-id');
+    if(ridEl && ridEl.textContent === id){
+      ridEl.textContent = '';
+      _sylCourses = [];
+      _sylTeacherName = '';
+      _sylTeacherId = '';
+      sylRenderCourseList();
+    }
+    sylLoadSavedList();
+  } catch(e){
+    alert('삭제 실패: '+e.message);
+  }
 }
 
 function sylInitPeriodDropdown(){
