@@ -15519,7 +15519,17 @@ function initTeacherSyllabus(){
   // 선생님 정보 고정
   _sylTeacherId = currentUser.id;
   _sylTeacherName = currentUser.name || '';
+  // 선생님 본인 사진 자동 로드 (users.profile_image_url)
   _sylTeacherPhoto = '';
+  (async function(){
+    try {
+      var uRes = await db.from('users').select('profile_image_url').eq('id', currentUser.id).single();
+      if(uRes.data?.profile_image_url){
+        _sylTeacherPhoto = uRes.data.profile_image_url;
+        sylRenderTeacherPhotoPreview();
+      }
+    } catch(e){}
+  })();
   _sylTeacherCurriculum = [
     {period:'1–2월',content:''},{period:'3–4월',content:''},
     {period:'5–6월',content:''},{period:'7–8월',content:''},
@@ -15688,9 +15698,16 @@ function sylUploadTeacherPhoto(input){
   var file = input.files[0];
   if(!file) return;
   var reader = new FileReader();
-  reader.onload = function(e){
+  reader.onload = async function(e){
     _sylTeacherPhoto = e.target.result;
     sylRenderTeacherPhotoPreview();
+    // users 테이블 profile_image_url에도 저장 (선생님 ID 있을 때)
+    var uid = _sylTeacherId || (currentUser?.role === 'teacher' ? currentUser.id : null);
+    if(uid){
+      try {
+        await db.from('users').update({profile_image_url: _sylTeacherPhoto}).eq('id', uid);
+      } catch(e){ console.warn('사진 프로필 저장 실패:', e); }
+    }
   };
   reader.readAsDataURL(file);
 }
@@ -15698,8 +15715,16 @@ function sylUploadTeacherPhoto(input){
 function sylRemoveTeacherPhoto(){
   _sylTeacherPhoto = '';
   sylRenderTeacherPhotoPreview();
-  var inp = document.getElementById('syl-teacher-photo-inp');
-  if(inp) inp.value = '';
+  ['syl-teacher-photo-inp','t-syl-teacher-photo-inp'].forEach(function(id){
+    var inp = document.getElementById(id);
+    if(inp) inp.value = '';
+  });
+  // users 테이블에서도 제거
+  var uid = _sylTeacherId || (currentUser?.role === 'teacher' ? currentUser.id : null);
+  if(uid){
+    db.from('users').update({profile_image_url: null}).eq('id', uid)
+      .then(function(){ }).catch(function(e){ console.warn('사진 제거 실패:', e); });
+  }
 }
 
 // ── 선생님 공통 연간 커리큘럼 그리드 ────────────────────────
@@ -15974,8 +15999,14 @@ async function sylLoadRecord(id){
     } else if(_sylCourses[0]?.curriculum){
       _sylTeacherCurriculum = _sylCourses[0].curriculum;
     }
-    // 선생님 공통 사진 복원
+    // 선생님 공통 사진 복원 (users.profile_image_url 우선, fallback: syllabuses.teacher_photo)
     _sylTeacherPhoto = data.teacher_photo || '';
+    if(data.teacher_id){
+      try {
+        var uRes = await db.from('users').select('profile_image_url').eq('id', data.teacher_id).single();
+        if(uRes.data?.profile_image_url) _sylTeacherPhoto = uRes.data.profile_image_url;
+      } catch(e){}
+    }
     sylRenderTeacherCurriculumGrid();
     sylRenderTeacherPhotoPreview();
     sylRenderCourseList();
@@ -16056,6 +16087,23 @@ function syllabusOnTeacherChange(){
   // 직접입력 이름 필드 표시/숨김
   var directDiv = document.getElementById('syl-direct-name-div');
   if(directDiv) directDiv.style.display = sel.value ? 'none' : 'flex';
+  // 선생님 선택 시 users.profile_image_url 자동 로드
+  if(_sylTeacherId){
+    (async function(){
+      try {
+        var uRes = await db.from('users').select('profile_image_url').eq('id', _sylTeacherId).single();
+        if(uRes.data?.profile_image_url){
+          _sylTeacherPhoto = uRes.data.profile_image_url;
+        } else {
+          _sylTeacherPhoto = '';
+        }
+        sylRenderTeacherPhotoPreview();
+      } catch(e){}
+    })();
+  } else {
+    _sylTeacherPhoto = '';
+    sylRenderTeacherPhotoPreview();
+  }
 }
 
 // ── 강좌 추가 ────────────────────────────────────────────────
