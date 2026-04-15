@@ -6771,19 +6771,40 @@ function mncToggleMent(studentId){
 function mncCopyMent(studentId){
   var s = _mncStudents.find(function(s){ return s.id===studentId; });
   if(!s) return;
-  var saved = _mncData[_mncResultDate] && _mncData[_mncResultDate][studentId];
-  if(!saved){ return; }
-  var status = saved.is_completed===true?'done':saved.is_completed===false?'undone':'';
-  if(!status){ return; }
-  var ment = mncGenerateMent(s.name, _mncDate, status, saved.score||0, studentId);
+
+  // 1. 현재 선택된 날짜에 결과가 있으면 그 날짜 사용
+  // 2. 없으면 이번 주 중 결과가 있는 가장 최근 날짜 사용
+  var targetDate = _mncResultDate;
+  var saved = _mncData[targetDate] && _mncData[targetDate][studentId];
+  var status = saved ? (saved.is_completed===true?'done':saved.is_completed===false?'undone':'') : '';
+
+  if(!status){
+    // 이번 주 전체 날짜 중 결과 있는 날짜 찾기 (최근순)
+    var allDates = Object.keys(_mncData).sort().reverse();
+    for(var i=0; i<allDates.length; i++){
+      var d = allDates[i];
+      var c = _mncData[d] && _mncData[d][studentId];
+      var st = c ? (c.is_completed===true?'done':c.is_completed===false?'undone':'') : '';
+      if(st){
+        targetDate = d;
+        saved = c;
+        status = st;
+        break;
+      }
+    }
+  }
+
+  if(!status){ alert('학습 결과가 입력된 날짜가 없습니다.'); return; }
+
+  // _mncDate는 check_date (= 결과날 그대로)
+  // targetDate가 결과날 = check_date
+  var ment = mncGenerateMent(s.name, targetDate, status, saved.score||0, studentId);
   if(!ment) return;
   navigator.clipboard.writeText(ment).then(function(){
-    // alert 없이 버튼 색상만 초록으로 피드백
     var row = document.getElementById('mnc-row-'+studentId);
     if(row){
       var btn = row.querySelector('button[onclick*="mncCopyMent"]');
       if(btn){
-        var origStyle = btn.getAttribute('style');
         btn.style.background = '#16a34a';
         btn.style.borderColor = '#86efac';
         btn.style.color = '#fff';
@@ -6796,21 +6817,33 @@ function mncCopyMent(studentId){
         }, 2000);
       }
     }
-  }).catch(function(){
-    // 복사 실패 시 아무것도 하지 않음
-  });
+  }).catch(function(){});
 }
 
 function mncCopyAllMents(){
   var all = [];
+  var allDates = Object.keys(_mncData).sort().reverse();
+
   _mncStudents.forEach(function(s){
-    var saved = _mncData[_mncResultDate] && _mncData[_mncResultDate][s.id];
-    if(!saved) return;
-    var status = saved.is_completed===true?'done':saved.is_completed===false?'undone':'';
-    if(!status) return;
-    var ment = mncGenerateMent(s.name, _mncDate, status, saved.score||0, s.id);
+    // 현재 날짜 결과 우선, 없으면 이번 주 가장 최근 결과 사용
+    var targetDate = _mncResultDate;
+    var saved = _mncData[targetDate] && _mncData[targetDate][s.id];
+    var status = saved ? (saved.is_completed===true?'done':saved.is_completed===false?'undone':'') : '';
+
+    if(!status){
+      for(var i=0; i<allDates.length; i++){
+        var d = allDates[i];
+        var c = _mncData[d] && _mncData[d][s.id];
+        var st = c ? (c.is_completed===true?'done':c.is_completed===false?'undone':'') : '';
+        if(st){ targetDate=d; saved=c; status=st; break; }
+      }
+    }
+    if(!status) return; // 이번 주 전체 결과 없으면 제외
+
+    var ment = mncGenerateMent(s.name, targetDate, status, saved.score||0, s.id);
     if(ment) all.push('【'+s.name+'】\n'+ment);
   });
+
   if(!all.length){ alert('입력된 멘트가 없습니다.'); return; }
   navigator.clipboard.writeText(all.join('\n\n──────────────────\n\n')).then(function(){
     alert('✅ 전체 멘트 '+all.length+'개가 복사됐습니다!\n카톡방에 붙여넣기 하세요.');
