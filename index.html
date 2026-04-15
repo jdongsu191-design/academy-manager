@@ -11050,4 +11050,2459 @@ async function wnSaveAll(){
     var sid = inputs[0].dataset.sid;
     var rec = {student_id: sid, session_date: date, created_by: currentUser.id, updated_at: new Date().toISOString()};
 
-    row.querySelectorAll('[data-sid][data-f
+    row.querySelectorAll('[data-sid][data-field]').forEach(function(el){
+      var field = el.dataset.field;
+      if(field === 'homework_done'){
+        rec[field] = el.value === '' ? null : (el.value === 'true');
+      } else rec[field] = el.value.trim() || null;
+    });
+
+    upserts.push(rec);
+  });
+
+  var {error} = await db.from('weekend_naje').upsert(upserts, {onConflict:'student_id,session_date'});
+  btn.textContent = '💾 전체 저장'; btn.disabled = false;
+
+  if(error){ alert('저장 오류: '+error.message); return; }
+  alert('✅ 저장 완료!');
+  await wnLoadData();
+}
+
+// 이미지 생성 (초록 디자인)
+async function wnGenerateImage(){
+  var date = document.getElementById('wn-date').value;
+  if(!_wnStudents.length){ alert('학생이 없습니다'); return; }
+  var btn = document.getElementById('wn-img-btn');
+  btn.textContent = '⏳ 생성 중...'; btn.disabled = true;
+
+  try{
+    var dp = date.split('-');
+    var dayNames=['일','월','화','수','목','금','토'];
+    var d = new Date(date);
+    var dateLabel = dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일('+dayNames[d.getDay()]+')';
+
+    // 현재 테이블에서 입력값 실시간 수집
+    var rows = _wnStudents.map(function(s, i){
+      function fv(field){
+        var el = document.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]');
+        return el ? el.value : '';
+      }
+      var att = fv('attendance');
+      var attLabel = att==='present'?'출석':att==='late'?'지각':att==='absent'?'결석':'-';
+      var attColor = att==='absent'?'color:#ef4444;font-weight:700':att==='late'?'color:#ea580c;font-weight:600':'color:#166534;font-weight:600';
+      var hw = fv('homework_done');
+      var hwLabel = hw==='true'?'완료':hw==='false'?'미완료':'-';
+      var hwColor = hw==='true'?'color:#166534;font-weight:700':hw==='false'?'color:#ef4444':'color:#9ca3af';
+      var result = fv('result');
+      var resultColor = result==='A'?'color:#166534;font-weight:700':result==='F'?'color:#ef4444;font-weight:700':'color:#1e293b;font-weight:700';
+      var bg = i%2===0?'#fff':'#f0fdf4';
+      return '<tr style="background:'+bg+'">'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;font-size:12px;color:#6b7280">'+( s.school||'')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;font-size:12px;color:#6b7280;text-align:center">'+( s.grade||'')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;font-weight:700;color:#1e293b">'+s.name+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;text-align:center">'+fv('level')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;text-align:center">'+fv('attend_time')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;text-align:center;'+attColor+'">'+attLabel+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;text-align:center;'+hwColor+'">'+hwLabel+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;text-align:center">'+fv('score_first')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;text-align:center">'+fv('score_retry')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;text-align:center;'+resultColor+'">'+result+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #bbf7d0;font-size:12px;color:#6b7280">'+fv('note')+'</td>'
+      +'</tr>';
+    }).join('');
+
+    var tempDiv = document.createElement('div');
+    tempDiv.style.cssText = 'position:absolute;left:-9999px;top:0;width:900px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:20px';
+    // 헤더 타이틀: 단일 선생님 vs 전체(분원)
+    var selectedIds = typeof wnGetSelectedTeacherIds==='function' ? wnGetSelectedTeacherIds() : [];
+    var allTeacherIds = _wnAllTeachers.map(function(t){ return t.id; });
+    var isAll = selectedIds.length===0 || selectedIds.length===allTeacherIds.length;
+    var headerTitle, headerSub;
+    if(isAll){
+      // 전체: 분원명 또는 '전체'
+      var myBranch = (window._allBranches||[]).find(function(b){ return b.id===currentUser.branch_id; });
+      headerTitle = myBranch ? myBranch.name+' 주말 N제 결과' : '주말 N제 결과';
+      headerSub = '전체 선생님';
+    } else if(selectedIds.length===1){
+      var t = _wnAllTeachers.find(function(t){ return t.id===selectedIds[0]; });
+      headerTitle = (t?t.name:'') + ' 선생님';
+      headerSub = '주말 N제 출결 결과';
+    } else {
+      headerTitle = selectedIds.length+'명 선생님';
+      headerSub = '주말 N제 출결 결과';
+    }
+
+    tempDiv.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding-bottom:14px;border-bottom:3px solid #16a34a">'
+      +'<div>'
+        +'<div style="font-size:11px;font-weight:600;color:#16a34a;letter-spacing:0.5px;margin-bottom:4px">📅 주말 N제</div>'
+        +'<div style="font-size:24px;font-weight:900;color:#14532d;line-height:1.2">'+headerTitle+'</div>'
+        +'<div style="font-size:12px;color:#6b7280;margin-top:4px">'+headerSub+'</div>'
+      +'</div>'
+      +'<div style="text-align:right">'
+        +'<div style="font-size:16px;font-weight:800;color:#1a1a2e">'+dateLabel+'</div>'
+        +'<div style="font-size:11px;color:#9ca3af;margin-top:3px">학원 관리 시스템</div>'
+      +'</div></div>'
+      +'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+      +'<thead><tr style="background:#166534">'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:left">학교</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">학년</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:left">이름</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">Level</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">출석시간</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">출석</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">숙제</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">본시</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">재시</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">결과</th>'
+      +'<th style="padding:7px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:left">비고</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody></table>'
+      +'<div style="margin-top:12px;display:flex;align-items:center;justify-content:space-between">'
+        +'<div style="font-size:11px;color:#166534;font-weight:600">A: 과제완료 &amp; 테스트통과 &nbsp;|&nbsp; B: 과제완료 &amp; 테스트불통 &nbsp;|&nbsp; C: 과제완료 &amp; 테스트미응시 &nbsp;|&nbsp; D: 과제미완료 &nbsp;|&nbsp; F: 결석</div>'
+        +'<div style="font-size:11px;color:#9ca3af">학원 관리 시스템 · '+new Date().toLocaleString('ko-KR')+'</div>'
+      +'</div>';
+    document.body.appendChild(tempDiv);
+
+    var canvas = await html2canvas(tempDiv, {backgroundColor:'#fff', scale:2, useCORS:true, logging:false, width:900, height:tempDiv.scrollHeight});
+    document.body.removeChild(tempDiv);
+
+    var isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    var fileName = '주말N제_'+date.replace(/-/g,'')+'.png';
+
+    canvas.toBlob(async function(blob){
+      if(isMobile){
+        var file = new File([blob], fileName, {type:'image/png'});
+        if(navigator.canShare && navigator.canShare({files:[file]})){
+          try{ await navigator.share({files:[file]}); btn.textContent='📊 이미지 생성'; btn.disabled=false; return; }
+          catch(e){ if(e.name==='AbortError'){btn.textContent='📊 이미지 생성';btn.disabled=false;return;} }
+        }
+      }
+      if(navigator.clipboard && navigator.clipboard.write){
+        try{
+          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+          btn.textContent='✅ 복사됨!';
+          setTimeout(function(){btn.textContent='📊 이미지 생성';btn.disabled=false;},2500);
+          return;
+        }catch(e){}
+      }
+      var a=document.createElement('a'); a.href=canvas.toDataURL(); a.download=fileName; a.click();
+      btn.textContent='📊 이미지 생성'; btn.disabled=false;
+    }, 'image/png');
+
+  }catch(err){
+    alert('오류: '+err.message);
+    btn.textContent='📊 이미지 생성'; btn.disabled=false;
+  }
+}
+
+
+function initWorkLog(){
+  const sel = document.getElementById('wl-class-select');
+  const currentVal = sel ? sel.value : '';
+
+  // 반 셀렉트 채우기 (현재 선택값 보존)
+  sel.innerHTML = '<option value="">반을 선택하세요</option>';
+  classes.forEach(c => {
+    sel.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+  });
+
+  // 이미 반이 선택된 상태였으면 복원 (업무일지 내용이 날아가지 않게)
+  if(currentVal){
+    sel.value = currentVal;
+    // 내용이 이미 로드된 상태면 재로드 하지 않음
+    const wlMain = document.getElementById('wl-main');
+    if(wlMain && wlMain.style.display !== 'none'){
+      // 이미 업무일지가 표시 중 → 그대로 유지, 재로드 안 함
+      wlLoadDayLogs();
+      return;
+    }
+  }
+
+  // 오늘 날짜 기본값 (날짜가 비어있을 때만)
+  const wlDate = document.getElementById('wl-date');
+  if(!wlDate.value){
+    const today = new Date().toISOString().split('T')[0];
+    wlDate.value = today;
+  }
+
+  document.getElementById('wl-main').style.display = currentVal ? 'block' : 'none';
+  document.getElementById('wl-empty').style.display = currentVal ? 'none' : 'block';
+
+  // 개별 버튼은 숨김 (반 선택 전)
+  const btn = document.getElementById('wl-copy-btn');
+  if(btn) btn.style.display = currentVal ? 'inline-flex' : 'none';
+
+  // 오늘 날짜 업무일지 목록 로드
+  wlLoadDayLogs();
+  // date picker 적용
+  setTimeout(function(){ window.initDatePickers && window.initDatePickers(); }, 50);
+}
+
+// 반 선택 변경 핸들러
+function wlOnClassChange(){
+  const classId = document.getElementById('wl-class-select').value;
+  const copyBtn = document.getElementById('wl-copy-btn');
+
+  if(!classId){
+    // 반 선택 안 함 → 업무일지 입력 화면 숨기고 저장된 목록만 표시
+    document.getElementById('wl-main').style.display = 'none';
+    document.getElementById('wl-empty').style.display = 'block';
+    if(copyBtn) copyBtn.style.display = 'none';
+    return;
+  }
+  // 반 선택 → 업무일지 로드 + 해당 반 이미지 버튼 표시
+  loadWorkLog();
+  if(copyBtn) copyBtn.style.display = 'inline-flex';
+}
+
+// 버튼 표시 헬퍼
+function wlShowAllBtn(){
+  // 금일 전체 이미지 버튼은 목록 UI로 대체됨 - 날짜 변경 시 목록 로드
+  wlLoadDayLogs();
+}
+function wlShowClassBtn(){
+  const btn = document.getElementById('wl-copy-btn');
+  const classId = document.getElementById('wl-class-select').value;
+  if(btn) btn.style.display = classId ? 'inline-flex' : 'none';
+}
+
+/* ── 날짜별 저장된 업무일지 목록 로드 ── */
+async function wlLoadDayLogs(){
+  const date = document.getElementById('wl-date').value;
+  const section = document.getElementById('wl-day-logs-section');
+  const listEl  = document.getElementById('wl-day-logs-list');
+  if(!date || !currentUser){ if(section) section.style.display='none'; return; }
+
+  const {data: logs, error} = await db.from('work_logs')
+    .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
+
+  if(error || !logs || !logs.length){
+    if(section) section.style.display='none'; return;
+  }
+
+  // 섹션 표시
+  section.style.display = 'block';
+
+  // 반 이름 매핑
+  listEl.innerHTML = logs.map(log => {
+    const cls = classes.find(c=>c.id===log.class_id);
+    const clsName = cls?.name || '알 수 없는 반';
+    const clsInfo = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
+    const isActive = wlCurrentLogId === log.id;
+    return `<div data-log-id="${log.id}" data-class-id="${log.class_id}"
+      onclick="wlOpenLogFromList('${log.id}','${log.class_id}')"
+      style="display:flex;align-items:center;gap:10px;padding:10px 12px;
+        border:1.5px solid ${isActive?'#3b82f6':'#86efac'};
+        border-radius:10px;background:${isActive?'#eff6ff':'#fff'};
+        cursor:pointer;transition:all 0.15s"
+      onmouseenter="this.style.borderColor='#3b82f6';this.style.background='#f0f7ff'"
+      onmouseleave="if('${log.id}'!==String(wlCurrentLogId)){this.style.borderColor='#86efac';this.style.background='#fff'}else{this.style.borderColor='#3b82f6';this.style.background='#eff6ff'}">
+      <input type="checkbox" class="wl-log-check" data-log-id="${log.id}"
+        onclick="event.stopPropagation()"
+        onchange="wlUpdateGenBtn()"
+        style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:var(--primary)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:700;color:${isActive?'#1d4ed8':'#1e293b'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${clsName}</div>
+        ${clsInfo?`<div style="font-size:11px;color:#9ca3af">${clsInfo}</div>`:''}
+      </div>
+      ${isActive?'<span style="font-size:10px;font-weight:700;color:#3b82f6;background:#dbeafe;padding:2px 7px;border-radius:100px;flex-shrink:0">열람 중</span>':''}
+      <button onclick="event.stopPropagation();wlDeleteLog('${log.id}', '${clsName.replace(/'/g,"\'")}')"
+        style="padding:4px 10px;border:1px solid #fca5a5;border-radius:6px;background:#fef2f2;color:#dc2626;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0">
+        삭제
+      </button>
+    </div>`;
+  }).join('');
+
+  // 전체선택 초기화
+  const selectAll = document.getElementById('wl-select-all');
+  if(selectAll) selectAll.checked = false;
+  wlUpdateGenBtn();
+}
+
+// 전체선택 토글
+function wlToggleSelectAll(cb){
+  document.querySelectorAll('.wl-log-check').forEach(c => c.checked = cb.checked);
+  wlUpdateGenBtn();
+}
+
+// 이미지 생성 버튼 활성화 업데이트
+function wlUpdateGenBtn(){
+  const checked = document.querySelectorAll('.wl-log-check:checked').length;
+  const btn = document.getElementById('wl-gen-selected-btn');
+  if(btn){
+    btn.style.display = checked > 0 ? 'block' : 'none';
+    btn.textContent = checked > 0
+      ? `📋 선택된 ${checked}개 업무일지 이미지 생성`
+      : '📋 선택 업무일지 이미지 생성';
+  }
+  // 전체선택 체크박스 상태 동기화
+  const total = document.querySelectorAll('.wl-log-check').length;
+  const selectAll = document.getElementById('wl-select-all');
+  if(selectAll) selectAll.checked = (total > 0 && checked === total);
+}
+
+// 업무일지 목록 클릭 → 해당 반 선택 + 내용 로드
+async function wlOpenLogFromList(logId, classId){
+  // 반 셀렉트에 해당 반 세팅
+  const sel = document.getElementById('wl-class-select');
+  if(sel){
+    sel.value = classId;
+    // 선택한 반의 copy 버튼 표시
+    const copyBtn = document.getElementById('wl-copy-btn');
+    if(copyBtn) copyBtn.style.display = 'inline-flex';
+  }
+  // 업무일지 로드 (loadWorkLog는 class_id + date 기반으로 DB 조회)
+  await loadWorkLog();
+  // 목록 하이라이트 갱신
+  await wlLoadDayLogs();
+  // 업무일지 입력 영역으로 스크롤
+  const mainEl = document.getElementById('wl-main');
+  if(mainEl) mainEl.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+// 업무일지 삭제
+async function wlDeleteLog(logId, clsName){
+  if(!confirm(`[${clsName}] 업무일지를 삭제할까요?
+삭제하면 복구할 수 없습니다.`)) return;
+  // 학생 데이터도 함께 삭제
+  await db.from('work_log_students').delete().eq('log_id', logId);
+  const {error} = await db.from('work_logs').delete().eq('id', logId);
+  if(error){ alert('삭제 오류: '+error.message); return; }
+  // 현재 열린 업무일지가 삭제된 경우 화면 초기화
+  if(wlCurrentLogId === logId){
+    wlCurrentLogId = null;
+    document.getElementById('wl-main').style.display = 'none';
+    document.getElementById('wl-empty').style.display = 'block';
+    document.getElementById('wl-copy-btn').style.display = 'none';
+  }
+  await wlLoadDayLogs();
+}
+
+// 선택된 업무일지로 이미지 생성
+async function wlGenerateSelectedImage(){
+  const checked = Array.from(document.querySelectorAll('.wl-log-check:checked'));
+  if(!checked.length){ alert('업무일지를 선택하세요'); return; }
+  const selectedLogIds = checked.map(c => c.dataset.logId);
+  const btn = document.getElementById('wl-gen-selected-btn');
+  btn.textContent = '⏳ 생성 중...'; btn.disabled = true;
+
+  try{
+    const date = document.getElementById('wl-date').value;
+    const dp = date.split('-');
+    const dayNames = ['일','월','화','수','목','금','토'];
+    const d = new Date(date);
+    const dateLabel = `${dp[0]}/${String(+dp[1]).padStart(2,'0')}/${String(+dp[2]).padStart(2,'0')} (${dayNames[d.getDay()]})`;
+
+    // 선택된 log 순서대로 조회
+    const {data: allLogs} = await db.from('work_logs')
+      .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
+    const logs = (allLogs||[]).filter(l => selectedLogIds.includes(l.id));
+    if(!logs.length){ alert('업무일지를 찾을 수 없습니다'); btn.textContent='📋 선택 업무일지 이미지 생성'; btn.disabled=false; return; }
+
+    const SCALE = 2;
+    const CARD_W = 680;
+    const GAP_PX = 12 * SCALE;
+    const canvases = [];
+
+    for(const log of logs){
+      const cls = classes.find(c=>c.id===log.class_id);
+      const {data: stus} = await db.from('work_log_students')
+        .select('*, users(name, school, grade)').eq('log_id', log.id);
+
+      const tempDiv = document.createElement('div');
+      tempDiv.style.cssText = 'position:absolute;left:-9999px;top:0;width:'+CARD_W+'px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+      tempDiv.innerHTML = buildWorkLogCardHTML(log, cls, stus||[], dateLabel, currentUser.name);
+      document.body.appendChild(tempDiv);
+
+      const canvas = await html2canvas(tempDiv, {
+        backgroundColor:'#fff', scale:SCALE, useCORS:true, logging:false,
+        width:CARD_W, height:tempDiv.scrollHeight
+      });
+      canvases.push(canvas);
+      document.body.removeChild(tempDiv);
+    }
+
+    // 세로로 합치기
+    const totalW = canvases[0].width;
+    const totalH = canvases.reduce((s,c)=>s+c.height,0) + GAP_PX*(canvases.length-1);
+    const merged = document.createElement('canvas');
+    merged.width = totalW; merged.height = totalH;
+    const mctx = merged.getContext('2d');
+    mctx.fillStyle = '#f0f4f8';
+    mctx.fillRect(0,0,totalW,totalH);
+    let curY=0;
+    canvases.forEach(c=>{ mctx.drawImage(c,0,curY); curY+=c.height+GAP_PX; });
+
+    const isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    const fileName = '업무일지_'+date.replace(/-/g,'')+'.png';
+
+    merged.toBlob(async (blob) => {
+      if(isMobile){
+        const file = new File([blob], fileName, {type:'image/png'});
+        if(navigator.canShare && navigator.canShare({files:[file]})){
+          try{
+            await navigator.share({files:[file], title:'업무일지'});
+            btn.textContent='📋 선택 업무일지 이미지 생성'; btn.disabled=false; return;
+          }catch(e){ if(e.name==='AbortError'){btn.textContent='📋 선택 업무일지 이미지 생성';btn.disabled=false;return;} }
+        }
+      }
+      if(navigator.clipboard && navigator.clipboard.write){
+        try{
+          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+          btn.textContent='✅ 복사됨!';
+          setTimeout(()=>{btn.textContent='📋 선택 업무일지 이미지 생성';btn.disabled=false;},2500);
+          return;
+        }catch(e){}
+      }
+      const a=document.createElement('a'); a.href=merged.toDataURL(); a.download=fileName; a.click();
+      btn.textContent='📋 선택 업무일지 이미지 생성'; btn.disabled=false;
+      alert('이미지를 다운로드했습니다.');
+    }, 'image/png');
+
+  }catch(err){
+    alert('오류: '+err.message); console.error(err);
+    btn.textContent='📋 선택 업무일지 이미지 생성'; btn.disabled=false;
+  }
+}
+
+// 업무일지 로드 (반 + 날짜 선택 시)
+async function loadWorkLog(){
+  const classId = document.getElementById('wl-class-select').value;
+  const date = document.getElementById('wl-date').value;
+  if(!classId || !date) return;
+
+  document.getElementById('wl-main').style.display = 'block';
+  document.getElementById('wl-empty').style.display = 'none';
+  wlTempStudents = []; // 날짜/반 변경 시 임시 학생 초기화
+
+  // 기존 업무일지 조회
+  const{data:log} = await db.from('work_logs').select('*')
+    .eq('teacher_id',currentUser.id).eq('class_id',classId).eq('log_date',date).single();
+
+  wlCurrentLogId = log?.id || null;
+
+  // 진도/숙제/체크 채우기
+  document.getElementById('wl-progress').value = log?.progress || '';
+  document.getElementById('wl-homework').value = log?.homework || '';
+  document.getElementById('wl-memo').value = log?.memo || '';
+  document.getElementById('wl-trial').value = log?.trial_class || '';
+  document.getElementById('wl-new-student').value = log?.new_student || '';
+  document.getElementById('wl-dropout').value = log?.dropout || '';
+
+  // 학생별 기존 데이터
+  let studentLogs = [];
+  if(wlCurrentLogId){
+    const{data:sl} = await db.from('work_log_students').select('*').eq('log_id',wlCurrentLogId);
+    studentLogs = sl || [];
+  }
+
+  // 현재 활성 학생 조회
+  const{data:activeStuds} = await db.from('users').select('*')
+    .eq('role','student').eq('class_id',classId).eq('status','active').order('name');
+  const activeIds = new Set((activeStuds||[]).map(s=>s.id));
+
+  // 과거 기록에 있는 비활성(퇴원) 학생 ID 추출 후 직접 조회
+  const pastIds = studentLogs
+    .map(sl=>sl.student_id)
+    .filter(id => id && !activeIds.has(id)); // null 제외
+  let pastStudents = [];
+  if(pastIds.length > 0){
+    const{data:pastData} = await db.from('users').select('*').in('id', pastIds);
+    pastStudents = (pastData||[]).map(s=>({...s, _isInactive: true}));
+  }
+
+  // student_id가 null인 기록(완전삭제된 학생) → 이름 "삭제된 학생"으로 표시
+  const deletedLogs = studentLogs.filter(sl => !sl.student_id);
+  const deletedPlaceholders = deletedLogs.map((sl, i) => ({
+    id: `deleted_${sl.id}`, name: '삭제된 학생', _isDeleted: true, _logId: sl.id
+  }));
+
+  // 활성 학생 + 퇴원 학생 + 삭제된 학생 합치기 (이름순)
+  wlStudents = [...(activeStuds||[]), ...pastStudents, ...deletedPlaceholders]
+    .sort((a,b) => a.name.localeCompare(b.name, 'ko'));
+
+  // 학생 테이블 렌더
+  renderWlStudentTable(wlStudents, studentLogs);
+}
+
+// 학생 테이블 렌더
+function renderWlStudentTable(students, studentLogs){
+  const tbody = document.getElementById('wl-student-tbody');
+  if(!students.length){
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:#6b7280">등록된 학생이 없습니다</td></tr>';
+    return;
+  }
+  tbody.innerHTML = students.map(s => {
+    const rowBg = s._isInactive ? 'background:#fafafa;opacity:0.75' : s._isDeleted ? 'background:#fafafa;opacity:0.5' : '';
+    const badge = s._isInactive
+      ? '<span style="font-size:10px;background:#fecaca;color:#991b1b;padding:1px 5px;border-radius:4px;margin-left:4px">퇴원</span>'
+      : s._isDeleted
+      ? '<span style="font-size:10px;background:#e5e7eb;color:#6b7280;padding:1px 5px;border-radius:4px;margin-left:4px">삭제됨</span>'
+      : s._isTemp
+      ? '<span style="font-size:10px;background:#EAF3DE;color:#3B6D11;padding:1px 5px;border-radius:4px;margin-left:4px">보강</span>'
+      : '';
+    // 삭제된 학생은 student_id 대신 _logId 기반으로 기록 찾기
+    const sl = s._isDeleted
+      ? studentLogs.find(l => l.id === s._logId) || {}
+      : studentLogs.find(l => l.student_id === s.id) || {};
+    // 삭제된 학생은 입력 불가 (읽기 전용)
+    const disabled = s._isDeleted ? 'disabled' : '';
+    return `<tr data-sid="${s.id}" style="border-bottom:1px solid var(--border);${rowBg}">
+      <td style="padding:8px 10px;font-size:12px;color:#6b7280;white-space:nowrap">${[s.school,s.grade].filter(Boolean).join(' ')||'-'}</td>
+      <td style="padding:8px 10px;font-weight:600;white-space:nowrap">
+        ${s.name}${badge}
+        ${s.enrolled_at&&!s._isInactive?`<div style="font-size:10px;color:#6b7280;margin-top:1px">입학 ${s.enrolled_at}</div>`:''}
+        ${s.withdrawn_at&&s._isInactive?`<div style="font-size:10px;color:var(--danger);margin-top:1px">퇴원 ${s.withdrawn_at}</div>`:''}
+      </td>
+      <td style="padding:8px 4px;text-align:center">
+        <select data-sid="${s.id}" data-field="attendance" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:#fff">
+          <option value="present" ${(sl.attendance||'present')==='present'?'selected':''}>정시</option>
+          <option value="late" ${sl.attendance==='late'?'selected':''}>지각</option>
+          <option value="absent" ${sl.attendance==='absent'?'selected':''}>결석</option>
+        </select>
+      </td>
+      <td style="padding:8px 4px;text-align:center">
+        <input type="text" data-sid="${s.id}" data-field="n_count" value="${sl.n_count||''}" placeholder="-"
+          style="width:60px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:center">
+      </td>
+      <td style="padding:8px 4px;text-align:center">
+        <select data-sid="${s.id}" data-field="homework_done" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:#fff">
+          <option value="true" ${sl.homework_done===true?'selected':''}>완료</option>
+          <option value="false" ${sl.homework_done===false||sl.homework_done===undefined?'selected':''}>미완료</option>
+        </select>
+      </td>
+      <td style="padding:8px 4px;text-align:center">
+        <input type="text" data-sid="${s.id}" data-field="test_score" value="${sl.test_score||''}" placeholder="-"
+          style="width:60px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:center">
+      </td>
+      <td style="padding:8px 4px">
+        <input type="text" data-sid="${s.id}" data-field="note" value="${sl.note||''}" placeholder="특이사항"
+          style="width:100%;min-width:80px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+      </td>
+      <td style="padding:4px;text-align:center">
+        ${s._isTemp ? `<button onclick="removeWlTempStudent('${s.id}')" title="제거" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:16px;line-height:1;padding:2px">×</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// 업무일지 저장
+async function saveWorkLog(){
+  const classId = document.getElementById('wl-class-select').value;
+  const date = document.getElementById('wl-date').value;
+  if(!classId || !date){alert('반과 날짜를 선택하세요');return;}
+
+  const btn = document.querySelector('#panel-worklog .btn-primary');
+  btn.textContent = '저장 중...'; btn.disabled = true;
+
+  try{
+    const logData = {
+      teacher_id: currentUser.id,
+      class_id: classId,
+      log_date: date,
+      progress: document.getElementById('wl-progress').value,
+      homework: document.getElementById('wl-homework').value,
+      memo: document.getElementById('wl-memo').value,
+      trial_class: document.getElementById('wl-trial').value || null,
+      new_student: document.getElementById('wl-new-student').value || null,
+      dropout: document.getElementById('wl-dropout').value || null,
+      updated_at: new Date().toISOString()
+    };
+
+    let logId = wlCurrentLogId;
+    if(logId){
+      await db.from('work_logs').update(logData).eq('id', logId);
+    } else {
+      const{data} = await db.from('work_logs').insert(logData).select().single();
+      logId = data.id;
+      wlCurrentLogId = logId;
+    }
+
+    // 학생별 데이터 저장
+    const rows = document.querySelectorAll('#wl-student-tbody tr');
+    for(const row of rows){
+      const sid = row.querySelector('[data-field="attendance"]')?.dataset.sid;
+      if(!sid) continue;
+      const attendance = row.querySelector('[data-field="attendance"]').value;
+      const n_count = row.querySelector('[data-field="n_count"]').value;
+      const homework_done = row.querySelector('[data-field="homework_done"]').value === 'true';
+      const test_score = row.querySelector('[data-field="test_score"]').value;
+      const note = row.querySelector('[data-field="note"]').value;
+
+      // temp_ 접두사인 경우 직접 입력 임시학생 → student_id null로 저장
+      // (다른 반 학생은 실제 uuid이므로 그대로 저장)
+      const realSid = sid.startsWith('temp_') ? null : sid;
+
+      // upsert (temp_ 학생은 note에 이름 포함)
+      const tempInfo = sid.startsWith('temp_') ? wlTempStudents.find(t=>t.id===sid) : null;
+      const noteValue = tempInfo ? `[${tempInfo.name}${tempInfo.school?' · '+tempInfo.school:''}] ${note}` : note;
+
+      if(realSid){
+        await db.from('work_log_students').upsert({
+          log_id: logId, student_id: realSid,
+          attendance, n_count: n_count || null,
+          homework_done, test_score, note: noteValue
+        }, {onConflict: 'log_id,student_id'});
+      } else if(tempInfo) {
+        // 직접 입력 임시학생 - 기존 기록 있는지 확인 후 insert
+        const existing = await db.from('work_log_students')
+          .select('id').eq('log_id',logId).is('student_id',null)
+          .ilike('note',`[${tempInfo.name}%`).single();
+        if(existing.data){
+          await db.from('work_log_students').update({
+            attendance, n_count: n_count || null,
+            homework_done, test_score, note: noteValue
+          }).eq('id', existing.data.id);
+        } else {
+          await db.from('work_log_students').insert({
+            log_id: logId, student_id: null,
+            attendance, n_count: n_count || null,
+            homework_done, test_score, note: noteValue
+          });
+        }
+      }
+    }
+
+    alert('✅ 업무일지가 저장됐습니다!');
+  // 저장 완료 후 해당 반 이미지 버튼 표시 + 목록 갱신
+  const copyBtn = document.getElementById('wl-copy-btn');
+  if(copyBtn) copyBtn.style.display = 'inline-flex';
+  // 날짜별 목록 갱신 (새로 저장된 항목 반영)
+  wlLoadDayLogs();
+  }catch(err){
+    alert('저장 오류: ' + err.message);
+  }
+  btn.textContent = '💾 저장'; btn.disabled = false;
+}
+
+// ===== 선생님 프로필 사진 업로드 =====
+async function uploadProfilePhoto(e){
+  const file = e.target.files[0];
+  if(!file) return;
+
+  // 즉시 미리보기
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById('atAvatar').innerHTML =
+      `<img src="${ev.target.result}" style="width:100%;height:100%;object-fit:cover">`;
+  };
+  reader.readAsDataURL(file);
+
+  try{
+    const fn = `profiles/${currentUser.id}_${Date.now()}.jpg`;
+    const{error:ue} = await db.storage.from('homework-photos').upload(fn, file, {contentType:file.type, upsert:true});
+    if(ue) throw ue;
+    const{data:ud} = db.storage.from('homework-photos').getPublicUrl(fn);
+    const photoUrl = ud.publicUrl;
+
+    const{error:de} = await db.from('users').update({profile_image_url: photoUrl}).eq('id', currentUser.id);
+    if(de) throw de;
+
+    currentUser.profile_image_url = photoUrl;
+    // localStorage 갱신 (자동로그인 시 최신 사진 유지)
+    alert('✅ 프로필 사진이 변경됐습니다!');
+  }catch(err){
+    alert('업로드 오류: ' + err.message);
+    const avatarEl = document.getElementById('atAvatar');
+    avatarEl.innerHTML = '';
+    avatarEl.textContent = currentUser.name[0];
+  }
+  e.target.value = '';
+}
+
+// ===== 학생 프로필 아바타 초기화 =====
+function initStudentAvatar(){
+  var el = document.getElementById('studentProfileAvatar');
+  if(!el) return;
+  if(currentUser.profile_image_url){
+    el.innerHTML = '<img src="'+currentUser.profile_image_url+'" style="width:100%;height:100%;object-fit:cover">';
+  } else {
+    el.textContent = currentUser.name[0]||'?';
+  }
+}
+
+// ===== 학생 프로필 사진 업로드 =====
+async function uploadStudentProfilePhoto(e){
+  const file = e.target.files[0];
+  if(!file) return;
+
+  // 즉시 미리보기
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    var el = document.getElementById('studentProfileAvatar');
+    if(el) el.innerHTML = '<img src="'+ev.target.result+'" style="width:100%;height:100%;object-fit:cover">';
+  };
+  reader.readAsDataURL(file);
+
+  try{
+    const fn = 'profiles/student_'+currentUser.id+'_'+Date.now()+'.jpg';
+    const{error:ue} = await db.storage.from('homework-photos').upload(fn, file, {contentType:file.type, upsert:true});
+    if(ue) throw ue;
+    const{data:ud} = db.storage.from('homework-photos').getPublicUrl(fn);
+    const photoUrl = ud.publicUrl;
+    const{error:de} = await db.from('users').update({profile_image_url: photoUrl}).eq('id', currentUser.id);
+    if(de) throw de;
+    currentUser.profile_image_url = photoUrl;
+    alert('✅ 프로필 사진이 등록됐습니다!');
+  }catch(err){
+    alert('업로드 오류: '+err.message);
+    initStudentAvatar();
+  }
+  e.target.value = '';
+}
+
+// ===== 선생님 프로필 사진 크게 보기 =====
+function viewTeacherProfilePhoto(){
+  var photo = window._currentTeacherPhoto;
+  var name = window._currentTeacherName||'선생님';
+  if(!photo){
+    alert(name+' 선생님\n(등록된 프로필 사진이 없습니다)');
+    return;
+  }
+  // 이미지 뷰어로 열기
+  openImgViewer(photo, name+' 선생님');
+  closeStSidebar();
+}
+
+// ===== 수학 기호 삽입 =====
+let najeImgSize = 70; // 초기 이미지 크기 (%)
+
+function insertMathSymbol(sym){
+  // 숨겨진 textarea에 값 추가
+  const ta = document.getElementById('naje-answer-input');
+  if(!ta) return;
+  ta.value = ta.value + sym;
+  syncAnswerDisplay();
+  saveNajeAnswer();
+}
+
+function backspaceNajeAnswer(){
+  const ta = document.getElementById('naje-answer-input');
+  if(!ta || !ta.value) return;
+  // 마지막 문자 삭제 (서로게이트 쌍 고려)
+  const arr = [...ta.value];
+  arr.pop();
+  ta.value = arr.join('');
+  syncAnswerDisplay();
+  saveNajeAnswer();
+}
+
+function clearNajeAnswer(){
+  const ta = document.getElementById('naje-answer-input');
+  if(!ta) return;
+  ta.value = '';
+  syncAnswerDisplay();
+  saveNajeAnswer();
+}
+
+function syncAnswerDisplay(){
+  const ta = document.getElementById('naje-answer-input');
+  const disp = document.getElementById('naje-answer-text');
+  if(!disp) return;
+  var val = ta ? ta.value : '';
+  disp.textContent = val;
+  // 빈 값이면 placeholder 스타일
+  var display = document.getElementById('naje-answer-display');
+  if(display){
+    if(!val){
+      disp.textContent = '';
+      display.style.color = '#9ca3af';
+    } else {
+      display.style.color = '#1a1a2e';
+    }
+  }
+}
+
+function focusAnswerDisplay(){
+  // 키패드 방식이므로 별도 동작 없음 (커서 깜빡임은 CSS로)
+}
+
+function adjustNajeImgSize(delta){
+  najeImgSize = Math.min(150, Math.max(30, najeImgSize + delta));
+  const img = document.getElementById('naje-problem-img');
+  const label = document.getElementById('naje-img-size-label');
+  if(img) img.style.width = najeImgSize + '%';
+  if(label) label.textContent = najeImgSize + '%';
+}
+
+// ===== 학생 일일N제 =====
+let studentNajeProblems = [];
+let studentNajeCurrentIdx = 0;
+let studentNajeAnswers = {};
+let studentNajeSetId = null;
+
+async function loadStudentNaje(){
+  document.getElementById('student-naje-list').style.display = 'block';
+  document.getElementById('student-naje-step-select').style.display = 'none';
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'none';
+
+  // 이 학생에게 부여된 N제 목록 조회 (naje_assignments)
+  const{data: assignments} = await db.from('naje_assignments')
+    .select('set_id,steps').eq('student_id', currentUser.id);
+  const assignedSetIds = (assignments||[]).map(function(a){return a.set_id;});
+  window._studentNajeAssignments = assignments||[];
+
+  let sets = [];
+  if(assignedSetIds.length > 0){
+    const{data} = await db.from('naje_sets')
+      .select('*').in('id', assignedSetIds).order('title',{ascending:true});
+    sets = data||[];
+  }
+  window._studentNajeSets = sets;
+
+  const sel = document.getElementById('student-naje-select');
+  const hint = document.getElementById('student-naje-select-hint');
+  if(!sel) return;
+
+  if(!sets.length){
+    sel.innerHTML = '<option value="">-- 부여된 N제가 없습니다 --</option>';
+    if(hint) hint.innerHTML = '<div style="font-size:32px;margin-bottom:8px">📭</div><div>선생님이 아직 N제를 부여하지 않았어요</div>';
+    return;
+  }
+  sel.innerHTML = '<option value="">-- N제를 선택하세요 --</option>'
+    + sets.map(function(s){
+      return '<option value="'+s.id+'">'+s.title+(s.week_number?' ('+s.week_number+'주차)':'')+'</option>';
+    }).join('');
+  if(hint) hint.innerHTML = '<div style="font-size:32px;margin-bottom:8px">👆</div><div>위에서 N제를 선택해주세요</div>';
+}
+
+function onStudentNajeSelect(){
+  var setId = document.getElementById('student-naje-select').value;
+  if(!setId) return;
+  var s = (window._studentNajeSets||[]).find(function(x){return x.id===setId;});
+  if(!s) return;
+  openStudentNajeViewer(setId, s.title);
+}
+
+
+// N제 선택 → 단계 선택 화면
+let _najeAllProblems = []; // 해당 N제 전체 문제 캐시
+let _najeCurrentSetTitle = '';
+let _najeCurrentStep = null; // 현재 선택된 단계
+
+async function openStudentNajeViewer(setId, title){
+  _najeCurrentSetTitle = title;
+  studentNajeSetId = setId;
+  document.getElementById('student-naje-step-title').textContent = title;
+
+  // 전체 문제 로드
+  const{data: problems} = await db.from('naje_problems')
+    .select('*').eq('set_id', setId).order('problem_number');
+  _najeAllProblems = problems || [];
+  if(!_najeAllProblems.length){ alert('문제가 없습니다.'); return; }
+
+  // 기존 답안 로드
+  const{data: savedAnswers} = await db.from('naje_answers')
+    .select('problem_id,answer').eq('student_id',currentUser.id).eq('set_id',setId);
+  studentNajeAnswers = {};
+  if(savedAnswers) savedAnswers.forEach(function(a){ studentNajeAnswers[a.problem_id] = a.answer; });
+
+  // 부여된 단계 계산 - naje_assignments에서 해당 N제의 steps 조회
+  var assignment = (window._studentNajeAssignments||[]).find(function(a){return a.set_id===setId;});
+  var assignedSteps = assignment ? (assignment.steps||[]) : [];
+
+  // 단계 선택 그리드 렌더
+  renderStepSelectGrid(assignedSteps);
+
+  document.getElementById('student-naje-list').style.display = 'none';
+  document.getElementById('student-naje-step-select').style.display = 'block';
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'none';
+  pushNavState({nav:'step-select'});
+}
+
+function renderStepSelectGrid(assignedSteps){
+  const grid = document.getElementById('student-naje-step-grid');
+  const stepsToShow = assignedSteps.length > 0 ? assignedSteps : NAJE_STAGES.map(function(s){return s.step;});
+
+  let html = '';
+  stepsToShow.forEach(function(stepNum){
+    var stageInfo = NAJE_STAGES.find(function(s){return s.step===stepNum;})
+      || (stepNum===11?{step:11,name:NAJE_KILLER_NAME,from:81,to:999}:null);
+    if(!stageInfo) return;
+
+    // 이 단계 문제들
+    var stepProblems = _najeAllProblems.filter(function(p){
+      return p.problem_number >= stageInfo.from && p.problem_number <= stageInfo.to;
+    });
+    if(!stepProblems.length) return;
+
+    // 제출된 답안 수 (1개라도 제출하면 완료 처리)
+    var answered = stepProblems.filter(function(p){ return !!studentNajeAnswers[p.id]; }).length;
+    var total = stepProblems.length;
+    // 맞은 문항 계산
+    var correct = stepProblems.filter(function(p){
+      var my = (studentNajeAnswers[p.id]||'').trim();
+      return my && p.correct_answer && normalizeAnswer(my)===normalizeAnswer(p.correct_answer);
+    }).length;
+    var pct = Math.round(answered/total*100);
+    var isComplete = answered > 0; // 1개 이상 제출하면 완료 (다시 풀기는 선생님만 가능)
+    var icon = najeStageIcon(stageInfo.name);
+    var statusColor = isComplete?'#3B6D11':'#6b7280';
+    var statusBg = isComplete?'#EAF3DE':'#f5f6fa';
+    // 정답이 부여된 문제 수 기준으로 표시, 없으면 제출수/전체
+    var hasCorrectAnswers = stepProblems.some(function(p){ return !!p.correct_answer; });
+    var statusLabel = isComplete
+      ? (hasCorrectAnswers ? '✅ '+correct+'/'+total : '✅ '+answered+'/'+total)
+      : '미시작';
+
+    var clickAction = isComplete ? 'viewNajeStepResult('+stepNum+')' : 'startNajeStep('+stepNum+')';
+    var actionLabel = isComplete ? '결과 보기 ›' : '시작하기 ›';
+    var actionColor = isComplete ? '#3B6D11' : '#6b7280';
+    html += '<div onclick="'+clickAction+'" style="background:#fff;border:2px solid '+(isComplete?'#86efac':'var(--border)')+';border-radius:14px;padding:14px;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:12px;">'
+      + '<div style="width:44px;height:44px;border-radius:12px;background:'+(isComplete?'#3B6D11':'#1a1a2e')+';display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">'+icon+'</div>'
+      + '<div style="flex:1;min-width:0;">'
+      + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">'
+      + '<span style="font-size:11px;font-weight:700;background:#1a1a2e;color:#fff;padding:2px 7px;border-radius:100px;">'+(stepNum<=10?stepNum+'단계':'킬러')+'</span>'
+      + '<span style="font-size:13px;font-weight:700;color:#1a1a2e;">'+stageInfo.name+'</span>'
+      + '</div>'
+      + '<div style="font-size:11px;color:#6b7280;margin-bottom:5px;">'+stageInfo.from+'~'+Math.min(stageInfo.to, _najeAllProblems.length)+'번 · '+total+'문제</div>'
+      + '<div style="background:#e5e7eb;border-radius:100px;height:5px;overflow:hidden;">'
+      + '<div style="width:'+pct+'%;height:100%;background:'+statusColor+';border-radius:100px;"></div>'
+      + '</div>'
+      + '</div>'
+      + '<div style="text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:4px;">'
+      + '<span style="font-size:11px;font-weight:700;padding:4px 9px;border-radius:100px;background:'+statusBg+';color:'+statusColor+';">'+statusLabel+'</span>'
+      + '<span style="font-size:12px;font-weight:600;color:'+actionColor+';">'+actionLabel+'</span>'
+      + '</div>'
+      + '</div>';
+  });
+
+  if(!html) html = '<div class="card" style="text-align:center;padding:24px;color:#6b7280"><p>풀 수 있는 단계가 없습니다.<br>선생님께 단계 부여를 요청하세요.</p></div>';
+  grid.innerHTML = html;
+}
+
+function closeStudentNajeStepSelect(){
+  document.getElementById('student-naje-step-select').style.display = 'none';
+  document.getElementById('student-naje-list').style.display = 'block';
+}
+
+// 단계 선택 → 해당 단계 문제만 풀기
+function startNajeStep(stepNum){
+  _najeCurrentStep = stepNum;
+  var stageInfo = NAJE_STAGES.find(function(s){return s.step===stepNum;})
+    || (stepNum===11?{step:11,name:NAJE_KILLER_NAME,from:81,to:999}:null);
+  if(!stageInfo) return;
+
+  // 해당 단계 문제만 필터
+  studentNajeProblems = _najeAllProblems.filter(function(p){
+    return p.problem_number >= stageInfo.from && p.problem_number <= stageInfo.to;
+  });
+  if(!studentNajeProblems.length){ alert('이 단계에 문제가 없습니다.'); return; }
+
+  studentNajeCurrentIdx = 0;
+
+  // 뷰어 제목에 단계명 표시
+  document.getElementById('student-naje-viewer-title').textContent =
+    _najeCurrentSetTitle + ' · ' + (stepNum<=10?stepNum+'단계 ':' ') + stageInfo.name;
+
+  document.getElementById('student-naje-step-select').style.display = 'none';
+  document.getElementById('student-naje-viewer').style.display = 'block';
+  document.getElementById('student-naje-result').style.display = 'none';
+  pushNavState({nav:'viewer'});
+
+  _najeNavOpen = -1;
+  renderNajeProblemNav();
+  showNajeProblem(0);
+}
+
+let _najeNavOpen = -1; // -1: 자동(현재 문제 속한 그룹)
+
+function renderNajeProblemNav(){
+  const nav = document.getElementById('naje-problem-nav');
+  if(!nav) return;
+
+  const mapped = studentNajeProblems.map(function(p){ return Object.assign({}, p, {number: p.problem_number}); });
+  const groups = najeGroupByStep(mapped);
+
+  // 현재 문제가 속한 그룹 자동 감지
+  const currNum = (studentNajeProblems[studentNajeCurrentIdx]||{}).problem_number;
+  let autoOpen = 0;
+  groups.forEach(function(g,gi){ if(g.problems.some(function(p){return p.problem_number===currNum;})) autoOpen=gi; });
+  if(_najeNavOpen === -1) _najeNavOpen = autoOpen;
+
+  // 문제 id → 전체 인덱스 맵
+  const idxMap = {};
+  studentNajeProblems.forEach(function(p,i){ idxMap[p.id] = i; });
+
+  let html = '';
+  groups.forEach(function(g, gi){
+    const isOpen = gi === _najeNavOpen;
+    const hasCurr = g.problems.some(function(p){ return idxMap[p.id] === studentNajeCurrentIdx; });
+    const done = g.problems.filter(function(p){ return !!studentNajeAnswers[p.id]; }).length;
+    const total = g.problems.length;
+    const borderC = isOpen ? 'var(--primary)' : hasCurr ? '#93c5fd' : 'var(--border)';
+    const hdrBg  = isOpen ? '#EBF5FF' : hasCurr ? '#f0f7ff' : '#f9fafb';
+    const tagBg  = isOpen ? 'var(--primary)' : hasCurr ? '#3b82f6' : '#64748b';
+    const stepTxt = g.step <= 10 ? g.step+'단계' : '킬러';
+    const chevron = isOpen ? '▲' : '▼';
+    const chevC   = isOpen ? 'var(--primary)' : '#9ca3af';
+    const doneC   = done === total ? '#d1fae5' : '#f0f0f0';
+    const doneTxtC= done === total ? '#059669' : '#6b7280';
+
+    html += '<div style="margin-bottom:5px;border:1.5px solid '+borderC+';border-radius:10px;overflow:hidden;">';
+    html += '<div onclick="_najeNavOpen=_najeNavOpen==='+gi+'?-1:'+gi+';renderNajeProblemNav()" style="display:flex;align-items:center;cursor:pointer;background:'+hdrBg+';padding:0;">'
+      + '<div style="display:flex;align-items:stretch;gap:0;height:34px;flex:1;min-width:0;">'
+      + '<div style="background:#1a1a2e;clip-path:polygon(0 0,80% 0,100% 50%,80% 100%,0 100%);padding:0 18px 0 10px;color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;min-width:52px;white-space:nowrap;flex-shrink:0;">'+stepTxt+'</div>'
+      + '<div style="background:'+tagBg+';clip-path:polygon(0 0,calc(100% - 10px) 0,100% 50%,calc(100% - 10px) 100%,0 100%);padding:0 16px 0 7px;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;gap:3px;flex-shrink:0;">'+najeStageIcon(g.name)+' '+g.name+'</div>'
+      + '<div style="padding:0 6px;display:flex;align-items:center;flex:1;min-width:0;">'
+      + '<span style="background:'+doneC+';color:'+doneTxtC+';padding:1px 7px;border-radius:100px;font-weight:600;font-size:10px;white-space:nowrap;">'+done+'/'+total+'</span>'
+      + '</div></div>'
+      + '<div style="padding:0 12px;font-size:12px;color:'+chevC+';font-weight:700;">'+chevron+'</div>'
+      + '</div>';
+
+    if(isOpen){
+      html += '<div style="padding:8px 10px;background:#fff;display:flex;flex-wrap:wrap;gap:5px;">';
+      g.problems.forEach(function(p){
+        const i = idxMap[p.id];
+        const isDone = !!studentNajeAnswers[p.id];
+        const isCurr = i === studentNajeCurrentIdx;
+        let bg, color, border;
+        if(isCurr){ bg='#1070C2'; color='#fff'; border='#1070C2'; }
+        else if(isDone){ bg='var(--primary)'; color='#fff'; border='var(--primary)'; }
+        else { bg='#fff'; color='#1a1a2e'; border='var(--border)'; }
+        html += '<button id="naje-nav-'+i+'" onclick="showNajeProblem('+i+')" style="width:36px;height:36px;border-radius:8px;border:1.5px solid '+border+';background:'+bg+';color:'+color+';cursor:pointer;font-size:13px;font-weight:600;">'+p.problem_number+'</button>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  nav.innerHTML = html;
+}
+
+function showNajeProblem(idx){
+  if(idx < 0 || idx >= studentNajeProblems.length) return;
+  // 현재 풀이 임시 저장
+  const prev = studentNajeProblems[studentNajeCurrentIdx];
+  const ansEl = document.getElementById('naje-answer-input');
+  if(prev && ansEl) studentNajeAnswers[prev.id] = ansEl.value;
+
+  studentNajeCurrentIdx = idx;
+  const p = studentNajeProblems[idx];
+  const levelInfo = getLevelInfoByNum(p.problem_number);
+
+  document.getElementById('naje-problem-img').src = p.image_url;
+  document.getElementById('naje-current-label').textContent = p.problem_number + '번 문제';
+  document.getElementById('naje-current-level').textContent = levelInfo ? levelInfo.name : '';
+  document.getElementById('naje-problem-counter').textContent = (idx+1) + ' / ' + studentNajeProblems.length;
+  document.getElementById('naje-prev-btn').disabled = idx === 0;
+  document.getElementById('naje-next-btn').disabled = idx === studentNajeProblems.length - 1;
+  document.getElementById('naje-answer-input').value = studentNajeAnswers[p.id] || '';
+  syncAnswerDisplay();
+
+  _najeNavOpen = -1; // 현재 문제 그룹 자동 열기
+  renderNajeProblemNav();
+}
+
+function navigateNajeProblem(dir){
+  const curr = studentNajeProblems[studentNajeCurrentIdx];
+  if(curr) studentNajeAnswers[curr.id] = document.getElementById('naje-answer-input').value;
+  showNajeProblem(studentNajeCurrentIdx + dir);
+}
+
+// 다음 문제로 이동 (현재 풀이 자동 저장)
+function najeAutoSaveAndNext(){
+  const curr = studentNajeProblems[studentNajeCurrentIdx];
+  if(curr) studentNajeAnswers[curr.id] = document.getElementById('naje-answer-input').value;
+  const next = studentNajeCurrentIdx + 1;
+  if(next < studentNajeProblems.length){
+    showNajeProblem(next);
+  }
+}
+
+// 최종 제출
+async function najeSubmitAll(){
+  // 현재 풀이 저장
+  const curr = studentNajeProblems[studentNajeCurrentIdx];
+  if(curr) studentNajeAnswers[curr.id] = document.getElementById('naje-answer-input').value;
+
+  const total = studentNajeProblems.length;
+  const answered = Object.keys(studentNajeAnswers).filter(id => studentNajeAnswers[id]?.trim()).length;
+
+  if(answered < total){
+    const go = confirm(`아직 풀지 않은 문제가 ${total - answered}개 있어요. 그래도 제출할까요?`);
+    if(!go) return;
+  }
+
+  const btn = event?.target || document.querySelector('[onclick="najeSubmitAll()"]');
+  if(btn){ btn.textContent = '제출 중...'; btn.disabled = true; }
+
+  try{
+    // 모든 답안 DB에 upsert
+    const upserts = studentNajeProblems
+      .filter(p => studentNajeAnswers[p.id]?.trim())
+      .map(p => ({
+        student_id: currentUser.id,
+        problem_id: p.id,
+        set_id: studentNajeSetId,
+        answer: studentNajeAnswers[p.id],
+        answered_at: new Date().toISOString()
+      }));
+
+    if(upserts.length > 0){
+      const {error} = await db.from('naje_answers').upsert(upserts, {onConflict:'student_id,problem_id'});
+      if(error) throw error;
+    }
+
+    // 결과 화면으로 이동
+    document.getElementById('student-naje-viewer').style.display = 'none';
+    document.getElementById('student-naje-result').style.display = 'block';
+    document.getElementById('naje-result-title').textContent =
+      document.getElementById('student-naje-viewer-title').textContent;
+    najeRenderResult();
+
+  }catch(err){
+    alert('제출 오류: ' + err.message);
+    if(btn){ btn.textContent = '📝 최종 제출'; btn.disabled = false; }
+  }
+}
+
+// 결과 화면 렌더링
+
+// ===== 선생님 N제 결과 확인 =====
+async function initNajeResultTab(){
+  // 반 목록 채우기
+  const classSel = document.getElementById('naje-result-class-select');
+  if(classSel){
+    classSel.innerHTML = '<option value="">전체 학생</option>';
+    (classes||[]).forEach(function(c){
+      classSel.innerHTML += '<option value="'+c.id+'">'+c.name+'</option>';
+    });
+  }
+
+  // 학생 드롭다운 초기화
+  const studentSel = document.getElementById('naje-result-student-select');
+  studentSel.innerHTML = '<option value="">학생 선택</option>';
+  studentSel.disabled = true;
+
+  // N제 목록 로드
+  const sel = document.getElementById('naje-result-set-select');
+  sel.innerHTML = '<option value="">N제를 선택하세요</option>';
+  const{data} = await db.from('naje_sets')
+    .select('id,title,total_problems,target_grade')
+    .order('title',{ascending:true});
+  (data||[]).forEach(function(s){
+    sel.innerHTML += '<option value="'+s.id+'">'+(s.target_grade?'['+s.target_grade+'] ':'')+s.title+' ('+s.total_problems+'문제)</option>';
+  });
+}
+
+// 반 선택 → 학생 드롭다운 갱신
+function loadNajeResultByClass(){
+  const classId = document.getElementById('naje-result-class-select').value;
+  const studentSel = document.getElementById('naje-result-student-select');
+  studentSel.innerHTML = '<option value="">전체 학생</option>';
+  const filtered = classId
+    ? students.filter(function(s){ return s.class_id===classId && s.status==='active'; })
+    : students.filter(function(s){ return s.status==='active'; });
+  filtered.sort(function(a,b){return a.name.localeCompare(b.name);});
+  filtered.forEach(function(s){
+    studentSel.innerHTML += '<option value="'+s.id+'">'+s.name+'</option>';
+  });
+  studentSel.disabled = filtered.length === 0;
+  // 결과 초기화
+  document.getElementById('naje-result-summary').innerHTML = '';
+  document.getElementById('naje-result-detail').innerHTML = '';
+}
+
+// 학생 선택 → N제 선택 유지하며 결과 갱신
+function loadNajeResultByStudent(){
+  const setId = document.getElementById('naje-result-set-select').value;
+  if(setId) loadNajeResultDetail();
+}
+
+async function loadNajeResultStudents(){
+  const setId = document.getElementById('naje-result-set-select').value;
+  const summary = document.getElementById('naje-result-summary');
+  const detail = document.getElementById('naje-result-detail');
+  summary.innerHTML = '';
+  detail.innerHTML = '';
+  if(!setId) return;
+
+  // N제 선택 즉시 결과 로드 (현재 선택된 학생 기준)
+  loadNajeResultDetail();
+}
+
+async function loadNajeResultDetail(){
+  const setId = document.getElementById('naje-result-set-select').value;
+  const studentId = document.getElementById('naje-result-student-select').value;
+  const summary = document.getElementById('naje-result-summary');
+  const detail = document.getElementById('naje-result-detail');
+  if(!setId) return;
+
+  detail.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+
+  // 문제 목록 + 정답
+  const{data:problems} = await db.from('naje_problems')
+    .select('id,problem_number,correct_answer,image_url')
+    .eq('set_id',setId).order('problem_number');
+
+  if(studentId){
+    // 특정 학생 결과
+    const{data:answers} = await db.from('naje_answers')
+      .select('problem_id,answer,answered_at')
+      .eq('set_id',setId).eq('student_id',studentId);
+    const ansMap = {};
+    (answers||[]).forEach(function(a){ ansMap[a.problem_id] = a.answer; });
+
+    const{data:studentInfo} = await db.from('users').select('name').eq('id',studentId).single();
+    renderNajeTeacherStudentResult(problems||[], ansMap, studentInfo?.name||'학생');
+  } else {
+    // 전체 현황 (반 필터 반영)
+    const classId = document.getElementById('naje-result-class-select')?.value || '';
+    const{data:allAnswers} = await db.from('naje_answers')
+      .select('problem_id,student_id,answer').eq('set_id',setId);
+    let q = db.from('users').select('id,name,class_id').eq('teacher_id',currentUser.id).eq('status','active').order('name');
+    if(classId) q = q.eq('class_id', classId);
+    const{data:allStudents} = await q;
+    renderNajeTeacherOverview(problems||[], allAnswers||[], allStudents||[]);
+  }
+}
+
+function renderNajeTeacherStudentResult(problems, ansMap, studentName){
+  const detail = document.getElementById('naje-result-detail');
+  const setId = document.getElementById('naje-result-set-select').value;
+  const studentId = document.getElementById('naje-result-student-select').value;
+  let correct=0, wrong=0, unanswered=0;
+  problems.forEach(function(p){
+    const ans = ansMap[p.id]?.trim();
+    if(!ans){ unanswered++; return; }
+    if(p.correct_answer && normalizeAnswer(ans) === normalizeAnswer(p.correct_answer)) correct++;
+    else if(p.correct_answer) wrong++;
+  });
+  const total = problems.length;
+  const scored = correct+wrong;
+  const pct = scored>0 ? Math.round(correct/problems.filter(function(p){return p.correct_answer;}).length*100) : null;
+
+  let html = '<div class="card" style="margin-bottom:12px">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">'
+    + '<div style="font-size:15px;font-weight:700;">'+studentName+' 학생 결과</div>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">'
+    + '<div style="text-align:center;padding:12px;background:#EAF3DE;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#3B6D11">'+correct+'</div><div style="font-size:11px;color:#3B6D11">정답</div></div>'
+    + '<div style="text-align:center;padding:12px;background:#FCEBEB;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#E24B4A">'+wrong+'</div><div style="font-size:11px;color:#E24B4A">오답</div></div>'
+    + '<div style="text-align:center;padding:12px;background:#f5f6fa;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#6b7280">'+unanswered+'</div><div style="font-size:11px;color:#6b7280">미제출</div></div>'
+    + '<div style="text-align:center;padding:12px;background:#E6F1FB;border-radius:10px"><div style="font-size:22px;font-weight:700;color:var(--primary)">'+(pct!==null?pct+'%':'-')+'</div><div style="font-size:11px;color:var(--primary)">정답률</div></div>'
+    + '</div></div>';
+
+  const groups = najeGroupByStep(problems.map(function(p){return Object.assign({},p,{number:p.problem_number});}));
+  groups.forEach(function(g){
+    // 이 단계에 제출된 답안 수
+    var stepAnswered = g.problems.filter(function(p){ return !!(ansMap[p.id]||'').trim(); }).length;
+    var stepTotal = g.problems.length;
+    var stepLabel = stepAnswered > 0 ? ' ✅ '+stepAnswered+'/'+stepTotal : ' ⬜ 미시작';
+    var resetBtn = stepAnswered > 0 && studentId
+      ? '<button onclick="resetStudentStep(\''+studentId+'\',\''+setId+'\','+g.step+',\''+studentName+'\')" '
+        + 'style="font-size:11px;padding:3px 10px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#E24B4A;cursor:pointer;flex-shrink:0;">🔄 초기화</button>'
+      : '';
+
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin:12px 0 6px;">'
+      + najeStageHeaderHTML(g.step, g.name, stepLabel)
+      + resetBtn
+      + '</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:12px">';
+    g.problems.forEach(function(p){
+      const myAns = (ansMap[p.id]||'').trim();
+      const hasCorrect = !!p.correct_answer;
+      let statusBg, statusText, statusIcon;
+      if(!myAns){ statusBg='#f5f6fa'; statusText='#6b7280'; statusIcon='⬜ 미제출'; }
+      else if(!hasCorrect){ statusBg='#FEF3C7'; statusText='#92400E'; statusIcon='📝 '+myAns; }
+      else if(normalizeAnswer(myAns)===normalizeAnswer(p.correct_answer)){ statusBg='#EAF3DE'; statusText='#3B6D11'; statusIcon='✅ 정답'; }
+      else { statusBg='#FCEBEB'; statusText='#E24B4A'; statusIcon='❌ 오답'; }
+      html += '<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">'
+        + '<div style="background:#f5f6fa;padding:5px 8px;font-size:12px;font-weight:700">'+p.problem_number+'번</div>'
+        + '<img src="'+p.image_url+'" style="width:100%;display:block;cursor:zoom-in" onclick="openImgViewer(this.getAttribute(\'data-src\'))" data-src="'+p.image_url+'">'
+        + '<div style="padding:6px 8px;background:'+statusBg+'">'
+        + '<div style="font-size:11px;font-weight:700;color:'+statusText+'">'+statusIcon+'</div>'
+        + (myAns&&hasCorrect&&normalizeAnswer(myAns)!==normalizeAnswer(p.correct_answer)?'<div style="font-size:10px;color:#6b7280;margin-top:2px">내 답: '+myAns+' / 정답: '+p.correct_answer+'</div>':'')
+        + '</div>'
+        + '</div>';
+    });
+    html += '</div>';
+  });
+  detail.innerHTML = html;
+}
+
+// 선생님: 학생 특정 단계 답안 초기화
+async function resetStudentStep(studentId, setId, stepNum, studentName){
+  var stageInfo = NAJE_STAGES.find(function(s){return s.step===stepNum;})
+    || (stepNum===11?{step:11,name:NAJE_KILLER_NAME,from:81,to:999}:null);
+  if(!stageInfo) return;
+  var stepLabel = stepNum<=10 ? stepNum+'단계 '+stageInfo.name : '킬러';
+  if(!confirm(studentName+' 학생의 ['+stepLabel+'] 답안을 초기화할까요?\n학생이 해당 단계를 다시 풀 수 있게 됩니다.')) return;
+
+  // 해당 단계 문제 ID 목록 (현재 로드된 problems 기준)
+  var {data: problems} = await db.from('naje_problems')
+    .select('id,problem_number').eq('set_id',setId)
+    .gte('problem_number',stageInfo.from).lte('problem_number',stageInfo.to);
+  if(!problems||!problems.length){ alert('문제를 찾을 수 없습니다.'); return; }
+
+  var problemIds = problems.map(function(p){return p.id;});
+  var {error} = await db.from('naje_answers')
+    .delete()
+    .eq('student_id',studentId)
+    .eq('set_id',setId)
+    .in('problem_id',problemIds);
+
+  if(error){ alert('오류: '+error.message); return; }
+  alert('✅ '+studentName+' 학생의 ['+stepLabel+'] 답안이 초기화됐습니다.');
+  loadNajeResultDetail(); // 새로고침
+}
+
+function renderNajeTeacherOverview(problems, allAnswers, allStudents){
+  const detail = document.getElementById('naje-result-detail');
+  // 학생별 정답 수 집계
+  const ansMap = {}; // {studentId: {problemId: answer}}
+  allAnswers.forEach(function(a){
+    if(!ansMap[a.student_id]) ansMap[a.student_id] = {};
+    ansMap[a.student_id][a.problem_id] = a.answer;
+  });
+  const submittedIds = Object.keys(ansMap);
+  const totalWithAnswer = problems.filter(function(p){return p.correct_answer;}).length;
+
+  let html = '<div class="card" style="margin-bottom:12px">'
+    + '<div style="font-size:14px;font-weight:700;margin-bottom:10px">전체 제출 현황 ('+submittedIds.length+'명 제출)</div>';
+
+  if(!submittedIds.length){
+    html += '<div style="text-align:center;padding:20px;color:#6b7280">아직 제출한 학생이 없습니다</div></div>';
+    detail.innerHTML = html;
+    return;
+  }
+
+  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
+    + '<thead><tr style="background:#f5f6fa">'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:left">학생</th>'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center">정답</th>'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center">오답</th>'
+    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center">미제출</th>'
+    + (totalWithAnswer>0?'<th style="padding:8px;border:1px solid #e5e7eb;text-align:center">정답률</th>':'')
+    + '</tr></thead><tbody>';
+
+  submittedIds.forEach(function(sid){
+    const student = allStudents.find(function(s){return s.id===sid;});
+    const sName = student ? student.name : '알 수 없음';
+    const sAnswers = ansMap[sid];
+    let correct=0, wrong=0, unanswered=0;
+    problems.forEach(function(p){
+      const ans = (sAnswers[p.id]||'').trim();
+      if(!ans){ unanswered++; return; }
+      if(p.correct_answer && normalizeAnswer(ans)===normalizeAnswer(p.correct_answer)) correct++;
+      else if(p.correct_answer) wrong++;
+    });
+    const pct = totalWithAnswer>0 ? Math.round(correct/totalWithAnswer*100) : null;
+    html += '<tr>'
+      + '<td style="padding:8px;border:1px solid #e5e7eb;font-weight:600">'+sName+'</td>'
+      + '<td style="padding:8px;border:1px solid #e5e7eb;text-align:center;color:#3B6D11;font-weight:700">'+correct+'</td>'
+      + '<td style="padding:8px;border:1px solid #e5e7eb;text-align:center;color:#E24B4A;font-weight:700">'+wrong+'</td>'
+      + '<td style="padding:8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280">'+unanswered+'</td>'
+      + (totalWithAnswer>0?'<td style="padding:8px;border:1px solid #e5e7eb;text-align:center;font-weight:700;color:'+(pct>=70?'#3B6D11':pct>=40?'#d97706':'#E24B4A')+'">'+(pct!==null?pct+'%':'-')+'</td>':'')
+      + '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  detail.innerHTML = html;
+}
+
+// 정답 비교용 정규화 (공백 제거, 소문자, ① → 1 등)
+function normalizeAnswer(ans){
+  if(!ans) return '';
+  var s = ans.toString().trim().replace(/\s+/g,'');
+  // 원문자 ①②③④⑤ → 1,2,3,4,5
+  s = s.replace(/①/g,'1').replace(/②/g,'2').replace(/③/g,'3').replace(/④/g,'4').replace(/⑤/g,'5');
+  return s.toLowerCase();
+}
+
+
+// ── 완료된 단계 결과 보기 ───────────────────────────────────
+function viewNajeStepResult(stepNum){
+  _najeCurrentStep = stepNum;
+  var stageInfo = NAJE_STAGES.find(function(s){return s.step===stepNum;})
+    || (stepNum===11?{step:11,name:NAJE_KILLER_NAME,from:81,to:999}:null);
+  if(!stageInfo) return;
+
+  studentNajeProblems = _najeAllProblems.filter(function(p){
+    return p.problem_number >= stageInfo.from && p.problem_number <= stageInfo.to;
+  });
+  studentNajeCurrentIdx = 0;
+
+  var stepLabel = stepNum<=10 ? stepNum+'단계 · '+stageInfo.name : '🔥 킬러 · '+stageInfo.name;
+  document.getElementById('naje-result-title').textContent = _najeCurrentSetTitle + ' · ' + stepLabel;
+
+  document.getElementById('student-naje-step-select').style.display = 'none';
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'block';
+  pushNavState({nav:'result'});
+
+  najeRenderStepResult(stageInfo);
+}
+
+function najeRenderStepResult(stageInfo){
+  const list = document.getElementById('naje-result-list');
+  if(!list) return;
+
+  var problems = studentNajeProblems;
+
+  // 집계: 틀린개수/전체 형식 (미제출도 틀린 문항에 포함)
+  var total = problems.length;
+  var wrong = 0, correct = 0, noAnswer = 0;
+  problems.forEach(function(p){
+    var my = (studentNajeAnswers[p.id]||'').trim();
+    if(!my){ noAnswer++; wrong++; return; } // 미제출 → 틀린 문항으로 집계
+    if(!p.correct_answer){ return; } // 정답 없으면 집계 제외
+    if(normalizeAnswer(my)===normalizeAnswer(p.correct_answer)) correct++;
+    else wrong++;
+  });
+  var graded = correct + wrong;
+
+  // 헤더: 틀린개수/전체문항
+  var html = ''
+    + '<div style="background:linear-gradient(135deg,#1a1a2e,#2d3561);border-radius:16px;padding:20px;margin-bottom:16px;color:#fff;">'
+    + '<div style="font-size:11px;opacity:0.6;margin-bottom:6px;letter-spacing:0.5px;">'+(stageInfo.step<=10?stageInfo.step+'단계 · ':'')+stageInfo.name+'</div>'
+    + '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
+    + '<div>'
+    + '<div style="font-size:38px;font-weight:800;line-height:1;color:#86efac;">'+correct+'<span style="font-size:18px;font-weight:500;opacity:0.6;color:#fff;">/'+total+'</span></div>'
+    + '<div style="font-size:12px;opacity:0.7;margin-top:4px;">맞은 문항 / 전체</div>'
+    + '</div>'
+    + '<div style="display:flex;gap:16px;text-align:center;">'
+    + '<div><div style="font-size:22px;font-weight:800;color:#86efac;">'+correct+'</div><div style="font-size:11px;opacity:0.6;">정답</div></div>'
+    + '<div><div style="font-size:22px;font-weight:800;color:#fca5a5;">'+(wrong-noAnswer)+'</div><div style="font-size:11px;opacity:0.6;">오답</div></div>'
+    + (noAnswer>0?'<div><div style="font-size:22px;font-weight:800;opacity:0.4;">'+noAnswer+'</div><div style="font-size:11px;opacity:0.4;">미제출</div></div>':'')+'</div>'
+    + '</div>'
+    + '</div>';
+
+  // 바둑판 그리드 시작
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
+
+  problems.forEach(function(p, idx){
+    var my = (studentNajeAnswers[p.id]||'').trim();
+    var hasQr = p.qr_url && p.qr_url.startsWith('http');
+    var probNum = p.problem_number;
+
+    // 제출 상태 + 정답/오답 여부
+    var submitted = !!my;
+    var hasCorrect = !!p.correct_answer;
+    var isCorrect = submitted && hasCorrect && normalizeAnswer(my) === normalizeAnswer(p.correct_answer);
+    var isWrong = submitted && hasCorrect && !isCorrect;
+    var borderColor = isCorrect ? '#86efac' : isWrong ? '#fca5a5' : submitted ? '#93c5fd' : '#e5e7eb';
+    var headerBg = isCorrect ? '#EAF3DE' : isWrong ? '#FCEBEB' : submitted ? '#f0f7ff' : '#f9fafb';
+    var statusDot = isCorrect
+      ? '<span style="font-size:13px;font-weight:800;color:#3B6D11;">✅</span>'
+      : isWrong
+      ? '<span style="font-size:13px;font-weight:800;color:#E24B4A;">❌</span>'
+      : submitted
+      ? '<span style="width:7px;height:7px;border-radius:50%;background:#178EF5;display:inline-block;"></span>'
+      : '<span style="width:7px;height:7px;border-radius:50%;background:#d1d5db;display:inline-block;"></span>';
+
+    html += '<div style="border:1.5px solid '+borderColor+';border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column;">'
+
+      // 헤더
+      + '<div style="background:'+headerBg+';padding:7px 10px;display:flex;align-items:center;justify-content:space-between;">'
+      + '<span style="font-size:12px;font-weight:800;color:#1a1a2e;">'+probNum+'번</span>'
+      + '<div style="display:flex;align-items:center;gap:4px;">'
+      + statusDot
+      + '<span style="font-size:10px;font-weight:600;color:'+(isCorrect?'#3B6D11':isWrong?'#E24B4A':submitted?'#178EF5':'#9ca3af')+'">'+(isCorrect?'정답':isWrong?'오답':submitted?'제출':'미제출')+'</span>'
+      + '</div>'
+      + '</div>'
+
+      // 문제 이미지
+      + '<div style="flex:1;padding:6px;background:#fafafa;">'
+      + '<img src="'+p.image_url+'" style="width:100%;border-radius:6px;cursor:zoom-in;display:block;" onclick="openImgViewer(this.getAttribute(\'data-src\'))" data-src="'+p.image_url+'">'
+      + '</div>'
+
+      // 내 답만 표시 (정답 비공개)
+      + '<div style="padding:8px 10px;border-top:1px solid #f0f0f0;">'
+      + (my
+        ? '<div style="display:flex;align-items:center;gap:6px;">'
+          + '<span style="font-size:10px;color:#6b7280;font-weight:600;">내 답</span>'
+          + '<span style="font-size:15px;font-weight:800;color:#1a1a2e;">'+my+'</span>'
+          + '</div>'
+        : '<span style="font-size:10px;color:#9ca3af;">미제출</span>'
+      )
+      + '</div>'
+
+      // 해설 버튼
+      + (hasQr
+        ? '<a href="'+p.qr_url+'" target="_blank" rel="noopener noreferrer"'
+          + ' style="display:flex;align-items:center;justify-content:center;gap:5px;'
+          + 'padding:8px;background:linear-gradient(135deg,#ff6b6b,#ee5a24);'
+          + 'color:#fff;text-decoration:none;font-size:11px;font-weight:700;">▶ 해설 강의</a>'
+        : '<div style="padding:7px;background:#f5f6fa;text-align:center;font-size:10px;color:#9ca3af;">해설 없음</div>'
+      )
+      + '</div>';
+  });
+
+  html += '</div>';
+  list.innerHTML = html;
+}
+
+function najeRenderResult(){
+  const list = document.getElementById('naje-result-list');
+  if(!list) return;
+
+  const assignedSteps2 = Array.isArray(currentUser.naje_steps) ? currentUser.naje_steps : [];
+  const allowedProbNums = new Set();
+  if(assignedSteps2.length === 0){
+    for(var _n=1; _n<=9999; _n++) allowedProbNums.add(_n);
+  } else {
+    NAJE_STAGES.forEach(function(stage){
+      if(assignedSteps2.includes(stage.step)){
+        for(var n=stage.from; n<=stage.to; n++) allowedProbNums.add(n);
+      }
+    });
+    if(assignedSteps2.includes(11)){ for(var n=81; n<=9999; n++) allowedProbNums.add(n); }
+  }
+
+  // 집계: 미제출도 틀린 문항에 포함
+  var wrong=0, correct=0, noAnswer=0, total=studentNajeProblems.length;
+  studentNajeProblems.forEach(function(p){
+    var ans=(studentNajeAnswers[p.id]||'').trim();
+    if(!ans){ noAnswer++; wrong++; return; } // 미제출 → 틀린 문항
+    if(!p.correct_answer) return;
+    if(normalizeAnswer(ans)===normalizeAnswer(p.correct_answer)) correct++;
+    else wrong++;
+  });
+
+  // 헤더: 틀린개수/전체
+  var html = '<div style="background:linear-gradient(135deg,#1a1a2e,#2d3561);border-radius:16px;padding:20px;margin-bottom:16px;color:#fff;">'
+    + '<div style="font-size:11px;opacity:0.6;margin-bottom:6px;">제출 결과</div>'
+    + '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
+    + '<div><div style="font-size:38px;font-weight:800;line-height:1;color:#86efac;">'+correct+'<span style="font-size:18px;font-weight:500;opacity:0.6;color:#fff;">/'+total+'</span></div>'
+    + '<div style="font-size:12px;opacity:0.7;margin-top:4px;">맞은 문항 / 전체</div></div>'
+    + '<div style="display:flex;gap:16px;text-align:center;">'
+    + '<div><div style="font-size:22px;font-weight:800;color:#86efac;">'+correct+'</div><div style="font-size:11px;opacity:0.6;">정답</div></div>'
+    + '<div><div style="font-size:22px;font-weight:800;color:#fca5a5;">'+(wrong-noAnswer)+'</div><div style="font-size:11px;opacity:0.6;">오답</div></div>'
+    + (noAnswer>0?'<div><div style="font-size:22px;font-weight:800;opacity:0.4;">'+noAnswer+'</div><div style="font-size:11px;opacity:0.4;">미제출</div></div>':'')
+    + '</div></div></div>';
+
+  // 바둑판 2열 그리드
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
+
+  studentNajeProblems.forEach(function(p){
+    var probNum = p.problem_number;
+    var my = (studentNajeAnswers[p.id]||'').trim();
+    var hasQr = p.qr_url && p.qr_url.startsWith('http');
+    var canSee = hasQr && allowedProbNums.has(probNum);
+    var hasCorrect = !!p.correct_answer;
+    var isCorrect = my && hasCorrect && normalizeAnswer(my)===normalizeAnswer(p.correct_answer);
+    var isWrong = my && hasCorrect && !isCorrect;
+    var borderColor = isCorrect?'#86efac':isWrong?'#fca5a5':my?'#93c5fd':'#e5e7eb';
+    var headerBg = isCorrect?'#EAF3DE':isWrong?'#FCEBEB':my?'#f0f7ff':'#f9fafb';
+    var statusDot = isCorrect
+      ? '<span style="font-size:13px;font-weight:800;color:#3B6D11;">✅</span>'
+      : isWrong
+      ? '<span style="font-size:13px;font-weight:800;color:#E24B4A;">❌</span>'
+      : my ? '<span style="width:7px;height:7px;border-radius:50%;background:#178EF5;display:inline-block;"></span>'
+      : '<span style="width:7px;height:7px;border-radius:50%;background:#d1d5db;display:inline-block;"></span>';
+    var statusTxt = isCorrect?'정답':isWrong?'오답':my?'제출':'미제출';
+    var statusColor = isCorrect?'#3B6D11':isWrong?'#E24B4A':my?'#178EF5':'#9ca3af';
+
+    html += '<div style="border:1.5px solid '+borderColor+';border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column;">'
+      + '<div style="background:'+headerBg+';padding:7px 10px;display:flex;align-items:center;justify-content:space-between;">'
+      + '<span style="font-size:12px;font-weight:800;color:#1a1a2e;">'+probNum+'번</span>'
+      + '<div style="display:flex;align-items:center;gap:4px;">'+statusDot
+      + '<span style="font-size:10px;font-weight:600;color:'+statusColor+';">'+statusTxt+'</span>'
+      + '</div></div>'
+      + '<div style="flex:1;padding:6px;background:#fafafa;">'
+      + '<img src="'+p.image_url+'" style="width:100%;border-radius:6px;cursor:zoom-in;display:block;" onclick="openImgViewer(this.getAttribute(\'data-src\'))" data-src="'+p.image_url+'">'
+      + '</div>'
+      + '<div style="padding:8px 10px;border-top:1px solid #f0f0f0;">'
+      + (my
+        ? '<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:10px;color:#6b7280;font-weight:600;">내 답</span><span style="font-size:15px;font-weight:800;color:#1a1a2e;">'+my+'</span></div>'
+        : '<span style="font-size:10px;color:#9ca3af;">미제출</span>'
+      )
+      + '</div>'
+      + (canSee
+        ? '<a href="'+p.qr_url+'" target="_blank" rel="noopener noreferrer" style="display:flex;align-items:center;justify-content:center;gap:5px;padding:8px;background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;text-decoration:none;font-size:11px;font-weight:700;">▶ 해설 강의</a>'
+        : '<div style="padding:7px;background:#f5f6fa;text-align:center;font-size:10px;color:#9ca3af;">해설 없음</div>'
+      )
+      + '</div>';
+  });
+
+  html += '</div>';
+  list.innerHTML = html || '<div class="empty-state"><p>결과가 없습니다</p></div>';
+}
+
+// 다시 풀기로 돌아가기
+function najeBackToSolve(){
+  document.getElementById('student-naje-result').style.display = 'none';
+  document.getElementById('student-naje-viewer').style.display = 'block';
+  showNajeProblem(studentNajeCurrentIdx);
+}
+
+function backToStepSelect(){
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'none';
+  // 단계 그리드 새로고침 (진행 상황 반영)
+  const assignedSteps = Array.isArray(currentUser.naje_steps) ? currentUser.naje_steps : [];
+  renderStepSelectGrid(assignedSteps);
+  document.getElementById('student-naje-step-select').style.display = 'block';
+}
+
+// 개별 임시 저장 (로컬만) - 최종 제출 시 DB 저장
+function saveNajeAnswer(e){
+  const p = studentNajeProblems[studentNajeCurrentIdx];
+  if(!p) return;
+  studentNajeAnswers[p.id] = document.getElementById('naje-answer-input').value;
+  renderNajeProblemNav();
+}
+
+function closeStudentNajeViewer(){
+  studentNajeProblems = [];
+  studentNajeCurrentIdx = 0;
+  _najeCurrentStep = null;
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'none';
+  // 단계 선택 화면이 있으면 거기로, 없으면 목록으로
+  const stepSel = document.getElementById('student-naje-step-select');
+  if(stepSel && _najeAllProblems.length){
+    const assignedSteps = Array.isArray(currentUser.naje_steps) ? currentUser.naje_steps : [];
+    renderStepSelectGrid(assignedSteps);
+    stepSel.style.display = 'block';
+  } else {
+    document.getElementById('student-naje-list').style.display = 'block';
+  }
+}
+
+/* ══════════════════════════════════════════
+   공통 유틸리티
+══════════════════════════════════════════ */
+function toggleAccordion(header, bodyId){
+  var body;
+  if(bodyId && !bodyId.startsWith('_sr_pot_')){
+    body = document.getElementById(bodyId);
+  }
+  if(!body){
+    // 동적 행(addStudentRow)의 경우: header 바로 다음 sibling
+    body = header.nextElementSibling;
+    if(!body || !body.classList.contains('accordion-body')) return;
+  }
+  var isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  body.style.display = isOpen ? 'none' : 'block';
+  var arrow = header.querySelector('span:last-child');
+  if(arrow) arrow.textContent = isOpen ? '▼' : '▲';
+}
+
+function srTogglePotential(chk){
+  var row = chk.closest('.student-row');
+  var detail = row ? row.querySelector('.sr-potential-detail') : null;
+  if(detail) detail.style.display = chk.checked ? 'grid' : 'none';
+}
+
+function editTogglePotential(chk){
+  var detail = document.getElementById('edit-potential-detail');
+  if(detail) detail.style.display = chk.checked ? 'grid' : 'none';
+}
+
+/* ══════════════════════════════════════════
+   포텐셜 (Weekend Potential)
+══════════════════════════════════════════ */
+var _ptStudents = [];
+var _ptData     = {};
+var _ptAllTeachers = [];
+
+async function initPotential(){
+  var dateEl = document.getElementById('pt-date');
+  if(!dateEl.value){
+    var today = new Date();
+    var day = today.getDay();
+    var diff = day === 6 ? 0 : (day === 0 ? -1 : 6 - day);
+    var sat = new Date(today);
+    sat.setDate(today.getDate() + (day === 0 ? -1 : diff));
+    dateEl.value = sat.toISOString().split('T')[0];
+  }
+  await ptLoadFilters();
+  await ptLoadData();
+}
+
+async function ptLoad(){
+  await ptLoadData();
+}
+
+async function ptLoadFilters(){
+  var myBranchId = currentUser.branch_id || null;
+  var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
+  if(myBranchId) tQuery = tQuery.eq('branch_id', myBranchId);
+  var {data: teachers} = await tQuery;
+  _ptAllTeachers = teachers || [];
+  if(!_ptAllTeachers.find(function(t){ return t.id===currentUser.id; })){
+    _ptAllTeachers.unshift({id:currentUser.id, name:currentUser.name, branch_id:myBranchId});
+  }
+  ptRenderTeacherCheckboxes();
+}
+
+function ptRenderTeacherCheckboxes(){
+  var list = document.getElementById('pt-teacher-chk-list');
+  if(!list) return;
+  list.innerHTML = _ptAllTeachers.map(function(t){
+    var checked = (t.id === currentUser.id) ? ' checked' : '';
+    return '<label style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:13px" '
+      +'onmouseover="this.style.background=\'#F5F3FF\'" onmouseout="this.style.background=\'\'">'
+      +'<input type="checkbox" class="pt-teacher-chk" value="'+t.id+'"'+checked+' '
+        +'onchange="ptTeacherChkChange()" style="accent-color:#7C3AED"> '
+      +'<span>'+t.name+' T</span>'
+    +'</label>';
+  }).join('');
+  ptUpdateTeacherLabel();
+}
+
+function ptToggleTeacherDropdown(e){
+  e.stopPropagation();
+  var dd = document.getElementById('pt-teacher-dropdown');
+  var isOpen = dd.style.display !== 'none';
+  dd.style.display = isOpen ? 'none' : 'block';
+  if(!isOpen){
+    setTimeout(function(){
+      document.addEventListener('click', function handler(ev){
+        if(!dd.contains(ev.target) && ev.target.id !== 'pt-teacher-btn'){
+          dd.style.display = 'none';
+        }
+        document.removeEventListener('click', handler);
+      });
+    }, 10);
+  }
+}
+
+function ptTeacherAllToggle(chkAll){
+  document.querySelectorAll('.pt-teacher-chk').forEach(function(c){ c.checked = chkAll.checked; });
+  ptUpdateTeacherLabel();
+  ptLoadData();
+}
+
+function ptTeacherChkChange(){
+  var all = document.querySelectorAll('.pt-teacher-chk');
+  var allChk = document.getElementById('pt-chk-all');
+  var checked = Array.from(all).filter(function(c){ return c.checked; });
+  if(allChk) allChk.checked = checked.length === all.length;
+  ptUpdateTeacherLabel();
+  ptLoadData();
+}
+
+function ptUpdateTeacherLabel(){
+  var all = document.querySelectorAll('.pt-teacher-chk');
+  var checked = Array.from(all).filter(function(c){ return c.checked; });
+  var label = document.getElementById('pt-teacher-label');
+  if(!label) return;
+  if(checked.length === 0 || checked.length === all.length){
+    label.textContent = '전체';
+  } else if(checked.length === 1){
+    var id = checked[0].value;
+    var t = _ptAllTeachers.find(function(t){ return t.id===id; });
+    label.textContent = t ? t.name+' T' : '1명';
+  } else {
+    label.textContent = checked.length+'명 선택';
+  }
+}
+
+function ptGetSelectedTeacherIds(){
+  var checked = Array.from(document.querySelectorAll('.pt-teacher-chk:checked'));
+  return checked.map(function(c){ return c.value; });
+}
+
+async function ptLoadData(){
+  var date = document.getElementById('pt-date').value;
+  var wrap = document.getElementById('pt-table-wrap');
+  if(!date){
+    wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">🎯</div><p>날짜를 선택하면 포텐셜 학생 목록이 표시됩니다</p></div>';
+    return;
+  }
+  wrap.innerHTML = '<div class="loading"><div class="spinner" style="border-top-color:#7C3AED"></div>불러오는 중...</div>';
+
+  var selectedIds = ptGetSelectedTeacherIds();
+  if(!selectedIds.length){
+    selectedIds = _ptAllTeachers.map(function(t){ return t.id; });
+    if(!selectedIds.length) selectedIds = [currentUser.id];
+  }
+
+  // 포텐셜 대상: potential_yn=true인 학생 (학교 구분 무관)
+  var query = db.from('users')
+    .select('id,name,school,grade,teacher_id,school_level,potential_yn,potential_level,potential_attend_time')
+    .eq('role','student').eq('status','active').eq('potential_yn', true);
+
+  if(selectedIds.length === 1){
+    query = query.eq('teacher_id', selectedIds[0]);
+  } else {
+    query = query.in('teacher_id', selectedIds);
+  }
+
+  var {data: students} = await query.order('name');
+  _ptStudents = students || [];
+
+  _ptData = {};
+  if(_ptStudents.length){
+    var {data: records} = await db.from('weekend_potential')
+      .select('*').eq('session_date', date)
+      .in('student_id', _ptStudents.map(function(s){ return s.id; }));
+    (records||[]).forEach(function(r){ _ptData[r.student_id] = r; });
+  }
+
+  ptRenderTable();
+}
+
+function ptRenderTable(){
+  var wrap = document.getElementById('pt-table-wrap');
+  if(!_ptStudents.length){
+    wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">🎯</div><p>포텐셜 참여 학생이 없습니다<br><small style="color:#9ca3af">학생 정보 수정에서 포텐셜 참여를 체크해주세요</small></p></div>';
+    return;
+  }
+
+  var ATT_OPTIONS = [{v:'',l:''},{v:'present',l:'출석'},{v:'late',l:'지각'},{v:'absent',l:'결석'}];
+  var RESULT_OPTIONS = [{v:'',l:''},{v:'A',l:'A'},{v:'C',l:'C'},{v:'F',l:'F'}];
+  var WRONG_OPTIONS = [{v:'',l:''},{v:'true',l:'완료'},{v:'false',l:'미완료'}];
+
+  var html = '<style>'
+    +'.pt-tbl{width:100%;border-collapse:collapse;font-size:12px}'
+    +'.pt-tbl th{background:#5B21B6;color:#F5F3FF;padding:7px 5px;text-align:center;font-size:11px;font-weight:700;white-space:nowrap}'
+    +'.pt-tbl tr:nth-child(even){background:#F5F3FF}'
+    +'.pt-tbl tr:nth-child(odd){background:#fff}'
+    +'.pt-tbl td{padding:5px 4px;border-bottom:1px solid #DDD6FE;vertical-align:middle;text-align:center}'
+    +'.pt-inp{width:100%;padding:5px 4px;border:1.5px solid #C4B5FD;border-radius:5px;font-size:11px;outline:none;background:#fff;box-sizing:border-box;text-align:center}'
+    +'.pt-inp:focus{border-color:#7C3AED;box-shadow:0 0 0 2px rgba(124,58,237,0.15)}'
+    +'.pt-sel{width:100%;padding:5px 2px;border:1.5px solid #C4B5FD;border-radius:5px;font-size:11px;outline:none;background:#fff;cursor:pointer}'
+    +'.pt-sel:focus{border-color:#7C3AED}'
+    +'</style>';
+
+  html += '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
+    +'<table class="pt-tbl" style="min-width:640px"><thead><tr>'
+    +'<th style="text-align:left;padding-left:8px;min-width:60px">학교</th>'
+    +'<th style="min-width:36px">학년</th>'
+    +'<th style="text-align:left;padding-left:6px;min-width:52px">이름</th>'
+    +'<th style="min-width:44px">레벨</th>'
+    +'<th style="min-width:52px">시간</th>'
+    +'<th style="min-width:52px">출결</th>'
+    +'<th style="min-width:52px">오답</th>'
+    +'<th style="min-width:44px">점수</th>'
+    +'<th style="min-width:40px">결과</th>'
+    +'<th style="text-align:left;padding-left:6px;min-width:80px">비고</th>'
+    +'<th style="min-width:48px">📋멘트</th>'
+    +'</tr></thead><tbody>';
+
+  _ptStudents.forEach(function(s){
+    var r = _ptData[s.id] || {};
+    var curAtt    = (r.id && r.attendance) ? r.attendance : '';
+    var curResult = r.result || '';
+    var curWrong  = r.id ? (r.wrong_done===true?'true':r.wrong_done===false?'false':'') : '';
+
+    var attSel = ATT_OPTIONS.map(function(o){
+      return '<option value="'+o.v+'"'+(curAtt===o.v?' selected':'')+'>'+o.l+'</option>';
+    }).join('');
+    var resultSel = RESULT_OPTIONS.map(function(o){
+      return '<option value="'+o.v+'"'+(curResult===o.v?' selected':'')+'>'+o.l+'</option>';
+    }).join('');
+    var wrongSel = WRONG_OPTIONS.map(function(o){
+      return '<option value="'+o.v+'"'+(curWrong===o.v?' selected':'')+'>'+o.l+'</option>';
+    }).join('');
+
+    html += '<tr>'
+      +'<td style="text-align:left;padding-left:8px;color:#6b7280;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(s.school||'')+'">'+( s.school||'')+'</td>'
+      +'<td style="color:#6b7280;white-space:nowrap">'+( s.grade||'')+'</td>'
+      +'<td style="text-align:left;padding-left:6px;font-weight:700;color:#1e293b;white-space:nowrap">'+s.name+'</td>'
+      +'<td><input class="pt-inp pt-focusable" data-sid="'+s.id+'" data-field="level" value="'+(r.level!=null&&r.id?r.level:(s.potential_level||''))+'" placeholder="A/B"></td>'
+      +'<td><input class="pt-inp pt-focusable" data-sid="'+s.id+'" data-field="attend_time" value="'+(r.attend_time!=null&&r.id?r.attend_time:(s.potential_attend_time||''))+'" placeholder="14:00"></td>'
+      +'<td><select class="pt-sel pt-focusable" data-sid="'+s.id+'" data-field="attendance">'+attSel+'</select></td>'
+      +'<td><select class="pt-sel pt-focusable" data-sid="'+s.id+'" data-field="wrong_done">'+wrongSel+'</select></td>'
+      +'<td><input class="pt-inp pt-focusable" data-sid="'+s.id+'" data-field="score" value="'+(r.score||'')+'" placeholder="점수"></td>'
+      +'<td><select class="pt-sel pt-focusable" data-sid="'+s.id+'" data-field="result">'+resultSel+'</select></td>'
+      +'<td><input class="pt-inp pt-focusable" data-sid="'+s.id+'" data-field="note" value="'+(r.note||'')+'" placeholder="비고"></td>'
+      +'<td><button data-sid="'+s.id+'" onclick="ptCopyMent(this.dataset.sid)"'
+        +' style="padding:5px 4px;border:1px solid #C4B5FD;border-radius:5px;background:#F5F3FF;color:#5B21B6;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;width:100%">'
+        +'📋</button></td>'
+    +'</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
+  ptInitKeyNav();
+}
+function ptInitKeyNav(){
+  var focusables = Array.from(document.querySelectorAll('.pt-focusable'));
+  var cols = 7; // level,attend_time,attendance,wrong_done,score,result,note
+  focusables.forEach(function(el, idx){
+    var colIdx = idx % cols;
+    el.addEventListener('keydown', function(e){
+      if(e.key === 'Tab'){
+        e.preventDefault();
+        var next = e.shiftKey ? focusables[idx-1] : focusables[idx+1];
+        if(next) next.focus();
+      } else if(e.key === 'Enter'){
+        e.preventDefault();
+        var nextRowIdx = idx - colIdx + cols + 2; // 다음 행 attendance
+        var next = focusables[nextRowIdx];
+        if(next) next.focus();
+      }
+    });
+  });
+}
+
+async function ptSaveAll(){
+  var date = document.getElementById('pt-date').value;
+  if(!date){ alert('날짜를 선택하세요'); return; }
+  if(!_ptStudents.length){ alert('학생이 없습니다'); return; }
+
+  var btn = document.getElementById('pt-save-btn');
+  btn.textContent = '⏳ 저장 중...'; btn.disabled = true;
+
+  // 반드시 #pt-table-wrap 내부로 범위 한정 (주말N제 테이블과 data-sid 충돌 방지)
+  var wrap = document.getElementById('pt-table-wrap');
+
+  var upserts = _ptStudents.map(function(s){
+    function fv(field){
+      var el = wrap ? wrap.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]') : null;
+      return el ? el.value.trim() : '';
+    }
+    var wrongVal = fv('wrong_done');
+    var scoreVal = fv('score');
+    return {
+      student_id: s.id,
+      session_date: date,
+      level: fv('level') || null,
+      attend_time: fv('attend_time') || null,
+      attendance: fv('attendance') || null,
+      wrong_done: wrongVal === 'true' ? true : wrongVal === 'false' ? false : null,
+      score: scoreVal !== '' ? (parseInt(scoreVal) || null) : null,
+      result: fv('result') || null,
+      note: fv('note') || null,
+      created_by: currentUser.id
+    };
+  });
+
+  var {error} = await db.from('weekend_potential').upsert(upserts, {onConflict:'student_id,session_date'});
+  btn.textContent = '💾 전체 저장'; btn.disabled = false;
+  if(error){ alert('저장 오류: '+error.message); return; }
+  alert('✅ 저장 완료!');
+  await ptLoadData();
+}
+
+function ptCopyMent(studentId){
+  var s = _ptStudents.find(function(st){ return st.id===studentId; });
+  if(!s){ alert('학생 정보를 찾을 수 없습니다'); return; }
+
+  var wrap = document.getElementById('pt-table-wrap');
+  function fv(field){
+    var el = wrap ? wrap.querySelector('[data-sid="'+studentId+'"][data-field="'+field+'"]') : null;
+    return el ? el.value.trim() : '';
+  }
+
+  var date   = document.getElementById('pt-date') ? document.getElementById('pt-date').value : '';
+  var result = fv('result');
+  var score  = fv('score');
+  var wrong  = fv('wrong_done');
+  var note   = fv('note');
+
+  if(!result){ alert('결과(A/C/F)를 먼저 입력해주세요'); return; }
+
+  var dp = date.split('-');
+  var dayNames = ['일','월','화','수','목','금','토'];
+  var d = new Date(date+'T00:00:00');
+  var dateLabel = (parseInt(dp[1]))+'월 '+(parseInt(dp[2]))+'일('+dayNames[d.getDay()]+')';
+
+  var resultText = result==='A' ? '테스트 완료 & 오답 완료'
+                : result==='C' ? '테스트 완료 & 오답 미완료'
+                : result==='F' ? '결석' : result;
+
+  var ment = '안녕하세요. 베스티안 수학학원입니다\n'
+    + dateLabel + '에 실시된 ' + s.name + ' 학생 포텐셜 결과 안내드립니다.\n'
+    + '▶ 결과: ' + resultText
+    + (score ? '\n▶ 점수: ' + score + '점' : '')
+    + (wrong && result!=='F' ? '\n▶ 오답: ' + (wrong==='true'?'완료':'미완료') : '');
+
+  navigator.clipboard.writeText(ment).then(function(){
+    var btn = wrap ? wrap.querySelector('[data-sid="'+studentId+'"][onclick*="ptCopyMent"]') : null;
+    if(btn){
+      btn.style.background='#7C3AED'; btn.style.color='#fff'; btn.style.borderColor='#5B21B6';
+      btn.innerHTML='✅ 복사됨';
+      setTimeout(function(){
+        btn.style.background='#F5F3FF'; btn.style.color='#5B21B6'; btn.style.borderColor='#C4B5FD';
+        btn.innerHTML='📋 멘트';
+      }, 2000);
+    }
+  }).catch(function(){ alert('클립보드 복사에 실패했습니다'); });
+}
+
+async function ptGenerateImage(){
+  var date = document.getElementById('pt-date').value;
+  if(!_ptStudents.length){ alert('학생이 없습니다'); return; }
+  var btn = document.getElementById('pt-img-btn');
+  btn.textContent = '⏳ 생성 중...'; btn.disabled = true;
+
+  try{
+    var dp = date.split('-');
+    var dayNames=['일','월','화','수','목','금','토'];
+    var d = new Date(date+'T00:00:00');
+    var dateLabel = dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일('+dayNames[d.getDay()]+')';
+
+    var rows = _ptStudents.map(function(s, i){
+      var ptWrap = document.getElementById('pt-table-wrap');
+      function fv(field){
+        var el = ptWrap ? ptWrap.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]') : null;
+        return el ? el.value : '';
+      }
+      var att = fv('attendance');
+      var attLabel = att==='present'?'출석':att==='late'?'지각':att==='absent'?'결석':'-';
+      var attColor = att==='absent'?'color:#ef4444;font-weight:700':att==='late'?'color:#ea580c;font-weight:600':'color:#5B21B6;font-weight:600';
+      var wrong = fv('wrong_done');
+      var wrongLabel = wrong==='true'?'완료':wrong==='false'?'미완료':'-';
+      var wrongColor = wrong==='true'?'color:#5B21B6;font-weight:700':wrong==='false'?'color:#ef4444':'color:#9ca3af';
+      var result = fv('result');
+      var resultColor = result==='A'?'color:#5B21B6;font-weight:800':result==='F'?'color:#ef4444;font-weight:700':'color:#1e293b;font-weight:700';
+      var bg = i%2===0?'#fff':'#F5F3FF';
+      return '<tr style="background:'+bg+'">'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;font-size:12px;color:#6b7280">'+(s.school||'')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;font-size:12px;color:#6b7280;text-align:center">'+(s.grade||'')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;font-weight:700;color:#1e293b">'+s.name+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;text-align:center;font-weight:700;color:#7C3AED">'+fv('level')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;text-align:center">'+fv('attend_time')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;text-align:center;'+attColor+'">'+attLabel+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;text-align:center;'+wrongColor+'">'+wrongLabel+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;text-align:center">'+fv('score')+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;text-align:center;'+resultColor+'">'+result+'</td>'
+        +'<td style="padding:6px 8px;border:1px solid #C4B5FD;font-size:12px;color:#6b7280">'+fv('note')+'</td>'
+      +'</tr>';
+    }).join('');
+
+    // 선생님 타이틀
+    var selectedIds = ptGetSelectedTeacherIds();
+    var allIds = _ptAllTeachers.map(function(t){ return t.id; });
+    var isAll = !selectedIds.length || selectedIds.length===allIds.length;
+    var headerTitle, headerSub;
+    if(isAll){
+      var myBranch = (window._allBranches||[]).find(function(b){ return b.id===currentUser.branch_id; });
+      headerTitle = myBranch ? myBranch.name+' 포텐셜 결과' : '포텐셜 결과';
+      headerSub = '전체 선생님';
+    } else if(selectedIds.length===1){
+      var t = _ptAllTeachers.find(function(t){ return t.id===selectedIds[0]; });
+      headerTitle = (t?t.name:'')+'  선생님';
+      headerSub = '포텐셜 출결 결과';
+    } else {
+      headerTitle = selectedIds.length+'명 선생님';
+      headerSub = '포텐셜 출결 결과';
+    }
+
+    var tempDiv = document.createElement('div');
+    tempDiv.style.cssText = 'position:absolute;left:-9999px;top:0;width:860px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:20px';
+    tempDiv.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding-bottom:14px;border-bottom:3px solid #7C3AED">'
+      +'<div>'
+        +'<div style="font-size:11px;font-weight:600;color:#7C3AED;letter-spacing:0.5px;margin-bottom:4px">🎯 포텐셜</div>'
+        +'<div style="font-size:24px;font-weight:900;color:#3B0764;line-height:1.2">'+headerTitle+'</div>'
+        +'<div style="font-size:12px;color:#6b7280;margin-top:4px">'+headerSub+'</div>'
+      +'</div>'
+      +'<div style="text-align:right">'
+        +'<div style="font-size:16px;font-weight:800;color:#1a1a2e">'+dateLabel+'</div>'
+        +'<div style="font-size:11px;color:#9ca3af;margin-top:3px">학원 관리 시스템</div>'
+      +'</div></div>'
+      +'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+      +'<thead><tr style="background:#5B21B6">'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:left">학교</th>'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">학년</th>'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:left">이름</th>'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">레벨</th>'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">시간</th>'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">출결</th>'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">오답</th>'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">점수</th>'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">결과</th>'
+      +'<th style="padding:7px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:left">비고</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody></table>'
+      +'<div style="margin-top:12px;display:flex;align-items:center;justify-content:space-between">'
+        +'<div style="font-size:11px;color:#7C3AED;font-weight:600">A: 테스트완료&오답완료 &nbsp;|&nbsp; C: 테스트완료&오답미완료 &nbsp;|&nbsp; F: 결석</div>'
+        +'<div style="font-size:11px;color:#9ca3af">학원 관리 시스템 · '+new Date().toLocaleString('ko-KR')+'</div>'
+      +'</div>';
+    document.body.appendChild(tempDiv);
+
+    var canvas = await html2canvas(tempDiv, {backgroundColor:'#fff', scale:2, useCORS:true, logging:false, width:860, height:tempDiv.scrollHeight});
+    document.body.removeChild(tempDiv);
+
+    var isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    var fileName = '포텐셜_'+date.replace(/-/g,'')+'.png';
+
+    canvas.toBlob(async function(blob){
+      if(isMobile){
+        var file = new File([blob], fileName, {type:'image/png'});
+        if(navigator.canShare && navigator.canShare({files:[file]})){
+          try{ await navigator.share({files:[file]}); btn.textContent='📊 이미지 생성'; btn.disabled=false; return; }
+          catch(e){ if(e.name==='AbortError'){btn.textContent='📊 이미지 생성';btn.disabled=false;return;} }
+        }
+      }
+      if(navigator.clipboard && navigator.clipboard.write){
+        try{
+          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+          btn.textContent='✅ 복사됨!';
+          setTimeout(function(){btn.textContent='📊 이미지 생성';btn.disabled=false;},2500);
+          return;
+        }catch(e){}
+      }
+      var a=document.createElement('a'); a.href=canvas.toDataURL(); a.download=fileName; a.click();
+      btn.textContent='📊 이미지 생성'; btn.disabled=false;
+    }, 'image/png');
+
+  }catch(err){
+    alert('오류: '+err.message);
+    btn.textContent='📊 이미지 생성'; btn.disabled=false;
+  }
+}
+
+/* ══════════════════════════════════════════
+   관리자 메뉴: 주말 프로그램 아코디언
+══════════════════════════════════════════ */
+function toggleAdminWeekendMenu(){
+  var submenu = document.getElementById('amenu-weekend-submenu');
+  var arrow   = document.getElementById('amenu-weekend-arrow');
+  if(!submenu) return;
+  var isOpen = submenu.style.display !== 'none';
+  submenu.style.display = isOpen ? 'none' : 'block';
+  if(arrow) arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
+/* ══════════════════════════════════════════
+   관리자 업무일지 - 분원 필터 추가
+══════════════════════════════════════════ */
+// initAdminWorklog 재정의 (분원 필터 포함)
+var _origInitAdminWorklog = typeof initAdminWorklog === 'function' ? initAdminWorklog : null;
+async function initAdminWorklog(){
+  var branchSel = document.getElementById('awl-branch-select');
+  var teacherSel = document.getElementById('awl-teacher-select');
+  if(!branchSel || !teacherSel) return;
+
+  // 분원 옵션 채우기
+  branchSel.innerHTML = '<option value="">전체 분원</option>';
+  (window._allBranches||[]).filter(function(b){ return b.active !== false; }).forEach(function(b){
+    branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+  });
+
+  // 선생님 전체 목록
+  teacherSel.innerHTML = '<option value="">선생님을 선택하세요</option>';
+  (allUsers||[]).filter(function(u){ return u.role==='teacher'; })
+    .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); })
+    .forEach(function(t){
+      var branchName = (window._allBranches||[]).find(function(b){ return b.id===t.branch_id; })?.name || '';
+      teacherSel.innerHTML += '<option value="'+t.id+'" data-branch="'+( t.branch_id||'')+'">'
+        +t.name+' 선생님'+(branchName?' ('+branchName+')':'')+'</option>';
+    });
+
+  var today = new Date().toISOString().split('T')[0];
+  document.getElementById('awl-date').value = today;
+  document.getElementById('awl-logs-section').style.display = 'none';
+  document.getElementById('awl-detail').style.display = 'none';
+  document.getElementById('awl-detail').innerHTML = '';
+}
+
+function awlFilterTeachers(){
+  var branchId = document.getElementById('awl-branch-select').value;
+  var teacherSel = document.getElementById('awl-teacher-select');
+  teacherSel.innerHTML = '<option value="">선생님을 선택하세요</option>';
+  (allUsers||[]).filter(function(u){
+    if(u.role !== 'teacher') return false;
+    if(!branchId) return true;
+    return u.branch_id === branchId;
+  }).sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); })
+    .forEach(function(t){
+      teacherSel.innerHTML += '<option value="'+t.id+'">'+t.name+' 선생님</option>';
+    });
+  // 선생님 변경됐으니 목록 초기화
+  document.getElementById('awl-logs-section').style.display = 'none';
+  document.getElementById('awl-detail').style.display = 'none';
+  document.getElementById('awl-detail').innerHTML = '';
+}
+
+/* ══════════════════════════════════════════
+   관리자 주말 N제 조회 (읽기전용)
+══════════════════════════════════════════ */
+
+/* 비활성 분원 선생님 제외 헬퍼 */
+function isTeacherInActiveBranch(teacher){
+  if(!teacher.branch_id) return true; // 미배정 선생님은 포함
+  var branch = (window._allBranches||[]).find(function(b){ return b.id === teacher.branch_id; });
+  if(!branch) return true; // 분원 정보 없으면 포함 (안전)
+  return branch.active !== false; // active 컬럼 없거나 true면 포함
+}
+
+var _awnAllTeachers = [];
+
+async function initAdminWeekendNaje(){
+  var today = new Date();
+  var day = today.getDay();
+  var diff = day===6?0:(day===0?-1:6-day);
+  var sat = new Date(today); sat.setDate(today.getDate()+(day===0?-1:diff));
+  var dateEl = document.getElementById('awn-date');
+  if(dateEl && !dateEl.value) dateEl.value = sat.toISOString().split('T')[0];
+
+  // 분원 필터
+  var branchSel = document.getElementById('awn-branch-select');
+  branchSel.innerHTML = '<option value="">전체 분원</option>';
+  (window._allBranches||[]).filter(function(b){ return b.active !== false; }).forEach(function(b){
+    branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+  });
+
+  // 선생님 목록
+  _awnAllTeachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && isTeacherInActiveBranch(u); })
+    .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
+  awnRenderTeachers('');
+  await awnLoad();
+}
+
+function awnFilterTeachers(){
+  var branchId = document.getElementById('awn-branch-select').value;
+  awnRenderTeachers(branchId);
+  awnLoad();
+}
+
+function awnRenderTeachers(branchId){
+  var sel = document.getElementById('awn-teacher-select');
+  sel.innerHTML = '<option value="">전체 선생님</option>';
+  _awnAllTeachers.filter(function(t){ return !branchId || t.branch_id===branchId; })
+    .forEach(function(t){ sel.innerHTML += '<option value="'+t.id+'">'+t.name+' T</option>'; });
+}
+
+async function awnLoad(){
+  var date = document.getElementById('awn-date').value;
+  var teacherId = document.getElementById('awn-teacher-select').value;
+  var wrap = document.getElementById('awn-table-wrap');
+  if(!date){ wrap.innerHTML='<div class="empty-state"><div class="ei">📅</div><p>날짜를 선택하세요</p></div>'; return; }
+  wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+
+  var teachers = teacherId
+    ? _awnAllTeachers.filter(function(t){ return t.id===teacherId; })
+    : (document.getElementById('awn-branch-select').value
+        ? _awnAllTeachers.filter(function(t){ return t.branch_id===document.getElementById('awn-branch-select').value; })
+        : _awnAllTeachers);
+  var teacherIds = teachers.map(function(t){ return t.id; });
+  if(!teacherIds.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">👤</div><p>선생님이 없습니다</p></div>'; return; }
+
+  // 학생 조회
+  var {data: students} = await db.from('users')
+    .select('id,name,school,grade,teacher_id,weekend_level,weekend_attend_time')
+    .eq('role','student').eq('status','active')
+    .in('teacher_id', teacherIds).order('name');
+  if(!students||!students.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">👤</div><p>학생이 없습니다</p></div>'; return; }
+
+  // 기록 조회
+  var {data: records} = await db.from('weekend_naje').select('*').eq('session_date',date)
+    .in('student_id', students.map(function(s){ return s.id; }));
+  var dataMap = {};
+  (records||[]).forEach(function(r){ dataMap[r.student_id]=r; });
+
+  var RESULT_LABELS = {A:'과제완료&테스트통과',B:'과제완료&테스트불통',C:'과제완료&테스트미응시',D:'과제미완료',F:'결석'};
+  var rows = students.map(function(s,i){
+    var r = dataMap[s.id]||{};
+    var t = _awnAllTeachers.find(function(t){ return t.id===s.teacher_id; });
+    var att = r.attendance==='present'?'출석':r.attendance==='late'?'지각':r.attendance==='absent'?'결석':'-';
+    var attColor = r.attendance==='absent'?'color:#ef4444':r.attendance==='late'?'color:#ea580c':'';
+    var hw = r.homework_done===true?'완료':r.homework_done===false?'미완료':'-';
+    var hwColor = r.homework_done===true?'color:#16a34a':r.homework_done===false?'color:#ef4444':'';
+    var result = r.result||'';
+    var resultColor = result==='A'?'color:#16a34a;font-weight:700':result==='F'?'color:#ef4444;font-weight:700':'';
+    var bg = i%2===0?'#fff':'#f0fdf4';
+    return '<tr style="background:'+bg+';font-size:12px">'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;color:#6b7280">'+(s.school||'')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;text-align:center;color:#6b7280">'+(s.grade||'')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;font-weight:700">'+s.name+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;text-align:center">'+(r.level||'-')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;text-align:center">'+(r.attend_time||'-')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;text-align:center;'+attColor+'">'+att+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;text-align:center;'+hwColor+'">'+hw+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;text-align:center">'+(r.score_first||'-')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;text-align:center">'+(r.score_retry||'-')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;text-align:center;'+resultColor+'">'+result+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #bbf7d0;color:#6b7280">'+(r.note||'')+'</td>'
+    +'</tr>';
+  }).join('');
+
+  var dp = date.split('-');
+  var dayNames=['일','월','화','수','목','금','토'];
+  var dateLabel = dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일('+dayNames[new Date(date+'T00:00:00').getDay()]+')';
+
+  wrap.innerHTML = '<div style="font-size:13px;font-weight:700;color:#166534;margin-bottom:8px">'+dateLabel+' · '+students.length+'명</div>'
+    +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<thead><tr style="background:#166534">'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:left">학교</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">학년</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:left">이름</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">Level</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">시간</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">출결</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">숙제</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">본시</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">재시</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:center">결과</th>'
+    +'<th style="padding:6px 8px;border:1px solid #15803d;color:#f0fdf4;text-align:left">비고</th>'
+    +'</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    +'<div style="margin-top:10px;font-size:11px;color:#166534;font-weight:600">A: 과제완료&테스트통과 | B: 과제완료&테스트불통 | C: 과제완료&테스트미응시 | D: 과제미완료 | F: 결석</div>';
+}
+
+/* ══════════════════════════════════════════
+   관리자 포텐셜 조회 (읽기전용)
+══════════════════════════════════════════ */
+var _awpAllTeachers = [];
+
+async function initAdminWeekendPotential(){
+  var today = new Date();
+  var day = today.getDay();
+  var diff = day===6?0:(day===0?-1:6-day);
+  var sat = new Date(today); sat.setDate(today.getDate()+(day===0?-1:diff));
+  var dateEl = document.getElementById('awp-date');
+  if(dateEl && !dateEl.value) dateEl.value = sat.toISOString().split('T')[0];
+
+  var branchSel = document.getElementById('awp-branch-select');
+  branchSel.innerHTML = '<option value="">전체 분원</option>';
+  (window._allBranches||[]).filter(function(b){ return b.active !== false; }).forEach(function(b){
+    branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+  });
+
+  _awpAllTeachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && isTeacherInActiveBranch(u); })
+    .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
+  awpRenderTeachers('');
+  await awpLoad();
+}
+
+function awpFilterTeachers(){
+  var branchId = document.getElementById('awp-branch-select').value;
+  awpRenderTeachers(branchId);
+  awpLoad();
+}
+
+function awpRenderTeachers(branchId){
+  var sel = document.getElementById('awp-teacher-select');
+  sel.innerHTML = '<option value="">전체 선생님</option>';
+  _awpAllTeachers.filter(function(t){ return !branchId || t.branch_id===branchId; })
+    .forEach(function(t){ sel.innerHTML += '<option value="'+t.id+'">'+t.name+' T</option>'; });
+}
+
+async function awpLoad(){
+  var date = document.getElementById('awp-date').value;
+  var teacherId = document.getElementById('awp-teacher-select').value;
+  var wrap = document.getElementById('awp-table-wrap');
+  if(!date){ wrap.innerHTML='<div class="empty-state"><div class="ei">🎯</div><p>날짜를 선택하세요</p></div>'; return; }
+  wrap.innerHTML = '<div class="loading"><div class="spinner" style="border-top-color:#7C3AED"></div>불러오는 중...</div>';
+
+  var teachers = teacherId
+    ? _awpAllTeachers.filter(function(t){ return t.id===teacherId; })
+    : (document.getElementById('awp-branch-select').value
+        ? _awpAllTeachers.filter(function(t){ return t.branch_id===document.getElementById('awp-branch-select').value; })
+        : _awpAllTeachers);
+  var teacherIds = teachers.map(function(t){ return t.id; });
+  if(!teacherIds.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">👤</div><p>선생님이 없습니다</p></div>'; return; }
+
+  var {data: students} = await db.from('users')
+    .select('id,name,school,grade,teacher_id,potential_level,potential_attend_time')
+    .eq('role','student').eq('status','active').eq('potential_yn',true)
+    .in('teacher_id', teacherIds).order('name');
+  if(!students||!students.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">🎯</div><p>포텐셜 참여 학생이 없습니다</p></div>'; return; }
+
+  var {data: records} = await db.from('weekend_potential').select('*').eq('session_date',date)
+    .in('student_id', students.map(function(s){ return s.id; }));
+  var dataMap = {};
+  (records||[]).forEach(function(r){ dataMap[r.student_id]=r; });
+
+  var rows = students.map(function(s,i){
+    var r = dataMap[s.id]||{};
+    var t = _awpAllTeachers.find(function(t){ return t.id===s.teacher_id; });
+    var att = r.attendance==='present'?'출석':r.attendance==='late'?'지각':r.attendance==='absent'?'결석':'-';
+    var attColor = r.attendance==='absent'?'color:#ef4444':r.attendance==='late'?'color:#ea580c':'';
+    var wrong = r.wrong_done===true?'완료':r.wrong_done===false?'미완료':'-';
+    var wrongColor = r.wrong_done===true?'color:#7C3AED':r.wrong_done===false?'color:#ef4444':'';
+    var result = r.result||'';
+    var resultColor = result==='A'?'color:#7C3AED;font-weight:700':result==='F'?'color:#ef4444;font-weight:700':'';
+    var bg = i%2===0?'#fff':'#F5F3FF';
+    return '<tr style="background:'+bg+';font-size:12px">'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;color:#6b7280">'+(s.school||'')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;text-align:center;color:#6b7280">'+(s.grade||'')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;font-weight:700">'+s.name+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;text-align:center;font-weight:700;color:#7C3AED">'+(r.level||s.potential_level||'-')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;text-align:center">'+(r.attend_time||s.potential_attend_time||'-')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;text-align:center;'+attColor+'">'+att+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;text-align:center;'+wrongColor+'">'+wrong+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;text-align:center">'+(r.score!=null?r.score:'-')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;text-align:center;'+resultColor+'">'+result+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #C4B5FD;color:#6b7280">'+(r.note||'')+'</td>'
+    +'</tr>';
+  }).join('');
+
+  var dp = date.split('-');
+  var dayNames=['일','월','화','수','목','금','토'];
+  var dateLabel = dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일('+dayNames[new Date(date+'T00:00:00').getDay()]+')';
+
+  wrap.innerHTML = '<div style="font-size:13px;font-weight:700;color:#5B21B6;margin-bottom:8px">'+dateLabel+' · '+students.length+'명</div>'
+    +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<thead><tr style="background:#5B21B6">'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:left">학교</th>'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">학년</th>'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:left">이름</th>'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">레벨</th>'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">시간</th>'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">출결</th>'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">오답</th>'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">점수</th>'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:center">결과</th>'
+    +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:left">비고</th>'
+    +'</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    +'<div style="margin-top:10px;font-size:11px;color:#7C3AED;font-weight:600">A: 테스트완료&오답완료 | C: 테스트완료&오답미완료 | F: 결석</div>';
+}
+
+/* ══════════════════════════════════════════
+   베티모의고사 (Weekend Bety)
+   - 고등/중고등: bety_yn 기본 true (해제 가능)
+   - 중등: 수동 체크 필요
+   - 일요일 기준
+══════════════════════════════════════════ */
+var _byStudents = [];
+var _byData     = {};
+var _byAllTeachers = [];
+
+function editToggleBety(chk){
+  var detail = document.getElementById('edit-bety-detail');
+  if(detail) detail.style.display = chk.checked ? 'grid' : 'none';
+}
+
+async function initBety(){
+  var dateEl = document.getElementById('by-date');
+  if(!dateEl.value){
+    // 가장 가까운 일요일
+    var today = new Date();
+    var day = today.getDay(); // 0=일
+    var diff = day === 0 ? 0 : (7 - day);
+    var sun = new Date(today);
+    sun.setDate(today.getDate() + (day === 0 ? 0 : diff));
+    // 이미 지난 일요일이 더 자연스러우면: day===0 ? 0 : -(day)
+    // 가장 가까운 지난 일요일
+    var lastSun = new Date(today);
+    lastSun.setDate(today.getDate() - day);
+    dateEl.value = lastSun.toISOString().split('T')[0];
+  }
+  await byLoadFilters();
+  await byLoadData();
+}
+
+async function byLoad(){ await byLoadData(); }
+
+async function byLoadFilters(){
+  var myBranchId = currentUser.branch_id || null;
+  var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
+  if(myBranchId) tQuery = tQuery.eq('branch_id', myBranchId);
+  var {data: teachers} = await tQuery;
+  _byAllTeachers = teachers || [];
+  if(!_byAllTeachers.find(function(t){ return t.id===currentUser.id; })){
+    _byAllTeachers.unshift({id:currentUser.id, name:currentUser.name, branch_id:myBranchId});
+  }
+  byRenderTeacherCheckboxes();
+}
+
+function byRenderTeacherCheckboxes(){
+  var list = document.getElementById('by-teacher-chk-list');
+  if(!list) return;
+  list.innerHTML = _byAllTeachers.map(function(t){
+    var checked = (t.id === currentUser.id) ? ' checked' : '';
+    return '<label style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:13px" '
+      +'onmouseover="this.style.background=\'#fffbeb\'" onmouseout="this.style.background=\'\'">'
+      +'<input type="checkbox" class="by-teacher-chk" value="'+t.id+'"'+checked+' '
+        +'onchange="byTeacherChkChange()" style="accent-color:#d97706"> '
+      +'<span>'+t.name+' T</span>'
+    +'</label>';
+  }).join('');
+  byUpdateTeacherLabel();
+}
+
+function byToggleTeacherDropdown(e){
+  e.stopPropagation();
+  var dd = document.getElementById('by-teacher-dropdown');
+  var isOpen = dd.style.display !== 'none';
+  dd.st
