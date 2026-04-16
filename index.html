@@ -1988,6 +1988,7 @@
                 </select>
                 <span id="syl-saved-count" style="font-size:10px;color:#9ca3af"></span>
               </div>
+              <button onclick="openSylLinkModal()" style="padding:6px 11px;background:#f0fdf4;color:#16a34a;border:1.5px solid #86efac;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">🔗 계획서 연결</button>
             </div>
 
           </div>
@@ -2010,6 +2011,51 @@
             <button onclick="closeModal('syllabusPreview')" style="border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280">✕</button>
           </div>
           <div id="syl-preview-content"></div>
+        </div>
+      </div>
+
+      <!-- 진도계획서 계정 연결 모달 -->
+      <div class="modal-backdrop" id="modal-sylLink" style="z-index:510;align-items:center">
+        <div style="background:#fff;border-radius:16px;padding:24px;width:95vw;max-width:560px;max-height:88vh;overflow-y:auto;position:relative">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+            <div>
+              <div style="font-size:16px;font-weight:800;color:#1F3A51">🔗 진도계획서 계정 연결</div>
+              <div style="font-size:11px;color:#9ca3af;margin-top:2px">직접 입력으로 만든 계획서를 등록된 선생님 계정에 연결합니다</div>
+            </div>
+            <button onclick="closeModal('sylLink')" style="border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280">✕</button>
+          </div>
+
+          <!-- Step 1: 연결할 계획서 선택 -->
+          <div style="margin-bottom:16px">
+            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px">
+              📄 Step 1 — 연결할 계획서 선택
+              <span style="font-size:10px;font-weight:400;color:#9ca3af;margin-left:6px">teacher_id 없는 직접입력 계획서만 표시</span>
+            </div>
+            <div id="syl-link-unlinked-list" style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;border:1.5px solid #e2e8f0;border-radius:8px;padding:8px">
+              <div style="font-size:12px;color:#9ca3af;text-align:center;padding:8px">불러오는 중...</div>
+            </div>
+          </div>
+
+          <!-- Step 2: 연결할 계정 선택 -->
+          <div style="margin-bottom:20px">
+            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px">👨‍🏫 Step 2 — 연결할 선생님 계정 선택</div>
+            <select id="syl-link-teacher-select" onchange="sylLinkOnTeacherChange()" style="width:100%;padding:8px 12px;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;outline:none;background:#fff">
+              <option value="">-- 선생님 선택 --</option>
+            </select>
+            <div id="syl-link-teacher-info" style="margin-top:8px;display:none;padding:10px 12px;background:#f0f9ff;border:1.5px solid #7dd3fc;border-radius:8px;font-size:12px;color:#0369a1"></div>
+          </div>
+
+          <!-- 연결 결과 미리보기 -->
+          <div id="syl-link-preview" style="display:none;margin-bottom:16px;padding:12px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px">
+            <div style="font-size:11px;font-weight:700;color:#16a34a;margin-bottom:6px">✅ 연결 후 변경사항 미리보기</div>
+            <div id="syl-link-preview-content" style="font-size:12px;color:#374151;line-height:1.8"></div>
+          </div>
+
+          <!-- 실행 버튼 -->
+          <div style="display:flex;gap:8px">
+            <button onclick="closeModal('sylLink')" style="flex:1;padding:10px;background:#f8fafc;color:#6b7280;border:1.5px solid #d0dde6;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">취소</button>
+            <button id="syl-link-confirm-btn" onclick="sylLinkExecute()" disabled style="flex:2;padding:10px;background:#d1fae5;color:#6b7280;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:not-allowed">선택 후 연결 가능</button>
+          </div>
         </div>
       </div>
 
@@ -16341,6 +16387,225 @@ async function sylAdminLoadFromSelect(id){
   await sylLoadRecord(id);
   var sel = document.getElementById('syl-saved-select');
   if(sel) sel.value = id;
+}
+
+// ── 진도계획서 계정 연결 ────────────────────────────────────
+
+var _sylLinkSelectedIds = []; // 선택된 계획서 id 배열
+var _sylLinkTargetTeacher = null; // { id, name, branch_id, branch_name }
+
+async function openSylLinkModal(){
+  _sylLinkSelectedIds = [];
+  _sylLinkTargetTeacher = null;
+  var btn = document.getElementById('syl-link-confirm-btn');
+  if(btn){ btn.disabled = true; btn.style.background='#d1fae5'; btn.style.color='#6b7280'; btn.style.cursor='not-allowed'; btn.textContent='선택 후 연결 가능'; }
+  var preview = document.getElementById('syl-link-preview');
+  if(preview) preview.style.display = 'none';
+  var info = document.getElementById('syl-link-teacher-info');
+  if(info) info.style.display = 'none';
+
+  openModal('sylLink');
+  await sylLinkLoadUnlinked();
+  await sylLinkLoadTeachers();
+}
+
+async function sylLinkLoadUnlinked(){
+  var listEl = document.getElementById('syl-link-unlinked-list');
+  if(!listEl) return;
+  listEl.innerHTML = '<div style="font-size:12px;color:#9ca3af;text-align:center;padding:8px">불러오는 중...</div>';
+  try {
+    // teacher_id가 null인 계획서만 조회
+    var {data, error} = await db.from('syllabuses')
+      .select('id, teacher_name, period, branch, updated_at')
+      .is('teacher_id', null)
+      .order('teacher_name', {ascending: true})
+      .order('period', {ascending: false});
+    if(error) throw error;
+    if(!data || !data.length){
+      listEl.innerHTML = '<div style="font-size:12px;color:#9ca3af;text-align:center;padding:12px">직접 입력된 계획서가 없습니다</div>';
+      return;
+    }
+
+    // 이름별 그룹화
+    var groups = {};
+    data.forEach(function(row){
+      var name = row.teacher_name || '이름 없음';
+      if(!groups[name]) groups[name] = [];
+      groups[name].push(row);
+    });
+
+    var html = '';
+    Object.keys(groups).sort().forEach(function(name){
+      var rows = groups[name];
+      html += '<div style="margin-bottom:8px">';
+      html += '<div style="font-size:10px;font-weight:700;color:#64748b;padding:2px 4px;margin-bottom:3px">👤 '+name+' ('+rows.length+'건)</div>';
+      rows.forEach(function(row){
+        var dt = new Date(row.updated_at);
+        var dtStr = (dt.getMonth()+1).toString().padStart(2,'0')+'/'+dt.getDate().toString().padStart(2,'0');
+        var chkId = 'syllink-chk-'+row.id;
+        html += '<label id="syllink-label-'+row.id+'" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;background:#fafbfc;cursor:pointer;margin-bottom:3px">'
+          +'<input type="checkbox" class="syl-link-chk" data-id="'+row.id+'" style="width:15px;height:15px;cursor:pointer;accent-color:#16a34a">'
+            +'<div style="font-size:12px;font-weight:600;color:#1F3A51">'+row.period+'</div>'
+            +'<div style="font-size:10px;color:#94a3b8">수정 '+dtStr+(row.branch?' · '+row.branch:'')+'</div>'
+          +'</div>'
+        +'</label>';
+      });
+      html += '</div>';
+    });
+    listEl.innerHTML = html;
+    // 이벤트 위임으로 체크박스 변경 감지
+    listEl.addEventListener('change', function(e){
+      var chk = e.target;
+      if(!chk.classList.contains('syl-link-chk')) return;
+      var id = chk.dataset.id;
+      var labelEl = document.getElementById('syllink-label-'+id);
+      var idx = _sylLinkSelectedIds.indexOf(id);
+      if(chk.checked){
+        if(idx < 0) _sylLinkSelectedIds.push(id);
+        if(labelEl){ labelEl.style.borderColor='#86efac'; labelEl.style.background='#f0fdf4'; }
+      } else {
+        if(idx >= 0) _sylLinkSelectedIds.splice(idx,1);
+        if(labelEl){ labelEl.style.borderColor='#e2e8f0'; labelEl.style.background='#fafbfc'; }
+      }
+      sylLinkUpdatePreview();
+    });
+  } catch(e){
+    listEl.innerHTML = '<div style="font-size:12px;color:#dc2626;padding:8px">불러오기 실패: '+e.message+'</div>';
+  }
+}
+
+function sylLinkToggleSelect(id, labelEl){
+  var chk = labelEl.querySelector('input[type="checkbox"]');
+  if(!chk) return;
+  // label click이 체크박스를 자동 토글하지만 확실히 처리
+  var idx = _sylLinkSelectedIds.indexOf(id);
+  if(idx >= 0){
+    _sylLinkSelectedIds.splice(idx, 1);
+    labelEl.style.borderColor = '#e2e8f0';
+    labelEl.style.background = '#fafbfc';
+  } else {
+    _sylLinkSelectedIds.push(id);
+    labelEl.style.borderColor = '#86efac';
+    labelEl.style.background = '#f0fdf4';
+  }
+  sylLinkUpdatePreview();
+}
+
+async function sylLinkLoadTeachers(){
+  var sel = document.getElementById('syl-link-teacher-select');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">-- 선생님 선택 --</option>';
+  try {
+    var {data, error} = await db.from('users')
+      .select('id, name, branch_id')
+      .eq('role', 'teacher')
+      .eq('status', 'active')
+      .order('name', {ascending: true});
+    if(error) throw error;
+
+    // 분원 정보도 가져오기
+    var {data: branches} = await db.from('branches').select('id, name');
+    var branchMap = {};
+    (branches||[]).forEach(function(b){ branchMap[b.id] = b.name; });
+
+    (data||[]).forEach(function(t){
+      var branchName = t.branch_id ? (branchMap[t.branch_id] || '분원미지정') : '분원미지정';
+      var opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = t.name + ' (' + branchName + ')';
+      opt.dataset.name = t.name;
+      opt.dataset.branchId = t.branch_id || '';
+      opt.dataset.branchName = branchName;
+      sel.appendChild(opt);
+    });
+  } catch(e){ console.warn(e); }
+}
+
+function sylLinkOnTeacherChange(){
+  var sel = document.getElementById('syl-link-teacher-select');
+  var info = document.getElementById('syl-link-teacher-info');
+  if(!sel || !info) return;
+  var opt = sel.options[sel.selectedIndex];
+  if(!sel.value){
+    _sylLinkTargetTeacher = null;
+    info.style.display = 'none';
+    sylLinkUpdatePreview();
+    return;
+  }
+  _sylLinkTargetTeacher = {
+    id: sel.value,
+    name: opt.dataset.name,
+    branch_id: opt.dataset.branchId || null,
+    branch_name: opt.dataset.branchName
+  };
+  info.style.display = 'block';
+  info.innerHTML = '<b>'+opt.dataset.name+'</b> 선생님 · 분원: <b>'+opt.dataset.branchName+'</b>';
+  sylLinkUpdatePreview();
+}
+
+function sylLinkUpdatePreview(){
+  var preview = document.getElementById('syl-link-preview');
+  var previewContent = document.getElementById('syl-link-preview-content');
+  var btn = document.getElementById('syl-link-confirm-btn');
+  var ready = _sylLinkSelectedIds.length > 0 && _sylLinkTargetTeacher;
+
+  if(btn){
+    btn.disabled = !ready;
+    if(ready){
+      btn.style.background = '#16a34a';
+      btn.style.color = '#fff';
+      btn.style.cursor = 'pointer';
+      btn.textContent = '🔗 '+_sylLinkSelectedIds.length+'개 계획서 연결하기';
+    } else {
+      btn.style.background = '#d1fae5';
+      btn.style.color = '#6b7280';
+      btn.style.cursor = 'not-allowed';
+      btn.textContent = '선택 후 연결 가능';
+    }
+  }
+
+  if(!preview || !previewContent) return;
+  if(!ready){ preview.style.display = 'none'; return; }
+
+  preview.style.display = 'block';
+  previewContent.innerHTML =
+    '선택 계획서 <b>'+_sylLinkSelectedIds.length+'건</b>에 아래 정보가 적용됩니다:<br>'
+    +'• teacher_id → <b>'+_sylLinkTargetTeacher.id.slice(0,8)+'...</b><br>'
+    +'• teacher_name → <b>'+_sylLinkTargetTeacher.name+'</b> (이름 통일)<br>'
+    +((_sylLinkTargetTeacher.branch_id)
+      ? '• branch → <b>'+_sylLinkTargetTeacher.branch_name+'</b>'
+      : '• branch → <b>변경 없음</b> (분원 미배정)');
+}
+
+async function sylLinkExecute(){
+  if(!_sylLinkSelectedIds.length || !_sylLinkTargetTeacher){
+    alert('계획서와 선생님을 모두 선택해주세요'); return;
+  }
+  var btn = document.getElementById('syl-link-confirm-btn');
+  if(btn){ btn.disabled = true; btn.textContent = '연결 중...'; }
+
+  try {
+    var updateData = {
+      teacher_id: _sylLinkTargetTeacher.id,
+      teacher_name: _sylLinkTargetTeacher.name,
+    };
+    if(_sylLinkTargetTeacher.branch_id){
+      updateData.branch = _sylLinkTargetTeacher.branch_id;
+    }
+
+    var {error} = await db.from('syllabuses')
+      .update(updateData)
+      .in('id', _sylLinkSelectedIds);
+    if(error) throw error;
+
+    closeModal('sylLink');
+    alert('✅ '+_sylLinkSelectedIds.length+'개 계획서가 '+_sylLinkTargetTeacher.name+' 선생님 계정에 연결되었습니다!');
+    // 목록 새로고침
+    await sylLoadSavedList();
+  } catch(e){
+    alert('연결 실패: '+e.message);
+    if(btn){ btn.disabled = false; btn.textContent = '🔗 다시 시도'; }
+  }
 }
 
 // ── 저장된 목록 불러오기 (관리자: 분원→선생님별 그룹화) ───────
