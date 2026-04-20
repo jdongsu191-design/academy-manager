@@ -17592,16 +17592,17 @@ async function sylSaveFile(blob, suggestedName, mimeType, ext){
 
 async function sylCaptureA4(html, quality){
   quality = quality || 0.95;
-  var A4W = 794, A4H = 1123;
-  
+  var A4W = 794;
+
   var tmp = document.createElement('div');
-  tmp.style.cssText = 'position:fixed;top:0;left:-9999px;width:794px;background:#fff;z-index:9998;font-family:Noto Sans KR,sans-serif';
+  tmp.style.cssText = 'position:fixed;top:0;left:-9999px;width:794px;background:#fff;z-index:9998;font-family:Noto Sans KR,NotoSansMath,sans-serif';
   tmp.innerHTML = html;
   document.body.appendChild(tmp);
   await new Promise(function(r){ setTimeout(r, 400); });
-  
+
   var fullH = tmp.scrollHeight;
-  
+
+  // 콘텐츠 높이 그대로 캡처 (축소 없음 — 내용이 많아도 글씨 크기 유지)
   var fullCanvas = await html2canvas(tmp, {
     scale: 2,
     useCORS: true,
@@ -17614,24 +17615,9 @@ async function sylCaptureA4(html, quality){
     windowHeight: fullH
   });
   document.body.removeChild(tmp);
-  
-  var a4Canvas = document.createElement('canvas');
-  a4Canvas.width  = A4W * 2;   // @2x
-  a4Canvas.height = A4H * 2;   // @2x
-  var ctx = a4Canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, a4Canvas.width, a4Canvas.height);
-  
-  var scaleX = (A4W * 2) / fullCanvas.width;
-  var scaleY = (A4H * 2) / fullCanvas.height;
-  var scale  = Math.min(scaleX, scaleY);  // 비율 유지
-  var dw = fullCanvas.width  * scale;
-  var dh = fullCanvas.height * scale;
-  var dx = ((A4W * 2) - dw) / 2;  // 수평 중앙
-  var dy = 0;                       // 상단 정렬
-  ctx.drawImage(fullCanvas, 0, 0, fullCanvas.width, fullCanvas.height, dx, dy, dw, dh);
-  
-  return a4Canvas;
+
+  // 캡처된 그대로 반환 (A4 너비 유지, 높이는 콘텐츠에 맞춤)
+  return fullCanvas;
 }
 
 function sylPreview(id){
@@ -17694,14 +17680,24 @@ async function syllabusExportPDF(){
 
   var summaryHTML = sylGetSummaryHTML();
   var summaryCanvas = await sylCaptureA4(summaryHTML, 0.95);
-  pdf.addImage(summaryCanvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pW, pH);
+  // 캔버스 비율에 맞게 PDF 높이 계산 (축소 없음)
+  var sumRatio = summaryCanvas.height / summaryCanvas.width;
+  var sumH = pW * sumRatio;
+  if(sumH > pH){
+    // 내용이 A4 한 장보다 길면 여러 페이지로 분할
+    pdf.addImage(summaryCanvas.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,sumH,[],false,'FAST');
+  } else {
+    pdf.addImage(summaryCanvas.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,sumH);
+  }
 
   for(var i=0; i<_sylCourses.length; i++){
     var c = _sylCourses[i];
     var html = sylGetCourseHTML(c);
     var canvas = await sylCaptureA4(html, 0.95);
-    pdf.addPage();
-    pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pW, pH);
+    var ratio = canvas.height / canvas.width;
+    var imgH = pW * ratio;
+    pdf.addPage([pW, imgH], 'portrait');
+    pdf.addImage(canvas.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,imgH);
   }
 
   var pdfBlob = pdf.output('blob');
