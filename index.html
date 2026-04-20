@@ -17590,34 +17590,53 @@ async function sylSaveFile(blob, suggestedName, mimeType, ext){
   return true;
 }
 
+// sylCaptureA4: 전체 캔버스 반환 (축소 없음)
 async function sylCaptureA4(html, quality){
   quality = quality || 0.95;
-  var A4W = 794;
+  var A4W = 794, A4H = 1123;
 
   var tmp = document.createElement('div');
   tmp.style.cssText = 'position:fixed;top:0;left:-9999px;width:794px;background:#fff;z-index:9998;font-family:Noto Sans KR,NotoSansMath,sans-serif';
   tmp.innerHTML = html;
   document.body.appendChild(tmp);
   await new Promise(function(r){ setTimeout(r, 400); });
-
   var fullH = tmp.scrollHeight;
 
-  // 콘텐츠 높이 그대로 캡처 (축소 없음 — 내용이 많아도 글씨 크기 유지)
+  // 콘텐츠 원본 크기로 캡처
   var fullCanvas = await html2canvas(tmp, {
-    scale: 2,
-    useCORS: true,
-    backgroundColor: '#ffffff',
-    width: A4W,
-    height: fullH,
-    scrollX: 0,
-    scrollY: 0,
-    windowWidth: A4W,
-    windowHeight: fullH
+    scale: 2, useCORS: true, backgroundColor: '#ffffff',
+    width: A4W, height: fullH,
+    scrollX: 0, scrollY: 0,
+    windowWidth: A4W, windowHeight: fullH
   });
   document.body.removeChild(tmp);
 
-  // 캡처된 그대로 반환 (A4 너비 유지, 높이는 콘텐츠에 맞춤)
-  return fullCanvas;
+  // A4 캔버스(@2x) 생성
+  var a4 = document.createElement('canvas');
+  a4.width  = A4W * 2;
+  a4.height = A4H * 2;
+  var ctx = a4.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, a4.width, a4.height);
+
+  // 콘텐츠가 A4보다 짧으면 원본 크기 그대로, 길면 A4에 맞게 축소
+  var scaleX = (A4W * 2) / fullCanvas.width;
+  var scaleY = (A4H * 2) / fullCanvas.height;
+  var scale  = fullCanvas.height <= A4H * 2
+               ? 1.0          // A4 이내: 원본 크기 유지
+               : Math.min(scaleX, scaleY); // A4 초과: 비율 유지하며 축소
+  var dw = fullCanvas.width  * scale;
+  var dh = fullCanvas.height * scale;
+  var dx = (a4.width  - dw) / 2; // 수평 중앙
+  var dy = 0;                      // 상단 정렬
+  ctx.drawImage(fullCanvas, 0, 0, fullCanvas.width, fullCanvas.height, dx, dy, dw, dh);
+
+  return a4;
+}
+
+// ZIP용 호환 함수 (단일 캔버스 배열로 반환)
+function sylSliceA4Pages(canvas){
+  return [canvas];
 }
 
 function sylPreview(id){
@@ -17680,24 +17699,23 @@ async function syllabusExportPDF(){
 
   var summaryHTML = sylGetSummaryHTML();
   var summaryCanvas = await sylCaptureA4(summaryHTML, 0.95);
-  // 캔버스 비율에 맞게 PDF 높이 계산 (축소 없음)
-  var sumRatio = summaryCanvas.height / summaryCanvas.width;
-  var sumH = pW * sumRatio;
-  if(sumH > pH){
-    // 내용이 A4 한 장보다 길면 여러 페이지로 분할
-    pdf.addImage(summaryCanvas.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,sumH,[],false,'FAST');
-  } else {
-    pdf.addImage(summaryCanvas.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,sumH);
-  }
+  var sumPages = sylSliceA4Pages(summaryCanvas);
+  var firstPage = true;
+  sumPages.forEach(function(pg){
+    if(!firstPage) pdf.addPage();
+    pdf.addImage(pg.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,pH);
+    firstPage = false;
+  });
 
   for(var i=0; i<_sylCourses.length; i++){
     var c = _sylCourses[i];
     var html = sylGetCourseHTML(c);
     var canvas = await sylCaptureA4(html, 0.95);
-    var ratio = canvas.height / canvas.width;
-    var imgH = pW * ratio;
-    pdf.addPage([pW, imgH], 'portrait');
-    pdf.addImage(canvas.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,imgH);
+    var pages = sylSliceA4Pages(canvas);
+    pages.forEach(function(pg){
+      pdf.addPage();
+      pdf.addImage(pg.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,pH);
+    });
   }
 
   var pdfBlob = pdf.output('blob');
@@ -17736,20 +17754,29 @@ async function syllabusExportZIP(){
   try {
     var zip = new JSZip();
 
+    // 요약: 슬라이스하여 00_요약-1.jpg, 00_요약-2.jpg...
     var summaryHTML = sylGetSummaryHTML();
     var summaryCanvas = await sylCaptureA4(summaryHTML, 0.95);
-    var summaryBlob = await new Promise(function(r){ summaryCanvas.toBlob(r,'image/jpeg',0.95); });
-    zip.file('00_요약.jpg', summaryBlob);
+    var sumPages = sylSliceA4Pages(summaryCanvas);
+    for(var p=0; p<sumPages.length; p++){
+      var sumBlob = await new Promise(function(r){ sumPages[p].toBlob(r,'image/jpeg',0.95); });
+      var sumFname = sumPages.length===1 ? '00_요약.jpg' : '00_요약-'+(p+1)+'.jpg';
+      zip.file(sumFname, sumBlob);
+    }
 
+    // 강좌별: 슬라이스하여 01_강좌명-1.jpg, 01_강좌명-2.jpg...
     for(var i=0; i<_sylCourses.length; i++){
       var c = _sylCourses[i];
       var html = sylGetCourseHTML(c);
       var canvas = await sylCaptureA4(html, 0.95);
-
-      var blob = await new Promise(function(r){ canvas.toBlob(r,'image/jpeg',0.95); });
+      var pages = sylSliceA4Pages(canvas);
       var num = (i+1).toString().padStart(2,'0');
-      var fname = num+'_'+(c.title||('강좌'+(i+1))).replace(/[\/:*?"<>|]/g,'_')+'.jpg';
-      zip.file(fname, blob);
+      var baseName = num+'_'+(c.title||('강좌'+(i+1))).replace(/[\/:*?"<>|]/g,'_');
+      for(var p=0; p<pages.length; p++){
+        var blob = await new Promise(function(r){ pages[p].toBlob(r,'image/jpeg',0.95); });
+        var fname = pages.length===1 ? baseName+'.jpg' : baseName+'-'+(p+1)+'.jpg';
+        zip.file(fname, blob);
+      }
     }
 
     var zipBlob = await zip.generateAsync({type:'blob'});
