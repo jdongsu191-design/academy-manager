@@ -10021,29 +10021,36 @@ async function parseAnswersWithClaude(dataUrl){
     const base64 = dataUrl.split(',')[1];
     const mediaType = dataUrl.split(';')[0].split(':')[1];
 
-    const response = await fetch('/api/claude-proxy', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 4096,
-        messages: [{
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: {type: 'base64', media_type: mediaType, data: base64}
-            },
-            {
-              type: 'text',
-              text: '이 이미지는 수학 문제집의 빠른정답 페이지입니다. 문항번호와 정답이 나열되어 있습니다. 모든 문항번호와 정답을 추출해서 반드시 순수 JSON만 반환하세요. 다른 텍스트는 절대 포함하지 마세요. 형식 예시: {"1":"③","2":"④","12":"16/3","45":"a+b"}'
-            }
-          ]
-        }]
-      })
-    });
+    const MAX_RETRY = 4;
+    let response, data;
+    for(let attempt = 1; attempt <= MAX_RETRY; attempt++){
+      if(attempt > 1){
+        const waitSec = attempt * 5;
+        console.log(`정답 인식 재시도 ${attempt}/${MAX_RETRY} (${waitSec}초 대기)`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+      }
+      response = await fetch('/api/claude-proxy', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 4096,
+          messages: [{
+            role: 'user',
+            content: [
+              {type: 'image', source: {type: 'base64', media_type: mediaType, data: base64}},
+              {type: 'text', text: '이 이미지는 수학 문제집의 빠른정답 페이지입니다. 문항번호와 정답이 나열되어 있습니다. 모든 문항번호와 정답을 추출해서 반드시 순수 JSON만 반환하세요. 다른 텍스트는 절대 포함하지 마세요. 형식 예시: {"1":"③","2":"④","12":"16/3","45":"a+b"}'}
+            ]
+          }]
+        })
+      });
+      data = await response.json();
+      const errMsg = data.error || '';
+      const isOverload = typeof errMsg === 'string' && (errMsg.indexOf('high demand') !== -1 || errMsg.indexOf('overloaded') !== -1 || errMsg.indexOf('temporarily') !== -1);
+      if(!data.error || !isOverload) break;
+      if(attempt === MAX_RETRY) break;
+    }
 
-    const data = await response.json();
     if(!data.content){
       console.error('프록시 오류:', JSON.stringify(data));
       return {};
