@@ -18051,12 +18051,29 @@ async function examScanExtract(){
       generationConfig:{ temperature:0.1, maxOutputTokens:8192 }
     };
 
-    var res = await fetch('/api/gemini-proxy', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(apiBody)
-    });
-    var data = await res.json();
+    // 재시도 로직 (서버 과부하 시 최대 3회)
+    var data = null;
+    var MAX_RETRY = 3;
+    for(var attempt = 1; attempt <= MAX_RETRY; attempt++){
+      if(attempt > 1){
+        var waitSec = attempt * 5;
+        if(progress) progress.textContent = '서버 과부하로 ' + waitSec + '초 후 재시도 중... (' + attempt + '/' + MAX_RETRY + ')';
+        await new Promise(function(r){ setTimeout(r, waitSec * 1000); });
+        if(progress) progress.textContent = 'AI가 문항을 인식하는 중... (' + attempt + '/' + MAX_RETRY + ')';
+      }
+      var res = await fetch('/api/gemini-proxy', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(apiBody)
+      });
+      data = await res.json();
+      // 성공 또는 재시도 불가능한 오류면 중단
+      var errMsg = data.error ? data.error.message : '';
+      var isOverload = errMsg.indexOf('high demand') !== -1 || errMsg.indexOf('overloaded') !== -1 || res.status === 503 || res.status === 429;
+      if(res.ok && !data.error) break; // 성공
+      if(!isOverload) break; // 재시도해도 소용없는 오류
+      if(attempt === MAX_RETRY) break;
+    }
 
     if(!res.ok || data.error) throw new Error(data.error ? data.error.message : 'API 오류');
 
