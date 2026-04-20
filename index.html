@@ -18010,9 +18010,9 @@ async function examScanExtract(){
   var removeAnswers = document.getElementById('exam-scan-opt-remove-answers') ? document.getElementById('exam-scan-opt-remove-answers').checked : true;
   var includeScore  = document.getElementById('exam-scan-opt-include-score') ? document.getElementById('exam-scan-opt-include-score').checked : true;
 
-  var loading = document.getElementById('exam-scan-loading');
-  var result  = document.getElementById('exam-scan-result');
-  var btn     = document.getElementById('exam-scan-extract-btn');
+  var loading  = document.getElementById('exam-scan-loading');
+  var result   = document.getElementById('exam-scan-result');
+  var btn      = document.getElementById('exam-scan-extract-btn');
   var progress = document.getElementById('exam-scan-progress');
 
   if(loading) loading.style.display='block';
@@ -18020,18 +18020,6 @@ async function examScanExtract(){
   if(btn){ btn.disabled=true; btn.textContent='⏳ 분석 중...'; }
 
   try {
-    if(progress) progress.textContent = '파일 변환 중...';
-
-    var base64 = await new Promise(function(resolve, reject){
-      var reader = new FileReader();
-      reader.onload = function(e){ resolve(e.target.result.split(',')[1]); };
-      reader.onerror = reject;
-      reader.readAsDataURL(_examScanFile);
-    });
-
-    var mediaType = _examScanFile.type;
-    if(progress) progress.textContent = 'AI가 문항을 인식하는 중...';
-
     var opts = [];
     if(removeMarks)   opts.push('채점 표시(동그라미, X, 체크 등)는 무시하세요.');
     if(removeAnswers) opts.push('학생이 적은 풀이 과정이나 메모는 무시하고 인쇄된 문제 원문만 추출하세요.');
@@ -18047,56 +18035,146 @@ async function examScanExtract(){
       + '예: 분수는 a/b, 제곱은 x², 루트는 √, 시그마는 Σ\n\n'
       + '문항 추출만 하고 다른 설명은 하지 마세요.';
 
-    var apiBody = {
-      model: 'gemini-2.5-flash',
-      contents:[{
-        parts:[
-          {inlineData:{ mimeType: mediaType, data: base64 }},
-          {text: prompt}
-        ]
-      }],
-      generationConfig:{ temperature:0.1, maxOutputTokens:8192 }
-    };
+    var isPDF = _examScanFile.type === 'application/pdf';
+    var allText = '';
 
-    // 재시도 로직 (서버 과부하 시 최대 3회)
-    var data = null;
-    var MAX_RETRY = 3;
-    for(var attempt = 1; attempt <= MAX_RETRY; attempt++){
-      if(attempt > 1){
-        var waitSec = attempt * 5;
-        if(progress) progress.textContent = '서버 과부하로 ' + waitSec + '초 후 재시도 중... (' + attempt + '/' + MAX_RETRY + ')';
-        await new Promise(function(r){ setTimeout(r, waitSec * 1000); });
-        if(progress) progress.textContent = 'AI가 문항을 인식하는 중... (' + attempt + '/' + MAX_RETRY + ')';
+    if(isPDF){
+      // ── PDF: pdf.js로 페이지별 분할 후 순차 전송 ──
+      if(progress) progress.textContent = 'pdf.js 로드 중...';
+
+      // pdf.js CDN 로드
+      if(!window.pdfjsLib){
+        await new Promise(function(resolve, reject){
+          var s = document.createElement('script');
+          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+          s.onload = resolve; s.onerror = reject;
+          document.head.appendChild(s);
+        });
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
       }
-      var res = await fetch('/api/gemini-proxy', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(apiBody)
+
+      if(progress) progress.textContent = 'PDF 읽는 중...';
+
+      var arrayBuffer = await new Promise(function(resolve, reject){
+        var reader = new FileReader();
+        reader.onload = function(e){ resolve(e.target.result); };
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(_examScanFile);
       });
-      data = await res.json();
-      // 성공 또는 재시도 불가능한 오류면 중단
-      var errMsg = data.error ? data.error.message : '';
-      var isOverload = errMsg.indexOf('high demand') !== -1 || errMsg.indexOf('overloaded') !== -1 || res.status === 503 || res.status === 429;
-      if(res.ok && !data.error) break; // 성공
-      if(!isOverload) break; // 재시도해도 소용없는 오류
-      if(attempt === MAX_RETRY) break;
+
+      var pdfDoc = await window.pdfjsLib.getDocument({data: arrayBuffer}).promise;
+      var totalPages = pdfDoc.numPages;
+      var pageResults = [];
+
+      for(var pageNum = 1; pageNum <= totalPages; pageNum++){
+        if(progress) progress.textContent = pageNum + '/' + totalPages + ' 페이지 처리 중...';
+
+        // 페이지 → 캔버스 → JPEG base64
+        var page = await pdfDoc.getPage(pageNum);
+        var viewport = page.getViewport({scale: 1.8});
+        var canvas = document.createElement('canvas');
+        canvas.width  = viewport.width;
+        canvas.height = viewport.height;
+        var ctx = canvas.getContext('2d');
+        await page.render({canvasContext: ctx, viewport: viewport}).promise;
+        var base64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+
+        // 페이지별 Gemini 전송 (최대 3회 재시도)
+        var pageText = '';
+        var MAX_RETRY = 3;
+        for(var attempt = 1; attempt <= MAX_RETRY; attempt++){
+          if(attempt > 1){
+            var waitSec = attempt * 6;
+            if(progress) progress.textContent = pageNum+'/'+ totalPages+' 페이지 재시도 중... ('+attempt+'/'+MAX_RETRY+', '+waitSec+'초 대기)';
+            await new Promise(function(r){ setTimeout(r, waitSec * 1000); });
+            if(progress) progress.textContent = pageNum+'/'+totalPages+' 페이지 처리 중... (재시도 '+attempt+')';
+          }
+
+          var res = await fetch('/api/gemini-proxy', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({
+              model: 'gemini-2.5-flash',
+              contents:[{parts:[
+                {inlineData:{ mimeType:'image/jpeg', data: base64 }},
+                {text: prompt}
+              ]}],
+              generationConfig:{ temperature:0.1, maxOutputTokens:4096 }
+            })
+          });
+          var data = await res.json();
+          var errMsg = data.error ? (data.error.message||'') : '';
+          var isOverload = errMsg.indexOf('high demand') !== -1 || errMsg.indexOf('overloaded') !== -1 || errMsg.indexOf('temporarily') !== -1;
+
+          if(!data.error){
+            if(data.candidates && data.candidates[0] && data.candidates[0].content){
+              var parts = data.candidates[0].content.parts;
+              pageText = (parts && parts[0] && parts[0].text) || '';
+            }
+            break;
+          }
+          if(!isOverload) break; // 재시도 불가 오류
+        }
+
+        if(pageText) pageResults.push('── ' + pageNum + '페이지 ──\n' + pageText);
+      }
+
+      allText = pageResults.join('\n\n');
+
+    } else {
+      // ── 이미지: 기존 방식 (단일 전송 + 재시도) ──
+      if(progress) progress.textContent = '이미지 변환 중...';
+      var base64img = await new Promise(function(resolve, reject){
+        var reader = new FileReader();
+        reader.onload = function(e){ resolve(e.target.result.split(',')[1]); };
+        reader.onerror = reject;
+        reader.readAsDataURL(_examScanFile);
+      });
+
+      if(progress) progress.textContent = 'AI가 문항을 인식하는 중...';
+      var MAX_RETRY2 = 3;
+      for(var attempt2 = 1; attempt2 <= MAX_RETRY2; attempt2++){
+        if(attempt2 > 1){
+          var ws = attempt2 * 5;
+          if(progress) progress.textContent = '서버 과부하로 ' + ws + '초 후 재시도... (' + attempt2 + '/' + MAX_RETRY2 + ')';
+          await new Promise(function(r){ setTimeout(r, ws * 1000); });
+          if(progress) progress.textContent = 'AI가 문항을 인식하는 중... (재시도 ' + attempt2 + ')';
+        }
+        var res2 = await fetch('/api/gemini-proxy', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            model: 'gemini-2.5-flash',
+            contents:[{parts:[
+              {inlineData:{ mimeType: _examScanFile.type, data: base64img }},
+              {text: prompt}
+            ]}],
+            generationConfig:{ temperature:0.1, maxOutputTokens:8192 }
+          })
+        });
+        var data2 = await res2.json();
+        var err2 = data2.error ? (data2.error.message||'') : '';
+        var isOvl = err2.indexOf('high demand') !== -1 || err2.indexOf('overloaded') !== -1;
+        if(!data2.error){
+          if(data2.candidates && data2.candidates[0] && data2.candidates[0].content){
+            var pts = data2.candidates[0].content.parts;
+            allText = (pts && pts[0] && pts[0].text) || '';
+          }
+          break;
+        }
+        if(!isOvl || attempt2 === MAX_RETRY2) throw new Error(err2 || 'API 오류');
+      }
     }
 
-    if(!res.ok || data.error) throw new Error(data.error ? data.error.message : 'API 오류');
+    if(!allText) throw new Error('추출된 내용이 없습니다. 다시 시도해주세요.');
 
-    var text = '';
-    if(data.candidates && data.candidates[0] && data.candidates[0].content){
-      var parts = data.candidates[0].content.parts;
-      text = (parts && parts[0] && parts[0].text) || '';
-    }
-    if(!text) throw new Error('추출된 내용이 없습니다');
-
-    _examScanResult = text;
+    _examScanResult = allText;
     if(progress) progress.textContent = '결과 정리 중...';
-    examScanDisplayResult(text);
+    examScanDisplayResult(allText);
 
   } catch(e){
-    alert('오류: '+e.message);
+    alert('오류: ' + e.message);
   } finally {
     if(loading) loading.style.display='none';
     if(btn){ btn.disabled=false; btn.style.opacity='1'; btn.textContent='🔄 다시 추출'; }
