@@ -14338,6 +14338,10 @@ async function wmsgLoadData(){
       +'</style>';
 
     html += '<div style="overflow-x:auto"><table class="wmsg-tbl"><thead><tr>';
+    html += '<th style="width:40px;min-width:40px;padding:6px 4px" title="추가 메시지 받을 학생 선택">'
+      +'<input type="checkbox" id="wmsg-chk-all" onchange="wmsgToggleAllExtra(this)" checked '
+      +'style="width:15px;height:15px;cursor:pointer;accent-color:#1F3A51" title="전체 선택/해제">'
+    +'</th>';
     html += '<th style="text-align:left;padding-left:10px;min-width:70px">학교</th>';
     html += '<th style="min-width:36px">학년</th>';
     html += '<th style="text-align:left;padding-left:8px;min-width:56px">이름</th>';
@@ -14355,11 +14359,18 @@ async function wmsgLoadData(){
       return na.localeCompare(nb,'ko');
     }).forEach(function(sid){
       var stu = stuMap[sid] || {name:'(알수없음)', school:'', grade:''};
-      var ment = wmsgBuildMent(stu, dateLabel, useNaje, usePt, useBy, wnMap[sid], ptMap[sid], byMap[sid], extraMsg);
+      // 기본 멘트 (추가 메시지 제외) + 최종 멘트 (추가 메시지 포함) 둘 다 준비
+      var baseMent = wmsgBuildMent(stu, dateLabel, useNaje, usePt, useBy, wnMap[sid], ptMap[sid], byMap[sid], '');
+      var ment     = wmsgBuildMent(stu, dateLabel, useNaje, usePt, useBy, wnMap[sid], ptMap[sid], byMap[sid], extraMsg);
       allMents.push(ment);
-      var mentEnc = encodeURIComponent(ment);
+      var mentEnc     = encodeURIComponent(ment);
+      var baseMentEnc = encodeURIComponent(baseMent);
 
-      html += '<tr>';
+      html += '<tr data-sid="'+sid+'" data-base-ment="'+baseMentEnc+'">';
+      html += '<td style="padding:6px 4px">'
+        +'<input type="checkbox" class="wmsg-extra-chk" checked data-sid="'+sid+'" onchange="wmsgOnRowExtraToggle(this)" '
+        +'style="width:15px;height:15px;cursor:pointer;accent-color:#1F3A51">'
+      +'</td>';
       html += '<td style="text-align:left;padding-left:10px;color:#6b7280;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(stu.school||'-')+'</td>';
       html += '<td style="color:#6b7280">'+(stu.grade||'-')+'</td>';
       html += '<td style="text-align:left;padding-left:8px;font-weight:700;color:#1e293b;white-space:nowrap">'+stu.name+'</td>';
@@ -14483,32 +14494,51 @@ function wmsgClearExtra(){
   wmsgRefreshExtraInAllMents();
 }
 
-// 추가 메시지만 바뀌었을 때 테이블의 숨겨진 ment 데이터를 즉시 갱신 (DB 재호출 없이)
+// 추가 메시지 / 체크박스 상태가 바뀌었을 때 모든 행의 data-ment를 다시 빌드
+// 각 행에 data-base-ment (extra 없는 버전)가 저장되어 있으므로 안전하게 재조립 가능
 function wmsgRefreshExtraInAllMents(){
   var extraEl = document.getElementById('wmsg-extra');
-  if(!extraEl) return;
-  var newExtra = (extraEl.value || '').trim();
+  var newExtra = extraEl ? (extraEl.value || '').trim() : '';
   var wrap = document.getElementById('wmsg-table-wrap');
   if(!wrap) return;
-  var btns = wrap.querySelectorAll('button[data-ment]');
-  btns.forEach(function(btn){
-    var current = '';
-    try { current = decodeURIComponent(btn.dataset.ment || ''); } catch(e){}
-    // 기존 ment에서 추가 메시지 블록 제거 (마지막 구분선 이후)
-    var sepIdx = current.lastIndexOf('\n-------------------------\n');
-    // 본문 파트(결과 요약 끝까지)를 찾기 위해 첫 구분선 이후의 두 번째 구분선 여부 체크
-    var firstSepIdx = current.indexOf('\n-------------------------\n');
-    var base = current;
-    if(firstSepIdx !== -1 && sepIdx !== -1 && sepIdx !== firstSepIdx){
-      base = current.substring(0, sepIdx);
-    }
-    // 새 ment 조립
-    var next = base;
-    if(newExtra){
-      next = base + '\n-------------------------\n' + newExtra;
-    }
-    btn.dataset.ment = encodeURIComponent(next);
+  var rows = wrap.querySelectorAll('tr[data-base-ment]');
+  rows.forEach(function(tr){
+    var base = '';
+    try { base = decodeURIComponent(tr.dataset.baseMent || ''); } catch(e){}
+    var chk = tr.querySelector('input.wmsg-extra-chk');
+    var include = chk ? chk.checked : true;
+    var next = (newExtra && include)
+      ? base + '\n-------------------------\n' + newExtra
+      : base;
+    var btn = tr.querySelector('button[data-ment]');
+    if(btn) btn.dataset.ment = encodeURIComponent(next);
   });
+}
+
+// 전체 선택/해제 체크박스
+function wmsgToggleAllExtra(masterChk){
+  var wrap = document.getElementById('wmsg-table-wrap');
+  if(!wrap) return;
+  var checks = wrap.querySelectorAll('input.wmsg-extra-chk');
+  checks.forEach(function(c){ c.checked = masterChk.checked; });
+  wmsgRefreshExtraInAllMents();
+}
+
+// 개별 행 체크박스 변경 시
+function wmsgOnRowExtraToggle(chk){
+  // 전체 선택 체크박스 상태 동기화
+  var wrap = document.getElementById('wmsg-table-wrap');
+  if(wrap){
+    var all = wrap.querySelectorAll('input.wmsg-extra-chk');
+    var checkedCount = 0;
+    all.forEach(function(c){ if(c.checked) checkedCount++; });
+    var master = document.getElementById('wmsg-chk-all');
+    if(master){
+      master.checked = (checkedCount === all.length);
+      master.indeterminate = (checkedCount > 0 && checkedCount < all.length);
+    }
+  }
+  wmsgRefreshExtraInAllMents();
 }
 
 function wmsgCopyOne(btn){
