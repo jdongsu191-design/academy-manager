@@ -1560,6 +1560,16 @@
                    <span style="color:#b45309">📝 베티모의고사</span>
                  </label>
                </div>
+               <!-- 추가 메시지 입력 -->
+               <div style="margin-top:8px">
+                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+                   <div style="font-size:11px;color:#6b7280;font-weight:600">✏️ 추가 메시지 <span style="font-weight:400;color:#9ca3af">(선택, 모든 학생에게 공통 추가됨)</span></div>
+                   <button type="button" onclick="wmsgClearExtra()" style="padding:2px 8px;border:1px solid #e5e7eb;border-radius:5px;background:#fff;color:#6b7280;font-size:10px;cursor:pointer">지우기</button>
+                 </div>
+                 <textarea id="wmsg-extra" oninput="wmsgRefreshExtraInAllMents()"
+                   placeholder="예: 이번 주는 개념 복습에 집중했습니다. 다음 주 N제는 확률 단원입니다."
+                   style="width:100%;padding:8px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;line-height:1.5;outline:none;background:#fff;box-sizing:border-box;resize:vertical;min-height:56px;font-family:inherit"></textarea>
+               </div>
              </div>
              <!-- 버튼 -->
              <div style="display:flex;gap:8px;align-self:flex-end">
@@ -14296,6 +14306,9 @@ async function wmsgLoadData(){
     var dayNames = ['일','월','화','수','목','금','토'];
     var d = new Date(date+'T00:00:00');
     var dateLabel = parseInt(dp[1]+'')+'월 '+parseInt(dp[2]+'')+'일('+dayNames[d.getDay()]+')';
+    // 추가 메시지 (선택)
+    var extraMsgEl = document.getElementById('wmsg-extra');
+    var extraMsg = extraMsgEl ? extraMsgEl.value : '';
 
     // 헤더 컬럼 구성
     var cols = ['학교','학년','이름'];
@@ -14341,7 +14354,7 @@ async function wmsgLoadData(){
       return na.localeCompare(nb,'ko');
     }).forEach(function(sid){
       var stu = stuMap[sid] || {name:'(알수없음)', school:'', grade:''};
-      var ment = wmsgBuildMent(stu, dateLabel, useNaje, usePt, useBy, wnMap[sid], ptMap[sid], byMap[sid]);
+      var ment = wmsgBuildMent(stu, dateLabel, useNaje, usePt, useBy, wnMap[sid], ptMap[sid], byMap[sid], extraMsg);
       allMents.push(ment);
       var mentEnc = encodeURIComponent(ment);
 
@@ -14412,7 +14425,7 @@ async function wmsgLoadData(){
   }
 }
 
-function wmsgBuildMent(stu, dateLabel, useNaje, usePt, useBy, wnRec, ptRec, byRec){
+function wmsgBuildMent(stu, dateLabel, useNaje, usePt, useBy, wnRec, ptRec, byRec, extraMsg){
   var lines = [];
   lines.push('안녕하세요. 베스티안 수학학원입니다');
   lines.push(stu.name+' 학생 주말프로그램 결과 안내드립니다.');
@@ -14453,7 +14466,48 @@ function wmsgBuildMent(stu, dateLabel, useNaje, usePt, useBy, wnRec, ptRec, byRe
     if(byRec.result!=='F') lines.push('▶ 오답: '+byWrong);
   }
 
+  // 추가 메시지가 있으면 구분선과 함께 하단에 붙임
+  if(extraMsg && extraMsg.trim()){
+    lines.push('-------------------------');
+    lines.push(extraMsg.trim());
+  }
+
   return lines.join('\n');
+}
+
+// 추가 메시지 입력란 지우기
+function wmsgClearExtra(){
+  var el = document.getElementById('wmsg-extra');
+  if(el){ el.value = ''; el.focus(); }
+  wmsgRefreshExtraInAllMents();
+}
+
+// 추가 메시지만 바뀌었을 때 테이블의 숨겨진 ment 데이터를 즉시 갱신 (DB 재호출 없이)
+function wmsgRefreshExtraInAllMents(){
+  var extraEl = document.getElementById('wmsg-extra');
+  if(!extraEl) return;
+  var newExtra = (extraEl.value || '').trim();
+  var wrap = document.getElementById('wmsg-table-wrap');
+  if(!wrap) return;
+  var btns = wrap.querySelectorAll('button[data-ment]');
+  btns.forEach(function(btn){
+    var current = '';
+    try { current = decodeURIComponent(btn.dataset.ment || ''); } catch(e){}
+    // 기존 ment에서 추가 메시지 블록 제거 (마지막 구분선 이후)
+    var sepIdx = current.lastIndexOf('\n-------------------------\n');
+    // 본문 파트(결과 요약 끝까지)를 찾기 위해 첫 구분선 이후의 두 번째 구분선 여부 체크
+    var firstSepIdx = current.indexOf('\n-------------------------\n');
+    var base = current;
+    if(firstSepIdx !== -1 && sepIdx !== -1 && sepIdx !== firstSepIdx){
+      base = current.substring(0, sepIdx);
+    }
+    // 새 ment 조립
+    var next = base;
+    if(newExtra){
+      next = base + '\n-------------------------\n' + newExtra;
+    }
+    btn.dataset.ment = encodeURIComponent(next);
+  });
 }
 
 function wmsgCopyOne(btn){
@@ -14467,7 +14521,16 @@ function wmsgCopyOne(btn){
 
 function wmsgCopyAll(){
   var btn = document.getElementById('wmsg-copy-all-btn');
-  var allMents = btn ? decodeURIComponent(btn.dataset.allMents||'') : '';
+  // 테이블의 각 복사 버튼에서 최신 data-ment 값을 수집 (추가 메시지 수정 반영)
+  var wrap = document.getElementById('wmsg-table-wrap');
+  var ments = [];
+  if(wrap){
+    wrap.querySelectorAll('button[data-ment]').forEach(function(b){
+      try { ments.push(decodeURIComponent(b.dataset.ment || '')); } catch(e){}
+    });
+  }
+  var allMents = ments.length ? ments.join('\n\n─────────────\n\n')
+                              : (btn ? decodeURIComponent(btn.dataset.allMents||'') : '');
   if(!allMents){ alert('멘트가 없습니다'); return; }
   navigator.clipboard.writeText(allMents).then(function(){
     if(btn){ btn.textContent='✅ 전체 복사됨!'; btn.style.background='#15803d'; }
