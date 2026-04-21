@@ -17513,7 +17513,48 @@ function sylDateToDay(dateStr){
   return days[dt.getDay()];
 }
 
-function sylGetCourseHTML(c){
+// 날짜 문자열(예: "7/5")에서 월 숫자 추출. 실패 시 null 반환
+function sylExtractMonth(dateStr){
+  if(!dateStr) return null;
+  var m = String(dateStr).replace(/\s/g,'').match(/^(\d{1,2})[\/\-\.]/);
+  if(!m) return null;
+  var n = parseInt(m[1],10);
+  if(isNaN(n) || n<1 || n>12) return null;
+  return n;
+}
+
+// schedule 배열을 월별로 그룹화. 월이 없는 행은 바로 앞 월에 귀속.
+// 반환: [{ month: 7, rows: [{orig, idx}, ...] }, ...] (시간순 유지)
+function sylGroupScheduleByMonth(schedule){
+  if(!schedule || !schedule.length) return [];
+  var groups = [];
+  var lastMonth = null;
+  for(var i=0; i<schedule.length; i++){
+    var s = schedule[i];
+    // 빈 행(날짜도 내용도 없음)은 스킵
+    if(!s.date && !s.main) continue;
+    var mm = sylExtractMonth(s.date);
+    if(mm === null){
+      // 월 파싱 실패 시 직전 그룹에 편입 (없으면 새 그룹 생성하되 month=0)
+      if(groups.length){
+        groups[groups.length-1].rows.push({orig:s, idx:i});
+      } else {
+        groups.push({month:0, rows:[{orig:s, idx:i}]});
+      }
+      continue;
+    }
+    if(mm !== lastMonth){
+      groups.push({month:mm, rows:[]});
+      lastMonth = mm;
+    }
+    groups[groups.length-1].rows.push({orig:s, idx:i});
+  }
+  return groups;
+}
+
+// ── 진도계획서: 페이지별 HTML 배열 반환 (월 2개 이상이면 월별로 분할) ──
+// 반환: [{ html: string, monthLabel: string, pageNo: number, totalPages: number }, ...]
+function sylGetCoursePagesHTML(c){
   var teacherName = _sylTeacherName || '선생님';
   var period = sylGetPeriod();
 
@@ -17528,24 +17569,6 @@ function sylGetCourseHTML(c){
     ['모의고사 시간', c.mogiTime||''],
   ];
 
-  var schedHTML = c.schedule.map(function(s,si){
-    var bg = s.flag==='H' ? '#fff8ed' : (si%2===1 ? '#f8fafc' : '#ffffff');
-    var mainColor = s.flag==='H' ? '#b94040' : (s.flag==='S' ? '#7c5a00' : '#1e293b');
-    var mainText = s.main.replace(/\n/g,'<br>');
-    var badge = s.flag==='S'?'<span style="display:inline-block;margin-top:3px;background:#fef3c7;border:1px solid #fbbf24;color:#92400e;font-size:8.5px;font-weight:700;border-radius:3px;padding:1px 5px">특별</span>':
-                s.flag==='H'?'<span style="display:inline-block;margin-top:3px;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-size:8.5px;font-weight:700;border-radius:3px;padding:1px 5px">휴강</span>':'';
-    return '<tr>'
-      +'<td style="padding:9px 10px;vertical-align:top;background:'+bg+';border-bottom:1px solid #e2e8f0;min-width:75px;max-width:75px;border-right:1px solid #e2e8f0">'
-        +'<div style="font-size:13.5px;font-weight:800;color:#1F3A51;white-space:nowrap">'+s.date+'</div>'
-        +'<div style="font-size:10.5px;color:#64748b;margin-top:1px;white-space:nowrap">'+s.day+'</div>'
-        +badge
-      +'</td>'
-      +'<td style="padding:9px 11px;vertical-align:top;background:'+bg+';border-bottom:1px solid #e2e8f0">'
-        +'<div style="font-size:12.5px;font-weight:700;color:'+mainColor+';line-height:1.7">'+mainText+'</div>'
-      +'</td>'
-    +'</tr>';
-  }).join('');
-
   var _courseIdx = _sylCourses ? _sylCourses.findIndex(function(x){ return x.id === c.id; }) : -1;
   if(_courseIdx < 0) _courseIdx = 0;
   var brandColor = c.brandColor || _sylCourseColorPalette[_courseIdx % _sylCourseColorPalette.length] || '#1F3A51';
@@ -17553,9 +17576,9 @@ function sylGetCourseHTML(c){
 
   var _curriculum = (c.curriculum && c.curriculum.length) ? c.curriculum : (_sylTeacherCurriculum || []);
   var hasCurriculum = _curriculum.some(function(cu){ return cu.content && cu.content.trim(); });
-  var currMonthNow = new Date().getMonth(); // 현재 월 (0=1월)
+  var currMonthNow = new Date().getMonth();
   var currHTML = hasCurriculum ? _curriculum.map(function(cu,ci){
-    var hl = ci === currMonthNow; // 현재 월 강조
+    var hl = ci === currMonthNow;
     var borderR = ci%6 < 5 ? 'border-right:1.5px solid rgba(255,255,255,0.18);' : '';
     var borderT = ci >= 6 ? 'border-top:1.5px solid rgba(255,255,255,0.18);' : '';
     var monthTxt = hl ? accentColor : 'rgba(255,255,255,0.95)';
@@ -17596,12 +17619,57 @@ function sylGetCourseHTML(c){
   var photoHTML = _photo
     ? '<div style="align-self:flex-end;flex-shrink:0;width:140px;height:140px;display:flex;align-items:flex-end;justify-content:center"><img src="'+_photo+'" style="max-width:140px;max-height:140px;object-fit:contain;display:block"></div>'
     : '';
+  var photoHTMLMini = _photo
+    ? '<div style="flex-shrink:0;width:56px;height:56px;display:flex;align-items:center;justify-content:center"><img src="'+_photo+'" style="max-width:56px;max-height:56px;object-fit:contain;display:block;border-radius:6px"></div>'
+    : '';
 
-  return `<div style="width:794px;background:#fff;font-family:'Noto Sans KR','NotoSansMath',sans-serif;position:relative;margin:0 auto">
+  // ── 월별 그룹화 ──
+  var monthGroups = sylGroupScheduleByMonth(c.schedule || []);
+  // 그룹이 없으면 빈 한 페이지로 처리 (기존과 동일)
+  if(!monthGroups.length){
+    monthGroups = [{month:0, rows:[]}];
+  }
+  var totalPages = monthGroups.length;
+
+  // 한 달짜리 schedule → <tr> 문자열로 렌더링
+  function renderSchedRows(rows){
+    return rows.map(function(item, idx){
+      var s = item.orig;
+      var si = idx;
+      var bg = s.flag==='H' ? '#fff8ed' : (si%2===1 ? '#f8fafc' : '#ffffff');
+      var mainColor = s.flag==='H' ? '#b94040' : (s.flag==='S' ? '#7c5a00' : '#1e293b');
+      var mainText = (s.main||'').replace(/\n/g,'<br>');
+      var badge = s.flag==='S'?'<span style="display:inline-block;margin-top:3px;background:#fef3c7;border:1px solid #fbbf24;color:#92400e;font-size:8.5px;font-weight:700;border-radius:3px;padding:1px 5px">특별</span>':
+                  s.flag==='H'?'<span style="display:inline-block;margin-top:3px;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-size:8.5px;font-weight:700;border-radius:3px;padding:1px 5px">휴강</span>':'';
+      return '<tr>'
+        +'<td style="padding:9px 10px;vertical-align:top;background:'+bg+';border-bottom:1px solid #e2e8f0;min-width:75px;max-width:75px;border-right:1px solid #e2e8f0">'
+          +'<div style="font-size:13.5px;font-weight:800;color:#1F3A51;white-space:nowrap">'+(s.date||'')+'</div>'
+          +'<div style="font-size:10.5px;color:#64748b;margin-top:1px;white-space:nowrap">'+(s.day||'')+'</div>'
+          +badge
+        +'</td>'
+        +'<td style="padding:9px 11px;vertical-align:top;background:'+bg+';border-bottom:1px solid #e2e8f0">'
+          +'<div style="font-size:12.5px;font-weight:700;color:'+mainColor+';line-height:1.7">'+mainText+'</div>'
+        +'</td>'
+      +'</tr>';
+    }).join('');
+  }
+
+  var pages = [];
+  monthGroups.forEach(function(grp, gi){
+    var isFirst = (gi === 0);
+    var pageNo = gi + 1;
+    var monthLabel = grp.month ? (grp.month+'월') : '';
+    var schedHTML = renderSchedRows(grp.rows);
+
+    // ── 페이지 헤더 ──
+    var headerHTML;
+    if(isFirst){
+      // 1페이지: 풀 헤더
+      headerHTML = `
   <!-- 헤더 -->
   <div style="background:${brandColor};padding:22px 32px 0;display:flex;align-items:flex-end;justify-content:space-between;gap:16px">
     <div style="flex:1;padding-bottom:18px">
-      <div style="font-size:11px;font-weight:700;letter-spacing:3px;color:${accentColor};text-transform:uppercase;margin-bottom:5px">베스티안 수학학원 · ${period} 진도계획서</div>
+      <div style="font-size:11px;font-weight:700;letter-spacing:3px;color:${accentColor};text-transform:uppercase;margin-bottom:5px">베스티안 수학학원 · ${period} 진도계획서${totalPages>1?' <span style="font-size:10px;color:rgba(255,255,255,0.6);letter-spacing:1px">('+pageNo+'/'+totalPages+')</span>':''}</div>
       <div style="font-size:13px;color:rgba(255,255,255,0.75);margin-bottom:6px;font-weight:500">${c.grade} · ${c.time}</div>
       <div style="font-size:30px;font-weight:900;color:#fff;line-height:1.15;letter-spacing:-0.5px">${teacherName} <span style="font-size:14px;font-weight:400;color:rgba(255,255,255,0.7)">선생님</span></div>
       <div style="font-size:15px;font-weight:700;color:${accentColor};margin-top:4px;letter-spacing:0.3px">${c.title||'강좌명'}</div>
@@ -17627,15 +17695,40 @@ function sylGetCourseHTML(c){
     ${featureText ? `<div style="background:#f4f7fa;border-left:3px solid ${brandColor};border-radius:0 8px 8px 0;padding:10px 14px">
       <div style="font-size:12.5px;font-weight:600;color:#1e293b;line-height:1.8">${featureText}</div>
     </div>` : ''}
+  </div>`;
+    } else {
+      // 2페이지 이상: 미니 헤더
+      headerHTML = `
+  <!-- 미니 헤더 (2페이지 이상) -->
+  <div style="background:${brandColor};padding:14px 32px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+    <div style="flex:1;display:flex;align-items:center;gap:14px">
+      ${photoHTMLMini}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700;letter-spacing:2.5px;color:${accentColor};text-transform:uppercase;margin-bottom:3px">베스티안 수학학원 · ${period} 진도계획서 <span style="font-size:9px;color:rgba(255,255,255,0.6);letter-spacing:1px">(${pageNo}/${totalPages})</span></div>
+        <div style="font-size:17px;font-weight:900;color:#fff;line-height:1.2;letter-spacing:-0.3px">${teacherName} <span style="font-size:11px;font-weight:400;color:rgba(255,255,255,0.7)">선생님</span> <span style="font-size:12px;color:${accentColor};font-weight:700;margin-left:6px">${c.title||''}</span></div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.75);margin-top:2px;font-weight:500">${c.grade||''} · ${c.time||''}</div>
+      </div>
+    </div>
   </div>
+  <div style="height:3px;background:linear-gradient(90deg,${accentColor} 0%,#e8d5a8 50%,transparent 100%)"></div>`;
+    }
 
-  <!-- 진도계획 + 주말학습 좌우 분할 -->
-  <div style="padding:4px 32px 14px">
+    // ── 회차별 진도 계획 섹션 ──
+    // 월 라벨을 섹션 제목에 함께 표시
+    var sectionTitle = monthLabel
+      ? ('회차별 진도 계획 · <span style="color:'+accentColor+'">'+monthLabel+'</span>')
+      : '회차별 진도 계획';
+
+    // 주말학습 표는 1페이지에서만 표시 (중복 방지)
+    var showWeekend = isFirst && weekendHTML;
+
+    var scheduleSectionHTML = `
+  <div style="padding:${isFirst?'4px':'14px'} 32px 14px">
     <div style="font-size:10.5px;font-weight:800;letter-spacing:2.5px;color:${brandColor};display:flex;align-items:center;gap:8px;margin-bottom:10px;text-transform:uppercase">
-      <span style="width:3px;height:12px;background:${accentColor};border-radius:2px;display:inline-block"></span>회차별 진도 계획
+      <span style="width:3px;height:12px;background:${accentColor};border-radius:2px;display:inline-block"></span>${sectionTitle}
       <span style="flex:1;height:1px;background:#d0dde6;display:inline-block"></span>
     </div>
-    <div style="display:grid;grid-template-columns:${weekendHTML ? '1fr 220px' : '1fr'};gap:12px;align-items:stretch">
+    <div style="display:grid;grid-template-columns:${showWeekend ? '1fr 220px' : '1fr'};gap:12px;align-items:stretch">
       <!-- 진도계획 표 -->
       <div style="border:1.5px solid #cbd5e1;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">
         <table style="border-collapse:collapse;width:100%;flex:1">
@@ -17646,8 +17739,7 @@ function sylGetCourseHTML(c){
           <tbody>${schedHTML}</tbody>
         </table>
       </div>
-      <!-- 주말학습 표 (내용 있을 때만) -->
-      ${weekendHTML ? `<div style="border:1.5px solid #bfdbfe;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">
+      ${showWeekend ? `<div style="border:1.5px solid #bfdbfe;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">
         <table style="border-collapse:collapse;width:100%;flex:1">
           <thead><tr style="background:#1e40af">
             <th colspan="2" style="padding:8px 10px;font-size:10.5px;font-weight:700;color:rgba(255,255,255,0.95);text-align:left">📅 주말 학습 계획</th>
@@ -17656,22 +17748,46 @@ function sylGetCourseHTML(c){
         </table>
       </div>` : ''}
     </div>
-  </div>
-  <!-- 연간 커리큘럼 (내용이 있을 때만) -->
-  ${hasCurriculum ? `<div style="padding:0 32px 18px">
+  </div>`;
+
+    // ── 연간 커리큘럼: 1페이지에만 표시 ──
+    var curriculumHTML = (isFirst && hasCurriculum) ? `<div style="padding:0 32px 18px">
     <div style="font-size:10.5px;font-weight:800;letter-spacing:2.5px;color:${brandColor};display:flex;align-items:center;gap:8px;margin-bottom:10px;text-transform:uppercase">
       <span style="width:3px;height:12px;background:${accentColor};border-radius:2px;display:inline-block"></span>연간 커리큘럼
       <span style="flex:1;height:1px;background:#d0dde6;display:inline-block"></span>
     </div>
     <div style="display:grid;grid-template-columns:repeat(6,1fr);grid-template-rows:auto auto;border:1.5px solid #cbd5e1;border-radius:10px;overflow:hidden">${currHTML}</div>
-  </div>` : ''}
+  </div>` : '';
 
-  <!-- 푸터 -->
+    var footerLabel = monthLabel ? (period+' · '+monthLabel+' · 진도계획서') : (period+' · 진도계획서');
+    var footerHTML = `
   <div style="background:#f4f7fa;border-top:1px solid #d0dde6;padding:9px 32px;display:flex;align-items:center;justify-content:space-between">
-    <div style="font-size:12.5px;font-weight:800;color:${brandColor}">베스티안 수학학원</div>
-    <div style="font-size:10.5px;color:#5a7080">${period} · 진도계획서 · ${c.title}</div>
-  </div>
-</div>`;
+    <div style="font-size:12.5px;font-weight:800;color:${brandColor}">베스티안 수학학원${totalPages>1?' <span style="font-size:10px;color:#6b7280;font-weight:600;margin-left:4px">'+pageNo+' / '+totalPages+'</span>':''}</div>
+    <div style="font-size:10.5px;color:#5a7080">${footerLabel} · ${c.title||''}</div>
+  </div>`;
+
+    var pageHTML = `<div style="width:794px;background:#fff;font-family:'Noto Sans KR','NotoSansMath',sans-serif;position:relative;margin:0 auto">${headerHTML}${scheduleSectionHTML}${curriculumHTML}${footerHTML}</div>`;
+
+    pages.push({
+      html: pageHTML,
+      monthLabel: monthLabel,
+      pageNo: pageNo,
+      totalPages: totalPages
+    });
+  });
+
+  return pages;
+}
+
+// 기존 호출부 호환: 모든 페이지를 세로로 이어붙여 반환 (미리보기용)
+function sylGetCourseHTML(c){
+  var pages = sylGetCoursePagesHTML(c);
+  if(pages.length <= 1) return pages[0] ? pages[0].html : '';
+  // 페이지 사이에 시각적 구분선 삽입
+  return pages.map(function(p, i){
+    var sep = i>0 ? '<div style="height:18px;background:transparent;display:flex;align-items:center;justify-content:center;margin:8px 0"><div style="flex:1;height:1px;background:#e2e8f0"></div><div style="padding:0 12px;font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:2px">PAGE '+(i+1)+' / '+p.totalPages+'</div><div style="flex:1;height:1px;background:#e2e8f0"></div></div>' : '';
+    return sep + p.html;
+  }).join('');
 }
 
 function sylGetSummaryHTML(){
@@ -17971,13 +18087,15 @@ async function syllabusExportPDF(){
 
   for(var i=0; i<_sylCourses.length; i++){
     var c = _sylCourses[i];
-    var html = sylGetCourseHTML(c);
-    var canvas = await sylCaptureA4(html, 0.95);
-    var pages = sylSliceA4Pages(canvas);
-    pages.forEach(function(pg){
-      pdf.addPage();
-      pdf.addImage(pg.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,pH);
-    });
+    var coursePages = sylGetCoursePagesHTML(c);
+    for(var p=0; p<coursePages.length; p++){
+      var canvas = await sylCaptureA4(coursePages[p].html, 0.95);
+      var pages = sylSliceA4Pages(canvas);
+      pages.forEach(function(pg){
+        pdf.addPage();
+        pdf.addImage(pg.toDataURL('image/jpeg',0.95),'JPEG',0,0,pW,pH);
+      });
+    }
   }
 
   var pdfBlob = pdf.output('blob');
@@ -18026,18 +18144,30 @@ async function syllabusExportZIP(){
       zip.file(sumFname, sumBlob);
     }
 
-    // 강좌별: 슬라이스하여 01_강좌명-1.jpg, 01_강좌명-2.jpg...
+    // 강좌별: 월이 여러 개면 월별 페이지로 분할 저장
     for(var i=0; i<_sylCourses.length; i++){
       var c = _sylCourses[i];
-      var html = sylGetCourseHTML(c);
-      var canvas = await sylCaptureA4(html, 0.95);
-      var pages = sylSliceA4Pages(canvas);
+      var coursePages = sylGetCoursePagesHTML(c);
       var num = (i+1).toString().padStart(2,'0');
       var baseName = num+'_'+(c.title||('강좌'+(i+1))).replace(/[\/:*?"<>|]/g,'_');
-      for(var p=0; p<pages.length; p++){
-        var blob = await new Promise(function(r){ pages[p].toBlob(r,'image/jpeg',0.95); });
-        var fname = pages.length===1 ? baseName+'.jpg' : baseName+'-'+(p+1)+'.jpg';
-        zip.file(fname, blob);
+      for(var p=0; p<coursePages.length; p++){
+        var pageInfo = coursePages[p];
+        var canvas = await sylCaptureA4(pageInfo.html, 0.95);
+        var slices = sylSliceA4Pages(canvas);
+        for(var q=0; q<slices.length; q++){
+          var blob = await new Promise(function(r){ slices[q].toBlob(r,'image/jpeg',0.95); });
+          var fname;
+          if(coursePages.length === 1 && slices.length === 1){
+            fname = baseName+'.jpg';
+          } else if(coursePages.length > 1){
+            // 월별 분할된 경우
+            var monthTag = pageInfo.monthLabel ? pageInfo.monthLabel : ('p'+pageInfo.pageNo);
+            fname = baseName+'_'+monthTag+(slices.length>1 ? '-'+(q+1) : '')+'.jpg';
+          } else {
+            fname = baseName+'-'+(q+1)+'.jpg';
+          }
+          zip.file(fname, blob);
+        }
       }
     }
 
