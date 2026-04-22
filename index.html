@@ -60,6 +60,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>if(typeof pdfjsLib!=='undefined')pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','NotoSansMath',sans-serif;background:#f5f6fa;color:#1a1a2e;min-height:100vh}
@@ -2488,6 +2490,13 @@
           <div>
             <div style="font-size:20px;font-weight:700;color:#1a1a2e">🔍 진도계획서 조회</div>
             <div style="font-size:13px;color:#6b7280;margin-top:4px">분원 · 선생님별 진도계획서를 조회합니다</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button onclick="sylvBulkExport('jpg')" id="sylv-bulk-jpg-btn"
+              style="padding:9px 14px;background:#1F3A51;color:#fff;border:none;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📦 전체 JPG (ZIP)</button>
+            <button onclick="sylvBulkExport('pdf')" id="sylv-bulk-pdf-btn"
+              style="padding:9px 14px;background:#c8a96e;color:#fff;border:none;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📦 전체 PDF (ZIP)</button>
+            <span id="sylv-bulk-status" style="font-size:12px;color:#6b7280;margin-left:4px;min-width:120px"></span>
           </div>
         </div>
 
@@ -14936,6 +14945,10 @@ async function sylViewLoad(){
       return true;
     });
 
+    // 전역 저장 (일괄 다운로드 재활용)
+    window._sylvFilteredData = filtered;
+    window._sylvBranchMap = branchMap;
+
     if(countEl) countEl.textContent = '총 '+filtered.length+'개';
 
     if(!filtered.length){
@@ -15220,6 +15233,311 @@ function sylViewCloseDetail(){
   document.getElementById('sylv-detail').style.display = 'none';
   document.querySelectorAll('[id^="sylv-arrow-"]').forEach(function(el){ el.style.transform='rotate(0deg)'; });
   document.querySelectorAll('[id^="sylv-item-"]').forEach(function(el){ el.style.background='#fafbfc'; el.style.borderColor='#e8edf2'; });
+}
+
+/* ══════════════════════════════════════════
+   진도계획서 일괄 다운로드 (ZIP)
+   JPG: zip / 선생님별 폴더 / 요약 + 개별 강좌 JPG
+   PDF: zip / 선생님별 PDF (요약 + 강좌들 합본)
+════════════════════════════════════════════ */
+
+// 숨김 렌더링 컨테이너 (한 번만 생성)
+function sylvEnsureRenderContainer(){
+  var c = document.getElementById('sylv-bulk-render');
+  if(!c){
+    c = document.createElement('div');
+    c.id = 'sylv-bulk-render';
+    c.style.cssText = 'position:fixed;left:-99999px;top:0;width:794px;background:#fff;font-family:\'Noto Sans KR\',\'NotoSansMath\',sans-serif';
+    document.body.appendChild(c);
+  }
+  return c;
+}
+
+// 한 진도계획서에 대해 전역 상태 세팅 + 페이지 HTML 배열 반환
+async function sylvPrepareRecord(record){
+  // 전체 레코드 로드 (courses 상세 포함)
+  var {data, error} = await db.from('syllabuses').select('*').eq('id', record.id).single();
+  if(error) throw error;
+
+  // 임시로 전역 변수 세팅 (렌더 함수들이 참조하므로)
+  _sylTeacherName = data.teacher_name || '';
+  _sylPeriod = data.period || '';
+  _sylCourses = sylNormalizeCourses(data.courses || []);
+  _sylTeacherPhoto = data.teacher_photo || '';
+  window._sylBrandColor = data.brand_color || '#1F3A51';
+  window._sylAccentColor = data.accent_color || '#c8a96e';
+  if(data.curriculum && Array.isArray(data.curriculum)){
+    _sylTeacherCurriculum = sylMigrateCurriculum(data.curriculum);
+  } else if(_sylCourses[0]?.curriculum){
+    _sylTeacherCurriculum = _sylCourses[0].curriculum;
+  } else {
+    _sylTeacherCurriculum = sylMigrateCurriculum(null);
+  }
+
+  // 선생님 프로필 사진 추가 로드 (옵션)
+  if(data.teacher_id){
+    try {
+      var uRes = await db.from('users').select('profile_image_url').eq('id', data.teacher_id).single();
+      if(uRes.data?.profile_image_url) _sylTeacherPhoto = uRes.data.profile_image_url;
+    } catch(e){}
+  }
+
+  return data;
+}
+
+// 숨김 영역에 HTML 렌더 후 canvas로 변환
+async function sylvRenderHtmlToCanvas(html){
+  var c = sylvEnsureRenderContainer();
+  c.innerHTML = html;
+  // 폰트/이미지 로딩 대기
+  await new Promise(function(r){ setTimeout(r, 120); });
+  // 내부 img 태그 로딩 대기
+  var imgs = c.querySelectorAll('img');
+  if(imgs.length){
+    await Promise.all(Array.from(imgs).map(function(img){
+      if(img.complete) return Promise.resolve();
+      return new Promise(function(resolve){
+        img.onload = resolve;
+        img.onerror = resolve;
+        setTimeout(resolve, 3000); // 타임아웃 3초
+      });
+    }));
+  }
+  var canvas = await html2canvas(c.firstElementChild, {
+    backgroundColor: '#ffffff',
+    scale: 2,
+    useCORS: true,
+    allowTaint: true,
+    logging: false
+  });
+  return canvas;
+}
+
+// canvas → Blob (JPG)
+function sylvCanvasToJpgBlob(canvas, quality){
+  return new Promise(function(resolve){
+    canvas.toBlob(function(blob){ resolve(blob); }, 'image/jpeg', quality || 0.9);
+  });
+}
+
+// 파일명 안전화 (특수문자 제거)
+function sylvSafeName(s){
+  return String(s||'').replace(/[\\\/:*?"<>|\n\r\t]/g,'').trim() || '무제';
+}
+
+// 메인: 전체 일괄 다운로드
+async function sylvBulkExport(format){
+  var filtered = window._sylvFilteredData;
+  if(!filtered || !filtered.length){ alert('먼저 조회 목록을 불러와주세요'); return; }
+  if(typeof JSZip === 'undefined'){ alert('JSZip 라이브러리 로드 실패'); return; }
+  if(format === 'pdf' && (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF)){
+    alert('jsPDF 라이브러리 로드 실패');
+    return;
+  }
+
+  var jpgBtn = document.getElementById('sylv-bulk-jpg-btn');
+  var pdfBtn = document.getElementById('sylv-bulk-pdf-btn');
+  var status = document.getElementById('sylv-bulk-status');
+  if(jpgBtn) jpgBtn.disabled = true;
+  if(pdfBtn) pdfBtn.disabled = true;
+  var setStatus = function(msg, color){
+    if(status){
+      status.textContent = msg;
+      status.style.color = color || '#6b7280';
+    }
+  };
+
+  // 확인 프롬프트
+  var ok = confirm('총 '+filtered.length+'개의 진도계획서를 '+format.toUpperCase()+' ZIP으로 다운로드합니다.\n시간이 걸릴 수 있습니다 (약 '+Math.ceil(filtered.length * 0.5)+'~'+Math.ceil(filtered.length * 1.2)+'분 예상).\n\n계속 진행할까요?');
+  if(!ok){
+    if(jpgBtn) jpgBtn.disabled = false;
+    if(pdfBtn) pdfBtn.disabled = false;
+    setStatus('');
+    return;
+  }
+
+  // 백업 (진행 중 전역 상태를 바꾸므로 끝나면 복원)
+  var backup = {
+    teacherName: _sylTeacherName,
+    period: _sylPeriod,
+    courses: _sylCourses,
+    teacherPhoto: _sylTeacherPhoto,
+    brandColor: window._sylBrandColor,
+    accentColor: window._sylAccentColor,
+    curriculum: _sylTeacherCurriculum
+  };
+
+  try {
+    var zip = new JSZip();
+
+    // 선생님 이름 기준 그룹
+    var groups = {};
+    filtered.forEach(function(r){
+      var key = (r.teacher_name || '미지정')+'_'+sylvSafeName(r._realBranchName || '');
+      if(!groups[key]){
+        groups[key] = { teacher: r.teacher_name || '미지정', branch: r._realBranchName || '', records: [] };
+      }
+      groups[key].records.push(r);
+    });
+    var groupKeys = Object.keys(groups);
+
+    var totalTeachers = groupKeys.length;
+    var processedTeachers = 0;
+    var totalErrors = 0;
+
+    // 선생님별 루프
+    for(var gi=0; gi<groupKeys.length; gi++){
+      var g = groups[groupKeys[gi]];
+      processedTeachers = gi+1;
+      setStatus('⏳ '+processedTeachers+'/'+totalTeachers+' - '+g.teacher+' 선생님 처리 중...', '#1F3A51');
+
+      // 폴더 이름
+      var teacherFolderName = sylvSafeName(g.teacher) + (g.branch ? ' ('+sylvSafeName(g.branch)+')' : '');
+
+      // 이 선생님의 각 진도계획서(period별)
+      for(var ri=0; ri<g.records.length; ri++){
+        var rec = g.records[ri];
+        try {
+          await sylvPrepareRecord(rec);
+        } catch(e){
+          console.error('진도계획서 로드 실패:', rec.id, e);
+          totalErrors++;
+          continue;
+        }
+
+        if(!_sylCourses || !_sylCourses.length) continue;
+
+        var periodSafe = sylvSafeName(_sylPeriod || '기간미정');
+
+        if(format === 'jpg'){
+          // ZIP / 선생님/ 기간 / 요약.jpg + 강좌별.jpg
+          var basePath = teacherFolderName + '/' + periodSafe + '/';
+
+          // 요약 페이지
+          try {
+            var summaryHtml = sylGetSummaryHTML();
+            if(summaryHtml && summaryHtml.indexOf('강좌가 없습니다') < 0){
+              // 요약은 1페이지 용 A4 컨테이너로 감싸서 렌더
+              var summaryWrapped = '<div style="width:794px;min-height:1123px;background:#fff;padding:24px;box-sizing:border-box">'+summaryHtml+'</div>';
+              var canvas = await sylvRenderHtmlToCanvas(summaryWrapped);
+              var blob = await sylvCanvasToJpgBlob(canvas, 0.92);
+              zip.file(basePath + sylvSafeName(g.teacher) + '_요약.jpg', blob);
+            }
+          } catch(e){
+            console.error('요약 생성 실패:', g.teacher, e);
+            totalErrors++;
+          }
+
+          // 강좌별
+          for(var ci=0; ci<_sylCourses.length; ci++){
+            var c = _sylCourses[ci];
+            try {
+              var pages = sylGetCoursePagesHTML(c);
+              for(var pi=0; pi<pages.length; pi++){
+                var canvas2 = await sylvRenderHtmlToCanvas(pages[pi].html);
+                var blob2 = await sylvCanvasToJpgBlob(canvas2, 0.92);
+                var fileName = sylvSafeName(g.teacher)+'_강좌'+(ci+1)+'_'+sylvSafeName(c.title || '무제');
+                if(pages.length > 1) fileName += '_p'+(pi+1);
+                fileName += '.jpg';
+                zip.file(basePath + fileName, blob2);
+              }
+            } catch(e){
+              console.error('강좌 생성 실패:', g.teacher, c.title, e);
+              totalErrors++;
+            }
+          }
+        } else if(format === 'pdf'){
+          // PDF: 선생님별 1개 파일 (요약 + 강좌 합본)
+          try {
+            var jsPDF = window.jspdf.jsPDF;
+            // A4 세로: 210 x 297mm
+            var pdf = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4', compress:true });
+            var pdfPageIdx = 0;
+
+            // 요약 페이지 먼저
+            var summaryHtml2 = sylGetSummaryHTML();
+            if(summaryHtml2 && summaryHtml2.indexOf('강좌가 없습니다') < 0){
+              var summaryWrapped2 = '<div style="width:794px;min-height:1123px;background:#fff;padding:24px;box-sizing:border-box">'+summaryHtml2+'</div>';
+              var sumCanvas = await sylvRenderHtmlToCanvas(summaryWrapped2);
+              var sumImg = sumCanvas.toDataURL('image/jpeg', 0.88);
+              if(pdfPageIdx > 0) pdf.addPage();
+              pdf.addImage(sumImg, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+              pdfPageIdx++;
+            }
+
+            // 강좌별 페이지
+            for(var ci2=0; ci2<_sylCourses.length; ci2++){
+              var c2 = _sylCourses[ci2];
+              var pages2 = sylGetCoursePagesHTML(c2);
+              for(var pi2=0; pi2<pages2.length; pi2++){
+                var courseCanvas = await sylvRenderHtmlToCanvas(pages2[pi2].html);
+                var courseImg = courseCanvas.toDataURL('image/jpeg', 0.88);
+                if(pdfPageIdx > 0) pdf.addPage();
+                pdf.addImage(courseImg, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                pdfPageIdx++;
+              }
+            }
+
+            if(pdfPageIdx > 0){
+              var pdfBlob = pdf.output('blob');
+              var pdfFileName = teacherFolderName + '/' + sylvSafeName(g.teacher) + '_' + periodSafe + '_진도계획서.pdf';
+              zip.file(pdfFileName, pdfBlob);
+            }
+          } catch(e){
+            console.error('PDF 생성 실패:', g.teacher, rec.id, e);
+            totalErrors++;
+          }
+        }
+      } // records 루프
+    } // groups 루프
+
+    setStatus('⏳ ZIP 파일 생성 중...', '#1F3A51');
+
+    // 루트 README.txt
+    var readmeContent = ''
+      +'진도계획서 일괄 다운로드\n'
+      +'──────────────────────────────\n'
+      +'발행일: '+new Date().toLocaleString('ko-KR')+'\n'
+      +'총 선생님: '+totalTeachers+'명\n'
+      +'총 진도계획서: '+filtered.length+'건\n'
+      +'형식: '+format.toUpperCase()+'\n'
+      +(totalErrors > 0 ? '오류 발생: '+totalErrors+'건 (콘솔 참고)\n' : '')
+      +'\n발행: BMAPS (베스티안 수학학원 관리 시스템)\n';
+    zip.file('README.txt', readmeContent);
+
+    // ZIP 생성
+    var zipBlob = await zip.generateAsync({ type:'blob', compression:'DEFLATE', compressionOptions:{level:6} });
+
+    // 다운로드
+    var dt = new Date();
+    var dateStr = dt.getFullYear()+String(dt.getMonth()+1).padStart(2,'0')+String(dt.getDate()).padStart(2,'0');
+    var zipName = '진도계획서_전체_'+format.toUpperCase()+'_'+dateStr+'.zip';
+    var url = URL.createObjectURL(zipBlob);
+    var a = document.createElement('a');
+    a.href = url; a.download = zipName;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+
+    setStatus('✅ 완료! ('+filtered.length+'건' + (totalErrors>0?', 오류 '+totalErrors+'건':'') + ')', '#16a34a');
+    setTimeout(function(){ setStatus(''); }, 8000);
+
+  } catch(e){
+    console.error('bulk export failed:', e);
+    alert('일괄 다운로드 실패: ' + (e.message || e));
+    setStatus('❌ 실패: '+(e.message||e), '#dc2626');
+  } finally {
+    // 전역 상태 복원
+    _sylTeacherName = backup.teacherName;
+    _sylPeriod = backup.period;
+    _sylCourses = backup.courses;
+    _sylTeacherPhoto = backup.teacherPhoto;
+    window._sylBrandColor = backup.brandColor;
+    window._sylAccentColor = backup.accentColor;
+    _sylTeacherCurriculum = backup.curriculum;
+
+    if(jpgBtn) jpgBtn.disabled = false;
+    if(pdfBtn) pdfBtn.disabled = false;
+  }
 }
 
 function toggleAdminWeekendMenu(){
