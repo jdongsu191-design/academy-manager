@@ -2992,6 +2992,31 @@
 
 </div><!-- /studentScreen -->
 
+<!-- 퇴원 보고서 미리보기 모달 (전역 - 선생님/관리자 모두 사용) -->
+<div id="modal-withdrawReport" style="display:none;position:fixed;inset:0;z-index:1050;background:rgba(0,0,0,0.55);align-items:center;justify-content:center;padding:20px;overflow-y:auto">
+  <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:720px;max-height:92vh;overflow-y:auto;position:relative;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div>
+        <div style="font-size:16px;font-weight:700;color:#1F3A51">📋 퇴원 보고서</div>
+        <div id="wdr-subtitle" style="font-size:12px;color:#6b7280;margin-top:2px"></div>
+      </div>
+      <button onclick="closeWithdrawReport()" style="border:none;background:none;font-size:22px;cursor:pointer;color:#6b7280">✕</button>
+    </div>
+
+    <!-- 렌더링될 보고서 미리보기 -->
+    <div id="wdr-preview-wrap" style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;background:#fafafa;margin-bottom:14px;max-height:60vh;overflow-y:auto">
+      <div style="padding:40px;text-align:center;color:#9ca3af;font-size:13px">불러오는 중...</div>
+    </div>
+
+    <!-- 액션 버튼 -->
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button onclick="closeWithdrawReport()" style="padding:9px 16px;border:1px solid #d0dde6;border-radius:10px;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer">닫기</button>
+      <button id="wdr-copy-btn" onclick="copyWithdrawReportImage()" style="padding:9px 16px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-size:13px;font-weight:700;cursor:pointer">📋 클립보드 복사</button>
+      <button id="wdr-save-btn" onclick="saveWithdrawReportImage()" style="padding:9px 16px;border:none;border-radius:10px;background:#16a34a;color:#fff;font-size:13px;font-weight:700;cursor:pointer">💾 이미지 저장</button>
+    </div>
+  </div>
+</div>
+
 <!-- 진도계획서 항목 불러오기 모달 (전역 - 선생님/관리자 모두 사용) -->
 <div class="modal-backdrop" id="modal-sylImportField" style="z-index:550;align-items:center">
   <div style="background:#fff;border-radius:16px;padding:20px;width:95vw;max-width:560px;max-height:85vh;overflow-y:auto;position:relative">
@@ -5452,6 +5477,10 @@ function renderStudents(){
           </div>
         </div>
         <div class="user-actions">
+          <button class="btn btn-sm" onclick="openWithdrawReport('${s.id}','${s.name.replace(/'/g,"\'")}')"
+            style="background:#f0f9ff;border-color:#7dd3fc;color:#0369a1;font-weight:700">
+            📋 퇴원 사유
+          </button>
           <button class="btn btn-sm" onclick="reEnrollStudent('${s.id}','${s.name.replace(/'/g,"\'")}')"
             style="background:#f0fdf4;border-color:#86efac;color:#16a34a;font-weight:700">
             재입학
@@ -5775,11 +5804,27 @@ function closeWithdrawModal(){
    - 첨부 양식 기준: 제목 + 인적사항 + 날짜 + 퇴원사유
    - 하단 워터마크: 베스티안 수학학원
 ══════════════════════════════════════════ */
-async function generateWithdrawReportImage(snap){
-  if(!snap || !snap.name){ throw new Error('학생 정보가 없습니다'); }
-  if(typeof html2canvas === 'undefined'){ throw new Error('html2canvas를 불러오지 못했습니다'); }
+/* ══════════════════════════════════════════
+   퇴원 보고서 공통 유틸
+   - snap 객체 표준 키: name, school, grade, teacher, enrolled, withdrawn, lastClass, reason
+══════════════════════════════════════════ */
+// DB 레코드(withdraw_reports) → 표준 snap 객체로 변환
+function withdrawReportToSnap(rec){
+  if(!rec) return null;
+  return {
+    name:      rec.student_name || '',
+    school:    rec.student_school || '',
+    grade:     rec.student_grade || '',
+    teacher:   rec.teacher_name || '',
+    enrolled:  rec.enrolled_at || '',
+    withdrawn: rec.withdrawn_at || '',
+    lastClass: rec.last_class_date || '',
+    reason:    rec.reason || ''
+  };
+}
 
-  // 날짜 포맷: YYYY-MM-DD → YYYY년 MM월 DD일
+// 보고서 HTML 문자열 생성 (렌더링 공통)
+function buildWithdrawReportHTML(snap){
   function fmtDate(s){
     if(!s) return '-';
     var m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -5790,12 +5835,7 @@ async function generateWithdrawReportImage(snap){
     return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
   };
 
-  // 임시 렌더링 컨테이너 (A4 비율, 화면 밖으로)
-  var tempDiv = document.createElement('div');
-  tempDiv.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;background:#fff;padding:50px 60px;font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#111;box-sizing:border-box';
-
-  // 본문 구성
-  tempDiv.innerHTML =
+  return (
     // 제목
     '<div style="text-align:center;font-size:32px;font-weight:700;letter-spacing:20px;margin:30px 0 50px">퇴 원 사 유 서</div>'
 
@@ -5854,8 +5894,18 @@ async function generateWithdrawReportImage(snap){
     // 하단 워터마크
     +'<div style="margin-top:60px;padding-top:18px;border-top:1px solid #d1d5db;text-align:center;font-size:11px;color:#9ca3af;letter-spacing:2px">'
       +'베스티안 수학학원'
-    +'</div>';
+    +'</div>'
+  );
+}
 
+// 보고서 HTML → Canvas → Blob 변환
+async function renderWithdrawReportToBlob(snap){
+  if(!snap || !snap.name){ throw new Error('학생 정보가 없습니다'); }
+  if(typeof html2canvas === 'undefined'){ throw new Error('html2canvas를 불러오지 못했습니다'); }
+
+  var tempDiv = document.createElement('div');
+  tempDiv.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;background:#fff;padding:50px 60px;font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#111;box-sizing:border-box';
+  tempDiv.innerHTML = buildWithdrawReportHTML(snap);
   document.body.appendChild(tempDiv);
 
   try {
@@ -5867,34 +5917,181 @@ async function generateWithdrawReportImage(snap){
       width:794,
       height:tempDiv.scrollHeight
     });
-
-    // 파일명 구성: YYMMDD_학교학년_이름_퇴원보고서.jpg (업로드 파일명 패턴 참고)
-    var dp = (snap.withdrawn||'').replace(/-/g,'').slice(2); // 260313
-    var schoolGrade = (snap.school||'') + (snap.grade||'').replace(/학년/g,'');
-    var safeName = (snap.name||'student').replace(/[\/\\:*?"<>|]/g,'');
-    var fileName = dp+'_'+schoolGrade+'_'+safeName+'_퇴원보고서.jpg';
-
-    // 다운로드 (Blob → Link 클릭)
-    await new Promise(function(resolve, reject){
+    return await new Promise(function(resolve, reject){
       canvas.toBlob(function(blob){
         if(!blob){ reject(new Error('이미지 생성 실패')); return; }
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(function(){
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          resolve();
-        }, 100);
+        resolve(blob);
       }, 'image/jpeg', 0.95);
     });
   } finally {
     if(tempDiv.parentNode) document.body.removeChild(tempDiv);
   }
 }
+
+// 파일명 규칙: YYMMDD_학교학년_이름_퇴원보고서.jpg
+function withdrawReportFileName(snap){
+  var dp = (snap.withdrawn||'').replace(/-/g,'').slice(2);
+  var schoolGrade = (snap.school||'') + (snap.grade||'').replace(/학년/g,'');
+  var safeName = (snap.name||'student').replace(/[\/\\:*?"<>|]/g,'');
+  return dp+'_'+schoolGrade+'_'+safeName+'_퇴원보고서.jpg';
+}
+
+/* ══════════════════════════════════════════
+   퇴원 보고서 미리보기 모달
+   - 퇴원 학생 목록 → "📋 퇴원 사유" 버튼 → 모달 오픈
+   - withdraw_reports 테이블에서 조회
+   - 미리보기 + 클립보드 복사 + 이미지 저장
+══════════════════════════════════════════ */
+var _wdrCurrentSnap = null;
+
+async function openWithdrawReport(studentId, studentName){
+  var modal = document.getElementById('modal-withdrawReport');
+  var wrap  = document.getElementById('wdr-preview-wrap');
+  var subtitle = document.getElementById('wdr-subtitle');
+  if(!modal || !wrap) return;
+
+  _wdrCurrentSnap = null;
+  if(subtitle) subtitle.textContent = (studentName||'') + ' 학생';
+  wrap.innerHTML = '<div style="padding:40px;text-align:center;color:#9ca3af;font-size:13px">📂 불러오는 중...</div>';
+  modal.style.display = 'flex';
+  modal.onclick = function(e){ if(e.target === modal) closeWithdrawReport(); };
+
+  try {
+    // 해당 학생의 최신 퇴원 보고서 조회
+    var {data, error} = await db.from('withdraw_reports')
+      .select('*')
+      .eq('student_id', studentId)
+      .order('created_at', {ascending:false})
+      .limit(1);
+    if(error) throw error;
+
+    if(!data || !data.length){
+      // 보고서 없음: users 테이블 정보로 임시 스냅샷 구성 (기존 데이터 대응)
+      var stuList = (_withdrawnStudents||[]).concat(typeof students !== 'undefined' ? students : []);
+      var stu = stuList.find(function(s){ return s.id === studentId; });
+      if(!stu){
+        wrap.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;font-size:13px">⚠️ 보고서 정보를 찾을 수 없습니다</div>';
+        return;
+      }
+      _wdrCurrentSnap = {
+        name:      stu.name || '',
+        school:    stu.school || '',
+        grade:     stu.grade || '',
+        teacher:   (currentUser && currentUser.name) || '',
+        enrolled:  stu.enrolled_at || '',
+        withdrawn: stu.withdrawn_at || '',
+        lastClass: stu.last_class_date || '',
+        reason:    stu.withdraw_reason || ''
+      };
+      wrap.innerHTML = '<div style="padding:6px 10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:7px;font-size:11px;margin-bottom:10px">'
+        +'⚠️ 이 학생의 보고서는 별도 저장되어 있지 않아 기본 정보로 구성했습니다.'
+        +'</div>'
+        +'<div style="background:#fff;padding:20px;border-radius:8px">'+buildWithdrawReportHTML(_wdrCurrentSnap)+'</div>';
+      return;
+    }
+
+    _wdrCurrentSnap = withdrawReportToSnap(data[0]);
+    wrap.innerHTML = '<div style="background:#fff;padding:20px;border-radius:8px">'+buildWithdrawReportHTML(_wdrCurrentSnap)+'</div>';
+  } catch(e){
+    console.error('퇴원 보고서 조회 실패:', e);
+    wrap.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;font-size:13px">❌ 조회 실패: '+(e.message||e)+'</div>';
+  }
+}
+
+function closeWithdrawReport(){
+  var modal = document.getElementById('modal-withdrawReport');
+  if(modal) modal.style.display = 'none';
+  _wdrCurrentSnap = null;
+}
+
+async function copyWithdrawReportImage(){
+  if(!_wdrCurrentSnap){ alert('보고서 정보가 없습니다'); return; }
+  var btn = document.getElementById('wdr-copy-btn');
+  var origText = btn ? btn.textContent : '';
+  if(btn){ btn.textContent = '⏳ 처리 중...'; btn.disabled = true; }
+  try {
+    var blob = await renderWithdrawReportToBlob(_wdrCurrentSnap);
+    // image/jpeg → 일부 브라우저는 ClipboardItem에 jpeg 지원 제한 → png 권장
+    // 재변환: jpeg blob을 png로 다시 만들기 위해 canvas 우회
+    // 간단히 png로 재렌더링
+    var pngBlob = await renderWithdrawReportToPngBlob(_wdrCurrentSnap);
+
+    if(navigator.clipboard && window.ClipboardItem){
+      await navigator.clipboard.write([new ClipboardItem({'image/png': pngBlob})]);
+      if(btn){ btn.textContent = '✅ 복사됨!'; setTimeout(function(){ btn.textContent = origText; btn.disabled = false; }, 1800); }
+    } else {
+      throw new Error('이 브라우저는 클립보드 이미지 복사를 지원하지 않습니다');
+    }
+  } catch(e){
+    console.error('클립보드 복사 실패:', e);
+    alert('❌ 클립보드 복사 실패: '+(e.message||e));
+    if(btn){ btn.textContent = origText; btn.disabled = false; }
+  }
+}
+
+// PNG용 별도 렌더 (클립보드 호환성)
+async function renderWithdrawReportToPngBlob(snap){
+  if(typeof html2canvas === 'undefined'){ throw new Error('html2canvas를 불러오지 못했습니다'); }
+  var tempDiv = document.createElement('div');
+  tempDiv.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;background:#fff;padding:50px 60px;font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#111;box-sizing:border-box';
+  tempDiv.innerHTML = buildWithdrawReportHTML(snap);
+  document.body.appendChild(tempDiv);
+  try {
+    var canvas = await html2canvas(tempDiv, {
+      backgroundColor:'#fff', scale:2, useCORS:true, logging:false,
+      width:794, height:tempDiv.scrollHeight
+    });
+    return await new Promise(function(resolve, reject){
+      canvas.toBlob(function(blob){
+        if(!blob){ reject(new Error('이미지 생성 실패')); return; }
+        resolve(blob);
+      }, 'image/png');
+    });
+  } finally {
+    if(tempDiv.parentNode) document.body.removeChild(tempDiv);
+  }
+}
+
+async function saveWithdrawReportImage(){
+  if(!_wdrCurrentSnap){ alert('보고서 정보가 없습니다'); return; }
+  var btn = document.getElementById('wdr-save-btn');
+  var origText = btn ? btn.textContent : '';
+  if(btn){ btn.textContent = '⏳ 처리 중...'; btn.disabled = true; }
+  try {
+    var blob = await renderWithdrawReportToBlob(_wdrCurrentSnap);
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = withdrawReportFileName(_wdrCurrentSnap);
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+    if(btn){ btn.textContent = '✅ 저장됨!'; setTimeout(function(){ btn.textContent = origText; btn.disabled = false; }, 1800); }
+  } catch(e){
+    console.error('이미지 저장 실패:', e);
+    alert('❌ 이미지 저장 실패: '+(e.message||e));
+    if(btn){ btn.textContent = origText; btn.disabled = false; }
+  }
+}
+
+// 기존 generateWithdrawReportImage는 호환성 위해 유지 (deprecated, 이제 사용 안 함)
+async function generateWithdrawReportImage(snap){
+  var blob = await renderWithdrawReportToBlob(snap);
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = withdrawReportFileName(snap);
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
+}
+
 
 async function confirmWithdraw(){
   var isBulk = document.getElementById('withdraw-student-id').value === '__bulk__';
