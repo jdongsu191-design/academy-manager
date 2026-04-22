@@ -15344,6 +15344,7 @@ var _arrwStudents = [];   // 독서실 대상 학생 [{id,name,school,grade,requ
 var _arrwRecords  = {};   // { studentId: { 'YYYY-MM-DD': recordObj } }
 var _arrwWeekDates = [];  // 월~일 7일 날짜 배열
 var _arrwDayLabels = ['월','화','수','목','금','토','일'];
+var _arrwSelectedDay = 0; // 0~6 (월~일)
 
 // 월요일로 보정해서 해당 주의 7일 반환
 function rrGetWeekDates(startStr){
@@ -15377,6 +15378,9 @@ async function initAdminRrWeekly(){
     var dd = String(today.getDate()).padStart(2,'0');
     weekInput.value = yyyy+'-'+mm+'-'+dd;
   }
+  // 기본 선택 요일: 오늘의 요일 (월=0, 일=6)
+  var todayDay = new Date().getDay(); // 0:일, 1:월, ...
+  _arrwSelectedDay = todayDay === 0 ? 6 : todayDay - 1;
   arrwUpdateWeekLabel();
   // 테이블 초기화
   var wrap = document.getElementById('arrw-table-wrap');
@@ -15519,6 +15523,10 @@ function arrwRenderTable(){
     wrap.innerHTML = '<div class="empty-state"><div class="ei">📭</div><p>독서실 이용 학생이 없습니다</p></div>';
     return;
   }
+  if(!_arrwWeekDates.length){
+    wrap.innerHTML = '<div class="empty-state"><div class="ei">📅</div><p>주차 정보가 없습니다</p></div>';
+    return;
+  }
 
   // 검색 필터
   var q = (document.getElementById('arrw-search')?.value || '').trim().toLowerCase();
@@ -15527,139 +15535,185 @@ function arrwRenderTable(){
     return (s.name||'').toLowerCase().indexOf(q) !== -1;
   });
 
-  if(!filteredStus.length){
-    wrap.innerHTML = '<div class="empty-state"><div class="ei">🔍</div><p>검색 결과가 없습니다</p></div>';
-    return;
-  }
+  // 선택된 요일의 날짜
+  var selDayIdx = _arrwSelectedDay;
+  if(selDayIdx < 0 || selDayIdx > 6) selDayIdx = 0;
+  var selDate = _arrwWeekDates[selDayIdx];
 
-  // CSS는 한 번만 삽입
+  // CSS (한 번만 정의)
   var css = ''
     +'<style>'
-    +'.arrw-tbl{width:100%;border-collapse:collapse;font-size:11px;background:#fff}'
-    +'.arrw-tbl th{background:#0369a1;color:#fff;padding:6px 4px;text-align:center;font-size:11px;font-weight:700;white-space:nowrap;border:1px solid #0284c7;position:sticky;top:0;z-index:2}'
-    +'.arrw-tbl th.day-header{background:#075985;font-size:11px}'
-    +'.arrw-tbl th.day-header.weekend{background:#a16207}'
-    +'.arrw-tbl td{padding:3px;border:1px solid #e2e8f0;vertical-align:middle;text-align:center;background:#fff}'
+    // 요일 탭
+    +'.arrw-day-tabs{display:flex;gap:6px;background:#f1f5f9;padding:6px;border-radius:12px;margin-bottom:12px;flex-wrap:wrap}'
+    +'.arrw-day-tab{flex:1;min-width:80px;padding:10px 4px;border:1.5px solid transparent;border-radius:9px;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.15s;display:flex;flex-direction:column;align-items:center;gap:2px}'
+    +'.arrw-day-tab:hover{background:#e0f2fe;color:#0369a1}'
+    +'.arrw-day-tab .tab-day{font-size:14px;font-weight:700}'
+    +'.arrw-day-tab .tab-date{font-size:10px;color:#94a3b8;font-weight:500}'
+    +'.arrw-day-tab.weekend{color:#a16207}'
+    +'.arrw-day-tab.sunday{color:#dc2626}'
+    +'.arrw-day-tab.today{background:#fef9c3;border-color:#facc15;color:#854d0e}'
+    +'.arrw-day-tab.active{background:#0369a1;color:#fff;border-color:#0369a1;box-shadow:0 2px 6px rgba(3,105,161,0.3)}'
+    +'.arrw-day-tab.active .tab-date{color:#bae6fd}'
+    +'.arrw-day-tab .tab-count{font-size:9px;color:#64748b;margin-top:2px}'
+    +'.arrw-day-tab.active .tab-count{color:#e0f2fe}'
+    // 테이블
+    +'.arrw-tbl{width:100%;border-collapse:collapse;font-size:12px;background:#fff}'
+    +'.arrw-tbl th{background:#0369a1;color:#fff;padding:8px 6px;text-align:center;font-size:12px;font-weight:700;white-space:nowrap;border:1px solid #0284c7}'
+    +'.arrw-tbl th.group-header{background:#075985}'
+    +'.arrw-tbl th.total-header{background:#b45309}'
+    +'.arrw-tbl th.remain-header{background:#b91c1c}'
+    +'.arrw-tbl td{padding:6px 4px;border:1px solid #e2e8f0;vertical-align:middle;text-align:center;background:#fff}'
     +'.arrw-tbl tr:nth-child(even) td{background:#f8fafc}'
-    +'.arrw-tbl td.name-cell{text-align:left;padding-left:8px;font-weight:700;color:#1e293b;white-space:nowrap;background:#f1f5f9 !important}'
-    +'.arrw-tbl td.day-cell{padding:2px 3px;background:#fff}'
-    +'.arrw-tbl td.weekend-day-cell{background:#fefce8 !important}'
-    +'.arrw-tbl td.total-cell{background:#fef3c7 !important;font-weight:700;font-size:11px}'
-    +'.arrw-tbl td.remain-cell{background:#fee2e2 !important;font-weight:700;font-size:11px}'
+    +'.arrw-tbl td.name-cell{text-align:left;padding-left:10px;font-weight:700;color:#1e293b;white-space:nowrap;background:#f1f5f9 !important;min-width:110px}'
+    +'.arrw-tbl td.req-cell{font-weight:700;color:#0369a1;min-width:70px}'
+    +'.arrw-tbl td.total-cell{background:#fef3c7 !important;font-weight:700;min-width:80px}'
+    +'.arrw-tbl td.remain-cell{background:#fee2e2 !important;font-weight:700;min-width:80px}'
     +'.arrw-tbl td.remain-cell.ok{background:#dcfce7 !important;color:#166534}'
-    +'.arrw-tbl input.t-input{width:100%;border:1px solid transparent;background:transparent;padding:2px 3px;font-size:10px;text-align:center;outline:none;font-family:inherit;color:#1e293b}'
+    +'.arrw-tbl td.daily-cell{background:#e0f2fe !important;font-weight:700;color:#0369a1;min-width:70px}'
+    // 인풋 그룹 (시간 + 지금버튼)
+    +'.arrw-ig{display:inline-flex;gap:2px;align-items:center}'
+    +'.arrw-tbl input.t-input{width:78px;border:1.5px solid #cbd5e1;background:#fff;padding:5px 4px;font-size:12px;text-align:center;outline:none;font-family:inherit;color:#1e293b;border-radius:5px}'
     +'.arrw-tbl input.t-input:hover{border-color:#bae6fd;background:#f0f9ff}'
     +'.arrw-tbl input.t-input:focus{border-color:#0369a1;background:#fff;box-shadow:0 0 0 2px rgba(3,105,161,0.15)}'
-    +'.arrw-tbl input.t-input.dirty{background:#fef9c3;font-weight:700}'
-    +'.arrw-tbl .day-wrap{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;padding:1px}'
-    +'.arrw-tbl .day-wrap .slot{display:flex;flex-direction:column;gap:0}'
-    +'.arrw-tbl .day-wrap .slot-label{font-size:8px;color:#94a3b8;font-weight:600;padding:1px 0}'
-    +'.arrw-tbl .now-btn{font-size:9px;padding:1px 4px;border:1px solid #bae6fd;background:#f0f9ff;color:#0369a1;border-radius:3px;cursor:pointer;font-weight:700}'
+    +'.arrw-tbl input.t-input.dirty{background:#fef9c3;font-weight:700;border-color:#facc15}'
+    +'.arrw-tbl .now-btn{font-size:10px;padding:3px 6px;border:1px solid #bae6fd;background:#f0f9ff;color:#0369a1;border-radius:4px;cursor:pointer;font-weight:700;white-space:nowrap}'
     +'.arrw-tbl .now-btn:hover{background:#0369a1;color:#fff}'
-    +'.arrw-tbl td.save-cell{padding:4px 6px}'
-    +'.arrw-tbl .save-btn{padding:4px 8px;border:1px solid #16a34a;border-radius:6px;background:#f0fdf4;color:#15803d;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap}'
+    +'.arrw-tbl .save-btn{padding:6px 12px;border:1px solid #16a34a;border-radius:7px;background:#f0fdf4;color:#15803d;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}'
     +'.arrw-tbl .save-btn:hover{background:#16a34a;color:#fff}'
     +'.arrw-tbl .save-btn.saved{background:#15803d;color:#fff}'
-    +'.arrw-req-input{width:56px;padding:2px 4px;border:1px solid #bae6fd;border-radius:4px;font-size:10px;text-align:center;color:#0369a1;font-weight:700;background:#f0f9ff}'
     +'</style>';
 
-  // 헤더 구성
+  // 요일 탭 구성
+  var tabsHtml = '<div class="arrw-day-tabs">';
+  var todayStr = (function(){
+    var d = new Date();
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  })();
+  for(var i=0; i<7; i++){
+    var dateStr = _arrwWeekDates[i];
+    var p = dateStr.split('-');
+    var isActive = (i === selDayIdx);
+    var isToday = (dateStr === todayStr);
+    var klass = 'arrw-day-tab';
+    if(i === 5) klass += ' weekend';
+    if(i === 6) klass += ' sunday';
+    if(isToday && !isActive) klass += ' today';
+    if(isActive) klass += ' active';
+
+    // 해당 요일의 입력된 학생 수 (체크인 또는 체크아웃 하나라도 있으면)
+    var filledCount = 0;
+    _arrwStudents.forEach(function(stu){
+      var r = (_arrwRecords[stu.id] && _arrwRecords[stu.id][dateStr]) || null;
+      if(r && (r.check_in_time || r.check_out_time)) filledCount++;
+    });
+
+    tabsHtml += '<button class="'+klass+'" onclick="arrwSelectDay('+i+')">'
+      +'<span class="tab-day">'+_arrwDayLabels[i]+'</span>'
+      +'<span class="tab-date">'+parseInt(p[1])+'/'+parseInt(p[2])+'</span>'
+      +'<span class="tab-count">'+filledCount+'명 입력</span>'
+      +'</button>';
+  }
+  tabsHtml += '</div>';
+
+  // 선택된 날짜 정보
+  var pp = selDate.split('-');
+  var dateLabel = pp[0]+'년 '+parseInt(pp[1])+'월 '+parseInt(pp[2])+'일 ('+_arrwDayLabels[selDayIdx]+')';
+  var isSelToday = (selDate === todayStr);
+
+  // 헤더
   var th = ''
     +'<thead>'
     +'<tr>'
-    +'<th rowspan="2" style="min-width:80px;left:0;position:sticky;z-index:3">이름</th>'
-    +'<th rowspan="2" style="min-width:70px">주 의무</th>';
+    +'<th rowspan="2" style="min-width:110px">이름</th>'
+    +'<th rowspan="2" style="min-width:70px">주 의무</th>'
+    +'<th colspan="6" class="group-header">'+_arrwDayLabels[selDayIdx]+' ('+parseInt(pp[1])+'/'+parseInt(pp[2])+') 출결</th>'
+    +'<th rowspan="2" style="min-width:80px;background:#0284c7">당일<br>공부</th>'
+    +'<th rowspan="2" class="total-header" style="min-width:80px">주간<br>합계</th>'
+    +'<th rowspan="2" class="remain-header" style="min-width:80px">남은<br>의무</th>'
+    +'<th rowspan="2" style="min-width:80px">저장</th>'
+    +'</tr>'
+    +'<tr>'
+    +'<th>입실</th>'
+    +'<th>1차 외출</th>'
+    +'<th>1차 복귀</th>'
+    +'<th>2차 외출</th>'
+    +'<th>2차 복귀</th>'
+    +'<th>퇴실</th>'
+    +'</tr>'
+    +'</thead>';
 
-  _arrwWeekDates.forEach(function(d, i){
-    var p = d.split('-');
-    var isWeekend = (i === 5 || i === 6);
-    th += '<th class="day-header'+(isWeekend?' weekend':'')+'" style="min-width:220px">'
-       + _arrwDayLabels[i] + ' ('+parseInt(p[1])+'/'+parseInt(p[2])+')</th>';
-  });
-  th += '<th rowspan="2" style="min-width:80px;background:#b45309">주간 합계</th>';
-  th += '<th rowspan="2" style="min-width:80px;background:#dc2626">남은 의무</th>';
-  th += '<th rowspan="2" style="min-width:70px">저장</th>';
-  th += '</tr>';
-  th += '<tr>';
-  _arrwWeekDates.forEach(function(d, i){
-    var isWeekend = (i === 5 || i === 6);
-    th += '<th class="day-header'+(isWeekend?' weekend':'')+'" style="font-size:10px;font-weight:500">'
-       + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;font-size:9px;color:#fff">'
-       + '<div>입실</div><div>1차외출-복귀</div><div>2차외출-복귀</div><div>퇴실</div>'
-       + '</div></th>';
-  });
-  th += '</tr></thead>';
-
-  // 본문 행 생성
+  // 본문
   var bodyRows = filteredStus.map(function(stu){
     var weekStat = arrwCalcStudentWeekly(stu.id);
     var totalTxt = rrFmtDuration(weekStat.total);
     var remainTxt = weekStat.required > 0 ? rrFmtDuration(weekStat.remaining) : '-';
     var remainOk = weekStat.required > 0 && weekStat.remaining <= 0;
-
-    var cells = '';
-    _arrwWeekDates.forEach(function(d, i){
-      var rec = (_arrwRecords[stu.id] && _arrwRecords[stu.id][d]) || {};
-      var isWeekend = (i === 5 || i === 6);
-      var dayCellClass = 'day-cell' + (isWeekend ? ' weekend-day-cell' : '');
-      cells += '<td class="'+dayCellClass+'">'
-        +'<div class="day-wrap">'
-          // 입실
-          +arrwSlotInput(stu.id, d, 'check_in_time', rec.check_in_time, '입실')
-          // 1차 외출/복귀
-          +'<div class="slot">'
-            +arrwSlotInputNoWrap(stu.id, d, 'out_1_start', rec.out_1_start, '1차외')
-            +arrwSlotInputNoWrap(stu.id, d, 'out_1_end',   rec.out_1_end,   '1차복')
-          +'</div>'
-          // 2차 외출/복귀
-          +'<div class="slot">'
-            +arrwSlotInputNoWrap(stu.id, d, 'out_2_start', rec.out_2_start, '2차외')
-            +arrwSlotInputNoWrap(stu.id, d, 'out_2_end',   rec.out_2_end,   '2차복')
-          +'</div>'
-          // 퇴실
-          +arrwSlotInput(stu.id, d, 'check_out_time', rec.check_out_time, '퇴실')
-        +'</div>'
-      +'</td>';
-    });
+    var rec = (_arrwRecords[stu.id] && _arrwRecords[stu.id][selDate]) || {};
+    var dailyMin = rrCalcDailyMinutes(rec);
+    var dailyTxt = dailyMin > 0 ? rrFmtDuration(dailyMin) : '-';
 
     return ''
       +'<tr data-sid="'+stu.id+'">'
-      +'<td class="name-cell" style="position:sticky;left:0;z-index:1">'
+      +'<td class="name-cell">'
         +(stu.name||'')
         +'<div style="font-size:10px;color:#6b7280;font-weight:400;margin-top:2px">'+(stu.school||'')+' '+(stu.grade||'')+'</div>'
       +'</td>'
-      +'<td style="text-align:center">'
-        +'<span style="font-size:11px;color:#0369a1;font-weight:700">'+(stu.required_study_minutes ? rrFmtDuration(stu.required_study_minutes) : '<span style="color:#cbd5e1">미설정</span>')+'</span>'
-      +'</td>'
-      +cells
+      +'<td class="req-cell">'+(stu.required_study_minutes ? rrFmtDuration(stu.required_study_minutes) : '<span style="color:#cbd5e1">미설정</span>')+'</td>'
+      // 입실
+      +'<td>'+arrwCellInput(stu.id, selDate, 'check_in_time', rec.check_in_time, true)+'</td>'
+      // 1차 외출
+      +'<td>'+arrwCellInput(stu.id, selDate, 'out_1_start', rec.out_1_start, false)+'</td>'
+      // 1차 복귀
+      +'<td>'+arrwCellInput(stu.id, selDate, 'out_1_end', rec.out_1_end, false)+'</td>'
+      // 2차 외출
+      +'<td>'+arrwCellInput(stu.id, selDate, 'out_2_start', rec.out_2_start, false)+'</td>'
+      // 2차 복귀
+      +'<td>'+arrwCellInput(stu.id, selDate, 'out_2_end', rec.out_2_end, false)+'</td>'
+      // 퇴실
+      +'<td>'+arrwCellInput(stu.id, selDate, 'check_out_time', rec.check_out_time, true)+'</td>'
+      // 당일 공부
+      +'<td class="daily-cell" id="arrw-daily-'+stu.id+'">'+dailyTxt+'</td>'
+      // 주간 합계
       +'<td class="total-cell" id="arrw-total-'+stu.id+'">'+totalTxt+'</td>'
+      // 남은 의무
       +'<td class="remain-cell '+(remainOk?'ok':'')+'" id="arrw-remain-'+stu.id+'">'+remainTxt+'</td>'
-      +'<td class="save-cell"><button class="save-btn" onclick="arrwSaveRow(\''+stu.id+'\',this)">💾 저장</button></td>'
+      +'<td><button class="save-btn" onclick="arrwSaveRow(\''+stu.id+'\',this)">💾 저장</button></td>'
       +'</tr>';
   }).join('');
 
-  wrap.innerHTML = css + '<div style="overflow-x:auto;overflow-y:auto;max-height:75vh"><table class="arrw-tbl">'+th+'<tbody>'+bodyRows+'</tbody></table></div>';
+  if(!filteredStus.length){
+    bodyRows = '<tr><td colspan="12" style="padding:40px;text-align:center;color:#9ca3af">🔍 검색 결과가 없습니다</td></tr>';
+  }
+
+  // 정보 배지
+  var infoBadge = ''
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">'
+      +'<div style="font-size:14px;font-weight:700;color:#0369a1">📅 '+dateLabel+(isSelToday?' <span style="background:#facc15;color:#854d0e;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;margin-left:6px">오늘</span>':'')+'</div>'
+      +'<div style="font-size:12px;color:#64748b">· 대상 학생 '+filteredStus.length+'명 / 전체 '+_arrwStudents.length+'명</div>'
+    +'</div>';
+
+  wrap.innerHTML = css + tabsHtml + infoBadge + '<div style="overflow-x:auto"><table class="arrw-tbl">'+th+'<tbody>'+bodyRows+'</tbody></table></div>';
 }
 
-// 입실/퇴실용 (큰 슬롯, 라벨 + [지금] 버튼)
-function arrwSlotInput(sid, date, field, value, label){
-  return ''
-    +'<div class="slot">'
-      +'<div class="slot-label">'+label+'</div>'
-      +'<div style="display:flex;gap:1px;align-items:center">'
-        +'<input type="time" class="t-input" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" value="'+(value||'')+'" onchange="arrwOnInputChange(this)">'
-        +'<button class="now-btn" onclick="arrwFillNow(this)" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" title="현재 시간">지금</button>'
-      +'</div>'
-    +'</div>';
+// 셀 인풋 (입실/퇴실 = 지금 버튼 포함, 나머지는 시간 입력만)
+function arrwCellInput(sid, date, field, value, withNowBtn){
+  var html = '<div class="arrw-ig">'
+    +'<input type="time" class="t-input" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" value="'+(value||'')+'" onchange="arrwOnInputChange(this)">';
+  if(withNowBtn){
+    html += '<button class="now-btn" onclick="arrwFillNow(this)" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" title="현재 시간 자동 입력">지금</button>';
+  } else {
+    // 외출/복귀에도 [지금] 버튼 넣기 (장시간 외출 복귀 등에 유용)
+    html += '<button class="now-btn" onclick="arrwFillNow(this)" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" title="현재 시간 자동 입력">지금</button>';
+  }
+  html += '</div>';
+  return html;
 }
 
-// 외출/복귀용 (작은 슬롯, 라벨만)
-function arrwSlotInputNoWrap(sid, date, field, value, label){
-  return ''
-    +'<div>'
-      +'<div class="slot-label">'+label+'</div>'
-      +'<input type="time" class="t-input" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" value="'+(value||'')+'" onchange="arrwOnInputChange(this)">'
-    +'</div>';
+// 요일 탭 전환
+function arrwSelectDay(idx){
+  if(idx < 0 || idx > 6) return;
+  _arrwSelectedDay = idx;
+  arrwRenderTable();
 }
 
 // 시간 input 변경 이벤트
@@ -15696,16 +15750,24 @@ function arrwFillNow(btn){
   }
 }
 
-// 주간 합계/남은시간 셀 갱신
+// 주간 합계/남은시간/당일 공부 셀 갱신
 function arrwRefreshRowTotals(sid){
   var stat = arrwCalcStudentWeekly(sid);
   var totalEl = document.getElementById('arrw-total-'+sid);
   var remainEl = document.getElementById('arrw-remain-'+sid);
+  var dailyEl = document.getElementById('arrw-daily-'+sid);
   if(totalEl) totalEl.textContent = rrFmtDuration(stat.total);
   if(remainEl){
     remainEl.textContent = stat.required > 0 ? rrFmtDuration(stat.remaining) : '-';
     if(stat.required > 0 && stat.remaining <= 0) remainEl.classList.add('ok');
     else remainEl.classList.remove('ok');
+  }
+  // 당일 공부시간 갱신
+  if(dailyEl && _arrwWeekDates.length){
+    var selDate = _arrwWeekDates[_arrwSelectedDay] || _arrwWeekDates[0];
+    var rec = (_arrwRecords[sid] && _arrwRecords[sid][selDate]) || {};
+    var dailyMin = rrCalcDailyMinutes(rec);
+    dailyEl.textContent = dailyMin > 0 ? rrFmtDuration(dailyMin) : '-';
   }
 }
 
