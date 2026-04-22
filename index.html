@@ -940,6 +940,9 @@
             <button class="at-menu-item" id="amenu-weekend-bety" onclick="switchAdminTab('admin-weekend-bety',this);initAdminWeekendBety()" style="font-size:12px;padding:8px 10px">
               <span class="at-menu-icon" style="font-size:14px">📝</span>베티모의고사 조회
             </button>
+            <button class="at-menu-item" id="amenu-weekend-naesin" onclick="switchAdminTab('admin-weekend-naesin',this);initAdminWeekendNaesin()" style="font-size:12px;padding:8px 10px">
+              <span class="at-menu-icon" style="font-size:14px">📘</span>내신대비 조회
+            </button>
           </div>
         </div>
       </div>
@@ -2596,6 +2599,35 @@
         </div>
         <div id="awby-table-wrap">
           <div class="empty-state"><div class="ei">📝</div><p>날짜를 선택하면 결과가 표시됩니다</p></div>
+        </div>
+      </div>
+
+      <!-- 관리자 내신대비 조회 패널 -->
+      <div class="panel" id="panel-admin-weekend-naesin">
+        <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#0f766e">📘 내신대비 조회</div>
+        <div style="font-size:13px;color:#0d9488;margin-bottom:16px">선생님별 내신대비 결과를 조회합니다 (읽기 전용)</div>
+        <div class="card" style="margin-bottom:12px;border:1.5px solid #99f6e4">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <div style="flex:1;min-width:120px">
+              <div style="font-size:12px;color:#0f766e;margin-bottom:4px;font-weight:500">분원</div>
+              <select id="awns-branch-select" onchange="awnsFilterTeachers()" style="width:100%;padding:9px 12px;border:1.5px solid #99f6e4;border-radius:10px;font-size:14px;outline:none;background:#fff">
+                <option value="">전체 분원</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:140px">
+              <div style="font-size:12px;color:#0f766e;margin-bottom:4px;font-weight:500">선생님</div>
+              <select id="awns-teacher-select" onchange="awnsLoad()" style="width:100%;padding:9px 12px;border:1.5px solid #99f6e4;border-radius:10px;font-size:14px;outline:none;background:#fff">
+                <option value="">전체 선생님</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:140px">
+              <div style="font-size:12px;color:#0f766e;margin-bottom:4px;font-weight:500">날짜 (일요일)</div>
+              <input type="date" id="awns-date" onchange="awnsLoad()" style="width:100%;padding:9px 12px;border:1.5px solid #99f6e4;border-radius:10px;font-size:14px;outline:none;background:#fff">
+            </div>
+          </div>
+        </div>
+        <div id="awns-table-wrap">
+          <div class="empty-state"><div class="ei">📘</div><p>날짜를 선택하면 결과가 표시됩니다</p></div>
         </div>
       </div>
 
@@ -14257,6 +14289,113 @@ async function awpLoad(){
     +'<th style="padding:6px 8px;border:1px solid #4C1D95;color:#F5F3FF;text-align:left">비고</th>'
     +'</tr></thead><tbody>'+rows+'</tbody></table></div>'
     +'<div style="margin-top:10px;font-size:11px;color:#7C3AED;font-weight:600">A: 테스트완료&오답완료 | C: 테스트완료&오답미완료 | F: 결석</div>';
+}
+
+/* ══════════════════════════════════════════
+   관리자 내신대비 조회 (Admin Weekend Naesin)
+   - 전체 중등/고등 학생 대상
+   - 일요일 기준
+══════════════════════════════════════════ */
+var _awnsAllTeachers = [];
+
+async function initAdminWeekendNaesin(){
+  // 다가오는 일요일을 기본값으로 (일요일이면 오늘)
+  var today = new Date();
+  var day = today.getDay();
+  var diff = day === 0 ? 0 : (7 - day);
+  var sun = new Date(today); sun.setDate(today.getDate() + diff);
+  var dateEl = document.getElementById('awns-date');
+  if(dateEl && !dateEl.value) dateEl.value = sun.toISOString().split('T')[0];
+
+  var branchSel = document.getElementById('awns-branch-select');
+  branchSel.innerHTML = '<option value="">전체 분원</option>';
+  (window._allBranches||[]).filter(function(b){ return b.active !== false; }).forEach(function(b){
+    branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+  });
+
+  _awnsAllTeachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && isTeacherInActiveBranch(u); })
+    .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
+  awnsRenderTeachers('');
+  await awnsLoad();
+}
+
+function awnsFilterTeachers(){
+  var branchId = document.getElementById('awns-branch-select').value;
+  awnsRenderTeachers(branchId);
+  awnsLoad();
+}
+
+function awnsRenderTeachers(branchId){
+  var sel = document.getElementById('awns-teacher-select');
+  sel.innerHTML = '<option value="">전체 선생님</option>';
+  _awnsAllTeachers.filter(function(t){ return !branchId || t.branch_id===branchId; })
+    .forEach(function(t){ sel.innerHTML += '<option value="'+t.id+'">'+t.name+' T</option>'; });
+}
+
+async function awnsLoad(){
+  var date = document.getElementById('awns-date').value;
+  var teacherId = document.getElementById('awns-teacher-select').value;
+  var wrap = document.getElementById('awns-table-wrap');
+  if(!date){ wrap.innerHTML='<div class="empty-state"><div class="ei">📘</div><p>날짜를 선택하세요</p></div>'; return; }
+  wrap.innerHTML = '<div class="loading"><div class="spinner" style="border-top-color:#0f766e"></div>불러오는 중...</div>';
+
+  var teachers = teacherId
+    ? _awnsAllTeachers.filter(function(t){ return t.id===teacherId; })
+    : (document.getElementById('awns-branch-select').value
+        ? _awnsAllTeachers.filter(function(t){ return t.branch_id===document.getElementById('awns-branch-select').value; })
+        : _awnsAllTeachers);
+  var teacherIds = teachers.map(function(t){ return t.id; });
+  if(!teacherIds.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">👤</div><p>선생님이 없습니다</p></div>'; return; }
+
+  // 전체 중등/고등 학생
+  var {data: students} = await db.from('users')
+    .select('id,name,school,grade,teacher_id,school_level')
+    .eq('role','student').eq('status','active')
+    .in('school_level', ['middle','high','both'])
+    .in('teacher_id', teacherIds).order('name');
+  if(!students||!students.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">📘</div><p>해당 조건의 중등/고등 학생이 없습니다</p></div>'; return; }
+
+  var {data: records} = await db.from('weekend_naesin').select('*').eq('session_date',date)
+    .in('student_id', students.map(function(s){ return s.id; }));
+  var dataMap = {};
+  (records||[]).forEach(function(r){ dataMap[r.student_id]=r; });
+
+  var rows = students.map(function(s,i){
+    var r = dataMap[s.id]||{};
+    var att = r.attendance==='present'?'출석':r.attendance==='late'?'지각':r.attendance==='absent'?'결석':'-';
+    var attColor = r.attendance==='absent'?'color:#ef4444':r.attendance==='late'?'color:#ea580c':'';
+    var result = r.result||'';
+    var resultColor = result==='A'?'color:#0f766e;font-weight:700'
+                   : result==='C'?'color:#a16207;font-weight:700'
+                   : result==='F'?'color:#ef4444;font-weight:700':'';
+    var bg = i%2===0?'#fff':'#f0fdfa';
+    return '<tr style="background:'+bg+';font-size:12px">'
+      +'<td style="padding:5px 8px;border:1px solid #5eead4;color:#6b7280">'+(s.school||'')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #5eead4;text-align:center;color:#6b7280">'+(s.grade||'')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #5eead4;font-weight:700">'+s.name+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #5eead4;text-align:center">'+(r.attend_time||'-')+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #5eead4;text-align:center;'+attColor+'">'+att+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #5eead4;text-align:center;'+resultColor+'">'+result+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #5eead4;color:#6b7280">'+(r.note||'')+'</td>'
+    +'</tr>';
+  }).join('');
+
+  var dp = date.split('-');
+  var dayNames=['일','월','화','수','목','금','토'];
+  var dateLabel = dp[0]+'년 '+(+dp[1])+'월 '+(+dp[2])+'일('+dayNames[new Date(date+'T00:00:00').getDay()]+')';
+
+  wrap.innerHTML = '<div style="font-size:13px;font-weight:700;color:#0f766e;margin-bottom:8px">'+dateLabel+' · '+students.length+'명</div>'
+    +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<thead><tr style="background:#0f766e">'
+    +'<th style="padding:6px 8px;border:1px solid #115e59;color:#ccfbf1;text-align:left">학교</th>'
+    +'<th style="padding:6px 8px;border:1px solid #115e59;color:#ccfbf1;text-align:center">학년</th>'
+    +'<th style="padding:6px 8px;border:1px solid #115e59;color:#ccfbf1;text-align:left">이름</th>'
+    +'<th style="padding:6px 8px;border:1px solid #115e59;color:#ccfbf1;text-align:center">시간</th>'
+    +'<th style="padding:6px 8px;border:1px solid #115e59;color:#ccfbf1;text-align:center">출결</th>'
+    +'<th style="padding:6px 8px;border:1px solid #115e59;color:#ccfbf1;text-align:center">결과</th>'
+    +'<th style="padding:6px 8px;border:1px solid #115e59;color:#ccfbf1;text-align:left">비고</th>'
+    +'</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    +'<div style="margin-top:10px;font-size:11px;color:#0f766e;font-weight:600">A: 테스트완료&통과 | C: 테스트완료&미통과 | F: 결석</div>';
 }
 
 /* ══════════════════════════════════════════
