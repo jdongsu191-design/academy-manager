@@ -3817,7 +3817,7 @@
       <!-- 독서실 아코디언 (관리자 전용 설정) -->
       <div style="grid-column:1/-1">
         <div class="accordion-header" onclick="toggleAccordion(this,'edit-reading-room-body')">
-          <span style="font-size:12px;font-weight:600;color:#0369a1">🏫 독서실 설정 (관리자 전용)</span>
+          <span style="font-size:12px;font-weight:600;color:#0369a1">🏫 독서실 설정</span>
           <span style="font-size:10px;color:#9ca3af">▼</span>
         </div>
         <div id="edit-reading-room-body" class="accordion-body">
@@ -3933,7 +3933,7 @@
       <div id="edit-naje-assignments-summary" style="margin-top:8px;font-size:11px;color:#4b5563"></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:16px">
-      <button class="btn btn-full" onclick="closeModal('editStudent')">취소</button>
+      <button class="btn btn-full" onclick="_isAdminStudentEditMode=false;closeModal('editStudent')">취소</button>
       <button class="btn btn-primary btn-full" onclick="saveEditStudent()">저장</button>
     </div>
   </div>
@@ -4951,7 +4951,8 @@ function renderAdminStudents(){
         <button class="btn btn-sm" onclick="adminCopyCode('${u.student_code||''}','${u.name}')" style="background:#f0f7ff;border-color:#93c5fd;color:#1d4ed8;font-size:11px">${u.student_code?'📋 복사':'—'}</button>
         <button class="btn btn-sm" onclick="adminReissueCode('${u.id}','${u.name}')" style="background:#fffbeb;border-color:#fde68a;color:#92400e;font-size:11px">🔄 재발급</button>
         ${isActive
-          ? `<button class="btn btn-danger btn-sm" onclick="adminRetireStudent('${u.id}')">퇴원</button>`
+          ? `<button class="btn btn-sm" onclick="openAdminEditStudentModal('${u.id}')" style="background:#eef2ff;border-color:#c7d2fe;color:#4f46e5;font-size:11px;font-weight:700">✏️ 수정</button>
+             <button class="btn btn-danger btn-sm" onclick="adminRetireStudent('${u.id}')">퇴원</button>`
           : `<button class="btn btn-sm" onclick="openWithdrawReport('${u.id}','${u.name.replace(/'/g,"\'")}')" style="background:#f0f9ff;border-color:#7dd3fc;color:#0369a1;font-size:11px;font-weight:700">📋 퇴원 사유</button>
              <button class="btn btn-success btn-sm" onclick="adminReEnrollStudent('${u.id}')">재원</button>
              <button class="btn btn-sm" onclick="adminDeleteStudent('${u.id}','${u.name}')" style="background:#fff0f0;border-color:#fca5a5;color:#dc2626;font-size:11px">삭제</button>`
@@ -6501,9 +6502,47 @@ function mncSelectLevel(level){
   if(potAccordion) potAccordion.style.display = 'block';
 }
 
+/* ══════════════════════════════════════════
+   관리자 학생 편집 (선생님 편집 모달 재활용)
+   - allUsers / allClasses에서 학생/반 정보 조회
+   - students, classes 배열에 임시 주입하여 기존 함수 재사용
+   - 저장 후 loadAdminData로 관리자 데이터 갱신
+══════════════════════════════════════════ */
+var _isAdminStudentEditMode = false;
+
+function openAdminEditStudentModal(id){
+  var u = (typeof allUsers !== 'undefined' ? allUsers : []).find(function(x){ return x.id === id && x.role === 'student'; });
+  if(!u){ alert('학생 정보를 찾을 수 없습니다'); return; }
+
+  // classes 전역이 관리자에선 비어있을 수 있으므로 allClasses 주입
+  if(typeof allClasses !== 'undefined' && allClasses.length){
+    if(typeof classes === 'undefined' || !Array.isArray(classes)){
+      window.classes = allClasses.slice();
+    } else {
+      // 이미 배열이면 관리자 모드에서는 전체 반 목록으로 교체 (참조 유지)
+      classes.length = 0;
+      Array.prototype.push.apply(classes, allClasses);
+    }
+  }
+
+  // students 배열에 현재 학생이 없으면 임시 주입
+  if(typeof students === 'undefined' || !Array.isArray(students)){
+    window.students = [];
+  }
+  if(!students.find(function(x){ return x.id === id; })){
+    students.push(u);
+  }
+
+  _isAdminStudentEditMode = true;
+  openEditStudentModal(id);
+}
+
 function openEditStudentModal(id){
   const s = students.find(s=>s.id===id);
   if(!s) return;
+  // 관리자 모드 플래그는 openAdminEditStudentModal에서 true로 선설정한 경우에만 유지
+  // (직접 호출 시엔 기본 선생님 모드)
+  if(!_isAdminStudentEditMode) _isAdminStudentEditMode = false;
   document.getElementById('edit-student-id').value = s.id;
   document.getElementById('edit-student-name').value = s.name||'';
   document.getElementById('edit-student-school').value = s.school||'';
@@ -6537,23 +6576,11 @@ function openEditStudentModal(id){
   if(betyLevel) betyLevel.value = s.bety_level || '';
   if(betyTime)  betyTime.value  = s.bety_attend_time || '';
 
-  // 독서실 설정 로드 (관리자만 수정 가능, 선생님은 읽기 전용)
+  // 독서실 설정 로드 (선생님/관리자 모두 수정 가능)
   var rrYnEl = document.getElementById('edit-student-rr-yn');
   var rrReqEl = document.getElementById('edit-student-rr-required');
   if(rrYnEl) rrYnEl.checked = !!s.reading_room_yn;
   if(rrReqEl) rrReqEl.value = rrMinutesToHm(s.required_study_minutes);
-  var isAdmin = currentUser && currentUser.role === 'admin';
-  if(rrYnEl)  rrYnEl.disabled  = !isAdmin;
-  if(rrReqEl) rrReqEl.readOnly = !isAdmin;
-  if(!isAdmin && rrReqEl){
-    rrReqEl.style.background = '#f3f4f6';
-    rrReqEl.style.color      = '#6b7280';
-    rrReqEl.style.cursor     = 'not-allowed';
-  } else if(rrReqEl){
-    rrReqEl.style.background = '';
-    rrReqEl.style.color      = '';
-    rrReqEl.style.cursor     = '';
-  }
   const sel = document.getElementById('edit-student-class');
   sel.innerHTML = '<option value="">반 선택</option>';
   classes.forEach(c=>{
@@ -6617,8 +6644,7 @@ async function saveEditStudent(){
   const bety_level = document.getElementById('edit-bety-level')?.value || null;
   const bety_attend_time = document.getElementById('edit-bety-time')?.value.trim() || null;
 
-  // 독서실 필드: 관리자만 반영
-  var isAdminSave = currentUser && currentUser.role === 'admin';
+  // 독서실 필드: 선생님/관리자 모두 수정 가능
   var updatePayload = {
     name, class_id:classId||null, class_id2:classId2||null,
     school:school||null, grade:grade||null, phone:phone||null,
@@ -6628,17 +6654,24 @@ async function saveEditStudent(){
     potential_yn, potential_level, potential_attend_time,
     bety_yn, bety_level, bety_attend_time
   };
-  if(isAdminSave){
-    var rrYnVal  = document.getElementById('edit-student-rr-yn')?.checked || false;
-    var rrReqRaw = document.getElementById('edit-student-rr-required')?.value || '';
-    updatePayload.reading_room_yn       = rrYnVal;
-    updatePayload.required_study_minutes = rrHmToMinutes(rrReqRaw);
-  }
+  var rrYnVal  = document.getElementById('edit-student-rr-yn')?.checked || false;
+  var rrReqRaw = document.getElementById('edit-student-rr-required')?.value || '';
+  updatePayload.reading_room_yn       = rrYnVal;
+  updatePayload.required_study_minutes = rrHmToMinutes(rrReqRaw);
   const{error} = await db.from('users').update(updatePayload).eq('id',id);
   btn.textContent='저장';btn.disabled=false;
   if(error){alert('오류: '+error.message);return;}
   closeModal('editStudent');
-  await loadTeacherData();
+  if(_isAdminStudentEditMode){
+    _isAdminStudentEditMode = false;
+    if(typeof loadAdminData === 'function'){
+      await loadAdminData();
+    } else {
+      await loadTeacherData();
+    }
+  } else {
+    await loadTeacherData();
+  }
   alert('✅ 학생 정보가 수정됐습니다!');
 }
 
