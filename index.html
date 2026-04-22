@@ -860,6 +860,9 @@
             <button class="at-menu-item" id="tmenu-weekend-potential" onclick="switchTeacherTab('weekend-potential',this);initPotential()" style="font-size:12px;padding:8px 10px">
               <span class="at-menu-icon" style="font-size:14px">🎯</span>포텐셜
             </button>
+            <button class="at-menu-item" id="tmenu-weekend-naesin" onclick="switchTeacherTab('weekend-naesin',this);initNaesin()" style="font-size:12px;padding:8px 10px">
+              <span class="at-menu-icon" style="font-size:14px">📘</span>내신대비
+            </button>
             <button class="at-menu-item" id="tmenu-weekend-bety" onclick="switchTeacherTab('weekend-bety',this);initBety()" style="font-size:12px;padding:8px 10px">
               <span class="at-menu-icon" style="font-size:14px">📝</span>베티모의고사
             </button>
@@ -1461,6 +1464,50 @@
         <div style="overflow-x:auto">
           <div id="pt-table-wrap">
             <div class="empty-state"><div class="ei">🎯</div><p>날짜를 선택하면 포텐셜 학생 목록이 표시됩니다</p></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 내신대비 패널 -->
+      <div class="panel" id="panel-weekend-naesin">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:18px;font-weight:700;color:#0f766e">📘 내신대비</div>
+            <div style="font-size:12px;color:#0d9488;margin-top:2px">일요 내신대비 출결 및 결과 관리</div>
+          </div>
+        </div>
+
+        <!-- 날짜 + 필터 + 버튼 -->
+        <div class="card" style="margin-bottom:12px;border:1.5px solid #99f6e4">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <div style="flex:1;min-width:130px">
+              <div style="font-size:12px;color:#0f766e;margin-bottom:4px;font-weight:500">날짜 (일요일)</div>
+              <input type="date" id="ns-date" onchange="nsLoad()"
+                style="width:100%;padding:9px 12px;border:1.5px solid #99f6e4;border-radius:10px;font-size:14px;outline:none;background:#fff">
+            </div>
+            <div style="flex:1;min-width:150px;position:relative">
+              <div style="font-size:12px;color:#0f766e;margin-bottom:4px;font-weight:500">선생님</div>
+              <button id="ns-teacher-btn" onclick="nsToggleTeacherDropdown(event)"
+                style="width:100%;padding:9px 12px;border:1.5px solid #99f6e4;border-radius:10px;font-size:13px;outline:none;background:#fff;cursor:pointer;text-align:left;display:flex;align-items:center;justify-content:space-between">
+                <span id="ns-teacher-label">전체</span><span style="font-size:10px;color:#9ca3af">▼</span>
+              </button>
+              <div id="ns-teacher-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:200;background:#fff;border:1.5px solid #99f6e4;border-radius:10px;box-shadow:0 4px 16px rgba(15,118,110,0.12);max-height:220px;overflow-y:auto;margin-top:4px;padding:6px 0">
+                <label style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:13px" onmouseover="this.style.background='#f0fdfa'" onmouseout="this.style.background=''">
+                  <input type="checkbox" id="ns-chk-all" onchange="nsTeacherAllToggle(this)" style="accent-color:#0f766e"> <span>전체</span>
+                </label>
+                <div id="ns-teacher-chk-list"></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;flex:1;min-width:220px;align-self:flex-end">
+              <button id="ns-save-btn" onclick="nsSaveAll()" class="btn" style="flex:1;padding:9px 0;font-weight:700;background:#0f766e;color:#fff;border-color:#0f766e">💾 전체 저장</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 학생 테이블 -->
+        <div style="overflow-x:auto">
+          <div id="ns-table-wrap">
+            <div class="empty-state"><div class="ei">📘</div><p>날짜를 선택하면 내신대비 학생 목록이 표시됩니다</p></div>
           </div>
         </div>
       </div>
@@ -13193,6 +13240,318 @@ async function ptGenerateImage(){
     alert('오류: '+err.message);
     btn.textContent='📊 이미지 생성'; btn.disabled=false;
   }
+}
+
+/* ══════════════════════════════════════════
+   내신대비 (Weekend Naesin) — 일요일 진행
+   대상: 전체 중등/고등 학생 (school_level in middle/high/both)
+   항목: 시간(attend_time) / 출결(attendance) / 결과(A/C/F) / 비고(note)
+══════════════════════════════════════════ */
+var _nsStudents = [];
+var _nsData     = {};
+var _nsAllTeachers = [];
+
+async function initNaesin(){
+  var dateEl = document.getElementById('ns-date');
+  if(!dateEl.value){
+    // 다가오는 일요일을 기본값으로 (일요일이면 오늘)
+    var today = new Date();
+    var day = today.getDay(); // 0=일,1=월...6=토
+    var diff = day === 0 ? 0 : (7 - day);
+    var sun = new Date(today);
+    sun.setDate(today.getDate() + diff);
+    dateEl.value = sun.toISOString().split('T')[0];
+  }
+  await nsLoadFilters();
+  await nsLoadData();
+}
+
+async function nsLoad(){
+  await nsLoadData();
+}
+
+async function nsLoadFilters(){
+  var myBranchId = currentUser.branch_id || null;
+  var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
+  if(myBranchId) tQuery = tQuery.eq('branch_id', myBranchId);
+  var {data: teachers} = await tQuery;
+  _nsAllTeachers = teachers || [];
+  if(!_nsAllTeachers.find(function(t){ return t.id===currentUser.id; })){
+    _nsAllTeachers.unshift({id:currentUser.id, name:currentUser.name, branch_id:myBranchId});
+  }
+  nsRenderTeacherCheckboxes();
+}
+
+function nsRenderTeacherCheckboxes(){
+  var list = document.getElementById('ns-teacher-chk-list');
+  if(!list) return;
+  list.innerHTML = _nsAllTeachers.map(function(t){
+    var checked = (t.id === currentUser.id) ? ' checked' : '';
+    return '<label style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:13px" '
+      +'onmouseover="this.style.background=\'#f0fdfa\'" onmouseout="this.style.background=\'\'">'
+      +'<input type="checkbox" class="ns-teacher-chk" value="'+t.id+'"'+checked+' '
+        +'onchange="nsTeacherChkChange()" style="accent-color:#0f766e"> '
+      +'<span>'+t.name+' T</span>'
+    +'</label>';
+  }).join('');
+  nsUpdateTeacherLabel();
+}
+
+function nsToggleTeacherDropdown(e){
+  e.stopPropagation();
+  var dd = document.getElementById('ns-teacher-dropdown');
+  var isOpen = dd.style.display !== 'none';
+  dd.style.display = isOpen ? 'none' : 'block';
+  if(!isOpen){
+    setTimeout(function(){
+      document.addEventListener('click', function handler(ev){
+        if(!dd.contains(ev.target) && ev.target.id !== 'ns-teacher-btn'){
+          dd.style.display = 'none';
+        }
+        document.removeEventListener('click', handler);
+      });
+    }, 10);
+  }
+}
+
+function nsTeacherAllToggle(chkAll){
+  document.querySelectorAll('.ns-teacher-chk').forEach(function(c){ c.checked = chkAll.checked; });
+  nsUpdateTeacherLabel();
+  nsLoadData();
+}
+
+function nsTeacherChkChange(){
+  var all = document.querySelectorAll('.ns-teacher-chk');
+  var allChk = document.getElementById('ns-chk-all');
+  var checked = Array.from(all).filter(function(c){ return c.checked; });
+  if(allChk) allChk.checked = checked.length === all.length;
+  nsUpdateTeacherLabel();
+  nsLoadData();
+}
+
+function nsUpdateTeacherLabel(){
+  var all = document.querySelectorAll('.ns-teacher-chk');
+  var checked = Array.from(all).filter(function(c){ return c.checked; });
+  var label = document.getElementById('ns-teacher-label');
+  if(!label) return;
+  if(checked.length === 0 || checked.length === all.length){
+    label.textContent = '전체';
+  } else if(checked.length === 1){
+    var id = checked[0].value;
+    var t = _nsAllTeachers.find(function(t){ return t.id===id; });
+    label.textContent = t ? t.name+' T' : '1명';
+  } else {
+    label.textContent = checked.length+'명 선택';
+  }
+}
+
+function nsGetSelectedTeacherIds(){
+  var checked = Array.from(document.querySelectorAll('.ns-teacher-chk:checked'));
+  return checked.map(function(c){ return c.value; });
+}
+
+async function nsLoadData(){
+  var date = document.getElementById('ns-date').value;
+  var wrap = document.getElementById('ns-table-wrap');
+  if(!date){
+    wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">📘</div><p>날짜를 선택하면 내신대비 학생 목록이 표시됩니다</p></div>';
+    return;
+  }
+  wrap.innerHTML = '<div class="loading"><div class="spinner" style="border-top-color:#0f766e"></div>불러오는 중...</div>';
+
+  var selectedIds = nsGetSelectedTeacherIds();
+  if(!selectedIds.length){
+    selectedIds = _nsAllTeachers.map(function(t){ return t.id; });
+    if(!selectedIds.length) selectedIds = [currentUser.id];
+  }
+
+  // 전체 중등/고등 학생 (school_level IN middle/high/both)
+  var query = db.from('users')
+    .select('id,name,school,grade,teacher_id,school_level')
+    .eq('role','student').eq('status','active')
+    .in('school_level', ['middle','high','both']);
+
+  if(selectedIds.length === 1){
+    query = query.eq('teacher_id', selectedIds[0]);
+  } else {
+    query = query.in('teacher_id', selectedIds);
+  }
+
+  var {data: students} = await query.order('name');
+  _nsStudents = students || [];
+
+  _nsData = {};
+  if(_nsStudents.length){
+    var {data: records} = await db.from('weekend_naesin')
+      .select('*').eq('session_date', date)
+      .in('student_id', _nsStudents.map(function(s){ return s.id; }));
+    (records||[]).forEach(function(r){ _nsData[r.student_id] = r; });
+  }
+
+  nsRenderTable();
+}
+
+function nsRenderTable(){
+  var wrap = document.getElementById('ns-table-wrap');
+  if(!_nsStudents.length){
+    wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">📘</div><p>해당 조건의 중등/고등 학생이 없습니다</p></div>';
+    return;
+  }
+
+  var ATT_OPTIONS = [{v:'',l:''},{v:'present',l:'출석'},{v:'late',l:'지각'},{v:'absent',l:'결석'}];
+  var RESULT_OPTIONS = [{v:'',l:''},{v:'A',l:'A'},{v:'C',l:'C'},{v:'F',l:'F'}];
+
+  var html = '<style>'
+    +'.ns-tbl{width:100%;border-collapse:collapse;font-size:12px}'
+    +'.ns-tbl th{background:#0f766e;color:#ccfbf1;padding:7px 5px;text-align:center;font-size:11px;font-weight:700;white-space:nowrap}'
+    +'.ns-tbl tr:nth-child(even){background:#f0fdfa}'
+    +'.ns-tbl tr:nth-child(odd){background:#fff}'
+    +'.ns-tbl td{padding:5px 4px;border-bottom:1px solid #99f6e4;vertical-align:middle;text-align:center}'
+    +'.ns-inp{width:100%;padding:6px 8px;border:1.5px solid #5eead4;border-radius:5px;font-size:12px;outline:none;background:#fff;box-sizing:border-box;text-align:center}'
+    +'.ns-inp:focus{border-color:#0f766e;box-shadow:0 0 0 2px rgba(15,118,110,0.15)}'
+    +'.ns-sel{width:100%;padding:6px 8px;border:1.5px solid #5eead4;border-radius:5px;font-size:12px;outline:none;background:#fff;cursor:pointer;min-width:60px}'
+    +'.ns-sel:focus{border-color:#0f766e}'
+    +'</style>';
+
+  html += '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
+    +'<table class="ns-tbl" style="min-width:560px"><thead><tr>'
+    +'<th style="text-align:left;padding-left:8px;min-width:60px">학교</th>'
+    +'<th style="min-width:36px">학년</th>'
+    +'<th style="text-align:left;padding-left:6px;min-width:52px">이름</th>'
+    +'<th style="min-width:60px">시간</th>'
+    +'<th style="min-width:60px">출결</th>'
+    +'<th style="min-width:60px">결과</th>'
+    +'<th style="text-align:left;padding-left:6px;min-width:90px">비고</th>'
+    +'<th style="min-width:48px">📋멘트</th>'
+    +'</tr></thead><tbody>';
+
+  _nsStudents.forEach(function(s){
+    var r = _nsData[s.id] || {};
+    var curAtt    = (r.id && r.attendance) ? r.attendance : '';
+    var curResult = r.result || '';
+
+    var attSel = ATT_OPTIONS.map(function(o){
+      return '<option value="'+o.v+'"'+(curAtt===o.v?' selected':'')+'>'+o.l+'</option>';
+    }).join('');
+    var resultSel = RESULT_OPTIONS.map(function(o){
+      return '<option value="'+o.v+'"'+(curResult===o.v?' selected':'')+'>'+o.l+'</option>';
+    }).join('');
+
+    html += '<tr>'
+      +'<td style="text-align:left;padding-left:8px;color:#6b7280;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(s.school||'')+'">'+(s.school||'')+'</td>'
+      +'<td style="color:#6b7280;white-space:nowrap">'+(s.grade||'')+'</td>'
+      +'<td style="text-align:left;padding-left:6px;font-weight:700;color:#1e293b;white-space:nowrap">'+s.name+'</td>'
+      +'<td><input class="ns-inp ns-focusable" data-sid="'+s.id+'" data-field="attend_time" value="'+(r.attend_time!=null&&r.id?r.attend_time:'')+'" placeholder="10:00"></td>'
+      +'<td><select class="ns-sel ns-focusable" data-sid="'+s.id+'" data-field="attendance">'+attSel+'</select></td>'
+      +'<td><select class="ns-sel ns-focusable" data-sid="'+s.id+'" data-field="result">'+resultSel+'</select></td>'
+      +'<td><input class="ns-inp ns-focusable" data-sid="'+s.id+'" data-field="note" value="'+(r.note||'')+'" placeholder="비고"></td>'
+      +'<td><button data-sid="'+s.id+'" onclick="nsCopyMent(this.dataset.sid)"'
+        +' style="padding:5px 4px;border:1px solid #5eead4;border-radius:5px;background:#f0fdfa;color:#0f766e;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;width:100%">'
+        +'📋</button></td>'
+    +'</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
+  nsInitKeyNav();
+}
+
+function nsInitKeyNav(){
+  // 방식 A: SELECT에서 선택 후 제자리, 엔터 한 번 더 눌러야 이동 (150ms 쿨다운)
+  var focusables = Array.from(document.querySelectorAll('.ns-focusable'));
+  var cols = 4; // attend_time, attendance, result, note
+  focusables.forEach(function(el, idx){
+    var colIdx = idx % cols;
+    var isSelect = el.tagName === 'SELECT';
+    var justChangedAt = 0;
+    if(isSelect){
+      el.addEventListener('change', function(){ justChangedAt = Date.now(); });
+    }
+    el.addEventListener('keydown', function(e){
+      if(e.key === 'Tab'){
+        e.preventDefault();
+        var next = e.shiftKey ? focusables[idx-1] : focusables[idx+1];
+        if(next) next.focus();
+      } else if(e.key === 'Enter'){
+        e.preventDefault();
+        if(isSelect && Date.now() - justChangedAt < 150) return;
+        // 다음 행의 출결(col=1)으로 점프
+        var nextRowIdx = idx - colIdx + cols + 1;
+        var next = focusables[nextRowIdx];
+        if(next) next.focus();
+      }
+    });
+  });
+}
+
+async function nsSaveAll(){
+  var date = document.getElementById('ns-date').value;
+  if(!date){ alert('날짜를 선택하세요'); return; }
+  if(!_nsStudents.length){ alert('학생이 없습니다'); return; }
+
+  var btn = document.getElementById('ns-save-btn');
+  btn.textContent = '⏳ 저장 중...'; btn.disabled = true;
+
+  var wrap = document.getElementById('ns-table-wrap');
+
+  var upserts = _nsStudents.map(function(s){
+    function fv(field){
+      var el = wrap ? wrap.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]') : null;
+      return el ? el.value.trim() : '';
+    }
+    return {
+      student_id: s.id,
+      session_date: date,
+      attend_time: fv('attend_time') || null,
+      attendance: fv('attendance') || null,
+      result: fv('result') || null,
+      note: fv('note') || null,
+      created_by: currentUser.id
+    };
+  });
+
+  var {error} = await db.from('weekend_naesin').upsert(upserts, {onConflict:'student_id,session_date'});
+  btn.textContent = '💾 전체 저장'; btn.disabled = false;
+  if(error){ alert('저장 오류: '+error.message); return; }
+  alert('✅ 저장 완료!');
+  await nsLoadData();
+}
+
+function nsCopyMent(studentId){
+  var s = _nsStudents.find(function(st){ return st.id===studentId; });
+  if(!s){ alert('학생 정보를 찾을 수 없습니다'); return; }
+
+  var wrap = document.getElementById('ns-table-wrap');
+  function fv(field){
+    var el = wrap ? wrap.querySelector('[data-sid="'+studentId+'"][data-field="'+field+'"]') : null;
+    return el ? el.value.trim() : '';
+  }
+
+  var date   = document.getElementById('ns-date') ? document.getElementById('ns-date').value : '';
+  if(!date){ alert('날짜를 선택하세요'); return; }
+  var result = fv('result');
+
+  var dp = date.split('-');
+  var dateLabel = (parseInt(dp[1]))+'월'+(parseInt(dp[2]))+'일';
+
+  var resultText = result==='A' ? '테스트 완료 & 통과'
+                : result==='C' ? '테스트 완료 & 미통과'
+                : result==='F' ? '결석'
+                : '미입력';
+
+  var ment = '■ 일요 내신대비 ' + s.name + ' 학생의 ' + dateLabel + ' 내신대비 결과는 "' + resultText + '"입니다.';
+
+  navigator.clipboard.writeText(ment).then(function(){
+    var btn = wrap ? wrap.querySelector('[data-sid="'+studentId+'"][onclick*="nsCopyMent"]') : null;
+    if(btn){
+      btn.style.background='#0f766e'; btn.style.color='#fff'; btn.style.borderColor='#115e59';
+      btn.innerHTML='✅';
+      setTimeout(function(){
+        btn.style.background='#f0fdfa'; btn.style.color='#0f766e'; btn.style.borderColor='#5eead4';
+        btn.innerHTML='📋';
+      }, 2000);
+    }
+  }).catch(function(){ alert('클립보드 복사에 실패했습니다'); });
 }
 
 /* ══════════════════════════════════════════
