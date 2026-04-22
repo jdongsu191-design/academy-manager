@@ -15966,6 +15966,9 @@ function arrwRenderTable(){
     +'.arrw-tbl .save-btn.saved{background:#15803d;color:#fff}'
     +'.arrw-tbl .report-btn{padding:6px 10px;border:1px solid #7c3aed;border-radius:7px;background:#faf5ff;color:#6d28d9;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}'
     +'.arrw-tbl .report-btn:hover{background:#7c3aed;color:#fff}'
+    +'.arrw-tbl .report-btn.copied{background:#16a34a;color:#fff;border-color:#16a34a}'
+    +'.arrw-tbl .report-preview-btn{padding:6px 8px;border:1px solid #c4b5fd;border-radius:7px;background:#fff;color:#7c3aed;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}'
+    +'.arrw-tbl .report-preview-btn:hover{background:#faf5ff;border-color:#7c3aed}'
     +'</style>';
 
   // 요일 탭 구성
@@ -16064,7 +16067,8 @@ function arrwRenderTable(){
       +'<td class="remain-cell '+(remainOk?'ok':'')+'" id="arrw-remain-'+stu.id+'">'+remainTxt+'</td>'
       +'<td><div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap">'
         +'<button class="save-btn" onclick="arrwSaveRow(\''+stu.id+'\',this)" title="이 학생 저장">💾</button>'
-        +'<button class="report-btn" onclick="arrwOpenReport(\''+stu.id+'\')" title="주간 학습 리포트 생성">📊 리포트</button>'
+        +'<button class="report-btn" onclick="arrwQuickCopyReport(\''+stu.id+'\',this)" title="주간 리포트 이미지 즉시 복사">📋 복사</button>'
+        +'<button class="report-preview-btn" onclick="arrwOpenReport(\''+stu.id+'\')" title="주간 리포트 미리보기">👁️</button>'
       +'</div></td>'
       +'</tr>';
   }).join('');
@@ -16409,6 +16413,111 @@ async function arrwPersistStudentDates(sid, dates){
 // 리포트 모달 열기 (학생 ID 받아서 빌드 → 모달 표시)
 var _arrwReportCurrent = null; // { sid, studentName, fileName }
 
+// 백그라운드에서 리포트 HTML을 만들고 이미지 Blob 반환 (모달 없이)
+async function arrwBuildReportBlob(sid){
+  var stu = _arrwStudents.find(function(x){ return x.id === sid; });
+  if(!stu) throw new Error('학생 정보를 찾을 수 없습니다');
+  if(!_arrwWeekDates || !_arrwWeekDates.length){
+    throw new Error('주차 데이터가 없습니다. [불러오기]를 먼저 실행해주세요.');
+  }
+
+  // 학생의 주간 기록 수집
+  var dailyData = _arrwWeekDates.map(function(d, i){
+    var rec = (_arrwRecords[sid] && _arrwRecords[sid][d]) || {};
+    var mins = rrCalcDailyMinutes(rec);
+    return {
+      date: d,
+      dayLabel: _arrwDayLabels[i],
+      dayIdx: i,
+      checkIn:  rec.check_in_time || '',
+      checkOut: rec.check_out_time || '',
+      checkOutNextDay: !!rec.check_out_is_next_day,
+      out1Start: rec.out_1_start || '',
+      out1End:   rec.out_1_end || '',
+      out2Start: rec.out_2_start || '',
+      out2End:   rec.out_2_end || '',
+      minutes: mins
+    };
+  });
+  var weekStat = arrwCalcStudentWeekly(sid);
+  var html = arrwBuildReportHTML(stu, dailyData, weekStat);
+
+  // 숨김 렌더 영역에 주입
+  var renderEl = document.getElementById('arrw-report-render');
+  if(!renderEl) throw new Error('렌더링 영역을 찾을 수 없습니다');
+  renderEl.innerHTML = html;
+
+  // 파일명 계산 (현재 선택 상태로 저장)
+  var stuSchool = (stu.school || '').replace(/\s+/g,'');
+  var stuGrade  = (stu.grade || '').replace(/\s+/g,'');
+  var datePart  = _arrwWeekDates[0].replace(/-/g,'').slice(2);
+  _arrwReportCurrent = {
+    sid: sid,
+    studentName: stu.name || '학생',
+    fileName: datePart + '_' + (stuSchool+stuGrade) + '_' + (stu.name||'학생') + '_주간학습리포트.png'
+  };
+
+  // 이미지 Blob 생성
+  if(typeof html2canvas === 'undefined') throw new Error('html2canvas 라이브러리가 로드되지 않았습니다');
+  var canvas = await html2canvas(renderEl.firstElementChild, {
+    backgroundColor: '#ffffff',
+    scale: 2,
+    useCORS: true,
+    allowTaint: true,
+    logging: false
+  });
+  return new Promise(function(resolve){
+    canvas.toBlob(function(blob){ resolve(blob); }, 'image/png');
+  });
+}
+
+// 즉시 클립보드 복사 (모달 없음) - 테이블 행의 [📋 복사] 버튼
+async function arrwQuickCopyReport(sid, btn){
+  var origText = btn ? btn.textContent : '';
+  try{
+    if(btn){ btn.textContent = '⏳'; btn.disabled = true; }
+    var blob = await arrwBuildReportBlob(sid);
+
+    var isMobile = window.innerWidth <= 680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    var fileName = (_arrwReportCurrent && _arrwReportCurrent.fileName) || '주간학습리포트.png';
+
+    // 모바일: Web Share API 우선
+    if(isMobile){
+      var file = new File([blob], fileName, {type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        try{
+          await navigator.share({files:[file], title:'주간 학습 리포트', text:(_arrwReportCurrent?_arrwReportCurrent.studentName+' 리포트':'')});
+          if(btn){ btn.textContent = '📤'; btn.classList.add('copied'); setTimeout(function(){ btn.textContent = origText; btn.classList.remove('copied'); btn.disabled=false; }, 1800); }
+          return;
+        }catch(e){
+          if(e.name === 'AbortError'){ if(btn){ btn.textContent = origText; btn.disabled=false; } return; }
+        }
+      }
+    }
+    // PC: 클립보드 API
+    if(navigator.clipboard && window.ClipboardItem){
+      try{
+        await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+        if(btn){ btn.textContent = '✅ 복사됨'; btn.classList.add('copied'); setTimeout(function(){ btn.textContent = origText; btn.classList.remove('copied'); btn.disabled=false; }, 1800); }
+        return;
+      }catch(clipErr){
+        console.warn('Clipboard failed, falling back to download:', clipErr);
+      }
+    }
+    // 폴백: 다운로드
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = fileName;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 500);
+    if(btn){ btn.textContent = '💾 저장됨'; btn.classList.add('copied'); setTimeout(function(){ btn.textContent = origText; btn.classList.remove('copied'); btn.disabled=false; }, 1800); }
+  } catch(e){
+    console.error('quick copy report:', e);
+    alert('리포트 복사 실패: ' + (e.message || e));
+    if(btn){ btn.textContent = origText; btn.disabled = false; }
+  }
+}
+
 function arrwOpenReport(sid){
   var stu = _arrwStudents.find(function(x){ return x.id === sid; });
   if(!stu){ alert('학생 정보를 찾을 수 없습니다'); return; }
@@ -16459,6 +16568,13 @@ function arrwOpenReport(sid){
     studentName: stu.name || '학생',
     fileName: datePart + '_' + (stuSchool+stuGrade) + '_' + (stu.name||'학생') + '_주간학습리포트.png'
   };
+
+  // 모달 헤더에 학생 이름 표시
+  var nameEl = document.getElementById('arrw-report-modal-name');
+  if(nameEl){
+    var schoolGrade = [stu.school, stu.grade].filter(Boolean).join(' ');
+    nameEl.textContent = '· '+(stu.name||'학생')+(schoolGrade ? ' ('+schoolGrade+')' : '');
+  }
 
   // 모달 표시
   document.getElementById('modal-arrw-report').style.display = 'flex';
@@ -18223,10 +18339,10 @@ function bulkWithdraw(){
   <div class="modal-content" style="max-width:900px;width:95%;max-height:90vh;overflow:auto;padding:0;background:#f3f0ff">
     <!-- 헤더 -->
     <div style="padding:16px 20px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10">
-      <div style="font-size:16px;font-weight:700;color:#6d28d9">📊 주간 학습 현황 리포트</div>
+      <div style="font-size:16px;font-weight:700;color:#6d28d9">📊 주간 학습 현황 리포트 <span id="arrw-report-modal-name" style="font-size:13px;font-weight:500;color:#6b7280;margin-left:8px"></span></div>
       <div style="display:flex;gap:8px">
         <button onclick="arrwCopyReportImage()" id="arrw-report-copy-btn" style="padding:8px 14px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">📋 이미지 복사</button>
-        <button onclick="arrwDownloadReportImage()" id="arrw-report-download-btn" style="padding:8px 14px;background:#6d28d9;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">💾 다운로드</button>
+        <button onclick="arrwDownloadReportImage()" id="arrw-report-download-btn" style="padding:8px 14px;background:#6d28d9;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">💾 저장</button>
         <button onclick="closeArrwReportModal()" style="padding:8px 14px;background:#fff;border:1px solid #d1d5db;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">닫기</button>
       </div>
     </div>
