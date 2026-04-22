@@ -15572,7 +15572,7 @@ function arrwRenderTable(){
     +'.arrw-tbl td.daily-cell{background:#e0f2fe !important;font-weight:700;color:#0369a1;min-width:70px}'
     // 인풋 그룹 (시간 + 지금버튼)
     +'.arrw-ig{display:inline-flex;gap:2px;align-items:center}'
-    +'.arrw-tbl input.t-input{width:78px;border:1.5px solid #cbd5e1;background:#fff;padding:5px 4px;font-size:12px;text-align:center;outline:none;font-family:inherit;color:#1e293b;border-radius:5px}'
+    +'.arrw-tbl input.t-input{width:72px;border:1.5px solid #cbd5e1;background:#fff;padding:6px 4px;font-size:14px;text-align:center;outline:none;font-family:"SF Mono","Menlo","Consolas",monospace;color:#1e293b;border-radius:5px;letter-spacing:0.5px;font-weight:600}'
     +'.arrw-tbl input.t-input:hover{border-color:#bae6fd;background:#f0f9ff}'
     +'.arrw-tbl input.t-input:focus{border-color:#0369a1;background:#fff;box-shadow:0 0 0 2px rgba(3,105,161,0.15)}'
     +'.arrw-tbl input.t-input.dirty{background:#fef9c3;font-weight:700;border-color:#facc15}'
@@ -15698,13 +15698,14 @@ function arrwRenderTable(){
 // 셀 인풋 (입실/퇴실 = 지금 버튼 포함, 나머지는 시간 입력만)
 function arrwCellInput(sid, date, field, value, withNowBtn){
   var html = '<div class="arrw-ig">'
-    +'<input type="time" class="t-input" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" value="'+(value||'')+'" onchange="arrwOnInputChange(this)">';
-  if(withNowBtn){
-    html += '<button class="now-btn" onclick="arrwFillNow(this)" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" title="현재 시간 자동 입력">지금</button>';
-  } else {
-    // 외출/복귀에도 [지금] 버튼 넣기 (장시간 외출 복귀 등에 유용)
-    html += '<button class="now-btn" onclick="arrwFillNow(this)" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" title="현재 시간 자동 입력">지금</button>';
-  }
+    +'<input type="text" inputmode="numeric" maxlength="5" placeholder="HH:MM" class="t-input" '
+      +'data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" '
+      +'value="'+(value||'')+'" '
+      +'oninput="arrwMaskTime(this)" '
+      +'onkeydown="arrwKeyTime(event,this)" '
+      +'onblur="arrwBlurTime(this)" '
+      +'onfocus="this.select()">';
+  html += '<button class="now-btn" onclick="arrwFillNow(this)" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" title="현재 시간 자동 입력">지금</button>';
   html += '</div>';
   return html;
 }
@@ -15715,6 +15716,72 @@ function arrwSelectDay(idx){
   _arrwSelectedDay = idx;
   arrwRenderTable();
 }
+
+// ── 24시제 시간 입력 마스크/검증 ──
+// 숫자만 남기고 자동으로 ':' 끼워넣기 (1534 → 15:34)
+function arrwMaskTime(el){
+  var raw = (el.value || '').replace(/[^\d]/g,'').slice(0,4);
+  var out = raw;
+  if(raw.length >= 3){
+    out = raw.slice(0,2) + ':' + raw.slice(2);
+  }
+  if(el.value !== out){
+    el.value = out;
+  }
+}
+// 키 입력 제어 (숫자 + 제어키만 허용, 콜론은 자동 처리이므로 타이핑 불필요)
+function arrwKeyTime(e, el){
+  var k = e.key;
+  // 허용: 숫자, Backspace, Delete, Tab, 화살표, Home, End, Ctrl+A, Ctrl+C, Ctrl+V
+  if(
+    /^[0-9]$/.test(k) ||
+    ['Backspace','Delete','Tab','ArrowLeft','ArrowRight','Home','End','Enter','Escape'].indexOf(k) >= 0 ||
+    (e.ctrlKey || e.metaKey)
+  ){
+    // Enter 시 blur 트리거
+    if(k === 'Enter'){ el.blur(); return; }
+    return;
+  }
+  // 콜론 타이핑 시 무시 (자동 생성되므로)
+  if(k === ':'){ e.preventDefault(); return; }
+  e.preventDefault();
+}
+// blur 시 정규화 + 유효성 검사 + 저장 이벤트 트리거
+function arrwBlurTime(el){
+  var v = (el.value || '').trim();
+  if(!v){
+    // 빈 값 허용 (삭제)
+    arrwOnInputChange(el);
+    return;
+  }
+  // 1~4자리 숫자 → 시:분으로 풀어서 해석
+  var digits = v.replace(/[^\d]/g,'');
+  var h = 0, m = 0;
+  if(digits.length === 1){ h = parseInt(digits); m = 0; }
+  else if(digits.length === 2){ h = parseInt(digits); m = 0; }
+  else if(digits.length === 3){ h = parseInt(digits.slice(0,1)); m = parseInt(digits.slice(1)); }
+  else if(digits.length === 4){ h = parseInt(digits.slice(0,2)); m = parseInt(digits.slice(2)); }
+  else {
+    // 콜론 포함 케이스
+    var mm = v.match(/^(\d{1,2}):(\d{1,2})$/);
+    if(mm){ h = parseInt(mm[1]); m = parseInt(mm[2]); }
+    else { el.value = ''; arrwOnInputChange(el); return; }
+  }
+  // 유효성 검사 (시:0-23, 분:0-59)
+  if(isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59){
+    el.style.background = '#fee2e2';
+    el.title = '올바른 시간 형식이 아닙니다 (0~23시, 0~59분)';
+    setTimeout(function(){ el.style.background = ''; el.title=''; }, 1500);
+    el.value = '';
+    arrwOnInputChange(el);
+    return;
+  }
+  // 정규화: HH:MM 포맷으로 저장
+  var hs = (h<10?'0'+h:''+h), ms = (m<10?'0'+m:''+m);
+  el.value = hs+':'+ms;
+  arrwOnInputChange(el);
+}
+
 
 // 시간 input 변경 이벤트
 function arrwOnInputChange(el){
