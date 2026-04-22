@@ -15961,9 +15961,11 @@ function arrwRenderTable(){
     +'.arrw-tbl .nd-badge.hidden{display:none}'
     +'.arrw-tbl .now-btn{font-size:10px;padding:3px 6px;border:1px solid #bae6fd;background:#f0f9ff;color:#0369a1;border-radius:4px;cursor:pointer;font-weight:700;white-space:nowrap}'
     +'.arrw-tbl .now-btn:hover{background:#0369a1;color:#fff}'
-    +'.arrw-tbl .save-btn{padding:6px 12px;border:1px solid #16a34a;border-radius:7px;background:#f0fdf4;color:#15803d;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}'
+    +'.arrw-tbl .save-btn{padding:6px 10px;border:1px solid #16a34a;border-radius:7px;background:#f0fdf4;color:#15803d;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}'
     +'.arrw-tbl .save-btn:hover{background:#16a34a;color:#fff}'
     +'.arrw-tbl .save-btn.saved{background:#15803d;color:#fff}'
+    +'.arrw-tbl .report-btn{padding:6px 10px;border:1px solid #7c3aed;border-radius:7px;background:#faf5ff;color:#6d28d9;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}'
+    +'.arrw-tbl .report-btn:hover{background:#7c3aed;color:#fff}'
     +'</style>';
 
   // 요일 탭 구성
@@ -16060,7 +16062,10 @@ function arrwRenderTable(){
       +'<td class="total-cell" id="arrw-total-'+stu.id+'">'+totalTxt+'</td>'
       // 남은 의무
       +'<td class="remain-cell '+(remainOk?'ok':'')+'" id="arrw-remain-'+stu.id+'">'+remainTxt+'</td>'
-      +'<td><button class="save-btn" onclick="arrwSaveRow(\''+stu.id+'\',this)">💾 저장</button></td>'
+      +'<td><div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap">'
+        +'<button class="save-btn" onclick="arrwSaveRow(\''+stu.id+'\',this)" title="이 학생 저장">💾</button>'
+        +'<button class="report-btn" onclick="arrwOpenReport(\''+stu.id+'\')" title="주간 학습 리포트 생성">📊 리포트</button>'
+      +'</div></td>'
       +'</tr>';
   }).join('');
 
@@ -16392,6 +16397,342 @@ async function arrwPersistStudentDates(sid, dates){
   // 해당 행 input.dirty 제거
   document.querySelectorAll('.arrw-tbl input.t-input[data-sid="'+sid+'"].dirty').forEach(function(el){ el.classList.remove('dirty'); });
   return rows.length;
+}
+
+/* ══════════════════════════════════════════
+   독서실 주간 학습 리포트 (A4, 794×1123)
+   - 학생별 [📊 리포트] 버튼 클릭 시 모달 열림
+   - 보라색 계열 디자인
+   - 이미지 복사 / 다운로드 지원
+════════════════════════════════════════════ */
+
+// 리포트 모달 열기 (학생 ID 받아서 빌드 → 모달 표시)
+var _arrwReportCurrent = null; // { sid, studentName, fileName }
+
+function arrwOpenReport(sid){
+  var stu = _arrwStudents.find(function(x){ return x.id === sid; });
+  if(!stu){ alert('학생 정보를 찾을 수 없습니다'); return; }
+  if(!_arrwWeekDates || !_arrwWeekDates.length){
+    alert('주차 데이터가 없습니다. [불러오기]를 먼저 실행해주세요.');
+    return;
+  }
+
+  // 학생의 주간 기록 수집
+  var dailyData = _arrwWeekDates.map(function(d, i){
+    var rec = (_arrwRecords[sid] && _arrwRecords[sid][d]) || {};
+    var mins = rrCalcDailyMinutes(rec);
+    return {
+      date: d,
+      dayLabel: _arrwDayLabels[i],
+      dayIdx: i,
+      checkIn:  rec.check_in_time || '',
+      checkOut: rec.check_out_time || '',
+      checkOutNextDay: !!rec.check_out_is_next_day,
+      out1Start: rec.out_1_start || '',
+      out1End:   rec.out_1_end || '',
+      out2Start: rec.out_2_start || '',
+      out2End:   rec.out_2_end || '',
+      minutes: mins
+    };
+  });
+
+  // 주간 합계
+  var weekStat = arrwCalcStudentWeekly(sid);
+
+  // 리포트 HTML 생성
+  var html = arrwBuildReportHTML(stu, dailyData, weekStat);
+  var renderEl = document.getElementById('arrw-report-render');
+  var previewEl = document.getElementById('arrw-report-preview');
+  if(renderEl) renderEl.innerHTML = html;
+  if(previewEl){
+    // 미리보기에는 축소된 버전으로 표시 (transform scale)
+    previewEl.innerHTML = '<div style="transform:scale(0.85);transform-origin:top left;width:794px">'+html+'</div>';
+    previewEl.style.width = Math.round(794*0.85)+'px';
+  }
+
+  // 파일명 구성
+  var stuSchool = (stu.school || '').replace(/\s+/g,'');
+  var stuGrade  = (stu.grade || '').replace(/\s+/g,'');
+  var datePart  = _arrwWeekDates[0].replace(/-/g,'').slice(2); // YYMMDD
+  _arrwReportCurrent = {
+    sid: sid,
+    studentName: stu.name || '학생',
+    fileName: datePart + '_' + (stuSchool+stuGrade) + '_' + (stu.name||'학생') + '_주간학습리포트.png'
+  };
+
+  // 모달 표시
+  document.getElementById('modal-arrw-report').style.display = 'flex';
+}
+
+function closeArrwReportModal(){
+  var m = document.getElementById('modal-arrw-report');
+  if(m) m.style.display = 'none';
+}
+
+// 분 → "X시간 YY분" 포맷 (기존 rrFmtDuration 활용하되 0분일 때 "0시간 00분")
+function arrwFmtReportDuration(mins){
+  if(mins == null || isNaN(mins) || mins <= 0) return '0시간 00분';
+  var h = Math.floor(mins/60), m = mins%60;
+  return h + '시간 ' + (m<10?'0'+m:m) + '분';
+}
+
+// 퇴실 시간 표기 (익일이면 "00:31 (익일)")
+function arrwFmtCheckOutTime(co, isNextDay){
+  if(!co) return '-';
+  var shortCo = co.length >= 5 ? co.slice(0,5) : co;
+  if(isNextDay) return shortCo + ' <span style="color:#7c3aed;font-size:10px;font-weight:600">(익일)</span>';
+  return shortCo;
+}
+
+// 리포트 HTML 빌더 (A4, 794×1123)
+function arrwBuildReportHTML(stu, dailyData, weekStat){
+  var PURPLE = '#6d28d9';
+  var PURPLE_LIGHT = '#7c3aed';
+  var PURPLE_BG = '#f5f3ff';
+  var PURPLE_BORDER = '#ddd6fe';
+  var GRAY = '#6b7280';
+  var DARK = '#1e1b4b';
+
+  // 날짜 범위
+  var firstDate = _arrwWeekDates[0];
+  var lastDate  = _arrwWeekDates[6];
+  var p1 = firstDate.split('-'), p2 = lastDate.split('-');
+  var periodLabel = parseInt(p1[1])+'/'+parseInt(p1[2])+'(월) ~ '+parseInt(p2[1])+'/'+parseInt(p2[2])+'(일)';
+
+  // 주간 총 공부시간
+  var totalMins = weekStat.total || 0;
+  var totalH = Math.floor(totalMins/60);
+  var totalM = totalMins % 60;
+
+  // 의무시간 + 달성률
+  var required = weekStat.required || 0;
+  var achievePct = required > 0 ? Math.min(100, Math.round((totalMins/required)*100)) : 0;
+  var achieveColor = achievePct >= 100 ? '#16a34a' : (achievePct >= 70 ? PURPLE_LIGHT : '#ea580c');
+
+  // 일일 리스트 row
+  var dayRowsHtml = dailyData.map(function(d, i){
+    var isWeekend = (d.dayIdx === 5 || d.dayIdx === 6);
+    var isSunday = (d.dayIdx === 6);
+    var dayColor = isSunday ? '#dc2626' : (isWeekend ? '#b45309' : DARK);
+
+    var timeRange;
+    if(!d.checkIn && !d.checkOut){
+      timeRange = '<span style="color:#cbd5e1">-</span>';
+    } else {
+      var ci = d.checkIn ? d.checkIn.slice(0,5) : '-';
+      var co = d.checkOut ? arrwFmtCheckOutTime(d.checkOut, d.checkOutNextDay) : '-';
+      timeRange = ci + ' ~ ' + co;
+    }
+    var durText = d.minutes > 0 ? arrwFmtReportDuration(d.minutes) : '<span style="color:#cbd5e1">0시간 00분</span>';
+    var rowBg = i % 2 === 1 ? '#fafafa' : '#fff';
+
+    return ''
+      +'<tr style="background:'+rowBg+'">'
+        +'<td style="padding:12px 16px;color:'+dayColor+';font-weight:700;font-size:14px;border-bottom:1px solid #f1f5f9;width:80px">'+d.dayLabel+'</td>'
+        +'<td style="padding:12px 16px;color:#4b5563;font-size:13px;border-bottom:1px solid #f1f5f9;font-family:-apple-system,BlinkMacSystemFont,monospace;letter-spacing:0.3px">'+timeRange+'</td>'
+        +'<td style="padding:12px 16px;color:'+PURPLE+';font-size:14px;font-weight:700;border-bottom:1px solid #f1f5f9;text-align:right;width:130px">'+durText+'</td>'
+      +'</tr>';
+  }).join('');
+
+  return ''
+  +'<div style="width:794px;min-height:1123px;background:#fff;padding:48px 52px;box-sizing:border-box;font-family:\'Apple SD Gothic Neo\',\'Malgun Gothic\',sans-serif;color:'+DARK+';position:relative">'
+    // 상단 보라 라인
+    +'<div style="position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(90deg,'+PURPLE+' 0%,'+PURPLE_LIGHT+' 100%)"></div>'
+
+    // 헤더: 제목 + 로고영역
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-top:12px;margin-bottom:28px;padding-bottom:16px;border-bottom:2px solid '+PURPLE_BORDER+'">'
+      +'<div>'
+        +'<div style="font-size:28px;font-weight:800;color:'+PURPLE+';letter-spacing:-0.5px">주간 학습 현황 리포트</div>'
+        +'<div style="font-size:12px;color:'+GRAY+';margin-top:4px;letter-spacing:1.5px">Weekly Study Status Report</div>'
+      +'</div>'
+      +'<div style="text-align:right">'
+        +'<div style="font-size:16px;font-weight:700;color:'+DARK+'">베스티안 수학학원</div>'
+        +'<div style="font-size:12px;color:'+GRAY+';margin-top:2px">스터디센터</div>'
+      +'</div>'
+    +'</div>'
+
+    // 학생 정보 + 기간 카드
+    +'<div style="background:'+PURPLE_BG+';border:1px solid '+PURPLE_BORDER+';border-radius:14px;padding:20px 24px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center">'
+      +'<div style="display:flex;align-items:center;gap:16px">'
+        +'<div style="width:44px;height:44px;border-radius:50%;background:'+PURPLE+';color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700">👤</div>'
+        +'<div>'
+          +'<div style="font-size:11px;color:'+PURPLE+';font-weight:600;letter-spacing:0.5px">대상 학생</div>'
+          +'<div style="font-size:17px;font-weight:800;color:'+DARK+';margin-top:2px">'+(stu.name||'학생')+' <span style="font-size:13px;font-weight:500;color:'+GRAY+'">학생</span></div>'
+          +(stu.school || stu.grade ? '<div style="font-size:11px;color:'+GRAY+';margin-top:2px">'+[stu.school, stu.grade].filter(Boolean).join(' ')+'</div>' : '')
+        +'</div>'
+      +'</div>'
+      +'<div style="text-align:right">'
+        +'<div style="font-size:11px;color:'+PURPLE+';font-weight:600;letter-spacing:0.5px">학습 기간</div>'
+        +'<div style="font-size:15px;font-weight:700;color:'+DARK+';margin-top:2px;letter-spacing:0.3px">'+periodLabel+'</div>'
+      +'</div>'
+    +'</div>'
+
+    // 주간 학습 요약 섹션
+    +'<div style="margin-bottom:24px">'
+      +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">'
+        +'<div style="width:4px;height:16px;background:'+PURPLE+';border-radius:2px"></div>'
+        +'<div style="font-size:15px;font-weight:700;color:'+DARK+'">주간 학습 요약</div>'
+      +'</div>'
+      +'<div style="background:#fff;border:1.5px solid '+PURPLE_BORDER+';border-radius:14px;padding:24px 20px">'
+        +'<div style="text-align:center;margin-bottom:'+(required > 0 ? '20px' : '0')+'">'
+          +'<div style="font-size:12px;color:'+GRAY+';margin-bottom:6px">이번 주 총 순수 공부시간</div>'
+          +'<div style="font-size:40px;font-weight:800;color:'+PURPLE+';letter-spacing:-1px;line-height:1.2">'
+            +'<span>'+totalH+'</span><span style="font-size:20px;color:'+DARK+';margin:0 4px 0 2px">시간</span>'
+            +'<span>'+(totalM<10?'0'+totalM:totalM)+'</span><span style="font-size:20px;color:'+DARK+';margin-left:2px">분</span>'
+          +'</div>'
+        +'</div>'
+        // 의무시간 + 달성률 (required > 0일 때만)
+        +(required > 0 ? (''
+          +'<div style="border-top:1px dashed '+PURPLE_BORDER+';padding-top:16px">'
+            +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+              +'<div style="font-size:12px;color:'+GRAY+'"><span style="color:'+PURPLE+';font-weight:700">주간 의무시간</span> '+arrwFmtReportDuration(required)+'</div>'
+              +'<div style="font-size:13px;font-weight:700;color:'+achieveColor+'">달성률 '+achievePct+'%</div>'
+            +'</div>'
+            // 프로그레스 바
+            +'<div style="background:#f1f5f9;height:8px;border-radius:4px;overflow:hidden">'
+              +'<div style="width:'+achievePct+'%;height:100%;background:'+achieveColor+';border-radius:4px;transition:width 0.3s"></div>'
+            +'</div>'
+            +'<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:'+GRAY+'">'
+              +'<div>달성: <b style="color:'+achieveColor+'">'+arrwFmtReportDuration(totalMins)+'</b></div>'
+              +'<div>'+(achievePct >= 100 ? '✅ 의무시간 달성 완료' : '남은 의무: <b style="color:#dc2626">'+arrwFmtReportDuration(Math.max(0, required-totalMins))+'</b>')+'</div>'
+            +'</div>'
+          +'</div>'
+        ) : '')
+      +'</div>'
+    +'</div>'
+
+    // 일일 학습 상세 섹션
+    +'<div style="margin-bottom:24px">'
+      +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">'
+        +'<div style="width:4px;height:16px;background:'+PURPLE+';border-radius:2px"></div>'
+        +'<div style="font-size:15px;font-weight:700;color:'+DARK+'">일일 학습 상세 내역</div>'
+      +'</div>'
+      +'<div style="background:#fff;border:1.5px solid '+PURPLE_BORDER+';border-radius:14px;overflow:hidden">'
+        +'<table style="width:100%;border-collapse:collapse">'
+          +'<thead>'
+            +'<tr style="background:'+PURPLE_BG+'">'
+              +'<th style="padding:12px 16px;color:'+PURPLE+';font-size:12px;font-weight:700;text-align:left;border-bottom:1px solid '+PURPLE_BORDER+'">요일</th>'
+              +'<th style="padding:12px 16px;color:'+PURPLE+';font-size:12px;font-weight:700;text-align:left;border-bottom:1px solid '+PURPLE_BORDER+'">입·퇴실 시간</th>'
+              +'<th style="padding:12px 16px;color:'+PURPLE+';font-size:12px;font-weight:700;text-align:right;border-bottom:1px solid '+PURPLE_BORDER+'">순공부시간</th>'
+            +'</tr>'
+          +'</thead>'
+          +'<tbody>'+dayRowsHtml+'</tbody>'
+        +'</table>'
+      +'</div>'
+    +'</div>'
+
+    // 학부모 확인 사항
+    +'<div style="margin-bottom:20px">'
+      +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">'
+        +'<div style="width:4px;height:16px;background:'+PURPLE+';border-radius:2px"></div>'
+        +'<div style="font-size:15px;font-weight:700;color:'+DARK+'">학부모님 확인 사항</div>'
+      +'</div>'
+      +'<div style="background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 20px">'
+        +'<ol style="margin:0;padding-left:20px;font-size:12px;color:'+GRAY+';line-height:1.9">'
+          +'<li>요일별, 주별 총 공부시간은 외출 및 식사 시간을 제외한 <b style="color:'+PURPLE+'">"실제 순공부시간"</b>입니다.</li>'
+          +'<li>올바른 면학 분위기 조성을 위해 빈번한 의무 학습시간 미이행 및 스터디센터 규칙 위반 시 부득이하게 퇴실 조치될 수 있습니다.</li>'
+          +'<li>자정을 넘긴 퇴실 기록은 해당 요일의 연속된 학습 시간으로 기록됩니다 (예: 월요일 23:00 ~ 화요일 00:31 → 월요일 기록).</li>'
+        +'</ol>'
+      +'</div>'
+    +'</div>'
+
+    // 하단 서명
+    +'<div style="position:absolute;bottom:48px;right:52px;text-align:right">'
+      +'<div style="font-size:14px;font-weight:700;color:'+DARK+'">베스티안 수학학원 스터디센터장 올림</div>'
+      +'<div style="font-size:11px;color:'+GRAY+';margin-top:4px">발행일: '+new Date().toLocaleDateString('ko-KR')+'</div>'
+    +'</div>'
+  +'</div>';
+}
+
+// 리포트 이미지 생성 (Blob 반환)
+async function arrwRenderReportToPngBlob(){
+  var renderEl = document.getElementById('arrw-report-render');
+  if(!renderEl || !renderEl.innerHTML){
+    throw new Error('리포트가 준비되지 않았습니다');
+  }
+  if(typeof html2canvas === 'undefined'){
+    throw new Error('html2canvas 라이브러리가 로드되지 않았습니다');
+  }
+  var canvas = await html2canvas(renderEl.firstElementChild, {
+    backgroundColor: '#ffffff',
+    scale: 2,
+    useCORS: true,
+    allowTaint: true,
+    logging: false
+  });
+  return new Promise(function(resolve){
+    canvas.toBlob(function(blob){ resolve(blob); }, 'image/png');
+  });
+}
+
+// [📋 이미지 복사] 버튼
+async function arrwCopyReportImage(){
+  var btn = document.getElementById('arrw-report-copy-btn');
+  var orig = btn ? btn.textContent : '';
+  try{
+    if(btn){ btn.textContent = '⏳ 생성 중...'; btn.disabled = true; }
+    var blob = await arrwRenderReportToPngBlob();
+    var isMobile = window.innerWidth <= 680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    var fileName = (_arrwReportCurrent && _arrwReportCurrent.fileName) || '주간학습리포트.png';
+
+    if(isMobile){
+      var file = new File([blob], fileName, {type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        try{
+          await navigator.share({files:[file], title:'주간 학습 리포트', text:(_arrwReportCurrent ? _arrwReportCurrent.studentName+' 학생 리포트' : '리포트')});
+          if(btn){ btn.textContent = '📤 공유됨'; setTimeout(function(){ btn.textContent = orig; btn.disabled=false; }, 2000); }
+          return;
+        }catch(shareErr){
+          if(shareErr.name === 'AbortError'){
+            if(btn){ btn.textContent = orig; btn.disabled=false; }
+            return;
+          }
+        }
+      }
+    }
+
+    // 클립보드 API
+    if(navigator.clipboard && window.ClipboardItem){
+      try{
+        await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+        if(btn){ btn.textContent = '✅ 복사 완료'; setTimeout(function(){ btn.textContent = orig; btn.disabled=false; }, 2000); }
+        return;
+      }catch(clipErr){
+        console.warn('Clipboard failed, falling back to download:', clipErr);
+      }
+    }
+    // 폴백: 다운로드
+    await arrwDownloadReportImage();
+    if(btn){ btn.textContent = '💾 다운로드됨'; setTimeout(function(){ btn.textContent = orig; btn.disabled=false; }, 2000); }
+  } catch(e){
+    console.error('copy report:', e);
+    alert('이미지 복사 실패: ' + (e.message || e));
+    if(btn){ btn.textContent = orig; btn.disabled = false; }
+  }
+}
+
+// [💾 다운로드] 버튼
+async function arrwDownloadReportImage(){
+  var btn = document.getElementById('arrw-report-download-btn');
+  var orig = btn ? btn.textContent : '';
+  try{
+    if(btn){ btn.textContent = '⏳ 생성 중...'; btn.disabled = true; }
+    var blob = await arrwRenderReportToPngBlob();
+    var fileName = (_arrwReportCurrent && _arrwReportCurrent.fileName) || '주간학습리포트.png';
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 500);
+    if(btn){ btn.textContent = '✅ 저장됨'; setTimeout(function(){ btn.textContent = orig; btn.disabled=false; }, 2000); }
+  } catch(e){
+    console.error('download report:', e);
+    alert('다운로드 실패: ' + (e.message || e));
+    if(btn){ btn.textContent = orig; btn.disabled = false; }
+  }
 }
 
 /* ══════════════════════════════════════════
@@ -17873,6 +18214,28 @@ function bulkWithdraw(){
 </script>
 <!-- 업무일지 이미지 렌더링용 숨김 영역 -->
 <div id="wl-image-render" style="position:fixed;left:-9999px;top:0;background:#fff;padding:20px;width:700px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"></div>
+
+<!-- 독서실 주간 리포트 이미지 렌더링용 숨김 영역 -->
+<div id="arrw-report-render" style="position:fixed;left:-9999px;top:0;background:#fff;width:794px;font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif"></div>
+
+<!-- 독서실 주간 리포트 미리보기 모달 -->
+<div id="modal-arrw-report" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeArrwReportModal()">
+  <div class="modal-content" style="max-width:900px;width:95%;max-height:90vh;overflow:auto;padding:0;background:#f3f0ff">
+    <!-- 헤더 -->
+    <div style="padding:16px 20px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10">
+      <div style="font-size:16px;font-weight:700;color:#6d28d9">📊 주간 학습 현황 리포트</div>
+      <div style="display:flex;gap:8px">
+        <button onclick="arrwCopyReportImage()" id="arrw-report-copy-btn" style="padding:8px 14px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">📋 이미지 복사</button>
+        <button onclick="arrwDownloadReportImage()" id="arrw-report-download-btn" style="padding:8px 14px;background:#6d28d9;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">💾 다운로드</button>
+        <button onclick="closeArrwReportModal()" style="padding:8px 14px;background:#fff;border:1px solid #d1d5db;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">닫기</button>
+      </div>
+    </div>
+    <!-- 미리보기 -->
+    <div style="padding:20px;display:flex;justify-content:center">
+      <div id="arrw-report-preview" style="box-shadow:0 4px 16px rgba(0,0,0,0.1);background:#fff"></div>
+    </div>
+  </div>
+</div>
 
 
 <!-- 학년 선택 datalist -->
