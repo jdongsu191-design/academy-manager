@@ -15311,20 +15311,27 @@ function rrCalcDailyMinutes(row){
   var ci = rrTimeStrToMinutes(row.check_in_time);
   var co = rrTimeStrToMinutes(row.check_out_time);
   if(ci == null || co == null) return 0;
+  // 퇴실이 익일이면 +24h
+  if(row.check_out_is_next_day) co += 24*60;
   var total = co - ci;
-  if(total < 0) total += 24*60; // 자정 넘긴 케이스 방어
+  // 입실 > 퇴실인데 플래그 없는 경우 자동 방어 (구 데이터 보호)
+  if(total < 0) total += 24*60;
   // 1차 외출 차감
   var o1s = rrTimeStrToMinutes(row.out_1_start);
   var o1e = rrTimeStrToMinutes(row.out_1_end);
   if(o1s != null && o1e != null){
-    var d = o1e - o1s; if(d < 0) d += 24*60;
+    if(row.out_1_end_is_next_day) o1e += 24*60;
+    var d = o1e - o1s;
+    if(d < 0) d += 24*60;
     total -= d;
   }
   // 2차 외출 차감
   var o2s = rrTimeStrToMinutes(row.out_2_start);
   var o2e = rrTimeStrToMinutes(row.out_2_end);
   if(o2s != null && o2e != null){
-    var d2 = o2e - o2s; if(d2 < 0) d2 += 24*60;
+    if(row.out_2_end_is_next_day) o2e += 24*60;
+    var d2 = o2e - o2s;
+    if(d2 < 0) d2 += 24*60;
     total -= d2;
   }
   // 추가 외출(분)
@@ -15487,6 +15494,9 @@ async function arrwLoad(){
         out_2_end:       rrNormalizeTime(r.out_2_end),
         extra_out_minutes: r.extra_out_minutes || 0,
         check_out_time:  rrNormalizeTime(r.check_out_time),
+        out_1_end_is_next_day:  !!r.out_1_end_is_next_day,
+        out_2_end_is_next_day:  !!r.out_2_end_is_next_day,
+        check_out_is_next_day:  !!r.check_out_is_next_day,
         note: r.note || '',
         _dirty: false  // 수정 여부 트래킹
       };
@@ -15660,17 +15670,17 @@ function arrwRenderTable(){
       +'</td>'
       +'<td class="req-cell">'+(stu.required_study_minutes ? rrFmtDuration(stu.required_study_minutes) : '<span style="color:#cbd5e1">미설정</span>')+'</td>'
       // 입실
-      +'<td>'+arrwCellInput(stu.id, selDate, 'check_in_time', rec.check_in_time, true)+'</td>'
+      +'<td>'+arrwCellInput(stu.id, selDate, 'check_in_time', rec.check_in_time, true, false)+'</td>'
       // 1차 외출
-      +'<td>'+arrwCellInput(stu.id, selDate, 'out_1_start', rec.out_1_start, false)+'</td>'
+      +'<td>'+arrwCellInput(stu.id, selDate, 'out_1_start', rec.out_1_start, false, false)+'</td>'
       // 1차 복귀
-      +'<td>'+arrwCellInput(stu.id, selDate, 'out_1_end', rec.out_1_end, false)+'</td>'
+      +'<td>'+arrwCellInput(stu.id, selDate, 'out_1_end', rec.out_1_end, false, !!rec.out_1_end_is_next_day)+'</td>'
       // 2차 외출
-      +'<td>'+arrwCellInput(stu.id, selDate, 'out_2_start', rec.out_2_start, false)+'</td>'
+      +'<td>'+arrwCellInput(stu.id, selDate, 'out_2_start', rec.out_2_start, false, false)+'</td>'
       // 2차 복귀
-      +'<td>'+arrwCellInput(stu.id, selDate, 'out_2_end', rec.out_2_end, false)+'</td>'
+      +'<td>'+arrwCellInput(stu.id, selDate, 'out_2_end', rec.out_2_end, false, !!rec.out_2_end_is_next_day)+'</td>'
       // 퇴실
-      +'<td>'+arrwCellInput(stu.id, selDate, 'check_out_time', rec.check_out_time, true)+'</td>'
+      +'<td>'+arrwCellInput(stu.id, selDate, 'check_out_time', rec.check_out_time, true, !!rec.check_out_is_next_day)+'</td>'
       // 당일 공부
       +'<td class="daily-cell" id="arrw-daily-'+stu.id+'">'+dailyTxt+'</td>'
       // 주간 합계
@@ -15696,16 +15706,21 @@ function arrwRenderTable(){
 }
 
 // 셀 인풋 (입실/퇴실 = 지금 버튼 포함, 나머지는 시간 입력만)
-function arrwCellInput(sid, date, field, value, withNowBtn){
-  var html = '<div class="arrw-ig">'
-    +'<input type="text" inputmode="numeric" maxlength="5" placeholder="HH:MM" class="t-input" '
-      +'data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" '
-      +'value="'+(value||'')+'" '
-      +'oninput="arrwMaskTime(this)" '
-      +'onkeydown="arrwKeyTime(event,this)" '
-      +'onblur="arrwBlurTime(this)" '
-      +'onfocus="this.select()">';
-  html += '<button class="now-btn" onclick="arrwFillNow(this)" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" title="현재 시간 자동 입력">지금</button>';
+function arrwCellInput(sid, date, field, value, withNowBtn, isNextDay){
+  var html = '<div style="display:inline-flex;flex-direction:column;align-items:center;gap:2px">'
+    +'<div class="arrw-ig">'
+      +'<input type="text" inputmode="numeric" maxlength="5" placeholder="HH:MM" class="t-input" '
+        +'data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" '
+        +'value="'+(value||'')+'" '
+        +'oninput="arrwMaskTime(this)" '
+        +'onkeydown="arrwKeyTime(event,this)" '
+        +'onblur="arrwBlurTime(this)" '
+        +'onfocus="this.select()">'
+      +'<button class="now-btn" onclick="arrwFillNow(this)" data-sid="'+sid+'" data-date="'+date+'" data-field="'+field+'" title="현재 시간 자동 입력">지금</button>'
+    +'</div>';
+  if(isNextDay){
+    html += '<div class="next-day-badge" style="font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:4px;padding:1px 5px;font-weight:700;white-space:nowrap">🌙 익일</div>';
+  }
   html += '</div>';
   return html;
 }
@@ -15795,8 +15810,77 @@ function arrwOnInputChange(el){
   _arrwRecords[sid][date]._dirty = true;
   el.classList.add('dirty');
 
+  // 🌙 익일 자동 판정
+  arrwAutoDetectNextDay(sid, date);
+
   // 주간 합계 재계산 → 해당 행의 total/remain 셀만 업데이트
   arrwRefreshRowTotals(sid);
+
+  // 해당 행 전체 다시 렌더링 (🌙 아이콘 등 뱃지 반영)
+  arrwRefreshRowBadges(sid, date);
+}
+
+/**
+ * 익일 자동 판정:
+ * "입실" 이후 순서대로 나오는 시간들(1차외출 → 1차복귀 → 2차외출 → 2차복귀 → 퇴실)은
+ * 단조 증가해야 함. 입실 시간보다 작으면 "익일" 플래그 on.
+ *
+ * 판정 기준:
+ * - 입실이 있어야 판정 가능 (입실 없으면 플래그 모두 false)
+ * - 각 시간이 입실보다 "작으면" 자동으로 익일 간주
+ * - 새벽 등원은 없다고 함 (운영 규칙) → 입실 < 8:00인 경우는 없음
+ */
+function arrwAutoDetectNextDay(sid, date){
+  var rec = _arrwRecords[sid] && _arrwRecords[sid][date];
+  if(!rec) return;
+  var ci = rrTimeStrToMinutes(rec.check_in_time);
+  if(ci == null){
+    // 입실 없으면 모든 플래그 false
+    rec.out_1_end_is_next_day = false;
+    rec.out_2_end_is_next_day = false;
+    rec.check_out_is_next_day = false;
+    return;
+  }
+  // 1차 복귀 (1차 외출이 존재해야 의미 있음)
+  var o1e = rrTimeStrToMinutes(rec.out_1_end);
+  rec.out_1_end_is_next_day = (o1e != null && o1e < ci);
+  // 2차 복귀
+  var o2e = rrTimeStrToMinutes(rec.out_2_end);
+  rec.out_2_end_is_next_day = (o2e != null && o2e < ci);
+  // 퇴실
+  var co = rrTimeStrToMinutes(rec.check_out_time);
+  rec.check_out_is_next_day = (co != null && co < ci);
+}
+
+/**
+ * 해당 학생 행의 모든 시간 입력 칸에 🌙 뱃지 반영
+ * (익일 플래그 on/off 시각화)
+ */
+function arrwRefreshRowBadges(sid, date){
+  var rec = _arrwRecords[sid] && _arrwRecords[sid][date];
+  if(!rec) return;
+  var fields = [
+    { field: 'out_1_end',     flag: rec.out_1_end_is_next_day },
+    { field: 'out_2_end',     flag: rec.out_2_end_is_next_day },
+    { field: 'check_out_time',flag: rec.check_out_is_next_day }
+  ];
+  fields.forEach(function(f){
+    var inputEl = document.querySelector('.arrw-tbl input.t-input[data-sid="'+sid+'"][data-date="'+date+'"][data-field="'+f.field+'"]');
+    if(!inputEl) return;
+    var parent = inputEl.closest('.arrw-ig');
+    if(!parent) return;
+    // 기존 뱃지 제거
+    var oldBadge = parent.parentNode.querySelector('.next-day-badge');
+    if(oldBadge) oldBadge.remove();
+    // 익일일 때만 새 뱃지 표시
+    if(f.flag){
+      var badge = document.createElement('div');
+      badge.className = 'next-day-badge';
+      badge.innerHTML = '🌙 익일';
+      badge.style.cssText = 'font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:4px;padding:1px 5px;margin-top:2px;font-weight:700;display:inline-block;white-space:nowrap';
+      parent.parentNode.appendChild(badge);
+    }
+  });
 }
 
 // [지금] 버튼
@@ -15912,6 +15996,9 @@ async function arrwPersistStudentDates(sid, dates){
       out_2_end:       r.out_2_end       ? r.out_2_end+':00'       : null,
       extra_out_minutes: r.extra_out_minutes || 0,
       check_out_time:  r.check_out_time  ? r.check_out_time+':00'  : null,
+      out_1_end_is_next_day: !!r.out_1_end_is_next_day,
+      out_2_end_is_next_day: !!r.out_2_end_is_next_day,
+      check_out_is_next_day: !!r.check_out_is_next_day,
       note: r.note || null,
       created_by: (currentUser && currentUser.id) || null,
       updated_at: new Date().toISOString()
