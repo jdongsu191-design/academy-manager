@@ -11590,29 +11590,46 @@ async function copyWorkLogImage(){
     canvas.toBlob(async (blob) => {
       const dateStr = date.replace(/-/g,'');
       const fileName = `업무일지_${className}_${dateStr}.png`;
-      const isMobile = window.innerWidth <= 680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
 
-      if(isMobile){
-        const file = new File([blob], fileName, {type:'image/png'});
-        if(navigator.canShare && navigator.canShare({files:[file]})){
-          try{
-            await navigator.share({files:[file], title:'업무일지', text:className+' 업무일지'});
+      // 🔍 개선된 모바일/태블릿 감지
+      // - 아이패드 iPadOS 13+는 UA가 Mac으로 위장 → ontouchend + Macintosh로 감지
+      // - 태블릿은 해상도가 크므로 터치 기능 + UA 기반으로 판단
+      // - Web Share API 가능하면 데스크톱이어도 사용자가 선택 가능
+      const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+      const isIpadOS = /Macintosh/.test(navigator.userAgent) && hasTouch;
+      const isMobile =
+        /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+        isIpadOS ||
+        window.innerWidth <= 680;
+
+      // 파일 객체 미리 준비
+      const file = new File([blob], fileName, {type:'image/png'});
+      const canShareFile = !!(navigator.canShare && navigator.canShare({files:[file]}));
+
+      // ✅ 1순위: Web Share API (모바일/태블릿 우선, 데스크톱에서도 지원하면 시도)
+      // isMobile이거나 터치 디바이스이면 Web Share 우선
+      if((isMobile || hasTouch) && canShareFile){
+        try{
+          await navigator.share({files:[file], title:'업무일지', text:className+' 업무일지'});
+          btn.textContent = '📤 공유/복사';
+          btn.style.background = '#25D366';
+          btn.disabled = false;
+          return;
+        }catch(shareErr){
+          // 사용자가 취소 → 다시 원상복귀 후 return
+          if(shareErr.name === 'AbortError'){
             btn.textContent = '📤 공유/복사';
             btn.style.background = '#25D366';
             btn.disabled = false;
             return;
-          }catch(shareErr){
-            if(shareErr.name === 'AbortError'){
-              btn.textContent = '📤 공유/복사';
-              btn.style.background = '#25D366';
-              btn.disabled = false;
-              return;
-            }
           }
+          // 기타 오류는 다음 폴백으로 진행
+          console.warn('Web Share 실패, 클립보드로 폴백:', shareErr);
         }
       }
 
-      if(navigator.clipboard && navigator.clipboard.write){
+      // ✅ 2순위: 클립보드 복사 (PC Chrome/Edge에서 가장 편리)
+      if(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem){
         try{
           await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
           btn.textContent = '✅ 복사됨!';
@@ -11624,9 +11641,11 @@ async function copyWorkLogImage(){
           }, 2500);
           return;
         }catch(clipErr){
+          console.warn('클립보드 실패, 다운로드로 폴백:', clipErr);
         }
       }
 
+      // ✅ 3순위: 다운로드 (마지막 수단)
       const a = document.createElement('a');
       a.href = canvas.toDataURL('image/png');
       a.download = fileName;
@@ -16806,23 +16825,29 @@ async function arrwQuickCopyReport(sid, btn){
     if(btn){ btn.textContent = '⏳'; btn.disabled = true; }
     var blob = await arrwBuildReportBlob(sid);
 
-    var isMobile = window.innerWidth <= 680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    // 🔍 개선된 모바일/태블릿 감지 (아이패드 iPadOS 13+ UA위장 대응)
+    var hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+    var isIpadOS = /Macintosh/.test(navigator.userAgent) && hasTouch;
+    var isMobile =
+      /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+      isIpadOS ||
+      window.innerWidth <= 680;
     var fileName = (_arrwReportCurrent && _arrwReportCurrent.fileName) || '주간학습리포트.png';
+    var file = new File([blob], fileName, {type:'image/png'});
+    var canShareFile = !!(navigator.canShare && navigator.canShare({files:[file]}));
 
-    // 모바일: Web Share API 우선
-    if(isMobile){
-      var file = new File([blob], fileName, {type:'image/png'});
-      if(navigator.canShare && navigator.canShare({files:[file]})){
-        try{
-          await navigator.share({files:[file], title:'주간 학습 리포트', text:(_arrwReportCurrent?_arrwReportCurrent.studentName+' 리포트':'')});
-          if(btn){ btn.textContent = '📤'; btn.classList.add('copied'); setTimeout(function(){ btn.textContent = origText; btn.classList.remove('copied'); btn.disabled=false; }, 1800); }
-          return;
-        }catch(e){
-          if(e.name === 'AbortError'){ if(btn){ btn.textContent = origText; btn.disabled=false; } return; }
-        }
+    // ✅ 1순위: Web Share API (모바일/태블릿/터치 디바이스 우선)
+    if((isMobile || hasTouch) && canShareFile){
+      try{
+        await navigator.share({files:[file], title:'주간 학습 리포트', text:(_arrwReportCurrent?_arrwReportCurrent.studentName+' 리포트':'')});
+        if(btn){ btn.textContent = '📤'; btn.classList.add('copied'); setTimeout(function(){ btn.textContent = origText; btn.classList.remove('copied'); btn.disabled=false; }, 1800); }
+        return;
+      }catch(e){
+        if(e.name === 'AbortError'){ if(btn){ btn.textContent = origText; btn.disabled=false; } return; }
+        console.warn('Web Share 실패, 클립보드로 폴백:', e);
       }
     }
-    // PC: 클립보드 API
+    // ✅ 2순위: 클립보드 API
     if(navigator.clipboard && window.ClipboardItem){
       try{
         await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
@@ -16832,7 +16857,7 @@ async function arrwQuickCopyReport(sid, btn){
         console.warn('Clipboard failed, falling back to download:', clipErr);
       }
     }
-    // 폴백: 다운로드
+    // ✅ 3순위: 다운로드
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url; a.download = fileName;
@@ -17116,26 +17141,34 @@ async function arrwCopyReportImage(){
   try{
     if(btn){ btn.textContent = '⏳ 생성 중...'; btn.disabled = true; }
     var blob = await arrwRenderReportToPngBlob();
-    var isMobile = window.innerWidth <= 680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     var fileName = (_arrwReportCurrent && _arrwReportCurrent.fileName) || '주간학습리포트.png';
 
-    if(isMobile){
-      var file = new File([blob], fileName, {type:'image/png'});
-      if(navigator.canShare && navigator.canShare({files:[file]})){
-        try{
-          await navigator.share({files:[file], title:'주간 학습 리포트', text:(_arrwReportCurrent ? _arrwReportCurrent.studentName+' 학생 리포트' : '리포트')});
-          if(btn){ btn.textContent = '📤 공유됨'; setTimeout(function(){ btn.textContent = orig; btn.disabled=false; }, 2000); }
+    // 🔍 개선된 모바일/태블릿 감지 (아이패드 iPadOS 13+ UA위장 대응)
+    var hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+    var isIpadOS = /Macintosh/.test(navigator.userAgent) && hasTouch;
+    var isMobile =
+      /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+      isIpadOS ||
+      window.innerWidth <= 680;
+    var file = new File([blob], fileName, {type:'image/png'});
+    var canShareFile = !!(navigator.canShare && navigator.canShare({files:[file]}));
+
+    // ✅ 1순위: Web Share API (모바일/태블릿/터치 디바이스 우선)
+    if((isMobile || hasTouch) && canShareFile){
+      try{
+        await navigator.share({files:[file], title:'주간 학습 리포트', text:(_arrwReportCurrent ? _arrwReportCurrent.studentName+' 학생 리포트' : '리포트')});
+        if(btn){ btn.textContent = '📤 공유됨'; setTimeout(function(){ btn.textContent = orig; btn.disabled=false; }, 2000); }
+        return;
+      }catch(shareErr){
+        if(shareErr.name === 'AbortError'){
+          if(btn){ btn.textContent = orig; btn.disabled=false; }
           return;
-        }catch(shareErr){
-          if(shareErr.name === 'AbortError'){
-            if(btn){ btn.textContent = orig; btn.disabled=false; }
-            return;
-          }
         }
+        console.warn('Web Share 실패, 클립보드로 폴백:', shareErr);
       }
     }
 
-    // 클립보드 API
+    // ✅ 2순위: 클립보드 API
     if(navigator.clipboard && window.ClipboardItem){
       try{
         await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
@@ -17145,7 +17178,7 @@ async function arrwCopyReportImage(){
         console.warn('Clipboard failed, falling back to download:', clipErr);
       }
     }
-    // 폴백: 다운로드
+    // ✅ 3순위: 다운로드
     await arrwDownloadReportImage();
     if(btn){ btn.textContent = '💾 다운로드됨'; setTimeout(function(){ btn.textContent = orig; btn.disabled=false; }, 2000); }
   } catch(e){
