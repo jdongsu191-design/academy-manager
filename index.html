@@ -11682,19 +11682,19 @@ async function openAssignAnswerModal(mode){
   const modal = document.createElement('div');
   modal.id = 'modal-assign-answer';
   modal.className = 'modal-backdrop open';
-  modal.innerHTML = '<div class="modal" style="max-width:700px;width:95vw;max-height:90vh">'
+  modal.innerHTML = '<div class="modal" style="max-width:920px;width:96vw;max-height:92vh;display:flex;flex-direction:column">'
     + '<div class="modal-handle"></div>'
-    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-shrink:0">'
     + '<h3 style="margin:0">📋 문항별 정답 부여</h3>'
     + '<button onclick="document.getElementById(&quot;modal-assign-answer&quot;).remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280">✕</button>'
     + '</div>'
-    + '<div id="assign-answer-body" style="overflow-y:auto;max-height:65vh;">'
+    + '<div id="assign-answer-body" style="overflow-y:auto;flex:1;min-height:0">'
     + '<div style="text-align:center;padding:40px;color:#6b7280">'
     + '<div style="font-size:32px;margin-bottom:12px">🤖</div>'
     + '<div>BMAPS 정답 인식 프로그램 작동 중...</div>'
     + '</div>'
     + '</div>'
-    + '<div id="assign-answer-footer" style="margin-top:14px;display:flex;gap:8px;display:none">'
+    + '<div id="assign-answer-footer" style="margin-top:14px;display:flex;gap:8px;display:none;flex-shrink:0">'
     + '<button onclick="document.getElementById(&quot;modal-assign-answer&quot;).remove()" class="btn" style="flex:1">취소</button>'
     + '<button onclick="applyAnswerMap()" class="btn btn-primary" style="flex:1">✅ 정답 부여</button>'
     + '</div>'
@@ -11711,48 +11711,191 @@ async function openAssignAnswerModal(mode){
   }
 
   window._pendingAnswerMap = claudeAnswers;
+  renderAssignAnswerSections(claudeAnswers);
+  footer.style.display = 'flex';
+}
 
-  const nums = Object.keys(claudeAnswers).map(Number).sort(function(a,b){return a-b;});
+// 🎨 섹션 단위 2열 그리드 렌더 (빠른정답 페이지 레이아웃 모방)
+function renderAssignAnswerSections(answersMap){
+  const body = document.getElementById('assign-answer-body');
+  if(!body) return;
+
+  const nums = Object.keys(answersMap).map(Number).sort(function(a,b){return a-b;});
   const total = najeExtractedProblems.length;
   const matched = nums.filter(function(n){ return n >= 1 && n <= total; }).length;
 
-  let html = '<div style="margin-bottom:10px;font-size:13px;color:#6b7280">'
-    + '총 <strong>' + nums.length + '개</strong> 정답 인식 · '
-    + '현재 문제(<strong>' + total + '문항</strong>)와 매칭: <strong style="color:' + (matched===total?'#10b981':'#f59e0b') + '">' + matched + '개</strong>'
-    + '</div>'
-    + '<div style="overflow-x:auto;">'
-    + '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
-    + '<thead><tr style="background:#f5f6fa;">'
-    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center;">문항</th>'
-    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center;">인식 정답</th>'
-    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center;">문항 존재</th>'
-    + '<th style="padding:8px;border:1px solid #e5e7eb;text-align:center;">수정</th>'
-    + '</tr></thead><tbody>';
+  // 📦 섹션 그룹핑: 현재 문제의 단계(level_name) 정보 활용
+  // najeExtractedProblems[i].level_name 이 있으면 그룹핑, 없으면 10문항 단위로 자동 그룹핑
+  const sections = buildAnswerSections(nums, answersMap);
 
-  nums.forEach(function(n){
-    const ans = claudeAnswers[n];
-    const exists = n >= 1 && n <= total;
-    html += '<tr>'
-      + '<td style="padding:7px;border:1px solid #e5e7eb;text-align:center;font-weight:700;">' + n + '번</td>'
-      + '<td style="padding:7px;border:1px solid #e5e7eb;text-align:center;color:#dc2626;font-weight:700;" id="pending-ans-' + n + '">' + ans + '</td>'
-      + '<td style="padding:7px;border:1px solid #e5e7eb;text-align:center;">' + (exists ? '✅' : '❌ 없음') + '</td>'
-      + '<td style="padding:7px;border:1px solid #e5e7eb;text-align:center;">'
-      + '<button onclick="editPendingAnswer(' + n + ')" style="background:none;border:1px solid #d1d5db;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px;">✏️</button>'
-      + '</td>'
-      + '</tr>';
+  // 섹션별 색상 (이미지의 청록 계열 참고)
+  const sectionColors = [
+    { bg:'#e6f4f1', accent:'#14b8a6', icon:'#0d9488' },  // 청록
+    { bg:'#e0f2fe', accent:'#0284c7', icon:'#0369a1' },  // 하늘
+    { bg:'#fef3c7', accent:'#d97706', icon:'#b45309' },  // 호박
+    { bg:'#fce7f3', accent:'#db2777', icon:'#be185d' },  // 핑크
+    { bg:'#ede9fe', accent:'#7c3aed', icon:'#6d28d9' },  // 보라
+    { bg:'#dcfce7', accent:'#16a34a', icon:'#15803d' },  // 초록
+    { bg:'#fee2e2', accent:'#dc2626', icon:'#b91c1c' },  // 빨강
+    { bg:'#f1f5f9', accent:'#64748b', icon:'#475569' },  // 회색
+  ];
+
+  let html = ''
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding:10px 14px;background:#f8fafc;border-radius:10px;flex-wrap:wrap;gap:8px">'
+    + '<div style="font-size:13px;color:#475569">'
+    +   '총 <strong style="color:#1F3A51">' + nums.length + '개</strong> 정답 인식 · '
+    +   '매칭: <strong style="color:' + (matched===total?'#10b981':'#f59e0b') + '">' + matched + '/' + total + '</strong>'
+    + '</div>'
+    + '<div style="font-size:11px;color:#9ca3af">🖱 <b style="color:#6d28d9">✏️</b> 클릭으로 수정</div>'
+    + '</div>';
+
+  // 2열 그리드
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px">';
+
+  sections.forEach(function(sec, idx){
+    const color = sectionColors[idx % sectionColors.length];
+    html += renderAnswerSectionCard(sec, idx+1, color, total);
   });
 
-  html += '</tbody></table>';
+  html += '</div>';
+
   body.innerHTML = html;
-  footer.style.display = 'flex';
+}
+
+// 정답을 섹션으로 그룹핑
+function buildAnswerSections(nums, answersMap){
+  // 우선순위 1: najeExtractedProblems 에 level_name 있으면 그것으로 그룹
+  const problems = najeExtractedProblems || [];
+  const hasStageInfo = problems.length > 0 && problems.some(function(p){ return p && (p.level_name || p.step); });
+
+  if(hasStageInfo){
+    // 단계별 그룹핑
+    const groups = {};
+    const order = [];
+    // 먼저 문제 목록에서 단계별 범위 파악
+    problems.forEach(function(p){
+      const step = p.step || 0;
+      const key = step + '_' + (p.level_name || '기타');
+      if(!groups[key]){
+        groups[key] = {
+          title: p.level_name || '기타',
+          subtitle: p.level_type || '',
+          step: step,
+          numbers: []
+        };
+        order.push(key);
+      }
+    });
+
+    // 인식된 번호를 해당 그룹에 배정
+    nums.forEach(function(n){
+      const prob = problems[n-1]; // 문제 번호는 1-based
+      const step = prob ? (prob.step || 0) : 0;
+      const levelName = prob ? (prob.level_name || '기타') : '기타';
+      const key = step + '_' + levelName;
+      if(groups[key]){
+        groups[key].numbers.push(n);
+      } else {
+        // 해당 범위를 벗어나는 번호 → "기타" 그룹
+        const miscKey = '_misc';
+        if(!groups[miscKey]){
+          groups[miscKey] = { title: '기타', subtitle: '범위 외', step: 999, numbers: [] };
+          order.push(miscKey);
+        }
+        groups[miscKey].numbers.push(n);
+      }
+    });
+
+    const result = order.map(function(k){ return groups[k]; }).filter(function(g){ return g.numbers.length > 0; });
+    if(result.length > 0) return result;
+  }
+
+  // 우선순위 2: 단계 정보 없으면 10문항 단위 자동 그룹핑
+  const autoGroups = [];
+  const CHUNK = 10;
+  let current = null;
+  nums.forEach(function(n){
+    const chunkIdx = Math.floor((n-1) / CHUNK);
+    if(!current || current._chunkIdx !== chunkIdx){
+      const start = chunkIdx * CHUNK + 1;
+      const end = (chunkIdx + 1) * CHUNK;
+      current = {
+        title: start + '~' + end + '번',
+        subtitle: '',
+        step: chunkIdx + 1,
+        numbers: [],
+        _chunkIdx: chunkIdx
+      };
+      autoGroups.push(current);
+    }
+    current.numbers.push(n);
+  });
+  return autoGroups;
+}
+
+// 섹션 카드 렌더 (이미지의 라벨 스타일 모방)
+function renderAnswerSectionCard(sec, stepNum, color, total){
+  const numsInSec = sec.numbers;
+  const rangeLabel = numsInSec.length > 0
+    ? numsInSec[0] + '~' + numsInSec[numsInSec.length-1] + '번'
+    : '';
+
+  let html = '<div style="border:1.5px solid ' + color.accent + '33;border-radius:12px;overflow:hidden;background:#fff">';
+
+  // 섹션 헤더 (이미지의 라벨 스타일: 번호 동그라미 + 이름 + 화살표)
+  html += '<div style="background:' + color.bg + ';padding:10px 14px;display:flex;align-items:center;gap:10px;border-bottom:1.5px solid ' + color.accent + '22">';
+  html += '<div style="width:26px;height:26px;border-radius:50%;background:' + color.icon + ';color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;flex-shrink:0">' + stepNum + '</div>';
+  html += '<div style="flex:1;min-width:0">';
+  html += '<div style="font-size:13px;font-weight:800;color:' + color.icon + '">📍 ' + (sec.title || '섹션') + ' 빠른정답</div>';
+  if(rangeLabel || sec.subtitle){
+    html += '<div style="font-size:10px;color:' + color.icon + 'cc;margin-top:1px">' + [rangeLabel, sec.subtitle].filter(Boolean).join(' · ') + '</div>';
+  }
+  html += '</div>';
+  html += '</div>';
+
+  // 본문: 2열 정답 리스트
+  html += '<div style="padding:10px 12px;display:grid;grid-template-columns:1fr 1fr;gap:4px 10px">';
+  numsInSec.forEach(function(n){
+    const ans = (window._pendingAnswerMap && window._pendingAnswerMap[n]) != null
+      ? window._pendingAnswerMap[n] : '';
+    const exists = n >= 1 && n <= total;
+    html += renderAnswerRow(n, ans, exists, color);
+  });
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+// 개별 정답 행
+function renderAnswerRow(n, ans, exists, color){
+  const numBadge = '<span style="min-width:26px;text-align:right;color:#64748b;font-size:12px;font-weight:600">' + n + '</span>';
+  const sep = '<span style="color:#cbd5e1">|</span>';
+  const ansBadge = ''
+    + '<span id="pending-ans-' + n + '" '
+    + 'onclick="editPendingAnswer(' + n + ')" '
+    + 'style="display:inline-block;min-width:50px;text-align:center;padding:2px 8px;border:1px solid ' + color.accent + '55;border-radius:6px;background:' + color.bg + ';color:' + color.icon + ';font-size:12px;font-weight:700;cursor:pointer;transition:all 0.15s" '
+    + 'onmouseover="this.style.borderColor=\'' + color.accent + '\';this.style.transform=\'translateY(-1px)\'" '
+    + 'onmouseout="this.style.borderColor=\'' + color.accent + '55\';this.style.transform=\'\'" '
+    + 'title="클릭하여 수정">' + (ans || '?') + '</span>';
+  const warn = exists ? '' : '<span title="문항 범위 밖" style="color:#f59e0b;font-size:11px">⚠</span>';
+
+  return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-family:-apple-system,BlinkMacSystemFont,sans-serif">'
+    + numBadge + sep + ansBadge + warn
+    + '</div>';
 }
 
 function editPendingAnswer(num){
   const cell = document.getElementById('pending-ans-' + num);
   const cur = cell ? cell.textContent : '';
-  const newVal = prompt(num + '번 정답 수정:', cur);
+  const newVal = prompt(num + '번 정답 수정:', cur === '?' ? '' : cur);
   if(newVal === null) return;
-  if(cell) cell.textContent = newVal;
+  if(cell){
+    cell.textContent = newVal || '?';
+    // 수정됨 표시 (굵은 테두리)
+    cell.style.borderWidth = '2px';
+    cell.style.boxShadow = '0 0 0 2px #fef3c7';
+  }
   if(window._pendingAnswerMap) window._pendingAnswerMap[num] = newVal;
 }
 
