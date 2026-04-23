@@ -11062,16 +11062,79 @@ async function startNajePdfLoad(file, mode){
       const midX = Math.floor(W * NJ.LEFT_COL_RATIO);
 
       function scanQR(imgData, w, h){
-        const sh = Math.floor(h * 0.5), ch = h - sh;
-        const buf = new Uint8ClampedArray(ch * w * 4);
-        for(let r = 0; r < ch; r++) buf.set(imgData.data.slice((sh+r)*w*4,(sh+r+1)*w*4), r*w*4);
-        let qr = jsQR(buf, w, ch, {inversionAttempts:'dontInvert'});
-        if(qr){ qr.location.topLeftCorner.y += sh; return qr; }
-        qr = jsQR(buf, w, ch, {inversionAttempts:'attemptBoth'});
-        if(qr){ qr.location.topLeftCorner.y += sh; return qr; }
-        qr = jsQR(imgData.data, w, h, {inversionAttempts:'dontInvert'});
+        // 🎯 개선: QR 위치를 예측할 수 없으므로 여러 영역을 순차적으로 시도
+        // 순서: 하단 50% → 중앙 50% (25~75%) → 상단 50% → 전체
+        //       원본 해상도 → 1/2 축소본
+
+        const tryScan = function(data, width, height, yOffset){
+          var qr = jsQR(data, width, height, {inversionAttempts:'dontInvert'});
+          if(qr){
+            if(yOffset) qr.location.topLeftCorner.y += yOffset;
+            return qr;
+          }
+          qr = jsQR(data, width, height, {inversionAttempts:'attemptBoth'});
+          if(qr){
+            if(yOffset) qr.location.topLeftCorner.y += yOffset;
+            return qr;
+          }
+          return null;
+        };
+
+        const extractRegion = function(imgD, W, H, startY, endY){
+          const ch = endY - startY;
+          const buf = new Uint8ClampedArray(ch * W * 4);
+          for(let r = 0; r < ch; r++) buf.set(imgD.data.slice((startY+r)*W*4, (startY+r+1)*W*4), r*W*4);
+          return buf;
+        };
+
+        // ① 하단 50% (가장 흔한 위치)
+        let startY = Math.floor(h * 0.5);
+        let region = extractRegion(imgData, w, h, startY, h);
+        let qr = tryScan(region, w, h - startY, startY);
         if(qr) return qr;
-        return jsQR(imgData.data, w, h, {inversionAttempts:'attemptBoth'}) || null;
+
+        // ② 중앙 50% (25%~75%) — 36번처럼 중간에 있는 QR 대응
+        startY = Math.floor(h * 0.25);
+        let endY = Math.floor(h * 0.75);
+        region = extractRegion(imgData, w, h, startY, endY);
+        qr = tryScan(region, w, endY - startY, startY);
+        if(qr) return qr;
+
+        // ③ 상단 50% (드물지만 가능)
+        startY = 0;
+        endY = Math.floor(h * 0.5);
+        region = extractRegion(imgData, w, h, startY, endY);
+        qr = tryScan(region, w, endY, 0);
+        if(qr) return qr;
+
+        // ④ 전체 스캔 (fallback)
+        qr = tryScan(imgData.data, w, h, 0);
+        if(qr) return qr;
+
+        // ⑤ 1/2 축소 후 전체 스캔 (고해상도 이미지에서 jsQR이 놓치는 경우 대응)
+        try {
+          const halfW = Math.floor(w / 2), halfH = Math.floor(h / 2);
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = w; tempCanvas.height = h;
+          const tempCtx = tempCanvas.getContext('2d');
+          const tempImg = tempCtx.createImageData(w, h);
+          tempImg.data.set(imgData.data);
+          tempCtx.putImageData(tempImg, 0, 0);
+
+          const scaledCanvas = document.createElement('canvas');
+          scaledCanvas.width = halfW; scaledCanvas.height = halfH;
+          scaledCanvas.getContext('2d').drawImage(tempCanvas, 0, 0, halfW, halfH);
+          const scaledData = scaledCanvas.getContext('2d').getImageData(0, 0, halfW, halfH);
+          const scaledQR = tryScan(scaledData.data, halfW, halfH, 0);
+          if(scaledQR){
+            // 좌표를 원본 기준으로 복구
+            scaledQR.location.topLeftCorner.y *= 2;
+            scaledQR.location.topLeftCorner.x *= 2;
+            return scaledQR;
+          }
+        } catch(e) { /* 메모리 부족 등 무시 */ }
+
+        return null;
       }
 
       function colHasProblemContent(imgData, w, h){
@@ -11114,9 +11177,19 @@ async function startNajePdfLoad(file, mode){
       leftCvs.getContext('2d').drawImage(cvs, 0, 0, midX, H, 0, 0, midX, H);
       const leftData = leftCvs.getContext('2d').getImageData(0, 0, midX, H);
       const leftQR = scanQR(leftData, midX, H);
+      console.log('[N제] p'+p+' 좌 QR:', leftQR ? '✓ @y='+Math.round(leftQR.location.topLeftCorner.y) : '✗ 없음');
 
       if(leftQR || colHasProblemContent(leftData, midX, H)){
-        const leftCutY = leftQR ? Math.max(30, Math.round(leftQR.location.topLeftCorner.y) - 15) : H;
+        // 🎯 QR 못 찾았을 때도 줄칸 시작점에서 자르기 (fallback)
+        let leftCutY;
+        if(leftQR){
+          leftCutY = Math.max(30, Math.round(leftQR.location.topLeftCorner.y) - 15);
+        } else {
+          // 줄칸 시작점 찾기 (본문 끝 지점). 못 찾으면 전체 사용.
+          const lineY = njFindLineStart(leftData, midX, 0, midX, 0, H);
+          leftCutY = (lineY > 0 && lineY < H) ? Math.max(30, lineY - 10) : H;
+          console.log('[N제] p'+p+' 좌 QR없음→줄칸자르기 lineY='+lineY+' cutY='+leftCutY);
+        }
         const leftFinal = njCrop(cvs, 0, midX, 0, leftCutY);
         najeExtractedProblems.push({
           number: num++, canvas: leftFinal, qrUrl: leftQR ? leftQR.data : null,
@@ -11132,9 +11205,18 @@ async function startNajePdfLoad(file, mode){
       rightCvs.getContext('2d').drawImage(cvs, midX, 0, W-midX, H, 0, 0, W-midX, H);
       const rightData = rightCvs.getContext('2d').getImageData(0, 0, W-midX, H);
       const rightQR = scanQR(rightData, W-midX, H);
+      console.log('[N제] p'+p+' 우 QR:', rightQR ? '✓ @y='+Math.round(rightQR.location.topLeftCorner.y) : '✗ 없음');
 
       if(rightQR || colHasProblemContent(rightData, W-midX, H)){
-        const rightCutY = rightQR ? Math.max(30, Math.round(rightQR.location.topLeftCorner.y) - 15) : H;
+        // 🎯 QR 못 찾았을 때도 줄칸 시작점에서 자르기 (fallback)
+        let rightCutY;
+        if(rightQR){
+          rightCutY = Math.max(30, Math.round(rightQR.location.topLeftCorner.y) - 15);
+        } else {
+          const lineY = njFindLineStart(rightData, W-midX, 0, W-midX, 0, H);
+          rightCutY = (lineY > 0 && lineY < H) ? Math.max(30, lineY - 10) : H;
+          console.log('[N제] p'+p+' 우 QR없음→줄칸자르기 lineY='+lineY+' cutY='+rightCutY);
+        }
         const rightFinal = njCrop(cvs, midX, W, 0, rightCutY);
         najeExtractedProblems.push({
           number: num++, canvas: rightFinal, qrUrl: rightQR ? rightQR.data : null,
