@@ -4441,6 +4441,125 @@ const SUPABASE_KEY='sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const {createClient}=supabase;
 const db=createClient(SUPABASE_URL,SUPABASE_KEY);
 
+/* ═══════════════════════════════════════════════════════
+   🎯 공통 유틸: 이미지 공유/복사/다운로드
+   ═══════════════════════════════════════════════════════
+   모바일/데스크탑에 따라 최적의 방식으로 이미지를 공유합니다.
+   - 모바일/태블릿: Web Share API (카톡 등 앱으로 바로 공유) 우선
+   - 데스크탑: 클립보드 복사 우선
+   - 모두 실패 시: 파일 다운로드로 fallback
+
+   사용법:
+     const result = await shareOrCopyImage(blob, '파일명.png');
+     // result: {success: true, method: 'share'|'clipboard'|'download'|'cancelled'}
+*/
+function isMobileOrTabletDevice(){
+  // 모바일 or 태블릿 감지 (터치 + 좁은 화면 or 모바일 UA)
+  const ua = navigator.userAgent || '';
+  const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  const isMobileUA = /Mobi|Android|iPhone|iPad|iPod/i.test(ua);
+  // iPadOS 13+ 는 userAgent에 iPad가 없고 Macintosh로 나오므로 추가 체크
+  const isIpadOS = /Macintosh/.test(ua) && hasTouch && navigator.maxTouchPoints > 1;
+  const isNarrowScreen = window.innerWidth <= 900;
+  return isMobileUA || isIpadOS || (hasTouch && isNarrowScreen);
+}
+
+async function shareOrCopyImage(blob, fileName){
+  if(!blob){ return {success:false, method:'none', error:'no blob'}; }
+  fileName = fileName || 'image.png';
+  const isMobile = isMobileOrTabletDevice();
+
+  // ===== 모바일/태블릿: Web Share API 최우선 =====
+  if(isMobile && navigator.share){
+    try {
+      const file = new File([blob], fileName, {type: blob.type || 'image/png'});
+      // canShare 체크는 일부 브라우저에서 불안정하므로
+      // navigator.share를 직접 시도 (title/text는 카톡 이미지 누락 방지 위해 생략)
+      await navigator.share({files: [file]});
+      return {success:true, method:'share'};
+    } catch(e) {
+      if(e && e.name === 'AbortError'){
+        return {success:true, method:'cancelled'};
+      }
+      console.warn('[shareOrCopyImage] share 실패, fallback:', e && e.message);
+      // fallthrough
+    }
+  }
+
+  // ===== Clipboard API (데스크탑 우선, 모바일 fallback) =====
+  if(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem){
+    try {
+      // image/png가 가장 호환성 좋음
+      const pngBlob = blob.type === 'image/png' ? blob : await _convertBlobToPng(blob);
+      await navigator.clipboard.write([new ClipboardItem({'image/png': pngBlob})]);
+      return {success:true, method:'clipboard'};
+    } catch(e) {
+      console.warn('[shareOrCopyImage] clipboard 실패, fallback:', e && e.message);
+      // fallthrough
+    }
+  }
+
+  // ===== 최후수단: 다운로드 =====
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){
+      URL.revokeObjectURL(url);
+      if(a.parentNode) a.parentNode.removeChild(a);
+    }, 100);
+    return {success:true, method:'download'};
+  } catch(e) {
+    return {success:false, method:'error', error:e && e.message};
+  }
+}
+
+// blob을 PNG로 변환 (Canvas 경유)
+async function _convertBlobToPng(blob){
+  return new Promise(function(resolve, reject){
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = function(){
+      try {
+        const cvs = document.createElement('canvas');
+        cvs.width = img.naturalWidth;
+        cvs.height = img.naturalHeight;
+        cvs.getContext('2d').drawImage(img, 0, 0);
+        cvs.toBlob(function(pngBlob){
+          URL.revokeObjectURL(url);
+          resolve(pngBlob);
+        }, 'image/png');
+      } catch(e){ URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error('이미지 로드 실패')); };
+    img.src = url;
+  });
+}
+
+// 공유 결과에 따라 사용자에게 안내 (버튼 텍스트 등에 활용)
+function shareResultMessage(result){
+  if(!result || !result.success) return '⚠️ 이미지 처리 실패';
+  switch(result.method){
+    case 'share': return '✅ 공유 완료';
+    case 'cancelled': return '공유가 취소되었습니다';
+    case 'clipboard': return '✅ 클립보드에 복사됨';
+    case 'download': return '💾 다운로드 완료';
+    default: return '✅ 완료';
+  }
+}
+
+// canvas → blob → shareOrCopyImage 한번에 처리하는 헬퍼
+async function shareOrCopyCanvas(canvas, fileName, mimeType, quality){
+  return new Promise(function(resolve){
+    canvas.toBlob(async function(blob){
+      const result = await shareOrCopyImage(blob, fileName);
+      resolve(result);
+    }, mimeType || 'image/png', quality || 0.95);
+  });
+}
+
 let currentUser=null,currentRole='teacher';
 let students=[],homeworks=[],submissions=[],allUsers=[],classes=[],allClasses=[];
 let pendingPhotos=[],currentSubmitHwId=null,currentSubmitStudentId=null;
@@ -9068,15 +9187,25 @@ async function mncGenerateSummaryImage(){
 
 async function mncShareImage(mode){
   if(!window._mncLastCanvas){ alert('먼저 이미지를 생성하세요'); return; }
+  var imgTeacherFilter = document.getElementById('mnc-img-teacher-filter')?.value || '';
+  var imgTobj = _mncTeachers.find(function(t){return t.id===imgTeacherFilter;});
+  var selectedResult = document.getElementById('mnc-date')?.value || '';
+  var fname = imgTeacherFilter
+    ? '고등일일N제_'+(imgTobj?imgTobj.name:'반별')+'T_'+selectedResult+'.png'
+    : '고등일일N제_전체_'+selectedResult+'.png';
   try{
-    window._mncLastCanvas.toBlob(function(blob){
-      var item = new ClipboardItem({'image/png': blob});
-      navigator.clipboard.write([item]).then(function(){
-        alert('✅ 이미지가 클립보드에 복사됐습니다!\n카톡에서 붙여넣기 하세요.');
-      });
-    });
+    var result = await shareOrCopyCanvas(window._mncLastCanvas, fname);
+    if(result.method === 'share'){
+      // 공유 성공 - 별도 알림 불필요 (공유 UI에서 이미 확인됨)
+    } else if(result.method === 'clipboard'){
+      alert('✅ 이미지가 클립보드에 복사됐습니다!\n카톡에서 붙여넣기 하세요.');
+    } else if(result.method === 'download'){
+      alert('💾 이미지를 다운로드했습니다.');
+    } else if(result.method === 'cancelled'){
+      // 사용자가 공유 취소 - 별도 알림 불필요
+    }
   }catch(e){
-    alert('클립보드 복사 실패: '+e.message+'\n다운로드 버튼을 이용해주세요.');
+    alert('이미지 공유 실패: '+(e.message||e)+'\n다운로드 버튼을 이용해주세요.');
   }
 }
 
@@ -12411,30 +12540,19 @@ async function copyAllWorkLogImage(){
       curY += c.height + GAP_PX; // 실제 픽셀로 일관성 있게
     });
 
-    const isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     const fileName = '금일업무일지_'+date.replace(/-/g,'')+'.png';
 
     merged.toBlob(async (blob) => {
-      if(isMobile){
-        const file = new File([blob], fileName, {type:'image/png'});
-        if(navigator.canShare && navigator.canShare({files:[file]})){
-          try{
-            await navigator.share({files:[file]});
-            btn.textContent='📋 금일 업무일지 이미지'; btn.disabled=false; return;
-          }catch(e){ if(e.name==='AbortError'){btn.textContent='📋 금일 업무일지 이미지';btn.disabled=false;return;} }
-        }
+      const result = await shareOrCopyImage(blob, fileName);
+      if(result.method === 'share' || result.method === 'clipboard'){
+        btn.textContent = result.method==='share' ? '✅ 공유 완료!' : '✅ 복사됨!';
+        setTimeout(()=>{btn.textContent='📋 금일 업무일지 이미지'; btn.disabled=false;}, 2500);
+      } else if(result.method === 'download'){
+        btn.textContent='💾 다운로드 완료'; btn.disabled=false;
+        setTimeout(()=>{btn.textContent='📋 금일 업무일지 이미지';}, 2500);
+      } else {
+        btn.textContent='📋 금일 업무일지 이미지'; btn.disabled=false;
       }
-      if(navigator.clipboard && navigator.clipboard.write){
-        try{
-          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-          btn.textContent='✅ 복사됨!';
-          setTimeout(()=>{btn.textContent='📋 금일 업무일지 이미지';btn.disabled=false;},2500);
-          return;
-        }catch(e){}
-      }
-      const a=document.createElement('a'); a.href=merged.toDataURL(); a.download=fileName; a.click();
-      btn.textContent='📋 금일 업무일지 이미지'; btn.disabled=false;
-      alert('이미지를 다운로드했습니다.');
     }, 'image/png');
 
   }catch(err){
@@ -13490,28 +13608,18 @@ async function wnGenerateImage(){
     var canvas = await html2canvas(tempDiv, {backgroundColor:'#fff', scale:2, useCORS:true, logging:false, width:900, height:tempDiv.scrollHeight});
     document.body.removeChild(tempDiv);
 
-    var isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     var fileName = '주말N제_'+date.replace(/-/g,'')+'.png';
 
-    canvas.toBlob(async function(blob){
-      if(isMobile){
-        var file = new File([blob], fileName, {type:'image/png'});
-        if(navigator.canShare && navigator.canShare({files:[file]})){
-          try{ await navigator.share({files:[file]}); btn.textContent='📊 이미지 생성'; btn.disabled=false; return; }
-          catch(e){ if(e.name==='AbortError'){btn.textContent='📊 이미지 생성';btn.disabled=false;return;} }
-        }
-      }
-      if(navigator.clipboard && navigator.clipboard.write){
-        try{
-          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-          btn.textContent='✅ 복사됨!';
-          setTimeout(function(){btn.textContent='📊 이미지 생성';btn.disabled=false;},2500);
-          return;
-        }catch(e){}
-      }
-      var a=document.createElement('a'); a.href=canvas.toDataURL(); a.download=fileName; a.click();
+    var result = await shareOrCopyCanvas(canvas, fileName);
+    if(result.method === 'share' || result.method === 'clipboard'){
+      btn.textContent = result.method==='share' ? '✅ 공유 완료!' : '✅ 복사됨!';
+      setTimeout(function(){btn.textContent='📊 이미지 생성'; btn.disabled=false;}, 2500);
+    } else if(result.method === 'download'){
+      btn.textContent='💾 다운로드 완료'; btn.disabled=false;
+      setTimeout(function(){btn.textContent='📊 이미지 생성';}, 2500);
+    } else {
       btn.textContent='📊 이미지 생성'; btn.disabled=false;
-    }, 'image/png');
+    }
 
   }catch(err){
     alert('오류: '+err.message);
@@ -13734,30 +13842,19 @@ async function wlGenerateSelectedImage(){
     let curY=0;
     canvases.forEach(c=>{ mctx.drawImage(c,0,curY); curY+=c.height+GAP_PX; });
 
-    const isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     const fileName = '업무일지_'+date.replace(/-/g,'')+'.png';
 
     merged.toBlob(async (blob) => {
-      if(isMobile){
-        const file = new File([blob], fileName, {type:'image/png'});
-        if(navigator.canShare && navigator.canShare({files:[file]})){
-          try{
-            await navigator.share({files:[file]});
-            btn.textContent='📋 선택 업무일지 이미지 생성'; btn.disabled=false; return;
-          }catch(e){ if(e.name==='AbortError'){btn.textContent='📋 선택 업무일지 이미지 생성';btn.disabled=false;return;} }
-        }
+      const result = await shareOrCopyImage(blob, fileName);
+      if(result.method === 'share' || result.method === 'clipboard'){
+        btn.textContent = result.method==='share' ? '✅ 공유 완료!' : '✅ 복사됨!';
+        setTimeout(()=>{btn.textContent='📋 선택 업무일지 이미지 생성'; btn.disabled=false;}, 2500);
+      } else if(result.method === 'download'){
+        btn.textContent='💾 다운로드 완료'; btn.disabled=false;
+        setTimeout(()=>{btn.textContent='📋 선택 업무일지 이미지 생성';}, 2500);
+      } else {
+        btn.textContent='📋 선택 업무일지 이미지 생성'; btn.disabled=false;
       }
-      if(navigator.clipboard && navigator.clipboard.write){
-        try{
-          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-          btn.textContent='✅ 복사됨!';
-          setTimeout(()=>{btn.textContent='📋 선택 업무일지 이미지 생성';btn.disabled=false;},2500);
-          return;
-        }catch(e){}
-      }
-      const a=document.createElement('a'); a.href=merged.toDataURL(); a.download=fileName; a.click();
-      btn.textContent='📋 선택 업무일지 이미지 생성'; btn.disabled=false;
-      alert('이미지를 다운로드했습니다.');
     }, 'image/png');
 
   }catch(err){
@@ -15591,25 +15688,16 @@ async function ptGenerateImage(){
     var isMobile = window.innerWidth<=680 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     var fileName = '포텐셜_'+date.replace(/-/g,'')+'.png';
 
-    canvas.toBlob(async function(blob){
-      if(isMobile){
-        var file = new File([blob], fileName, {type:'image/png'});
-        if(navigator.canShare && navigator.canShare({files:[file]})){
-          try{ await navigator.share({files:[file]}); btn.textContent='📊 이미지 생성'; btn.disabled=false; return; }
-          catch(e){ if(e.name==='AbortError'){btn.textContent='📊 이미지 생성';btn.disabled=false;return;} }
-        }
-      }
-      if(navigator.clipboard && navigator.clipboard.write){
-        try{
-          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-          btn.textContent='✅ 복사됨!';
-          setTimeout(function(){btn.textContent='📊 이미지 생성';btn.disabled=false;},2500);
-          return;
-        }catch(e){}
-      }
-      var a=document.createElement('a'); a.href=canvas.toDataURL(); a.download=fileName; a.click();
+    var result = await shareOrCopyCanvas(canvas, fileName);
+    if(result.method === 'share' || result.method === 'clipboard'){
+      btn.textContent = result.method==='share' ? '✅ 공유 완료!' : '✅ 복사됨!';
+      setTimeout(function(){btn.textContent='📊 이미지 생성'; btn.disabled=false;}, 2500);
+    } else if(result.method === 'download'){
+      btn.textContent='💾 다운로드 완료'; btn.disabled=false;
+      setTimeout(function(){btn.textContent='📊 이미지 생성';}, 2500);
+    } else {
       btn.textContent='📊 이미지 생성'; btn.disabled=false;
-    }, 'image/png');
+    }
 
   }catch(err){
     alert('오류: '+err.message);
@@ -20264,31 +20352,18 @@ async function mrExportImage(copy){
   });
   wrap.innerHTML = '';
 
-  var isMobile = window.innerWidth<=680||/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
   var fileName = _mrData.year+'년_'+_mrData.month+'월_'+r.teacher.name+'_수강인원.png';
 
-  canvas.toBlob(async function(blob){
-    if(copy){
-      if(navigator.clipboard&&navigator.clipboard.write){
-        try{
-          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-          alert('✅ 이미지가 클립보드에 복사됐습니다!');
-          return;
-        }catch(e){}
-      }
-    }
-    if(isMobile&&navigator.canShare){
-      var file=new File([blob],fileName,{type:'image/png'});
-      if(navigator.canShare({files:[file]})){
-        try{ await navigator.share({files:[file]}); return; }catch(e){}
-      }
-    }
-    var a=document.createElement('a');
-    a.href=canvas.toDataURL();
-    a.download=fileName;
-    a.click();
-    if(copy) alert('✅ 이미지를 저장했습니다 (클립보드 복사 불가)');
-  },'image/png');
+  // 공통 유틸 사용: 모바일은 공유, 데스크탑은 클립보드, 실패시 다운로드
+  var result = await shareOrCopyCanvas(canvas, fileName);
+  if(result.method === 'share'){
+    // 공유 성공 - 별도 알림 불필요
+  } else if(result.method === 'clipboard'){
+    alert('✅ 이미지가 클립보드에 복사됐습니다!');
+  } else if(result.method === 'download'){
+    alert('💾 이미지를 다운로드했습니다.');
+  }
+  // cancelled 는 알림 생략
 }
 
 /* ══════════════════════════════════════════
