@@ -2059,6 +2059,17 @@
 
         <!-- 목록 탭 -->
         <div id="admin-naje-panel-list">
+          <!-- 📦 일괄 이동 바 (선택된 N제가 있을 때만 표시) -->
+          <div id="admin-naje-bulk-bar" style="display:none;position:sticky;top:0;z-index:10;background:#faf5ff;border:2px solid #c4b5fd;border-radius:10px;padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap;box-shadow:0 2px 8px rgba(124,58,237,0.1)">
+            <span style="font-size:13px;font-weight:700;color:#6d28d9">
+              <span id="admin-naje-bulk-count">0</span>개 선택됨
+            </span>
+            <div style="flex:1"></div>
+            <button onclick="adminNajeSelectAll(true)" style="padding:6px 12px;border:1.5px solid #c4b5fd;border-radius:7px;background:#fff;color:#6d28d9;font-size:12px;font-weight:600;cursor:pointer">현재 화면 전체 선택</button>
+            <button onclick="adminNajeBulkMove()" style="padding:6px 14px;border:none;border-radius:7px;background:#7c3aed;color:#fff;font-size:12px;font-weight:700;cursor:pointer">📁 선택 N제 일괄 이동</button>
+            <button onclick="adminNajeClearSelection()" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:7px;background:#fff;color:#6b7280;font-size:12px;font-weight:600;cursor:pointer">선택 해제</button>
+          </div>
+
           <!-- 🔍 전체 검색창 -->
           <div style="margin-bottom:12px;position:relative">
             <input type="text" id="admin-naje-search" placeholder="🔍 전체 N제에서 검색 (제목/과목/주차/설명)"
@@ -10622,6 +10633,8 @@ var _adminNajeSubfolderSelected = null;    // 레벨2: 하위 폴더 이름 (nul
 
 function setAdminNajeViewMode(mode){
   _adminNajeViewMode = mode;
+  _adminNajeSelectedIds.clear();
+  adminNajeUpdateBulkBar();
   try { localStorage.setItem('bmaps_admin_naje_viewmode', mode); } catch(e){}
 
   var btnList = document.getElementById('admin-naje-viewmode-list');
@@ -10853,16 +10866,22 @@ function adminNajeCreateNewSubfolder(){
 
 function adminNajeSelectSubfolder(folderName){
   _adminNajeSubfolderSelected = folderName;
+  _adminNajeSelectedIds.clear();
+  adminNajeUpdateBulkBar();
   renderAdminNajeFolderView();
 }
 
 function adminNajeSelectFolder(grade){
   _adminNajeFolderSelected = grade;
   _adminNajeSubfolderSelected = null;
+  _adminNajeSelectedIds.clear();
+  adminNajeUpdateBulkBar();
   renderAdminNajeFolderView();
 }
 
 function adminNajeFolderBack(){
+  _adminNajeSelectedIds.clear();
+  adminNajeUpdateBulkBar();
   // 레벨2에 있으면 레벨1로, 레벨1에 있으면 레벨0으로
   if(_adminNajeSubfolderSelected !== null){
     _adminNajeSubfolderSelected = null;
@@ -10981,13 +11000,55 @@ function adminNajeRegisterInFolder(){
 }
 
 // 관리자용 N제 세트 카드 (폴더 뷰 내부용) - 목록 뷰와 완전히 동일 (보기/수정/삭제)
+// 선택된 N제 ID Set (일괄 이동용)
+var _adminNajeSelectedIds = new Set();
+
+function adminNajeToggleSelect(setId, checked){
+  if(checked) _adminNajeSelectedIds.add(setId);
+  else _adminNajeSelectedIds.delete(setId);
+  adminNajeUpdateBulkBar();
+}
+
+function adminNajeUpdateBulkBar(){
+  var bar = document.getElementById('admin-naje-bulk-bar');
+  var countEl = document.getElementById('admin-naje-bulk-count');
+  if(!bar) return;
+  var n = _adminNajeSelectedIds.size;
+  if(n === 0){
+    bar.style.display = 'none';
+  } else {
+    bar.style.display = 'flex';
+    if(countEl) countEl.textContent = n;
+  }
+}
+
+function adminNajeSelectAll(checkAll){
+  document.querySelectorAll('.admin-naje-item-chk').forEach(function(cb){
+    cb.checked = checkAll;
+    var sid = cb.getAttribute('data-sid');
+    if(checkAll) _adminNajeSelectedIds.add(sid);
+    else _adminNajeSelectedIds.delete(sid);
+  });
+  adminNajeUpdateBulkBar();
+}
+
+function adminNajeClearSelection(){
+  _adminNajeSelectedIds.clear();
+  document.querySelectorAll('.admin-naje-item-chk').forEach(function(cb){ cb.checked = false; });
+  adminNajeUpdateBulkBar();
+}
+
 function adminNajeBuildSetListCards(rows){
   return rows.map(function(s){
     var cnt = s.naje_problems && s.naje_problems[0] ? s.naje_problems[0].count : s.total_problems||0;
     var safeTitle = (s.title||'').replace(/'/g,"\\'");
     var safeDesc = (s.description||'').replace(/'/g,"\\'");
+    var checked = _adminNajeSelectedIds.has(s.id) ? 'checked' : '';
+    var canMove = ['고1','고2','고3'].includes(s.target_grade || '');
     return '<div class="card" style="margin-bottom:10px;">'
       + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
+      + '<div style="display:flex;align-items:flex-start;gap:10px;flex:1;min-width:0">'
+      + (canMove ? '<input type="checkbox" class="admin-naje-item-chk" data-sid="'+s.id+'" '+checked+' onchange="adminNajeToggleSelect(\''+s.id+'\',this.checked)" style="margin-top:4px;width:16px;height:16px;accent-color:#7c3aed;cursor:pointer;flex-shrink:0" title="일괄 이동용 선택">' : '<div style="width:16px;flex-shrink:0"></div>')
       + '<div style="flex:1;min-width:0">'
       + '<div style="font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:6px">'+(s.title||'')+'</div>'
       + '<div style="display:flex;flex-wrap:wrap;gap:5px;">'
@@ -11000,6 +11061,7 @@ function adminNajeBuildSetListCards(rows){
       + (s.description?'<div style="font-size:12px;color:#9ca3af;margin-top:4px">'+s.description+'</div>':'')
       + '<div style="font-size:11px;color:#c4c9d4;margin-top:5px">'+new Date(s.created_at).toLocaleDateString('ko-KR')+' 등록</div>'
       + '</div>'
+      + '</div>'
       + '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">'
       + '<button class="btn btn-primary btn-sm" onclick="viewNajeSet(\''+s.id+'\')">보기</button>'
       + '<button class="btn btn-sm" onclick="openEditNajeSetModal(\''+s.id+'\',\''+safeTitle+'\',\''+(s.subject||'')+'\',\''+(s.target_grade||'')+'\','+(s.week_number||'null')+',\''+safeDesc+'\')" style="background:#fff;border:1px solid var(--border);">수정</button>'
@@ -11009,6 +11071,82 @@ function adminNajeBuildSetListCards(rows){
       + '</div>'
       + '</div>';
   }).join('');
+}
+
+// 여러 N제를 한 번에 폴더로 이동
+async function adminNajeBulkMove(){
+  if(_adminNajeSelectedIds.size === 0){ alert('선택된 N제가 없습니다'); return; }
+
+  var setIds = Array.from(_adminNajeSelectedIds);
+  // 선택된 N제들의 학년 확인 (모두 같은 학년이어야 이동 가능 - 폴더는 학년별 소속)
+  try {
+    var { data: selectedSets, error: selErr } = await db.from('naje_sets')
+      .select('id,target_grade,title,folder_name').in('id', setIds);
+    if(selErr) throw selErr;
+    var grades = new Set();
+    (selectedSets||[]).forEach(function(r){ grades.add(r.target_grade || ''); });
+    if(grades.size > 1){
+      alert('선택된 N제들의 학년이 다릅니다.\n같은 학년의 N제들만 한 번에 이동할 수 있습니다.\n\n현재 선택된 학년: ' + Array.from(grades).join(', '));
+      return;
+    }
+    var grade = Array.from(grades)[0];
+    if(!['고1','고2','고3'].includes(grade)){
+      alert('고1/고2/고3 학년의 N제만 폴더 이동 가능합니다.');
+      return;
+    }
+
+    // 기존 폴더 목록 가져오기
+    var { data: folderData } = await db.from('naje_sets')
+      .select('folder_name').eq('target_grade', grade).not('folder_name','is',null);
+    var u = {};
+    (folderData||[]).forEach(function(r){ if(r.folder_name) u[r.folder_name] = true; });
+    var folders = Object.keys(u).sort();
+
+    // 선택 메뉴 표시 (prompt)
+    var options = ['(미분류 - 폴더에서 빼기)'].concat(folders).concat(['+ 새 폴더 만들기']);
+    var msg = '선택된 ' + setIds.length + '개의 N제를 이동할 폴더를 선택하세요\n\n';
+    options.forEach(function(o, i){ msg += (i+1) + '. ' + o + '\n'; });
+    msg += '\n📚 학년: ' + grade;
+    var chosen = prompt(msg + '\n\n번호 입력:');
+    if(!chosen) return;
+    var idx = parseInt(chosen) - 1;
+    if(isNaN(idx) || idx < 0 || idx >= options.length){ alert('잘못된 번호입니다'); return; }
+
+    var newFolder = null;
+    if(idx === 0){
+      newFolder = null; // 미분류로
+    } else if(idx === options.length - 1){
+      // 새 폴더
+      var name = prompt('새 폴더 이름:');
+      if(!name) return;
+      newFolder = name.trim();
+      if(!newFolder) return;
+    } else {
+      newFolder = options[idx];
+    }
+
+    // 최종 확인
+    var targetLabel = newFolder ? ('📁 ' + newFolder) : '(미분류)';
+    if(!confirm('선택된 ' + setIds.length + '개의 N제를 "' + targetLabel + '" 로 이동하시겠어요?')) return;
+
+    // 일괄 UPDATE
+    var { error: updErr } = await db.from('naje_sets')
+      .update({ folder_name: newFolder }).in('id', setIds);
+    if(updErr) throw updErr;
+
+    alert('✅ ' + setIds.length + '개의 N제가 "' + targetLabel + '" 로 이동되었습니다');
+    _adminNajeSelectedIds.clear();
+    adminNajeUpdateBulkBar();
+
+    // 현재 뷰 재로드
+    if(_adminNajeViewMode === 'folder'){
+      renderAdminNajeFolderView();
+    } else {
+      loadAdminNajeSetList();
+    }
+  } catch(e) {
+    alert('일괄 이동 실패: ' + (e.message || e));
+  }
 }
 
 // N제를 다른 폴더로 이동 (또는 폴더 제거)
