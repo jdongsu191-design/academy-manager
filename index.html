@@ -8239,6 +8239,21 @@ async function naLoadSetsByGrade(){
   }
 }
 
+// N제의 고정 11단계 정의 (기존 학생 수정 모달 로직과 동일)
+var _NAJE_STAGES = [
+  {num:1,  label:'내신3점', range:'1~8번'},
+  {num:2,  label:'내신3점', range:'9~16번'},
+  {num:3,  label:'모고3점', range:'17~24번'},
+  {num:4,  label:'모고3점', range:'25~32번'},
+  {num:5,  label:'내신4점', range:'33~40번'},
+  {num:6,  label:'내신4점', range:'41~48번'},
+  {num:7,  label:'모고쉬사', range:'49~56번'},
+  {num:8,  label:'모고어사', range:'57~64번'},
+  {num:9,  label:'내신심화', range:'65~72번'},
+  {num:10, label:'내신심화', range:'73~80번'},
+  {num:11, label:'킬러',    range:'81번~'}
+];
+
 // N제 선택 시 → Step 2 반 선택 버튼 표시
 async function naOnSetChange(){
   var setSel = document.getElementById('na-set-select');
@@ -8253,34 +8268,34 @@ async function naOnSetChange(){
     return;
   }
 
-  // 해당 N제의 단계 목록 조회 (problem 들 중 level_name 있는 것들 unique)
+  // 🎯 단계 구조: 고정 11단계 (naje_assignments.steps 는 숫자 배열 [1,2,3,...])
+  // 이 N제에 실제로 문항이 존재하는 단계만 필터링해서 노출
   try {
     var {data: problems} = await db.from('naje_problems')
-      .select('level_name').eq('set_id', setId);
-    var seen = {};
-    var steps = [];
+      .select('problem_number').eq('set_id', setId);
+    var maxNum = 0;
     (problems||[]).forEach(function(p){
-      if(p.level_name && !seen[p.level_name]){
-        seen[p.level_name] = true;
-        steps.push(p.level_name);
-      }
+      if(p.problem_number && p.problem_number > maxNum) maxNum = p.problem_number;
     });
-    // 자연어 정렬
-    steps.sort(function(a,b){ return najeNaturalCompare(a, b); });
-    _naState.setSteps = steps;
-
-    // N제 정보
-    var selOpt = setSel.options[setSel.selectedIndex];
-    _naState.setInfo = { id: setId, label: selOpt ? selOpt.textContent : '' };
+    // 문항 번호 범위에 따라 어느 단계까지 포함하는지 결정
+    // 각 단계 정의의 range 시작 번호를 기준으로 판정
+    var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+    _naState.setSteps = _NAJE_STAGES.filter(function(st, idx){
+      return maxNum >= stageStartNums[idx];
+    });
   } catch(e) {
     console.error('[N제 단계 로드]', e);
-    _naState.setSteps = [];
+    // fallback: 전체 11단계 노출
+    _naState.setSteps = _NAJE_STAGES.slice();
   }
 
+  // N제 정보
+  var selOpt = setSel.options[setSel.selectedIndex];
+  _naState.setInfo = { id: setId, label: selOpt ? selOpt.textContent : '' };
+
   if(_naState.setSteps.length === 0){
-    alert('이 N제에는 단계 정보가 없습니다');
-    document.getElementById('na-class-wrap').style.display = 'none';
-    return;
+    // 안전장치: 문항이 전혀 없어도 기본 11단계 노출
+    _naState.setSteps = _NAJE_STAGES.slice();
   }
 
   // 반 버튼 렌더
@@ -8372,28 +8387,34 @@ function naRenderMatrix(){
     return;
   }
 
-  var steps = _naState.setSteps;
+  var steps = _naState.setSteps;  // [{num, label, range}, ...]
 
   // 헤더 (첫 칸: 학생, 이후: 각 단계)
   var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:420px">';
   html += '<thead><tr style="background:#eff6ff">';
   html += '<th onclick="naToggleAllStudents()" style="padding:8px 10px;border:1px solid #dbeafe;text-align:left;font-weight:700;color:#1e40af;cursor:pointer;white-space:nowrap" title="전체 학생 토글">학생 ↕</th>';
-  steps.forEach(function(step, idx){
-    html += '<th onclick="naToggleStepColumn(\'' + _escQ(step) + '\')" style="padding:8px 6px;border:1px solid #dbeafe;text-align:center;font-weight:700;color:#1e40af;cursor:pointer;min-width:54px;white-space:nowrap" title="이 단계 전체 토글">' + _esc(step) + '</th>';
+  steps.forEach(function(st){
+    var isKiller = (st.num === 11);
+    var headColor = isKiller ? '#991b1b' : '#1e40af';
+    var headBg = isKiller ? '#fee2e2' : '';
+    var headStyle = headBg ? ';background:'+headBg : '';
+    var title = st.label + ' (' + st.range + ')';
+    var headLabel = isKiller ? '🔥 '+st.num : st.num+'단계';
+    html += '<th onclick="naToggleStepColumn(' + st.num + ')" style="padding:8px 6px;border:1px solid #dbeafe;text-align:center;font-weight:700;color:'+headColor+';cursor:pointer;min-width:54px;white-space:nowrap'+headStyle+'" title="'+_esc(title)+'">' + headLabel + '</th>';
   });
   html += '</tr></thead><tbody>';
 
   students.forEach(function(s){
     html += '<tr>';
     html += '<td onclick="naToggleStudentRow(\'' + s.id + '\')" style="padding:7px 10px;border:1px solid #dbeafe;font-weight:600;color:#1e293b;cursor:pointer;white-space:nowrap" title="이 학생 전체 토글">' + _esc(s.name) + '</td>';
-    steps.forEach(function(step){
-      var checked = _naState.current[s.id] && _naState.current[s.id].has(step);
-      var origHas = _naState.original[s.id] && _naState.original[s.id].has(step);
+    steps.forEach(function(st){
+      var checked = _naState.current[s.id] && _naState.current[s.id].has(st.num);
+      var origHas = _naState.original[s.id] && _naState.original[s.id].has(st.num);
       var changed = checked !== origHas;
       var bg = changed ? '#fef3c7' : '#fff';
       html += '<td style="padding:4px;border:1px solid #dbeafe;text-align:center;background:' + bg + '">'
         + '<input type="checkbox" ' + (checked?'checked':'') + ' '
-        + 'onchange="naToggleCell(\'' + s.id + '\',\'' + _escQ(step) + '\',this.checked)" '
+        + 'onchange="naToggleCell(\'' + s.id + '\',' + st.num + ',this.checked)" '
         + 'style="width:16px;height:16px;cursor:pointer;accent-color:#2563eb">'
         + '</td>';
     });
@@ -8403,11 +8424,11 @@ function naRenderMatrix(){
   wrap.innerHTML = html;
 }
 
-// 개별 셀 토글
-function naToggleCell(studentId, step, checked){
+// 개별 셀 토글 (step은 이제 숫자)
+function naToggleCell(studentId, stepNum, checked){
   if(!_naState.current[studentId]) _naState.current[studentId] = new Set();
-  if(checked) _naState.current[studentId].add(step);
-  else _naState.current[studentId].delete(step);
+  if(checked) _naState.current[studentId].add(stepNum);
+  else _naState.current[studentId].delete(stepNum);
   naRenderMatrix();  // 변경 표시 하이라이트 갱신
   naUpdateUnsavedBadge();
 }
@@ -8416,27 +8437,27 @@ function naToggleCell(studentId, step, checked){
 function naToggleStudentRow(studentId){
   if(!_naState.current[studentId]) _naState.current[studentId] = new Set();
   // 현재 상태 확인: 한 개라도 체크 안 된 게 있으면 → 전체 선택. 모두 체크됐으면 → 전체 해제
-  var allChecked = _naState.setSteps.every(function(step){ return _naState.current[studentId].has(step); });
+  var allChecked = _naState.setSteps.every(function(st){ return _naState.current[studentId].has(st.num); });
   if(allChecked){
     _naState.current[studentId].clear();
   } else {
-    _naState.setSteps.forEach(function(step){ _naState.current[studentId].add(step); });
+    _naState.setSteps.forEach(function(st){ _naState.current[studentId].add(st.num); });
   }
   naRenderMatrix();
   naUpdateUnsavedBadge();
 }
 
-// 단계 열 전체 토글
-function naToggleStepColumn(step){
+// 단계 열 전체 토글 (stepNum은 숫자)
+function naToggleStepColumn(stepNum){
   var students = _naState.classStudents[_naState.classId] || [];
   // 현재 상태: 모든 학생이 이 단계 체크돼 있으면 해제, 아니면 전체 선택
   var allChecked = students.every(function(s){
-    return _naState.current[s.id] && _naState.current[s.id].has(step);
+    return _naState.current[s.id] && _naState.current[s.id].has(stepNum);
   });
   students.forEach(function(s){
     if(!_naState.current[s.id]) _naState.current[s.id] = new Set();
-    if(allChecked) _naState.current[s.id].delete(step);
-    else _naState.current[s.id].add(step);
+    if(allChecked) _naState.current[s.id].delete(stepNum);
+    else _naState.current[s.id].add(stepNum);
   });
   naRenderMatrix();
   naUpdateUnsavedBadge();
@@ -8448,14 +8469,14 @@ function naToggleAllStudents(){
   var steps = _naState.setSteps;
   // 현재 모든 셀이 체크된 상태인지 확인
   var allChecked = students.every(function(s){
-    return _naState.current[s.id] && steps.every(function(step){ return _naState.current[s.id].has(step); });
+    return _naState.current[s.id] && steps.every(function(st){ return _naState.current[s.id].has(st.num); });
   });
   students.forEach(function(s){
     if(!_naState.current[s.id]) _naState.current[s.id] = new Set();
     if(allChecked){
       _naState.current[s.id].clear();
     } else {
-      steps.forEach(function(step){ _naState.current[s.id].add(step); });
+      steps.forEach(function(st){ _naState.current[s.id].add(st.num); });
     }
   });
   naRenderMatrix();
