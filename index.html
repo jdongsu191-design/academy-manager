@@ -13300,7 +13300,34 @@ async function wnDeleteTestNamePeriod(periodId){
   }
 }
 
-function wnRenderTestNameList(){
+// 모든 기간의 학생 ID들을 모아서, 이름 매핑 캐시를 확보 (목록 표시용)
+var _wnTnStudentNameMap = {};  // {student_id: 'name'}
+
+async function wnEnsureStudentNamesForPeriods(){
+  var settings = wnGetTestNameSettings();
+  var allIds = new Set();
+  (settings.periods || []).forEach(function(p){
+    (p.student_ids || []).forEach(function(sid){ allIds.add(sid); });
+  });
+  // 이미 맵에 있는 건 제외
+  var missing = [];
+  allIds.forEach(function(sid){
+    if(!_wnTnStudentNameMap[sid]) missing.push(sid);
+  });
+  if(missing.length === 0) return;
+  try {
+    var {data: users} = await db.from('users')
+      .select('id,name,status').in('id', missing);
+    (users || []).forEach(function(u){
+      // 상태와 관계없이 이름은 표시 (퇴원생도 기록은 남음)
+      _wnTnStudentNameMap[u.id] = u.name + (u.status !== 'active' ? ' (퇴원)' : '');
+    });
+  } catch(e) {
+    console.warn('[시험명칭] 학생 이름 조회 실패:', e);
+  }
+}
+
+async function wnRenderTestNameList(){
   var el = document.getElementById('wn-testname-list');
   if(!el) return;
   var settings = wnGetTestNameSettings();
@@ -13309,16 +13336,36 @@ function wnRenderTestNameList(){
     el.innerHTML = '<div style="font-size:12px;color:#9ca3af;padding:4px 0">등록된 기간 명칭이 없습니다</div>';
     return;
   }
+
+  // 학생 이름 매핑 보장
+  await wnEnsureStudentNamesForPeriods();
+
   el.innerHTML = periods.map(function(p){
-    var sidCount = (p.student_ids || []).length;
-    var scope = sidCount === 0 ? '전체 학생' : (sidCount + '명 지정');
-    return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:#fff;border:1px solid #bbf7d0;border-radius:8px;font-size:12px">'
-      +'<div style="flex:1;min-width:0">'
-        +'<div style="font-weight:700;color:#166534">'+p.name+'</div>'
-        +'<div style="color:#9ca3af;margin-top:2px;font-size:11px">'+p.start+' ~ '+p.end+' · '+scope+'</div>'
+    var sidList = p.student_ids || [];
+    var sidCount = sidList.length;
+    var scopeLabel = sidCount === 0 ? '전체 학생' : (sidCount + '명 지정');
+
+    // 학생 이름 리스트 (지정된 경우만)
+    var namesHtml = '';
+    if(sidCount > 0){
+      var names = sidList.map(function(sid){
+        return _wnTnStudentNameMap[sid] || '(이름 없음)';
+      });
+      namesHtml = '<div style="margin-top:6px;padding:6px 8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:11px;color:#166534;line-height:1.5">'
+        + '<b style="color:#15803d">대상 학생: </b>' + names.join(', ')
+        + '</div>';
+    }
+
+    return '<div style="padding:7px 10px;background:#fff;border:1px solid #bbf7d0;border-radius:8px;font-size:12px">'
+      +'<div style="display:flex;align-items:center;gap:8px">'
+        +'<div style="flex:1;min-width:0">'
+          +'<div style="font-weight:700;color:#166534">'+p.name+'</div>'
+          +'<div style="color:#9ca3af;margin-top:2px;font-size:11px">'+p.start+' ~ '+p.end+' · '+scopeLabel+'</div>'
+        +'</div>'
+        +'<button data-pid="'+p.id+'" onclick="wnDeleteTestNamePeriod(parseInt(this.dataset.pid))"'
+          +' style="padding:2px 8px;border:1px solid #fca5a5;border-radius:5px;background:#fff0f0;color:#dc2626;font-size:11px;cursor:pointer;white-space:nowrap">삭제</button>'
       +'</div>'
-      +'<button data-pid="'+p.id+'" onclick="wnDeleteTestNamePeriod(parseInt(this.dataset.pid))"'
-        +' style="padding:2px 8px;border:1px solid #fca5a5;border-radius:5px;background:#fff0f0;color:#dc2626;font-size:11px;cursor:pointer;white-space:nowrap">삭제</button>'
+      + namesHtml
     +'</div>';
   }).join('');
 }
@@ -13331,9 +13378,9 @@ var _wnTnSelectedClassIds = new Set();  // 선택된 반 ID들
 async function wnLoadClassesForTestName(){
   if(!currentUser || !currentUser.id) return;
   try {
-    // 본인 담당 반만 로드
+    // 본인 담당 반만 로드 (active=true 인 것만, 삭제된 반 제외)
     var {data: clss} = await db.from('classes')
-      .select('id,name').eq('teacher_id', currentUser.id).order('name');
+      .select('id,name').eq('teacher_id', currentUser.id).eq('active', true).order('name');
     _wnTnClasses = clss || [];
     // 본인 담당 학생만 로드 (class_id 기준)
     var classIds = _wnTnClasses.map(function(c){ return c.id; });
@@ -13346,8 +13393,8 @@ async function wnLoadClassesForTestName(){
         .in('class_id', classIds).order('name');
       _wnTnStudents = studs || [];
     }
-    // 기본: 모든 반 선택
-    _wnTnSelectedClassIds = new Set(classIds);
+    // 기본: 아무 반도 선택하지 않음 (체크 해제 상태로 시작)
+    _wnTnSelectedClassIds = new Set();
     wnRenderClassFilters();
     wnRenderStudentCheckList();
   } catch(e) {
