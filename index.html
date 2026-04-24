@@ -1510,6 +1510,18 @@
                 <input id="wn-tn-name" placeholder="예: N제 교과서 통합 TEST"
                   style="width:100%;padding:6px 8px;border:1.5px solid #bbf7d0;border-radius:7px;font-size:13px;outline:none;box-sizing:border-box">
               </div>
+              <!-- 반 필터 -->
+              <div style="margin-bottom:8px">
+                <div style="font-size:11px;color:#9ca3af;margin-bottom:4px">적용 대상 반 (선택된 반의 학생만 표시)</div>
+                <div id="wn-tn-class-filters" style="display:flex;flex-wrap:wrap;gap:4px"></div>
+              </div>
+              <!-- 학생 체크박스 영역 -->
+              <div style="margin-bottom:10px;max-height:220px;overflow-y:auto;background:#f9fafb;border:1px solid #e5e7eb;border-radius:7px;padding:6px">
+                <div id="wn-tn-student-list"></div>
+              </div>
+              <div style="font-size:10px;color:#6b7280;margin-bottom:8px;background:#fef3c7;padding:5px 8px;border-radius:5px">
+                💡 학생을 <b>선택하지 않으면</b> 해당 기간에 <b>모든 학생</b>에게 명칭이 적용됩니다
+              </div>
               <button onclick="wnAddTestNamePeriod()"
                 style="width:100%;padding:7px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">
                 + 기간 추가
@@ -13034,34 +13046,168 @@ function removeWlTempStudent(sid){
 let wlStudents = [];
 let wlCurrentLogId = null;
 
-/* ── 시험 명칭 설정 (localStorage) ── */
-function wnGetTestNameSettings(){
-  try{
-    var key = 'wn_testname_' + (currentUser ? currentUser.id : 'default');
-    var raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : {defaultName: 'N제 TEST', periods: []};
-  }catch(e){ return {defaultName: 'N제 TEST', periods: []}; }
-}
+/* ── 시험 명칭 설정 (Supabase DB 기반) ──
+   테이블:
+   - weekend_naje_testname_settings (teacher_id, default_name)
+   - weekend_naje_testname_periods (id, teacher_id, start_date, end_date, name, student_ids[])
 
-function wnSaveTestNameSettings(settings){
-  try{
-    var key = 'wn_testname_' + (currentUser ? currentUser.id : 'default');
-    localStorage.setItem(key, JSON.stringify(settings));
-  }catch(e){}
-}
+   student_ids 빈 배열 = 전체 학생 적용 (기존 동작)
 
-function wnGetTestName(dateStr){
-  var settings = wnGetTestNameSettings();
-  if(!dateStr) return settings.defaultName || 'N제 TEST';
-  var periods = settings.periods || [];
-  for(var i=0; i<periods.length; i++){
-    var p = periods[i];
-    if(dateStr >= p.start && dateStr <= p.end) return p.name;
+   캐시: _wnTestNameCache 를 활용해 UI 깜빡임 최소화
+*/
+var _wnTestNameCache = null;  // {defaultName, periods: [{id, start, end, name, student_ids: []}]}
+var _wnTestNameLoaded = false;
+
+// DB에서 설정 읽어오기 (캐시 갱신)
+async function wnLoadTestNameSettingsFromDB(){
+  if(!currentUser || !currentUser.id){
+    _wnTestNameCache = {defaultName: 'N제 TEST', periods: []};
+    _wnTestNameLoaded = true;
+    return _wnTestNameCache;
   }
-  return settings.defaultName || 'N제 TEST';
+  try {
+    // 기본 명칭
+    var {data: setting} = await db.from('weekend_naje_testname_settings')
+      .select('default_name').eq('teacher_id', currentUser.id).maybeSingle();
+    var defaultName = (setting && setting.default_name) || 'N제 TEST';
+
+    // 기간 목록
+    var {data: periods} = await db.from('weekend_naje_testname_periods')
+      .select('id,start_date,end_date,name,student_ids')
+      .eq('teacher_id', currentUser.id)
+      .order('start_date', {ascending: true});
+
+    _wnTestNameCache = {
+      defaultName: defaultName,
+      periods: (periods || []).map(function(p){
+        return {
+          id: p.id,
+          start: p.start_date,
+          end: p.end_date,
+          name: p.name,
+          student_ids: Array.isArray(p.student_ids) ? p.student_ids : []
+        };
+      })
+    };
+    _wnTestNameLoaded = true;
+
+    // localStorage에 남아있는 기존 데이터 자동 마이그레이션 (최초 1회)
+    await wnMigrateLocalStorageToDB();
+
+    return _wnTestNameCache;
+  } catch(e) {
+    console.error('[시험명칭] DB 로드 실패:', e);
+    _wnTestNameCache = {defaultName: 'N제 TEST', periods: []};
+    _wnTestNameLoaded = true;
+    return _wnTestNameCache;
+  }
 }
 
-function wnRefreshTestNameDisplay(){
+// localStorage → DB 자동 마이그레이션 (최초 1회)
+async function wnMigrateLocalStorageToDB(){
+  if(!currentUser || !currentUser.id) return;
+  try {
+    var key = 'wn_testname_' + currentUser.id;
+    var migFlag = 'wn_testname_migrated_' + currentUser.id;
+    if(localStorage.getItem(migFlag)) return;  // 이미 마이그레이션 완료
+    var raw = localStorage.getItem(key);
+    if(!raw) {
+      localStorage.setItem(migFlag, '1');
+      return;
+    }
+    var old = JSON.parse(raw);
+    if(!old || (typeof old !== 'object')) {
+      localStorage.setItem(migFlag, '1');
+      return;
+    }
+
+    // DB에 이미 데이터가 있으면 마이그레이션 스킵 (중복 방지)
+    if(_wnTestNameCache && _wnTestNameCache.periods && _wnTestNameCache.periods.length > 0){
+      localStorage.setItem(migFlag, '1');
+      return;
+    }
+
+    // 기본 명칭 upsert
+    if(old.defaultName) {
+      await db.from('weekend_naje_testname_settings').upsert({
+        teacher_id: currentUser.id,
+        default_name: old.defaultName,
+        updated_at: new Date().toISOString()
+      });
+    }
+    // 기간 일괄 insert
+    var periodsToInsert = (old.periods || []).map(function(p){
+      return {
+        teacher_id: currentUser.id,
+        start_date: p.start,
+        end_date: p.end,
+        name: p.name,
+        student_ids: []  // 기존 localStorage엔 학생 지정 없음 → 전체 적용
+      };
+    });
+    if(periodsToInsert.length){
+      await db.from('weekend_naje_testname_periods').insert(periodsToInsert);
+    }
+    localStorage.setItem(migFlag, '1');
+    console.log('[시험명칭] localStorage → DB 마이그레이션 완료:', periodsToInsert.length + '건');
+
+    // 캐시 재로드
+    var {data: setting} = await db.from('weekend_naje_testname_settings')
+      .select('default_name').eq('teacher_id', currentUser.id).maybeSingle();
+    var {data: periods} = await db.from('weekend_naje_testname_periods')
+      .select('id,start_date,end_date,name,student_ids')
+      .eq('teacher_id', currentUser.id)
+      .order('start_date', {ascending: true});
+    _wnTestNameCache = {
+      defaultName: (setting && setting.default_name) || 'N제 TEST',
+      periods: (periods || []).map(function(p){
+        return {id: p.id, start: p.start_date, end: p.end_date, name: p.name, student_ids: p.student_ids||[]};
+      })
+    };
+  } catch(e) {
+    console.error('[시험명칭] 마이그레이션 실패:', e);
+  }
+}
+
+// 캐시된 설정 조회 (동기 - 로드 안 됐으면 기본값)
+function wnGetTestNameSettings(){
+  if(_wnTestNameCache) return _wnTestNameCache;
+  return {defaultName: 'N제 TEST', periods: []};
+}
+
+// 날짜 + 학생ID 기반 시험 명칭 반환
+// - studentId 없으면: 날짜만 보고 기본/기간명 반환 (전체용)
+// - studentId 있으면: 해당 학생이 포함된 기간을 우선적으로 확인
+function wnGetTestName(dateStr, studentId){
+  var settings = wnGetTestNameSettings();
+  var defaultName = settings.defaultName || 'N제 TEST';
+  if(!dateStr) return defaultName;
+  var periods = settings.periods || [];
+
+  // 학생 ID가 있으면 - 해당 학생이 포함된 기간부터 우선 매칭
+  // 학생 ID가 없으면 - 기존 동작 (날짜만 매칭)
+  for(var i = 0; i < periods.length; i++){
+    var p = periods[i];
+    if(dateStr < p.start || dateStr > p.end) continue;  // 기간 밖
+    var sids = p.student_ids || [];
+    if(studentId){
+      // 학생ID가 있으면: 빈 배열(전체 적용) or 해당 학생이 포함된 경우만 매칭
+      if(sids.length === 0 || sids.indexOf(studentId) !== -1){
+        return p.name;
+      }
+    } else {
+      // 학생ID가 없으면: 기존 동작 (기간 매칭되면 반환)
+      return p.name;
+    }
+  }
+  return defaultName;
+}
+
+async function wnRefreshTestNameDisplay(){
+  // DB 미로드 상태면 먼저 로드
+  if(!_wnTestNameLoaded){
+    await wnLoadTestNameSettingsFromDB();
+  }
   var date = document.getElementById('wn-date') ? document.getElementById('wn-date').value : '';
   var name = wnGetTestName(date);
   var el = document.getElementById('wn-current-testname');
@@ -13078,45 +13224,80 @@ function wnToggleTestNameSettings(){
   var isOpen = area.style.display !== 'none';
   area.style.display = isOpen ? 'none' : 'block';
   if(btn) btn.textContent = isOpen ? '편집' : '닫기';
-  if(!isOpen) wnRenderTestNameList();
+  if(!isOpen) {
+    wnRenderTestNameList();
+    wnLoadClassesForTestName();  // 반 필터 로드
+  }
 }
 
-function wnSaveDefaultTestName(){
+async function wnSaveDefaultTestName(){
   var inp = document.getElementById('wn-default-testname');
   var name = (inp ? inp.value : '').trim();
   if(!name){ alert('명칭을 입력하세요'); return; }
-  var settings = wnGetTestNameSettings();
-  settings.defaultName = name;
-  wnSaveTestNameSettings(settings);
-  wnRefreshTestNameDisplay();
-  alert('✅ 기본 명칭이 저장됐습니다.');
+  if(!currentUser || !currentUser.id){ alert('로그인 정보를 확인하세요'); return; }
+  try {
+    var {error} = await db.from('weekend_naje_testname_settings').upsert({
+      teacher_id: currentUser.id,
+      default_name: name,
+      updated_at: new Date().toISOString()
+    });
+    if(error) throw error;
+    if(_wnTestNameCache) _wnTestNameCache.defaultName = name;
+    wnRefreshTestNameDisplay();
+    alert('✅ 기본 명칭이 저장됐습니다.');
+  } catch(e) {
+    alert('저장 실패: ' + (e.message || e));
+  }
 }
 
-function wnAddTestNamePeriod(){
+async function wnAddTestNamePeriod(){
   var start = document.getElementById('wn-tn-start') ? document.getElementById('wn-tn-start').value : '';
   var end   = document.getElementById('wn-tn-end')   ? document.getElementById('wn-tn-end').value   : '';
   var nameEl = document.getElementById('wn-tn-name');
   var name  = (nameEl ? nameEl.value : '').trim();
   if(!start || !end || !name){ alert('시작일, 종료일, 명칭을 모두 입력하세요'); return; }
   if(start > end){ alert('시작일이 종료일보다 늦습니다'); return; }
-  var settings = wnGetTestNameSettings();
-  settings.periods = settings.periods || [];
-  settings.periods.push({start: start, end: end, name: name});
-  settings.periods.sort(function(a,b){ return a.start.localeCompare(b.start); });
-  wnSaveTestNameSettings(settings);
-  document.getElementById('wn-tn-start').value = '';
-  document.getElementById('wn-tn-end').value   = '';
-  nameEl.value = '';
-  wnRenderTestNameList();
-  wnRefreshTestNameDisplay();
+  if(!currentUser || !currentUser.id){ alert('로그인 정보를 확인하세요'); return; }
+
+  // 선택된 학생 ID 수집
+  var selectedStudentIds = wnGetCheckedStudentIds();
+
+  try {
+    var {error} = await db.from('weekend_naje_testname_periods').insert({
+      teacher_id: currentUser.id,
+      start_date: start,
+      end_date: end,
+      name: name,
+      student_ids: selectedStudentIds
+    });
+    if(error) throw error;
+
+    // 입력값 리셋
+    document.getElementById('wn-tn-start').value = '';
+    document.getElementById('wn-tn-end').value   = '';
+    nameEl.value = '';
+    // 체크된 학생들 해제
+    document.querySelectorAll('.wn-tn-student-chk').forEach(function(cb){ cb.checked = false; });
+
+    // 캐시 갱신
+    await wnLoadTestNameSettingsFromDB();
+    wnRefreshTestNameDisplay();
+  } catch(e) {
+    alert('추가 실패: ' + (e.message || e));
+  }
 }
 
-function wnDeleteTestNamePeriod(idx){
-  var settings = wnGetTestNameSettings();
-  settings.periods.splice(idx, 1);
-  wnSaveTestNameSettings(settings);
-  wnRenderTestNameList();
-  wnRefreshTestNameDisplay();
+async function wnDeleteTestNamePeriod(periodId){
+  if(!periodId) return;
+  if(!confirm('이 기간 명칭을 삭제하시겠어요?')) return;
+  try {
+    var {error} = await db.from('weekend_naje_testname_periods').delete().eq('id', periodId);
+    if(error) throw error;
+    await wnLoadTestNameSettingsFromDB();
+    wnRefreshTestNameDisplay();
+  } catch(e) {
+    alert('삭제 실패: ' + (e.message || e));
+  }
 }
 
 function wnRenderTestNameList(){
@@ -13128,16 +13309,144 @@ function wnRenderTestNameList(){
     el.innerHTML = '<div style="font-size:12px;color:#9ca3af;padding:4px 0">등록된 기간 명칭이 없습니다</div>';
     return;
   }
-  el.innerHTML = periods.map(function(p, i){
+  el.innerHTML = periods.map(function(p){
+    var sidCount = (p.student_ids || []).length;
+    var scope = sidCount === 0 ? '전체 학생' : (sidCount + '명 지정');
     return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:#fff;border:1px solid #bbf7d0;border-radius:8px;font-size:12px">'
-      +'<div style="flex:1">'
-        +'<span style="font-weight:700;color:#166534">'+p.name+'</span>'
-        +'<span style="color:#9ca3af;margin-left:8px">'+p.start+' ~ '+p.end+'</span>'
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="font-weight:700;color:#166534">'+p.name+'</div>'
+        +'<div style="color:#9ca3af;margin-top:2px;font-size:11px">'+p.start+' ~ '+p.end+' · '+scope+'</div>'
       +'</div>'
-      +'<button data-idx="'+i+'" onclick="wnDeleteTestNamePeriod(parseInt(this.dataset.idx))"'
-        +' style="padding:2px 8px;border:1px solid #fca5a5;border-radius:5px;background:#fff0f0;color:#dc2626;font-size:11px;cursor:pointer">삭제</button>'
+      +'<button data-pid="'+p.id+'" onclick="wnDeleteTestNamePeriod(parseInt(this.dataset.pid))"'
+        +' style="padding:2px 8px;border:1px solid #fca5a5;border-radius:5px;background:#fff0f0;color:#dc2626;font-size:11px;cursor:pointer;white-space:nowrap">삭제</button>'
     +'</div>';
   }).join('');
+}
+
+/* ── 기간 추가용 학생 선택 (반 필터 + 체크박스) ── */
+var _wnTnClasses = [];    // [{id, name}, ...]
+var _wnTnStudents = [];   // [{id, name, class_id, school, grade}, ...]
+var _wnTnSelectedClassIds = new Set();  // 선택된 반 ID들
+
+async function wnLoadClassesForTestName(){
+  if(!currentUser || !currentUser.id) return;
+  try {
+    // 본인 담당 반만 로드
+    var {data: clss} = await db.from('classes')
+      .select('id,name').eq('teacher_id', currentUser.id).order('name');
+    _wnTnClasses = clss || [];
+    // 본인 담당 학생만 로드 (class_id 기준)
+    var classIds = _wnTnClasses.map(function(c){ return c.id; });
+    if(classIds.length === 0){
+      _wnTnStudents = [];
+    } else {
+      var {data: studs} = await db.from('users')
+        .select('id,name,class_id,school,grade')
+        .eq('role','student').eq('status','active')
+        .in('class_id', classIds).order('name');
+      _wnTnStudents = studs || [];
+    }
+    // 기본: 모든 반 선택
+    _wnTnSelectedClassIds = new Set(classIds);
+    wnRenderClassFilters();
+    wnRenderStudentCheckList();
+  } catch(e) {
+    console.error('[시험명칭] 반/학생 로드 실패:', e);
+  }
+}
+
+function wnRenderClassFilters(){
+  var wrap = document.getElementById('wn-tn-class-filters');
+  if(!wrap) return;
+  if(!_wnTnClasses.length){
+    wrap.innerHTML = '<div style="font-size:11px;color:#9ca3af">담당 반이 없습니다</div>';
+    return;
+  }
+  wrap.innerHTML = _wnTnClasses.map(function(c){
+    var checked = _wnTnSelectedClassIds.has(c.id) ? 'checked' : '';
+    return '<label style="display:inline-flex;align-items:center;gap:4px;padding:5px 9px;background:'
+      +(_wnTnSelectedClassIds.has(c.id)?'#bbf7d0':'#fff')
+      +';border:1.5px solid #86efac;border-radius:14px;font-size:11px;cursor:pointer;user-select:none">'
+      +'<input type="checkbox" data-cid="'+c.id+'" onchange="wnToggleClassFilter(this)" '+checked+' style="accent-color:#16a34a;margin:0">'
+      +'<span style="font-weight:600;color:#166534">'+c.name+'</span>'
+      +'</label>';
+  }).join('');
+}
+
+function wnToggleClassFilter(cb){
+  var cid = cb.getAttribute('data-cid');
+  if(cb.checked) _wnTnSelectedClassIds.add(cid);
+  else _wnTnSelectedClassIds.delete(cid);
+  wnRenderClassFilters();
+  wnRenderStudentCheckList();
+}
+
+function wnRenderStudentCheckList(){
+  var wrap = document.getElementById('wn-tn-student-list');
+  if(!wrap) return;
+
+  // 이전에 체크된 학생 ID 유지
+  var prevChecked = new Set();
+  document.querySelectorAll('.wn-tn-student-chk:checked').forEach(function(cb){
+    prevChecked.add(cb.getAttribute('data-sid'));
+  });
+
+  // 필터된 학생
+  var filtered = _wnTnStudents.filter(function(s){
+    return _wnTnSelectedClassIds.has(s.class_id);
+  });
+  if(!filtered.length){
+    wrap.innerHTML = '<div style="font-size:11px;color:#9ca3af;padding:8px;text-align:center">반을 선택하면 학생이 표시됩니다</div>';
+    return;
+  }
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding:4px 8px">'
+    +'<span style="font-size:11px;color:#6b7280">대상 학생 ('+filtered.length+'명)</span>'
+    +'<div style="display:flex;gap:6px">'
+      +'<button onclick="wnToggleAllStudents(true)" style="padding:2px 8px;border:1px solid #86efac;border-radius:5px;background:#fff;color:#166534;font-size:11px;cursor:pointer">전체</button>'
+      +'<button onclick="wnToggleAllStudents(false)" style="padding:2px 8px;border:1px solid #d1d5db;border-radius:5px;background:#fff;color:#6b7280;font-size:11px;cursor:pointer">해제</button>'
+    +'</div>'
+    +'</div>';
+
+  // 반별 그룹핑
+  var byClass = {};
+  filtered.forEach(function(s){
+    if(!byClass[s.class_id]) byClass[s.class_id] = [];
+    byClass[s.class_id].push(s);
+  });
+
+  _wnTnClasses.forEach(function(c){
+    if(!_wnTnSelectedClassIds.has(c.id)) return;
+    var stus = byClass[c.id] || [];
+    if(!stus.length) return;
+    html += '<div style="margin-bottom:6px">'
+      +'<div style="font-size:11px;font-weight:700;color:#15803d;padding:3px 8px;background:#dcfce7;border-radius:5px;margin-bottom:3px">'+c.name+'</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:3px;padding:2px 4px">';
+    stus.forEach(function(s){
+      var ck = prevChecked.has(s.id) ? 'checked' : '';
+      html += '<label style="display:flex;align-items:center;gap:4px;padding:4px 6px;background:#fff;border:1px solid #e5e7eb;border-radius:5px;cursor:pointer;font-size:11px">'
+        +'<input type="checkbox" class="wn-tn-student-chk" data-sid="'+s.id+'" '+ck+' style="accent-color:#16a34a;margin:0">'
+        +'<span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+s.name+'</span>'
+        +'</label>';
+    });
+    html += '</div></div>';
+  });
+
+  wrap.innerHTML = html;
+}
+
+function wnToggleAllStudents(check){
+  document.querySelectorAll('.wn-tn-student-chk').forEach(function(cb){
+    cb.checked = check;
+  });
+}
+
+function wnGetCheckedStudentIds(){
+  var ids = [];
+  document.querySelectorAll('.wn-tn-student-chk:checked').forEach(function(cb){
+    ids.push(cb.getAttribute('data-sid'));
+  });
+  return ids;
 }
 
 /* ── 멘트 복사 ── */
@@ -13163,7 +13472,7 @@ function wnCopyMent(studentId){
   var dayNames = ['일','월','화','수','목','금','토'];
   var d = new Date(date+'T00:00:00');
   var dateLabel = (parseInt(dp[1]))+'/'+(parseInt(dp[2]))+'('+dayNames[d.getDay()]+')';
-  var testName  = wnGetTestName(date);
+  var testName  = wnGetTestName(date, studentId);  // 학생별 명칭 반영
   var resultText = result === 'F' ? '결석' : (WN_RESULT_LABELS[result] || result);
 
   // 점수 라인: 본시/재시 입력 여부에 따라 조건부 조립
@@ -13205,13 +13514,14 @@ async function initWeekendNaje(){
     dateEl.value = sat.toISOString().split('T')[0];
   }
 
-  wnRefreshTestNameDisplay();
+  await wnLoadTestNameSettingsFromDB();  // DB 우선 로드
+  await wnRefreshTestNameDisplay();
   await wnLoadFilters();
   await wnLoadData();
 }
 
 async function wnLoad(){
-  wnRefreshTestNameDisplay();
+  await wnRefreshTestNameDisplay();
   await wnLoadData();
 }
 
