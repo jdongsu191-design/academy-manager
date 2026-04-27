@@ -16641,6 +16641,22 @@ async function openNajeResultModal(setId, studentId){
   var modal = document.getElementById('modal-naje-result-detail');
   if(modal) modal.classList.add('open');
 
+  // 1) 이 학생의 이 N제 부여 단계 가져오기 (캐시된 assignmentsByset 활용)
+  var assignmentRows = window._najeResultData?.assignmentsByset?.[setId] || [];
+  var myAssignment = assignmentRows.find(function(a){ return a.student_id === studentId; });
+  var assignedSteps = (myAssignment && Array.isArray(myAssignment.steps)) ? myAssignment.steps.slice() : [];
+
+  // 2) 부여된 단계의 문제 번호 범위 산출 (11단계 8문제 단위)
+  var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+  var stageEndNums   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
+  var allowedNumbers = new Set();
+  assignedSteps.forEach(function(stepNum){
+    var idx = stepNum - 1;
+    if(idx < 0 || idx >= stageStartNums.length) return;
+    for(var n = stageStartNums[idx]; n <= stageEndNums[idx]; n++) allowedNumbers.add(n);
+  });
+
+  // 3) 문제 + 답안 데이터 조회
   var {data: problems} = await db.from('naje_problems')
     .select('id,problem_number,correct_answer,image_url')
     .eq('set_id', setId).order('problem_number');
@@ -16650,16 +16666,33 @@ async function openNajeResultModal(setId, studentId){
   var ansMap = {};
   (answers||[]).forEach(function(a){ ansMap[a.problem_id] = a.answer; });
 
-  _renderNajeResultModalBody(problems||[], ansMap, stuInfo?.name||'학생');
+  // 4) 부여된 단계의 문제만 필터링 (부여 데이터 없으면 전체 표시)
+  var filteredProblems = (problems||[]);
+  if(assignedSteps.length > 0){
+    filteredProblems = filteredProblems.filter(function(p){ return allowedNumbers.has(p.problem_number); });
+  }
+
+  _renderNajeResultModalBody(filteredProblems, ansMap, stuInfo?.name||'학생', assignedSteps);
 }
 
-function _renderNajeResultModalBody(problems, ansMap, studentName){
+function _renderNajeResultModalBody(problems, ansMap, studentName, assignedSteps){
   var summaryEl = document.getElementById('naje-result-modal-summary');
   var detailEl  = document.getElementById('naje-result-modal-detail');
   if(!summaryEl || !detailEl) return;
 
   var setId = _najeModalCtx.setId;
   var studentId = _najeModalCtx.studentId;
+  assignedSteps = assignedSteps || [];
+
+  // 부여 정보 자체가 없는 경우 안내
+  if(assignedSteps.length === 0){
+    summaryEl.innerHTML = '';
+    detailEl.innerHTML = '<div style="text-align:center;padding:30px 20px;color:#9ca3af;font-size:13px">'
+      + '<div style="font-size:36px;margin-bottom:10px">⚠️</div>'
+      + '<div>이 학생에게 부여된 단계가 없습니다</div>'
+      + '</div>';
+    return;
+  }
 
   var correct=0, wrong=0, unanswered=0;
   problems.forEach(function(p){
@@ -16671,7 +16704,14 @@ function _renderNajeResultModalBody(problems, ansMap, studentName){
   var totalScored = problems.filter(function(p){return p.correct_answer;}).length;
   var pct = (correct+wrong)>0 ? Math.round(correct/totalScored*100) : null;
 
-  summaryEl.innerHTML = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">'
+  // 부여 단계 정보 표시 (예: "부여 단계: 1, 3, 4, 5단계")
+  var sortedSteps = assignedSteps.slice().sort(function(a,b){return a-b;});
+  var stepsInfo = '<div style="font-size:12px;color:#6b7280;margin-bottom:10px;padding:8px 10px;background:#eff6ff;border:1px solid #dbeafe;border-radius:8px">'
+    + '📄 <b style="color:#1e40af">부여 단계:</b> ' + sortedSteps.join(', ') + '단계 (총 ' + problems.length + '문항)'
+    + '</div>';
+
+  summaryEl.innerHTML = stepsInfo
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">'
     + '<div style="text-align:center;padding:12px;background:#EAF3DE;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#3B6D11">'+correct+'</div><div style="font-size:11px;color:#3B6D11">정답</div></div>'
     + '<div style="text-align:center;padding:12px;background:#FCEBEB;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#E24B4A">'+wrong+'</div><div style="font-size:11px;color:#E24B4A">오답</div></div>'
     + '<div style="text-align:center;padding:12px;background:#f5f6fa;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#6b7280">'+unanswered+'</div><div style="font-size:11px;color:#6b7280">미제출</div></div>'
