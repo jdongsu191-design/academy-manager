@@ -17017,7 +17017,7 @@ async function _loadNajeResultData(){
 
   // 2) 담당 학생들에게 부여된 N제 목록
   var {data: assignments} = await db.from('naje_assignments')
-    .select('set_id,student_id,steps').in('student_id', myStudentIds);
+    .select('set_id,student_id,steps,excluded_problems').in('student_id', myStudentIds);
   var assignedSetIds = Array.from(new Set((assignments||[]).map(function(a){return a.set_id;})));
 
   if(assignedSetIds.length === 0){
@@ -17369,19 +17369,25 @@ async function openNajeResultModal(setId, studentId){
   var modal = document.getElementById('modal-naje-result-detail');
   if(modal) modal.classList.add('open');
 
-  // 1) 이 학생의 이 N제 부여 단계 가져오기 (캐시된 assignmentsByset 활용)
+  // 1) 이 학생의 이 N제 부여 단계 + 제외 문항 가져오기
   var assignmentRows = window._najeResultData?.assignmentsByset?.[setId] || [];
   var myAssignment = assignmentRows.find(function(a){ return a.student_id === studentId; });
   var assignedSteps = (myAssignment && Array.isArray(myAssignment.steps)) ? myAssignment.steps.slice() : [];
+  var excludedArr = (myAssignment && Array.isArray(myAssignment.excluded_problems)) ? myAssignment.excluded_problems : [];
+  var excludedSet = new Set(excludedArr);
 
   // 2) 부여된 단계의 문제 번호 범위 산출 (11단계 8문제 단위)
   var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
   var stageEndNums   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
-  var allowedNumbers = new Set();
+  var stepRangeNumbers = new Set();  // 부여된 단계의 모든 문항 (제외 포함)
+  var allowedNumbers = new Set();    // 실제 부여 (제외 빼고)
   assignedSteps.forEach(function(stepNum){
     var idx = stepNum - 1;
     if(idx < 0 || idx >= stageStartNums.length) return;
-    for(var n = stageStartNums[idx]; n <= stageEndNums[idx]; n++) allowedNumbers.add(n);
+    for(var n = stageStartNums[idx]; n <= stageEndNums[idx]; n++){
+      stepRangeNumbers.add(n);
+      if(!excludedSet.has(n)) allowedNumbers.add(n);
+    }
   });
 
   // 3) 문제 + 답안 데이터 조회
@@ -17394,16 +17400,18 @@ async function openNajeResultModal(setId, studentId){
   var ansMap = {};
   (answers||[]).forEach(function(a){ ansMap[a.problem_id] = a.answer; });
 
-  // 4) 부여된 단계의 문제만 필터링 (부여 데이터 없으면 전체 표시)
+  // 4) 부여된 단계의 문제만 필터링 (점선 표시는 모달 본문에서 excludedSet으로)
+  // - assignedSteps가 있으면 그 단계 범위 안의 문제 모두 (제외 포함) 가져옴 → 모달에서 제외는 회색/점선
+  // - assignedSteps가 없으면(부여 X) 빈 배열 → 모달에서 안내
   var filteredProblems = (problems||[]);
   if(assignedSteps.length > 0){
-    filteredProblems = filteredProblems.filter(function(p){ return allowedNumbers.has(p.problem_number); });
+    filteredProblems = filteredProblems.filter(function(p){ return stepRangeNumbers.has(p.problem_number); });
   }
 
-  _renderNajeResultModalBody(filteredProblems, ansMap, stuInfo?.name||'학생', assignedSteps);
+  _renderNajeResultModalBody(filteredProblems, ansMap, stuInfo?.name||'학생', assignedSteps, excludedSet);
 }
 
-function _renderNajeResultModalBody(problems, ansMap, studentName, assignedSteps){
+function _renderNajeResultModalBody(problems, ansMap, studentName, assignedSteps, excludedSet){
   var summaryEl = document.getElementById('naje-result-modal-summary');
   var detailEl  = document.getElementById('naje-result-modal-detail');
   if(!summaryEl || !detailEl) return;
@@ -17411,6 +17419,7 @@ function _renderNajeResultModalBody(problems, ansMap, studentName, assignedSteps
   var setId = _najeModalCtx.setId;
   var studentId = _najeModalCtx.studentId;
   assignedSteps = assignedSteps || [];
+  excludedSet = (excludedSet instanceof Set) ? excludedSet : new Set();
 
   // 부여 정보 자체가 없는 경우 안내
   if(assignedSteps.length === 0){
@@ -17422,20 +17431,27 @@ function _renderNajeResultModalBody(problems, ansMap, studentName, assignedSteps
     return;
   }
 
+  // 점수 계산: 제외된 문항은 통계에서 빠짐 (실제 부여 문항만)
   var correct=0, wrong=0, unanswered=0;
-  problems.forEach(function(p){
+  var assignedProblems = problems.filter(function(p){ return !excludedSet.has(p.problem_number); });
+  assignedProblems.forEach(function(p){
     var ans = (ansMap[p.id]||'').toString().trim();
     if(!ans){ unanswered++; return; }
     if(p.correct_answer && normalizeAnswer(ans) === normalizeAnswer(p.correct_answer)) correct++;
     else if(p.correct_answer) wrong++;
   });
-  var totalScored = problems.filter(function(p){return p.correct_answer;}).length;
+  var totalScored = assignedProblems.filter(function(p){return p.correct_answer;}).length;
   var pct = (correct+wrong)>0 ? Math.round(correct/totalScored*100) : null;
 
-  // 부여 단계 정보 표시 (예: "부여 단계: 1, 3, 4, 5단계")
+  // 부여 단계 정보 표시 (예: "부여 단계: 1, 3, 4, 5단계 (24문항 / 제외 3문항)")
   var sortedSteps = assignedSteps.slice().sort(function(a,b){return a-b;});
+  var assignedCount = assignedProblems.length;
+  var excludedCount = problems.length - assignedCount;
+  var excludedNote = excludedCount > 0 
+    ? ' <span style="color:#92400e;font-weight:700">(' + assignedCount + '문항 부여, ' + excludedCount + '문항 제외)</span>'
+    : ' (총 ' + assignedCount + '문항)';
   var stepsInfo = '<div style="font-size:12px;color:#6b7280;margin-bottom:10px;padding:8px 10px;background:#eff6ff;border:1px solid #dbeafe;border-radius:8px">'
-    + '📄 <b style="color:#1e40af">부여 단계:</b> ' + sortedSteps.join(', ') + '단계 (총 ' + problems.length + '문항)'
+    + '📄 <b style="color:#1e40af">부여 단계:</b> ' + sortedSteps.join(', ') + '단계' + excludedNote
     + '</div>';
 
   summaryEl.innerHTML = stepsInfo
@@ -17451,34 +17467,68 @@ function _renderNajeResultModalBody(problems, ansMap, studentName, assignedSteps
     +   '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:#fee2e2;border:1px solid #fca5a5;border-radius:3px;display:inline-block"></span>오답</span>'
     +   '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:#FEF3C7;border:1px solid #fcd34d;border-radius:3px;display:inline-block"></span>정답 미입력</span>'
     +   '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:#f5f6fa;border:1px solid #e5e7eb;border-radius:3px;display:inline-block"></span>미제출</span>'
+    +   (excludedSet.size > 0 ? '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:#fafbfc;border:1px dashed #d1d5db;border-radius:3px;display:inline-block"></span>부여 제외</span>' : '')
     + '</div>';
 
   var groups = najeGroupByStep(problems.map(function(p){return Object.assign({},p,{number:p.problem_number});}));
   var html = '';
   groups.forEach(function(g){
-    // 🎯 카운트: 맞은 개수 / 문항수
+    // 🎯 카운트: 맞은 개수 / 부여된 문항수 (제외 문항은 분모에서 빠짐)
     var stepCorrect = 0;
     var stepAnswered = 0;
+    var stepAssignedTotal = 0;  // 이 단계에서 부여된 문항 수 (제외 빼고)
+    var stepExcludedCount = 0;  // 이 단계에서 제외된 문항 수
     g.problems.forEach(function(p){
+      if(excludedSet.has(p.problem_number)){
+        stepExcludedCount++;
+        return;
+      }
+      stepAssignedTotal++;
       var a = (ansMap[p.id]||'').toString().trim();
       if(a) stepAnswered++;
       if(a && p.correct_answer && normalizeAnswer(a) === normalizeAnswer(p.correct_answer)) stepCorrect++;
     });
-    var stepTotal = g.problems.length;
-    var stepLabel = stepAnswered > 0 ? ' '+stepCorrect+'/'+stepTotal : ' ⬜ 미시작';
+    var stepLabel;
+    if(stepAssignedTotal === 0){
+      stepLabel = ' ⊘ 모두 제외됨';
+    } else if(stepAnswered > 0){
+      stepLabel = ' '+stepCorrect+'/'+stepAssignedTotal;
+    } else {
+      stepLabel = ' ⬜ 미시작';
+    }
     var resetBtn = stepAnswered > 0
       ? '<button onclick="resetStudentStep(\''+studentId+'\',\''+setId+'\','+g.step+',\''+(studentName||'').replace(/\'/g,"\\'")+'\')" '
         + 'style="font-size:11px;padding:3px 10px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#E24B4A;cursor:pointer;flex-shrink:0;">🔄 초기화</button>'
       : '';
 
+    // 부분 부여 표시 (단계 헤더 옆)
+    var partialBadge = stepExcludedCount > 0
+      ? '<span style="font-size:10px;font-weight:700;background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:100px;margin-left:6px">◐ '+stepExcludedCount+'개 제외</span>'
+      : '';
+
     // 🎯 단계 박스: 헤더 + 셀 그리드를 하나의 카드로 묶음
     html += '<div style="border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:10px;background:#fafbfc">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">'
+      + '<div style="display:flex;align-items:center;flex-wrap:wrap">'
       + najeStageHeaderHTML(g.step, g.name, stepLabel)
+      + partialBadge
+      + '</div>'
       + resetBtn
       + '</div>';
     html += '<div style="display:grid;grid-template-columns:repeat(8,1fr);gap:5px">';
     g.problems.forEach(function(p){
+      var isExcluded = excludedSet.has(p.problem_number);
+
+      if(isExcluded){
+        // 제외된 문항 - 점선 + 회색 (옵션 C)
+        html += '<div style="background:#fafbfc;border:1px dashed #d1d5db;border-radius:7px;padding:6px 4px;text-align:center;line-height:1.2;opacity:0.55">'
+          + '<div style="font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:2px">'+p.problem_number+'번</div>'
+          + '<div style="font-size:13px;color:#9ca3af;font-weight:700">⊘</div>'
+          + '<div style="font-size:9px;color:#9ca3af;margin-top:1px;line-height:1">제외</div>'
+          + '</div>';
+        return;
+      }
+
       var myAns = (ansMap[p.id]||'').toString().trim();
       var hasCorrect = !!p.correct_answer;
       var bg, fg, border, mainContent, subContent='';
