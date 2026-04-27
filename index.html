@@ -4134,11 +4134,11 @@
     <div id="csm-panel-xlsx" style="display:none">
       <div style="background:#f0f4f8;border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;color:#4b5563;line-height:1.8">
         📋 <strong>엑셀에서 복사 후 붙여넣기</strong><br>
-        A열(학교명) · B열(이름) · C열(학년) 데이터 셀만 선택 후<br>
-        Ctrl+C → 아래 칸에 Ctrl+V
+        A열(학교명) · B열(학년) · C열(이름) · D열(입학일)<br>
+        <span style="color:#9ca3af">제목 행(학교명/학년/이름/입학일)을 포함해도 자동 인식돼요</span>
       </div>
       <textarea id="csm-paste-area"
-        placeholder="엑셀에서 복사한 내용을 여기에 붙여넣으세요 (Ctrl+V)"
+        placeholder="엑셀에서 복사한 내용을 여기에 붙여넣으세요 (Ctrl+V)&#10;예) 한서고  3  김민서  2024-04-15"
         oninput="csmParsePaste()"
         style="width:100%;height:110px;padding:10px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:13px;outline:none;resize:vertical;box-sizing:border-box;font-family:inherit"></textarea>
       <div id="csm-xlsx-preview" style="margin-top:10px"></div>
@@ -5709,6 +5709,74 @@ function csmXlsxReset(){
   if(area)      area.value = '';
 }
 
+// 날짜 문자열을 YYYY-MM-DD로 정규화 (다양한 포맷 지원)
+function csmNormalizeDate(s){
+  if(!s) return null;
+  s = String(s).trim();
+  if(!s) return null;
+
+  // 엑셀 시리얼 숫자 (예: 45000) → 1900년 1월 1일 기준
+  if(/^\d{4,6}$/.test(s) && parseInt(s) > 30000){
+    var serial = parseInt(s);
+    // 엑셀 1900-01-01 = 1, 1900-02-29 버그 보정
+    var msPerDay = 86400000;
+    var excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    var d = new Date(excelEpoch.getTime() + serial * msPerDay);
+    if(!isNaN(d.getTime())){
+      return d.toISOString().slice(0, 10);
+    }
+  }
+
+  // 일반 패턴들
+  // 2024-04-15, 2024/04/15, 2024.04.15, 2024 04 15
+  var m = s.match(/^(\d{4})[\-\/\.\s](\d{1,2})[\-\/\.\s](\d{1,2})$/);
+  if(m){
+    var y = m[1], mo = ('0'+m[2]).slice(-2), d = ('0'+m[3]).slice(-2);
+    return y + '-' + mo + '-' + d;
+  }
+  // 24-04-15 (YY-MM-DD) → 2024-04-15
+  m = s.match(/^(\d{2})[\-\/\.](\d{1,2})[\-\/\.](\d{1,2})$/);
+  if(m){
+    var y = '20' + m[1];
+    var mo = ('0'+m[2]).slice(-2), d = ('0'+m[3]).slice(-2);
+    return y + '-' + mo + '-' + d;
+  }
+  // 04/15/2024 (MM/DD/YYYY) - 미국식 형태도 일단 시도
+  m = s.match(/^(\d{1,2})[\-\/\.](\d{1,2})[\-\/\.](\d{4})$/);
+  if(m){
+    var mo = ('0'+m[1]).slice(-2), d = ('0'+m[2]).slice(-2);
+    return m[3] + '-' + mo + '-' + d;
+  }
+  // 한국식 "2024년 4월 15일"
+  m = s.match(/^(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일?$/);
+  if(m){
+    var mo = ('0'+m[2]).slice(-2), d = ('0'+m[3]).slice(-2);
+    return m[1] + '-' + mo + '-' + d;
+  }
+
+  // Date 파싱 실패 시 null
+  var parsed = new Date(s);
+  if(!isNaN(parsed.getTime())){
+    return parsed.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+// 행이 헤더인지 판단 (제목 셀 포함해서 붙여넣기 한 경우 감지)
+function csmIsHeaderRow(cols){
+  // 모든 칸이 텍스트 라벨이고 학년/숫자가 없으면 헤더로 간주
+  var headerKeywords = ['학교','학교명','이름','성명','학년','입학일','입학','등록일','date'];
+  var matchCount = 0;
+  cols.forEach(function(c){
+    var lc = (c||'').trim().toLowerCase();
+    headerKeywords.forEach(function(k){
+      if(lc.indexOf(k.toLowerCase()) !== -1) matchCount++;
+    });
+  });
+  // 헤더 키워드가 2개 이상 매칭되면 헤더 행
+  return matchCount >= 2;
+}
+
 function csmParsePaste(){
   var area = document.getElementById('csm-paste-area');
   var text = area ? area.value : '';
@@ -5724,51 +5792,68 @@ function csmParsePaste(){
 
   var lines = text.trim().split(/\r?\n/);
   var parsed = [];
-  lines.forEach(function(line){
+  var skippedHeader = false;
+
+  lines.forEach(function(line, idx){
     if(!line.trim()) return;
     var cols = line.split('\t').map(function(c){ return c.trim(); });
 
-    if(cols.length >= 3){
-      var school = cols[0];
-      var name   = cols[1]; // B열 = 이름
-      var grade  = cols[2]; // C열 = 학년
+    // 헤더 행 자동 감지 (첫 줄 또는 어디든)
+    if(csmIsHeaderRow(cols)){
+      skippedHeader = true;
+      return;
+    }
 
-      var isHeader = (grade && isNaN(grade) && !/학년/.test(grade) && grade.length > 2)
-                  || name === '이름' || school === '학교명' || school === '학교';
-      if(isHeader) return;
+    // 새 컬럼 순서: A=학교, B=학년, C=이름, D=입학일
+    var school = cols[0] || '';
+    var gradeRaw = cols[1] || '';
+    var name = cols[2] || '';
+    var enrolledRaw = cols[3] || '';
 
-      var gradeNum = grade.replace(/[^0-9]/g, '');
-      if(name) parsed.push({school: school, grade: gradeNum, name: name});
+    // 학년: 숫자만 추출
+    var gradeNum = gradeRaw.replace(/[^0-9]/g, '');
+    // 입학일: 정규화 시도
+    var enrolledAt = csmNormalizeDate(enrolledRaw);
 
-    } else if(cols.length === 2){
-      var name  = cols[0];
-      var grade = cols[1].replace(/[^0-9]/g, '');
-      if(name && name !== '이름') parsed.push({school:'', grade: grade, name: name});
-
-    } else if(cols.length === 1){
-      var name = cols[0];
-      if(name && name !== '이름') parsed.push({school:'', grade:'', name: name});
+    // 이름이 있으면 등록 (필수)
+    if(name){
+      parsed.push({
+        school: school,
+        grade: gradeNum,
+        name: name,
+        enrolled_at: enrolledAt,
+        enrolled_raw: enrolledRaw  // 표시용 (정규화 실패 시 원본 보여줌)
+      });
     }
   });
 
   _csmXlsxData = parsed;
 
   if(!parsed.length){
-    preview.innerHTML = '<div style="color:#dc2626;font-size:13px;padding:10px">❌ 인식된 학생이 없습니다.<br>A열(학교), B열(이름), C열(학년) 셀을 선택해서 복사해주세요.</div>';
+    preview.innerHTML = '<div style="color:#dc2626;font-size:13px;padding:10px">❌ 인식된 학생이 없습니다.<br>A열(학교) · B열(학년) · C열(이름) · D열(입학일) 순서로 셀을 복사해주세요.</div>';
     uploadBtn.style.display = 'none';
     return;
   }
 
   var tableRows = parsed.map(function(d, i){
+    var dateDisplay = d.enrolled_at 
+      ? d.enrolled_at 
+      : (d.enrolled_raw ? '<span style="color:#dc2626" title="날짜 형식을 인식할 수 없습니다">⚠️ '+d.enrolled_raw+'</span>' : '<span style="color:#9ca3af">-</span>');
     return '<tr style="background:'+(i%2===0?'#fff':'#f8fafc')+'">'
       +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:12px;color:#9ca3af">'+(i+1)+'</td>'
       +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280">'+d.school+'</td>'
       +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:12px;text-align:center">'+d.grade+'</td>'
       +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:13px;font-weight:700;color:#1e293b">'+d.name+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:12px;text-align:center">'+dateDisplay+'</td>'
     +'</tr>';
   }).join('');
 
-  preview.innerHTML = '<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:6px">✅ 인식된 학생 '+parsed.length+'명</div>'
+  var headerNote = skippedHeader 
+    ? '<div style="font-size:11px;color:#6b7280;margin-bottom:4px">ℹ️ 제목 행을 자동으로 제외했습니다</div>' 
+    : '';
+
+  preview.innerHTML = headerNote
+    +'<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:6px">✅ 인식된 학생 '+parsed.length+'명</div>'
     +'<div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">'
     +'<table style="width:100%;border-collapse:collapse">'
     +'<thead><tr style="background:#1e293b">'
@@ -5776,6 +5861,7 @@ function csmParsePaste(){
     +'<th style="padding:5px 8px;color:#e2e8f0;font-size:11px;text-align:left">학교</th>'
     +'<th style="padding:5px 8px;color:#e2e8f0;font-size:11px;text-align:center">학년</th>'
     +'<th style="padding:5px 8px;color:#e2e8f0;font-size:11px;text-align:left">이름</th>'
+    +'<th style="padding:5px 8px;color:#e2e8f0;font-size:11px;text-align:center">입학일</th>'
     +'</tr></thead><tbody>'+tableRows+'</tbody></table></div>';
 
   uploadBtn.style.display = 'block';
@@ -5808,12 +5894,13 @@ async function csmUploadXlsx(){
         if(!s.class_id) updateObj.class_id = _csmClassId;
         else updateObj.class_id2 = _csmClassId; // class_id가 있으면 class_id2에 배정
         if(d.school) { updateObj.school = d.school; updateObj.grade = d.grade||null; }
+        if(d.enrolled_at) updateObj.enrolled_at = d.enrolled_at;
         updateObj.school_level = _csmClassLevel; // 반의 school_level 상속
         await db.from('users').update(updateObj).eq('id',s.id);
         ok++;
       } else {
         var grade = d.grade ? (d.grade+'학년') : null;
-        var {error} = await db.from('users').insert({
+        var insertObj = {
           name: d.name,
           school: d.school||null,
           grade: grade,
@@ -5822,7 +5909,9 @@ async function csmUploadXlsx(){
           status: 'active',
           teacher_id: currentUser.id,
           school_level: _csmClassLevel
-        });
+        };
+        if(d.enrolled_at) insertObj.enrolled_at = d.enrolled_at;
+        var {error} = await db.from('users').insert(insertObj);
         if(error) fail.push(d.name);
         else ok++;
       }
