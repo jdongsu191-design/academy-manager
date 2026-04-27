@@ -1302,21 +1302,21 @@
           <!-- 검색/필터 바 -->
           <div class="card" style="margin-bottom:12px;padding:10px 12px">
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-              <div style="flex:2;min-width:140px;position:relative">
-                <input id="naje-result-set-search" type="text" placeholder="🔍 N제 제목 검색..." 
-                  oninput="renderNajeResultList()"
-                  style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
+              <div style="flex:1;min-width:120px">
+                <select id="naje-result-class-filter" onchange="renderNajeResultList()" 
+                  style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#fff">
+                  <option value="">전체 반</option>
+                </select>
               </div>
               <div style="flex:2;min-width:140px;position:relative">
                 <input id="naje-result-student-search" type="text" placeholder="🔍 학생 이름 검색..." 
                   oninput="renderNajeResultList()"
                   style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
               </div>
-              <div style="flex:1;min-width:120px">
-                <select id="naje-result-class-filter" onchange="renderNajeResultList()" 
-                  style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#fff">
-                  <option value="">전체 반</option>
-                </select>
+              <div style="flex:2;min-width:140px;position:relative">
+                <input id="naje-result-set-search" type="text" placeholder="🔍 N제 제목 검색..." 
+                  oninput="renderNajeResultList()"
+                  style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
               </div>
             </div>
           </div>
@@ -16473,7 +16473,7 @@ async function _loadNajeResultData(){
     .filter(function(s){ return s.status==='active'; })
     .map(function(s){ return s.id; });
   if(myStudentIds.length === 0){
-    window._najeResultData = { sets:[], assignmentsByset:{}, answersByStuSet:{}, students:[] };
+    window._najeResultData = { sets:[], assignmentsByset:{}, answersByStuSet:{}, problemsBySet:{}, answeredProblemsByStuSet:{}, students:[] };
     if(cardsEl) cardsEl.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#9ca3af;font-size:13px"><div style="font-size:40px;margin-bottom:10px">👥</div><div>담당 학생이 없습니다</div></div>';
     return;
   }
@@ -16484,7 +16484,7 @@ async function _loadNajeResultData(){
   var assignedSetIds = Array.from(new Set((assignments||[]).map(function(a){return a.set_id;})));
 
   if(assignedSetIds.length === 0){
-    window._najeResultData = { sets:[], assignmentsByset:{}, answersByStuSet:{}, students:students||[] };
+    window._najeResultData = { sets:[], assignmentsByset:{}, answersByStuSet:{}, problemsBySet:{}, answeredProblemsByStuSet:{}, students:students||[] };
     if(cardsEl) cardsEl.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#9ca3af;font-size:13px"><div style="font-size:40px;margin-bottom:10px">📭</div><div>부여된 N제가 없습니다</div></div>';
     return;
   }
@@ -16494,9 +16494,13 @@ async function _loadNajeResultData(){
     .select('id,title,target_grade,folder_name,total_problems,created_at')
     .in('id', assignedSetIds).order('created_at', {ascending:false});
 
-  // 4) 답안 정보 (단순 존재 여부 - 학생별 set 진행 상태용)
+  // 4) 모든 N제의 문항 정보 (진행률 계산용 - problem_number 매핑)
+  var {data: allProblems} = await db.from('naje_problems')
+    .select('id,set_id,problem_number').in('set_id', assignedSetIds);
+
+  // 5) 답안 정보 (problem_id 포함 → 부여 단계 진행률 계산용)
   var {data: answers} = await db.from('naje_answers')
-    .select('student_id,set_id,answer').in('set_id', assignedSetIds).in('student_id', myStudentIds);
+    .select('student_id,set_id,problem_id,answer').in('set_id', assignedSetIds).in('student_id', myStudentIds);
 
   // 가공
   var assignmentsByset = {};
@@ -16504,10 +16508,24 @@ async function _loadNajeResultData(){
     if(!assignmentsByset[a.set_id]) assignmentsByset[a.set_id] = [];
     assignmentsByset[a.set_id].push(a);
   });
+
+  // problemsBySet: {setId: [{id, problem_number}]}
+  var problemsBySet = {};
+  (allProblems||[]).forEach(function(p){
+    if(!problemsBySet[p.set_id]) problemsBySet[p.set_id] = [];
+    problemsBySet[p.set_id].push({id: p.id, problem_number: p.problem_number});
+  });
+
+  // answersByStuSet: {studentId|setId: true} (1개라도 답안 있으면)
+  // answeredProblemsByStuSet: {studentId|setId: Set(problem_id)} - 진행률 계산용
   var answersByStuSet = {};
+  var answeredProblemsByStuSet = {};
   (answers||[]).forEach(function(a){
     if(a.answer && String(a.answer).trim() !== ''){
-      answersByStuSet[a.student_id + '|' + a.set_id] = true;
+      var key = a.student_id + '|' + a.set_id;
+      answersByStuSet[key] = true;
+      if(!answeredProblemsByStuSet[key]) answeredProblemsByStuSet[key] = new Set();
+      answeredProblemsByStuSet[key].add(a.problem_id);
     }
   });
 
@@ -16515,11 +16533,13 @@ async function _loadNajeResultData(){
     sets: sets || [],
     assignmentsByset: assignmentsByset,
     answersByStuSet: answersByStuSet,
+    problemsBySet: problemsBySet,
+    answeredProblemsByStuSet: answeredProblemsByStuSet,
     students: students || []
   };
 }
 
-// 카드 리스트 렌더링 (검색/필터 반영)
+// 카드 리스트 렌더링 (반 → 학생 → N제 3단계 계층)
 function renderNajeResultList(){
   var data = window._najeResultData;
   var cardsEl = document.getElementById('naje-result-cards');
@@ -16528,8 +16548,8 @@ function renderNajeResultList(){
     cardsEl.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
     return;
   }
-  if(!data.sets.length){
-    cardsEl.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#9ca3af;font-size:13px"><div style="font-size:40px;margin-bottom:10px">📭</div><div>부여된 N제가 없습니다</div></div>';
+  if(!data.students.length){
+    cardsEl.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#9ca3af;font-size:13px"><div style="font-size:40px;margin-bottom:10px">👥</div><div>담당 학생이 없습니다</div></div>';
     return;
   }
 
@@ -16537,80 +16557,224 @@ function renderNajeResultList(){
   var stuKw  = (document.getElementById('naje-result-student-search')?.value || '').trim().toLowerCase();
   var classId = document.getElementById('naje-result-class-filter')?.value || '';
 
-  var filteredSets = data.sets.filter(function(s){
-    if(!setKw) return true;
-    return (s.title||'').toLowerCase().indexOf(setKw) !== -1;
-  });
-
   var classMap = {};
   (classes||[]).forEach(function(c){ classMap[c.id] = c.name; });
 
-  var cards = filteredSets.map(function(s){
-    var assignmentRows = data.assignmentsByset[s.id] || [];
-    var assignedStudentIds = new Set(assignmentRows.map(function(a){return a.student_id;}));
+  // 11단계 정의 (8문제 단위)
+  var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+  var stageEndNums   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
 
-    var studentRows = data.students
-      .filter(function(stu){
-        if(!assignedStudentIds.has(stu.id)) return false;
-        if(stu.status !== 'active') return false;
-        if(classId && stu.class_id !== classId) return false;
-        if(stuKw && (stu.name||'').toLowerCase().indexOf(stuKw) === -1) return false;
+  // 학생 → 부여 N제 매핑 (assignmentsByStudent)
+  var assignmentsByStudent = {};  // {studentId: [{set_id, steps}]}
+  Object.keys(data.assignmentsByset).forEach(function(setId){
+    var rows = data.assignmentsByset[setId];
+    rows.forEach(function(a){
+      if(!assignmentsByStudent[a.student_id]) assignmentsByStudent[a.student_id] = [];
+      assignmentsByStudent[a.student_id].push(a);
+    });
+  });
+
+  // setId → set 정보 매핑
+  var setMap = {};
+  data.sets.forEach(function(s){ setMap[s.id] = s; });
+
+  // 학생 진행률 계산 함수
+  function calcStudentSetProgress(studentId, setId){
+    var assign = (assignmentsByStudent[studentId]||[]).find(function(a){return a.set_id === setId;});
+    var steps = (assign && Array.isArray(assign.steps)) ? assign.steps : [];
+    if(steps.length === 0){
+      return { steps: [], totalCnt: 0, doneCnt: 0, pct: 0, status: 'none' };
+    }
+    // 부여 단계의 문항 번호 범위
+    var allowedNumbers = new Set();
+    steps.forEach(function(stepNum){
+      var idx = stepNum - 1;
+      if(idx < 0 || idx >= stageStartNums.length) return;
+      for(var n = stageStartNums[idx]; n <= stageEndNums[idx]; n++) allowedNumbers.add(n);
+    });
+    var problems = data.problemsBySet[setId] || [];
+    var targetProblems = problems.filter(function(p){ return allowedNumbers.has(p.problem_number); });
+    var totalCnt = targetProblems.length;
+    var answeredSet = data.answeredProblemsByStuSet[studentId + '|' + setId] || new Set();
+    var doneCnt = targetProblems.filter(function(p){ return answeredSet.has(p.id); }).length;
+    var pct = totalCnt > 0 ? Math.round(doneCnt / totalCnt * 100) : 0;
+    var status;
+    if(totalCnt === 0) status = 'none';
+    else if(doneCnt === 0) status = 'notStarted';
+    else if(doneCnt === totalCnt) status = 'completed';
+    else status = 'inProgress';
+    return { steps: steps.slice().sort(function(a,b){return a-b;}), totalCnt: totalCnt, doneCnt: doneCnt, pct: pct, status: status };
+  }
+
+  // 1) 반 필터 + 학생 이름 필터로 학생 필터링
+  var filteredStudents = data.students.filter(function(stu){
+    if(stu.status !== 'active') return false;
+    if(classId && stu.class_id !== classId) return false;
+    if(stuKw && (stu.name||'').toLowerCase().indexOf(stuKw) === -1) return false;
+    return true;
+  });
+
+  // 2) 반별 그룹핑
+  var classGroups = {};  // {classId: [students...]}
+  var noClassGroup = [];
+  filteredStudents.forEach(function(stu){
+    if(stu.class_id){
+      if(!classGroups[stu.class_id]) classGroups[stu.class_id] = [];
+      classGroups[stu.class_id].push(stu);
+    } else {
+      noClassGroup.push(stu);
+    }
+  });
+  // 각 반 내 학생 이름순 정렬
+  Object.keys(classGroups).forEach(function(cid){
+    classGroups[cid].sort(function(a,b){ return (a.name||'').localeCompare(b.name||'', 'ko'); });
+  });
+  noClassGroup.sort(function(a,b){ return (a.name||'').localeCompare(b.name||'', 'ko'); });
+
+  // 반 정렬 (classes 배열 순서 유지)
+  var orderedClassIds = (classes||[]).map(function(c){return c.id;}).filter(function(cid){ return classGroups[cid]; });
+
+  // 3) HTML 생성
+  var html = '';
+
+  // 학생 카드 빌더
+  function buildStudentCard(stu){
+    // 학생에게 부여된 N제 (검색 키워드로 N제 필터)
+    var stuAssignments = (assignmentsByStudent[stu.id] || []);
+    var matchedSets = stuAssignments
+      .map(function(a){ return setMap[a.set_id]; })
+      .filter(function(s){
+        if(!s) return false;
+        if(setKw && (s.title||'').toLowerCase().indexOf(setKw) === -1) return false;
         return true;
       })
-      .sort(function(a,b){ return (a.name||'').localeCompare(b.name||'', 'ko'); });
+      .sort(function(a,b){
+        // 등록일 내림차순
+        return (b.created_at||'').localeCompare(a.created_at||'');
+      });
 
-    if((stuKw || classId) && studentRows.length === 0) return '';
+    // N제 검색어가 있는데 매칭 N제가 0이면 학생 자체 숨김
+    if(setKw && matchedSets.length === 0) return '';
 
-    var titleEsc = (s.title||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    var folderBadge = s.folder_name 
-      ? '<span class="badge" style="background:#fef3c7;color:#b45309;font-weight:700">📁 '+_esc(s.folder_name)+'</span>' 
-      : '';
-    var gradeBadge = s.target_grade 
-      ? '<span class="badge badge-blue">'+s.target_grade+'</span>' 
-      : '';
+    // 학생 헤더 정보 계산
+    var totalAssigned = matchedSets.length;
+    var completedCnt = 0, inProgressCnt = 0, notStartedCnt = 0;
+    matchedSets.forEach(function(s){
+      var prog = calcStudentSetProgress(stu.id, s.id);
+      if(prog.status === 'completed') completedCnt++;
+      else if(prog.status === 'inProgress') inProgressCnt++;
+      else if(prog.status === 'notStarted') notStartedCnt++;
+    });
 
-    var stuRowsHtml = studentRows.map(function(stu){
-      var clsName = classMap[stu.class_id] || '';
-      var hasAnswer = !!data.answersByStuSet[stu.id + '|' + s.id];
-      var statusIcon = hasAnswer ? '🔵' : '⭕';
-      var statusColor = hasAnswer ? '#1d4ed8' : '#9ca3af';
+    // 학생 안의 N제 카드들
+    var setCardsHtml = matchedSets.map(function(s){
+      var prog = calcStudentSetProgress(stu.id, s.id);
+      var statusLabel, statusBg, statusColor, barColor, cardBorder;
+      if(prog.status === 'completed'){
+        statusLabel = '✅ 완료'; statusBg = '#dcfce7'; statusColor = '#15803d';
+        barColor = '#22c55e'; cardBorder = '#bbf7d0';
+      } else if(prog.status === 'inProgress'){
+        statusLabel = '🔵 진행 중'; statusBg = '#dbeafe'; statusColor = '#1d4ed8';
+        barColor = '#3b82f6'; cardBorder = '#bfdbfe';
+      } else if(prog.status === 'notStarted'){
+        statusLabel = '⭕ 시작 전'; statusBg = '#f3f4f6'; statusColor = '#6b7280';
+        barColor = '#9ca3af'; cardBorder = '#e5e7eb';
+      } else {
+        statusLabel = '⚠️ 단계 없음'; statusBg = '#fef3c7'; statusColor = '#92400e';
+        barColor = '#9ca3af'; cardBorder = '#fcd34d';
+      }
+      var titleEsc = (s.title||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       return '<div onclick="event.stopPropagation();openNajeResultModal(\''+s.id+'\',\''+stu.id+'\')" '
-        + 'style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #f3f4f6;cursor:pointer;transition:background 0.1s" '
-        + 'onmouseover="this.style.background=\'#f9fafb\'" onmouseout="this.style.background=\'\'">'
-        + '<div style="display:flex;align-items:center;gap:8px;min-width:0">'
-        +   '<span style="font-weight:600;color:#1a1a2e">'+_esc(stu.name)+'</span>'
-        +   (clsName?'<span style="font-size:11px;color:#9ca3af">('+_esc(clsName)+')</span>':'')
+        + 'style="background:#fff;border:1.5px solid '+cardBorder+';border-radius:10px;padding:10px 12px;margin:6px 12px;cursor:pointer;transition:all 0.15s ease" '
+        + 'onmouseover="this.style.transform=\'translateY(-1px)\';this.style.boxShadow=\'0 2px 8px rgba(0,0,0,0.06)\'" '
+        + 'onmouseout="this.style.transform=\'\';this.style.boxShadow=\'\'">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">'
+        +   '<div style="font-size:13px;font-weight:700;color:#1a1a2e;flex:1;min-width:0;line-height:1.3">'+titleEsc+'</div>'
+        +   '<span style="padding:3px 8px;border-radius:10px;background:'+statusBg+';color:'+statusColor+';font-weight:700;font-size:10px;flex-shrink:0">'+statusLabel+'</span>'
         + '</div>'
-        + '<div style="font-size:13px;color:'+statusColor+';font-weight:700">'+statusIcon+'</div>'
+        // 진행률 바
+        + '<div style="height:6px;background:#f1f5f9;border-radius:100px;overflow:hidden;margin-bottom:4px">'
+        +   '<div style="height:100%;width:'+prog.pct+'%;background:'+barColor+';border-radius:100px;transition:width 0.3s"></div>'
+        + '</div>'
+        + '<div style="font-size:11px;color:#6b7280;font-weight:600">'+prog.doneCnt+'/'+prog.totalCnt+' ('+prog.pct+'%)</div>'
         + '</div>';
     }).join('');
 
-    var stuListId = 'najeres-stulist-'+s.id;
-    return '<div class="card" style="margin-bottom:10px;padding:0;overflow:hidden">'
-      + '<div onclick="toggleNajeResultCard(\''+s.id+'\')" style="padding:14px 16px;cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;gap:10px">'
+    var clsName = classMap[stu.class_id] || '반 없음';
+    var summary = '부여 ' + totalAssigned + '개';
+    var statusSummary = '';
+    if(totalAssigned > 0){
+      var parts = [];
+      if(completedCnt > 0) parts.push('✅ ' + completedCnt);
+      if(inProgressCnt > 0) parts.push('🔵 ' + inProgressCnt);
+      if(notStartedCnt > 0) parts.push('⭕ ' + notStartedCnt);
+      statusSummary = parts.join(' · ');
+    }
+
+    var stuListId = 'najeres-stuset-'+stu.id;
+    var hasContent = totalAssigned > 0;
+    var emptyMsg = totalAssigned === 0 
+      ? '<div style="padding:14px;text-align:center;color:#9ca3af;font-size:12px">부여된 N제가 없습니다</div>'
+      : '';
+
+    return '<div class="card" style="margin-bottom:8px;padding:0;overflow:hidden;border:1px solid #e5e7eb">'
+      + '<div onclick="toggleNajeResultStudent(\''+stu.id+'\')" style="padding:12px 14px;cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;gap:10px">'
       +   '<div style="flex:1;min-width:0">'
-      +     '<div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:6px;line-height:1.4">'+titleEsc+'</div>'
-      +     '<div style="display:flex;flex-wrap:wrap;gap:5px">'+gradeBadge+folderBadge+'</div>'
+      +     '<div style="font-size:14px;font-weight:700;color:#1a1a2e;line-height:1.3">'
+      +       '<span>'+_esc(stu.name)+'</span>'
+      +       '<span style="font-size:11px;font-weight:500;color:#9ca3af;margin-left:6px">('+_esc(clsName)+')</span>'
+      +     '</div>'
+      +     '<div style="font-size:11px;color:#6b7280;margin-top:3px;font-weight:500">'
+      +       summary
+      +       (statusSummary ? '<span style="margin:0 6px;color:#d1d5db">·</span>' + statusSummary : '')
+      +     '</div>'
       +   '</div>'
-      +   '<div id="najeres-arrow-'+s.id+'" style="font-size:14px;color:#9ca3af;flex-shrink:0">▼</div>'
+      +   '<div id="najeres-stu-arrow-'+stu.id+'" style="font-size:13px;color:#9ca3af;flex-shrink:0">▼</div>'
       + '</div>'
-      + '<div id="'+stuListId+'" style="display:none;border-top:1px solid #e5e7eb;background:#fff">'
-      +   (stuRowsHtml || '<div style="padding:14px;text-align:center;color:#9ca3af;font-size:12px">조건에 맞는 학생이 없습니다</div>')
+      + '<div id="'+stuListId+'" style="display:none;border-top:1px solid #f3f4f6;background:#fafbfc;padding:6px 0">'
+      +   (hasContent ? setCardsHtml : emptyMsg)
       + '</div>'
       + '</div>';
-  }).filter(Boolean).join('');
+  }
 
-  if(!cards){
+  // 4) 반별로 섹션 렌더링
+  orderedClassIds.forEach(function(cid){
+    var cls = (classes||[]).find(function(c){return c.id===cid;});
+    var stuList = classGroups[cid];
+    var studentCards = stuList.map(buildStudentCard).filter(Boolean).join('');
+    if(!studentCards) return;  // 검색 결과 0이면 반도 숨김
+    html += '<div style="margin-bottom:14px">'
+      + '<div style="font-size:13px;font-weight:700;color:#1F3A51;margin-bottom:8px;padding:6px 10px;background:#eff6ff;border-radius:8px;border-left:3px solid #3b82f6">'
+      +   '🏫 ' + _esc(cls?.name || '') + ' <span style="color:#6b7280;font-weight:500;margin-left:4px">(' + stuList.length + '명)</span>'
+      + '</div>'
+      + studentCards
+      + '</div>';
+  });
+
+  // 반 미배정 학생들
+  if(noClassGroup.length > 0){
+    var noClassCards = noClassGroup.map(buildStudentCard).filter(Boolean).join('');
+    if(noClassCards){
+      html += '<div style="margin-bottom:14px">'
+        + '<div style="font-size:13px;font-weight:700;color:#6b7280;margin-bottom:8px;padding:6px 10px;background:#f9fafb;border-radius:8px;border-left:3px solid #9ca3af">'
+        +   '🏫 반 미배정 <span style="color:#9ca3af;font-weight:500;margin-left:4px">(' + noClassGroup.length + '명)</span>'
+        + '</div>'
+        + noClassCards
+        + '</div>';
+    }
+  }
+
+  if(!html){
     cardsEl.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#9ca3af;font-size:13px"><div style="font-size:36px;margin-bottom:10px">🔍</div><div>검색 조건에 맞는 결과가 없습니다</div></div>';
     return;
   }
-  cardsEl.innerHTML = cards;
+  cardsEl.innerHTML = html;
 }
 
-// 카드 헤더 클릭 → 학생 리스트 펼침/접힘
-function toggleNajeResultCard(setId){
-  var listEl = document.getElementById('najeres-stulist-'+setId);
-  var arrowEl = document.getElementById('najeres-arrow-'+setId);
+// 학생 카드 헤더 클릭 → 학생 안의 N제 리스트 펼침/접힘
+function toggleNajeResultStudent(studentId){
+  var listEl = document.getElementById('najeres-stuset-'+studentId);
+  var arrowEl = document.getElementById('najeres-stu-arrow-'+studentId);
   if(!listEl) return;
   var open = listEl.style.display !== 'none';
   if(open){
@@ -16620,6 +16784,11 @@ function toggleNajeResultCard(setId){
     listEl.style.display = 'block';
     if(arrowEl) arrowEl.textContent = '▲';
   }
+}
+
+// (구) 호환용 - 혹시 어딘가에서 toggleNajeResultCard 호출이 남아있을까봐
+function toggleNajeResultCard(setId){
+  // 더 이상 사용 안 함 (반/학생 우선 구조로 변경됨)
 }
 
 // 학생 행 클릭 → 상세 결과 모달 띄우기
