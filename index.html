@@ -4747,7 +4747,14 @@ async function login(){
   const username=document.getElementById('loginUsername').value.trim();
   const password=document.getElementById('loginPassword').value.trim();
   if(!username||!password){alert('아이디와 비밀번호를 입력하세요');return;}
-  const{data,error}=await db.from('users').select('*').eq('username',username).eq('password',password).eq('role',currentRole).single();
+  // 🏢 관리자 모드일 때는 admin 또는 desk 둘 다 허용 (username/password로 정확히 한 명 매칭됨)
+  var query = db.from('users').select('*').eq('username',username).eq('password',password);
+  if(currentRole === 'admin'){
+    query = query.in('role', ['admin','desk']);
+  } else {
+    query = query.eq('role', currentRole);
+  }
+  const{data,error}=await query.single();
   if(error||!data){alert('아이디 또는 비밀번호가 올바르지 않습니다');return;}
   if(data.status==='pending'){alert('관리자 승인 대기 중입니다.\n승인 후 로그인 가능합니다.');return;}
   if(data.status==='inactive'||data.deleted_at){alert('비활성화된 계정입니다.\n관리자에게 문의해 주세요.');return;}
@@ -4831,6 +4838,31 @@ function showApp(){
     document.getElementById('headerTitle').textContent = '🔑 관리자';
     showNavBar(true);
     _navPush('admin','admin-accounts');
+    loadAdminData();
+
+  } else if(currentUser.role === 'desk'){
+    // 🏢 데스크 계정: 관리자 화면을 그대로 사용하되 사이드바 메뉴는 부여된 것만 표시
+    document.getElementById('adminApp').style.display  = 'block';
+    document.getElementById('adminNav').style.display  = 'block';
+    document.getElementById('atRoleLabel').textContent = '데스크';
+    document.getElementById('headerTitle').textContent = '🏢 ' + (currentUser.name || '데스크');
+    showNavBar(true);
+    // 데스크 사이드바 필터링 적용 (관리자 메뉴 중 부여된 것만 표시)
+    applyDeskSidebarFilter();
+    // 부여된 메뉴 중 첫 번째로 자동 진입
+    var firstTab = getDeskFirstTab();
+    if(firstTab){
+      _navPush('admin', firstTab.tabId);
+      // 클릭과 동일한 효과: switchAdminTab + init 함수
+      var btn = document.getElementById(firstTab.btnId);
+      if(btn){ btn.click(); }
+    } else {
+      // 부여된 메뉴 없음
+      var content = document.querySelector('.at-content');
+      if(content){
+        content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:#9ca3af"><div style="font-size:48px;margin-bottom:16px">🏢</div><div style="font-size:16px;font-weight:700;color:#6b7280;margin-bottom:8px">부여된 권한이 없습니다</div><div style="font-size:13px">관리자에게 권한 부여를 요청해주세요</div></div>';
+      }
+    }
     loadAdminData();
 
   } else if(currentUser.role === 'teacher'){
@@ -5290,10 +5322,15 @@ async function saveAssignBranch(){
 var _origLoadAdminData = null;
 
 function switchAdminTab(tab, el){
+  // 🏢 데스크 권한 가드: 부여 안 된 메뉴 차단
+  if(currentUser && currentUser.role === 'desk' && !deskHasTabAccess(tab)){
+    alert('해당 메뉴에 대한 권한이 없습니다.');
+    return;
+  }
   document.querySelectorAll('#adminApp .panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-'+tab).classList.add('active');
   document.querySelectorAll('#adminNav .at-menu-item').forEach(t=>t.classList.remove('active'));
-  el.classList.add('active');
+  if(el) el.classList.add('active');
   closeAtSidebar();
   _navPush('admin', tab);
   setTimeout(function(){ window.initDatePickers && window.initDatePickers(); }, 80);
@@ -8462,6 +8499,129 @@ function getDeskPermKeys(user){
   if(!user || !user.permissions) return [];
   var perms = user.permissions;
   return DESK_PERMISSIONS.filter(function(p){ return perms[p.key] === true; }).map(function(p){return p.key;});
+}
+
+// 권한 키 → 사이드바 메뉴 ID 매핑
+// (한 권한이 여러 메뉴를 활성화할 수 있도록 배열로)
+var DESK_PERM_TO_MENUS = {
+  'weekend_naje':  [{btnId:'amenu-weekend-naje',     tabId:'admin-weekend-naje',     parent:'amenu-weekend-group'}],
+  'weekend_pt':    [{btnId:'amenu-weekend-potential',tabId:'admin-weekend-potential',parent:'amenu-weekend-group'}],
+  'weekend_bety':  [{btnId:'amenu-weekend-bety',     tabId:'admin-weekend-bety',     parent:'amenu-weekend-group'}],
+  'weekend_ns':    [{btnId:'amenu-weekend-naesin',   tabId:'admin-weekend-naesin',   parent:'amenu-weekend-group'}],
+  // 'weekend_msg' 메뉴는 아직 BMAPS에 없음 - 메뉴 추가 시 여기에 매핑 추가
+  // 예: 'weekend_msg':   [{btnId:'amenu-weekend-msg', tabId:'admin-weekend-msg', parent:'amenu-weekend-group'}],
+  'students':      [{btnId:'amenu-accounts',         tabId:'admin-accounts',         parent:null}],
+  'classes':       [{btnId:'amenu-accounts',         tabId:'admin-accounts',         parent:null}],
+  'reading_room':  [{btnId:'amenu-rr-weekly',        tabId:'admin-rr-weekly',        parent:'amenu-reading-room-group'}]
+};
+
+// 모든 관리자 사이드바 메뉴 ID (필터링 시 "허용 안 된 메뉴"를 숨기기 위해)
+var ADMIN_SIDEBAR_BUTTON_IDS = [
+  'amenu-accounts', 'amenu-homework',
+  'amenu-naje-accordion', // 고등 일일N제 그룹
+  'amenu-beti', 'amenu-syllabus-group', 'amenu-branches', 'amenu-worklog',
+  'amenu-monthly-report', 'amenu-weekend-group', 'amenu-reading-room-group',
+  'amenu-exam-analysis'
+];
+
+// 데스크가 부여받은 메뉴만 사이드바에 표시 (나머지 숨김)
+function applyDeskSidebarFilter(){
+  if(!currentUser || currentUser.role !== 'desk') return;
+  var permKeys = getDeskPermKeys(currentUser);
+  // 허용되는 메뉴 ID 셋
+  var allowedBtnIds = new Set();
+  var allowedParentIds = new Set();
+  permKeys.forEach(function(pk){
+    var menus = DESK_PERM_TO_MENUS[pk] || [];
+    menus.forEach(function(m){
+      allowedBtnIds.add(m.btnId);
+      if(m.parent) allowedParentIds.add(m.parent);
+    });
+  });
+
+  // 모든 관리자 사이드바 항목을 일단 숨김
+  ADMIN_SIDEBAR_BUTTON_IDS.forEach(function(id){
+    var el = document.getElementById(id);
+    if(el) el.style.display = 'none';
+  });
+
+  // 부여된 그룹/버튼만 다시 표시
+  allowedParentIds.forEach(function(pid){
+    var p = document.getElementById(pid);
+    if(p) p.style.display = '';
+  });
+  allowedBtnIds.forEach(function(bid){
+    var b = document.getElementById(bid);
+    if(b) b.style.display = '';
+  });
+
+  // 그룹의 서브메뉴 안에서도 부여 안 된 항목은 숨김
+  // (예: weekend 그룹에 4개 자식 있는데 사용자는 weekend_naje만 부여 → 나머지 3개 숨김)
+  var weekendChildren = ['amenu-weekend-naje','amenu-weekend-potential','amenu-weekend-bety','amenu-weekend-naesin'];
+  weekendChildren.forEach(function(id){
+    var el = document.getElementById(id);
+    if(!el) return;
+    el.style.display = allowedBtnIds.has(id) ? '' : 'none';
+  });
+
+  // 독서실 그룹: 자식이 1개뿐이지만 같은 패턴 적용
+  var readingChildren = ['amenu-rr-weekly'];
+  readingChildren.forEach(function(id){
+    var el = document.getElementById(id);
+    if(!el) return;
+    el.style.display = allowedBtnIds.has(id) ? '' : 'none';
+  });
+}
+
+// 데스크가 가진 권한 중 첫 번째 메뉴 (자동 진입용)
+function getDeskFirstTab(){
+  var permKeys = getDeskPermKeys(currentUser);
+  for(var i = 0; i < permKeys.length; i++){
+    var menus = DESK_PERM_TO_MENUS[permKeys[i]] || [];
+    if(menus.length > 0) return menus[0];
+  }
+  return null;
+}
+
+// 데스크가 특정 탭에 접근 권한이 있는지 (URL 직접 접근 차단용)
+function deskHasTabAccess(tabId){
+  if(currentUser && currentUser.role !== 'desk') return true;  // 데스크 아니면 통과
+  var permKeys = getDeskPermKeys(currentUser);
+  for(var i = 0; i < permKeys.length; i++){
+    var menus = DESK_PERM_TO_MENUS[permKeys[i]] || [];
+    for(var j = 0; j < menus.length; j++){
+      if(menus[j].tabId === tabId) return true;
+    }
+  }
+  return false;
+}
+
+// 🎯 데스크 분원 필터 자동 고정 (주말 프로그램 등)
+// branchSelectId: 분원 select element의 id
+// → 데스크 사용자면 본인 branch_ids 만 옵션에 표시 + 자동 선택
+//   본인 branch_ids 가 1개면 disabled (변경 불가)
+//   본인 branch_ids 가 여러 개면 그 중에서만 선택 가능 (전체 분원 옵션은 제거)
+// 호출 패턴: initAdminWeekendXxx 함수에서 branchSel options 채운 직후 applyDeskBranchLock('awn-branch-select') 호출
+function applyDeskBranchLock(branchSelectId){
+  if(!currentUser || currentUser.role !== 'desk') return;
+  var sel = document.getElementById(branchSelectId);
+  if(!sel) return;
+  var allowed = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+  if(allowed.length === 0) return;
+  // 옵션 재구성: "전체 분원" 제거, 데스크 담당 분원만 남김
+  var newHtml = '';
+  Array.from(sel.options).forEach(function(opt){
+    if(opt.value && allowed.indexOf(opt.value) !== -1){
+      newHtml += '<option value="'+opt.value+'">'+opt.textContent+'</option>';
+    }
+  });
+  sel.innerHTML = newHtml;
+  // 첫 번째 분원 자동 선택
+  if(sel.options.length > 0){
+    sel.value = sel.options[0].value;
+  }
+  // 분원이 1개면 disabled
+  sel.disabled = (allowed.length === 1);
 }
 
 // N제의 고정 11단계 정의 (기존 학생 수정 모달 로직과 동일)
@@ -19586,10 +19746,14 @@ async function initAdminWeekendNaje(){
   (window._allBranches||[]).filter(function(b){ return b.active !== false; }).forEach(function(b){
     branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
   });
+  // 🏢 데스크는 본인 분원으로 자동 고정
+  applyDeskBranchLock('awn-branch-select');
 
   _awnAllTeachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && isTeacherInActiveBranch(u); })
     .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
-  awnRenderTeachers('');
+  // 데스크면 본인 분원 학생만 보이도록 초기 필터
+  var initialBranch = (currentUser && currentUser.role === 'desk') ? branchSel.value : '';
+  awnRenderTeachers(initialBranch);
   await awnLoad();
 }
 
@@ -19698,10 +19862,12 @@ async function initAdminWeekendPotential(){
   (window._allBranches||[]).filter(function(b){ return b.active !== false; }).forEach(function(b){
     branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
   });
+  applyDeskBranchLock('awp-branch-select');
 
   _awpAllTeachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && isTeacherInActiveBranch(u); })
     .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
-  awpRenderTeachers('');
+  var initialBranch = (currentUser && currentUser.role === 'desk') ? branchSel.value : '';
+  awpRenderTeachers(initialBranch);
   await awpLoad();
 }
 
@@ -19810,10 +19976,12 @@ async function initAdminWeekendNaesin(){
   (window._allBranches||[]).filter(function(b){ return b.active !== false; }).forEach(function(b){
     branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
   });
+  applyDeskBranchLock('awns-branch-select');
 
   _awnsAllTeachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && isTeacherInActiveBranch(u); })
     .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
-  awnsRenderTeachers('');
+  var initialBranch = (currentUser && currentUser.role === 'desk') ? branchSel.value : '';
+  awnsRenderTeachers(initialBranch);
   await awnsLoad();
 }
 
@@ -21985,10 +22153,12 @@ async function initAdminWeekendBety(){
   (window._allBranches||[]).filter(function(b){ return b.active !== false; }).forEach(function(b){
     branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
   });
+  applyDeskBranchLock('awby-branch-select');
 
   _awbyAllTeachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && isTeacherInActiveBranch(u); })
     .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
-  awbyRenderTeachers('');
+  var initialBranch = (currentUser && currentUser.role === 'desk') ? branchSel.value : '';
+  awbyRenderTeachers(initialBranch);
   await awbyLoad();
 }
 
