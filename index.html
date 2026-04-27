@@ -16529,9 +16529,9 @@ async function loadStudentNaje(){
   if(!cardsEl) return;
   cardsEl.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
 
-  // 1) 부여된 N제 (assignments)
+  // 1) 부여된 N제 (assignments) - excluded_problems 포함
   var {data: assignments} = await db.from('naje_assignments')
-    .select('set_id,steps').eq('student_id', currentUser.id);
+    .select('set_id,steps,excluded_problems').eq('student_id', currentUser.id);
   var assignedSetIds = (assignments||[]).map(function(a){return a.set_id;});
   window._studentNajeAssignments = assignments||[];
 
@@ -16591,6 +16591,9 @@ async function loadStudentNaje(){
       if(idx < 0 || idx >= stageStartNums.length) return;
       for(var n = stageStartNums[idx]; n <= stageEndNums[idx]; n++) assignedNumbers.add(n);
     });
+    // 🎯 부분 부여: excluded_problems 제거
+    var excluded = (assignment && Array.isArray(assignment.excluded_problems)) ? assignment.excluded_problems : [];
+    excluded.forEach(function(n){ assignedNumbers.delete(n); });
 
     var setProblems = problemsBySet[s.id] || [];
     // 부여된 단계에 해당하는 문제만 필터
@@ -16682,10 +16685,25 @@ async function openStudentNajeViewer(setId, title){
   studentNajeAnswers = {};
   if(savedAnswers) savedAnswers.forEach(function(a){ studentNajeAnswers[a.problem_id] = a.answer; });
 
-  var assignment = (window._studentNajeAssignments||[]).find(function(a){return a.set_id===setId;});
-  var assignedSteps = assignment ? (assignment.steps||[]) : [];
+  // 🎯 부여 정보를 매번 DB에서 직접 조회 (캐시 의존 X) - excluded_problems 포함
+  var assignedSteps = [];
+  var excludedProblems = [];
+  try {
+    var {data: assignRow} = await db.from('naje_assignments')
+      .select('steps, excluded_problems')
+      .eq('student_id', currentUser.id).eq('set_id', setId).maybeSingle();
+    if(assignRow){
+      assignedSteps = Array.isArray(assignRow.steps) ? assignRow.steps : [];
+      excludedProblems = Array.isArray(assignRow.excluded_problems) ? assignRow.excluded_problems : [];
+    }
+  } catch(e){
+    console.error('[부여 정보 조회]', e);
+  }
+  // 전역에 저장 (startNajeStep에서 사용)
+  _najeAssignedSteps = assignedSteps;
+  _najeExcludedProblems = new Set(excludedProblems);
 
-  renderStepSelectGrid(assignedSteps);
+  renderStepSelectGrid(assignedSteps, _najeExcludedProblems);
 
   document.getElementById('student-naje-list').style.display = 'none';
   document.getElementById('student-naje-step-select').style.display = 'block';
@@ -16694,9 +16712,20 @@ async function openStudentNajeViewer(setId, title){
   pushNavState({nav:'step-select'});
 }
 
-function renderStepSelectGrid(assignedSteps){
+// 부여된 단계 + 제외 문항 전역 (단계 선택/풀이 화면 모두에서 사용)
+var _najeAssignedSteps = [];
+var _najeExcludedProblems = new Set();
+
+function renderStepSelectGrid(assignedSteps, excludedSet){
   const grid = document.getElementById('student-naje-step-grid');
-  const stepsToShow = assignedSteps.length > 0 ? assignedSteps : NAJE_STAGES.map(function(s){return s.step;});
+  excludedSet = excludedSet || new Set();
+  // 🎯 부여된 단계만 표시 (부여 0개면 안내 메시지)
+  const stepsToShow = assignedSteps.length > 0 ? assignedSteps.slice().sort(function(a,b){return a-b;}) : [];
+
+  if(stepsToShow.length === 0){
+    grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:#6b7280"><p>풀 수 있는 단계가 없습니다.<br>선생님께 단계 부여를 요청하세요.</p></div>';
+    return;
+  }
 
   let html = '';
   stepsToShow.forEach(function(stepNum){
@@ -16704,10 +16733,13 @@ function renderStepSelectGrid(assignedSteps){
       || (stepNum===11?{step:11,name:NAJE_KILLER_NAME,from:81,to:999}:null);
     if(!stageInfo) return;
 
+    // 🎯 이 단계 안에서 부여된(=excluded 아닌) 문항만 추림
     var stepProblems = _najeAllProblems.filter(function(p){
-      return p.problem_number >= stageInfo.from && p.problem_number <= stageInfo.to;
+      if(p.problem_number < stageInfo.from || p.problem_number > stageInfo.to) return false;
+      if(excludedSet.has(p.problem_number)) return false;
+      return true;
     });
-    if(!stepProblems.length) return;
+    if(!stepProblems.length) return;  // 모든 문항이 제외된 단계는 숨김
 
     var answered = stepProblems.filter(function(p){ return !!studentNajeAnswers[p.id]; }).length;
     var total = stepProblems.length;
@@ -16716,7 +16748,7 @@ function renderStepSelectGrid(assignedSteps){
       return my && p.correct_answer && normalizeAnswer(my)===normalizeAnswer(p.correct_answer);
     }).length;
     var pct = Math.round(answered/total*100);
-    var isComplete = answered > 0; // 1개 이상 제출하면 완료 (다시 풀기는 선생님만 가능)
+    var isComplete = answered > 0;
     var icon = najeStageIcon(stageInfo.name);
     var statusColor = isComplete?'#3B6D11':'#6b7280';
     var statusBg = isComplete?'#EAF3DE':'#f5f6fa';
@@ -16728,14 +16760,25 @@ function renderStepSelectGrid(assignedSteps){
     var clickAction = isComplete ? 'viewNajeStepResult('+stepNum+')' : 'startNajeStep('+stepNum+')';
     var actionLabel = isComplete ? '결과 보기 ›' : '시작하기 ›';
     var actionColor = isComplete ? '#3B6D11' : '#6b7280';
+
+    // 부분 부여인지 표시 (단계 안의 8문항 중 일부만 부여된 경우)
+    var isPartial = false;
+    for(var n = stageInfo.from; n <= Math.min(stageInfo.to, stageInfo.from + 7); n++){
+      if(excludedSet.has(n)) { isPartial = true; break; }
+    }
+    var partialBadge = isPartial 
+      ? '<span style="font-size:10px;font-weight:700;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:100px;margin-left:4px">◐ 부분</span>'
+      : '';
+
     html += '<div onclick="'+clickAction+'" style="background:#fff;border:2px solid '+(isComplete?'#86efac':'var(--border)')+';border-radius:14px;padding:14px;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:12px;">'
       + '<div style="width:44px;height:44px;border-radius:12px;background:'+(isComplete?'#3B6D11':'#1a1a2e')+';display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">'+icon+'</div>'
       + '<div style="flex:1;min-width:0;">'
-      + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">'
+      + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap">'
       + '<span style="font-size:11px;font-weight:700;background:#1a1a2e;color:#fff;padding:2px 7px;border-radius:100px;">'+(stepNum<=10?stepNum+'단계':'킬러')+'</span>'
       + '<span style="font-size:13px;font-weight:700;color:#1a1a2e;">'+stageInfo.name+'</span>'
+      + partialBadge
       + '</div>'
-      + '<div style="font-size:11px;color:#6b7280;margin-bottom:5px;">'+stageInfo.from+'~'+Math.min(stageInfo.to, _najeAllProblems.length)+'번 · '+total+'문제</div>'
+      + '<div style="font-size:11px;color:#6b7280;margin-bottom:5px;">'+total+'문제 부여됨</div>'
       + '<div style="background:#e5e7eb;border-radius:100px;height:5px;overflow:hidden;">'
       + '<div style="width:'+pct+'%;height:100%;background:'+statusColor+';border-radius:100px;"></div>'
       + '</div>'
@@ -16762,10 +16805,13 @@ function startNajeStep(stepNum){
     || (stepNum===11?{step:11,name:NAJE_KILLER_NAME,from:81,to:999}:null);
   if(!stageInfo) return;
 
+  // 🎯 부여된 문항만 추림 (excluded 제외)
   studentNajeProblems = _najeAllProblems.filter(function(p){
-    return p.problem_number >= stageInfo.from && p.problem_number <= stageInfo.to;
+    if(p.problem_number < stageInfo.from || p.problem_number > stageInfo.to) return false;
+    if(_najeExcludedProblems && _najeExcludedProblems.has(p.problem_number)) return false;
+    return true;
   });
-  if(!studentNajeProblems.length){ alert('이 단계에 문제가 없습니다.'); return; }
+  if(!studentNajeProblems.length){ alert('이 단계에 부여된 문제가 없습니다.'); return; }
 
   studentNajeCurrentIdx = 0;
 
