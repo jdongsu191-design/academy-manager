@@ -1380,7 +1380,8 @@
 
               <!-- 조작 안내 문구 -->
               <div style="padding:8px 12px;background:#f0f7ff;border:1px dashed #bfdbfe;border-radius:8px;font-size:11px;color:#1e40af;margin-bottom:10px;line-height:1.6">
-                💡 <b>단계 헤더</b>(예: 1단계) 클릭 = <b>열 전체 선택/해제</b> · <b>학생 이름</b> 클릭 = <b>행 전체 선택/해제</b> · <b>학생 ↕</b> 클릭 = <b>전체 토글</b>
+                💡 <b>단계 헤더</b> 클릭 = <b>열 전체 토글</b> · <b>학생 이름</b> 클릭 = <b>행 전체 토글</b> · <b>학생 ↕</b> 클릭 = <b>전체 토글</b><br>
+                ☑/◐/☐ 셀의 <b>좌측</b> 클릭 = 단계 전체 부여 토글 · 셀의 <b>⋯ 영역</b> 클릭 = <b>문항별 부분 선택</b> 팝업
               </div>
 
               <div id="na-matrix-table-wrap" style="overflow-x:auto;margin-bottom:12px">
@@ -8294,9 +8295,12 @@ var _naState = {
   classId: null,         // 선택된 반 ID
   classes: [],           // 담당 반 목록
   classStudents: {},     // {classId: [{id, name}]}
-  // 매트릭스 상태
-  original: {},          // {studentId: Set(step_name)} - DB에서 로드한 원본
-  current: {},           // {studentId: Set(step_name)} - 현재 선택 상태 (저장 전)
+  // 매트릭스 상태 (단계 부여)
+  original: {},          // {studentId: Set(stepNum)} - DB에서 로드한 원본
+  current: {},           // {studentId: Set(stepNum)} - 현재 선택 상태 (저장 전)
+  // 매트릭스 상태 (부분 선택 - 단계 안에서 제외할 문항)
+  excludedOriginal: {},  // {studentId: Set(problemNumber)} - DB에서 로드한 원본
+  excludedCurrent:  {},  // {studentId: Set(problemNumber)} - 현재 상태
 };
 
 async function initNajeAssignTab(){
@@ -8308,6 +8312,8 @@ async function initNajeAssignTab(){
   _naState.classId = null;
   _naState.original = {};
   _naState.current = {};
+  _naState.excludedOriginal = {};
+  _naState.excludedCurrent  = {};
 
   var gEl = document.getElementById('na-grade-select');
   if(gEl) gEl.value = '';
@@ -8478,6 +8484,8 @@ async function naSelectClass(classId){
 async function naLoadMatrix(){
   _naState.original = {};
   _naState.current = {};
+  _naState.excludedOriginal = {};
+  _naState.excludedCurrent  = {};
 
   var students = _naState.classStudents[_naState.classId] || [];
   if(students.length === 0){
@@ -8493,19 +8501,24 @@ async function naLoadMatrix(){
   try {
     // 이 학생들의 이 N제에 대한 기존 부여 데이터
     var {data: assignments} = await db.from('naje_assignments')
-      .select('student_id, steps').eq('set_id', _naState.setId).in('student_id', studentIds);
+      .select('student_id, steps, excluded_problems').eq('set_id', _naState.setId).in('student_id', studentIds);
 
     // 기본값: 모두 빈 Set
     students.forEach(function(s){
       _naState.original[s.id] = new Set();
       _naState.current[s.id] = new Set();
+      _naState.excludedOriginal[s.id] = new Set();
+      _naState.excludedCurrent[s.id]  = new Set();
     });
 
     // DB 데이터 반영
     (assignments||[]).forEach(function(a){
       var steps = Array.isArray(a.steps) ? a.steps : [];
+      var excluded = Array.isArray(a.excluded_problems) ? a.excluded_problems : [];
       _naState.original[a.student_id] = new Set(steps);
-      _naState.current[a.student_id] = new Set(steps);
+      _naState.current[a.student_id]  = new Set(steps);
+      _naState.excludedOriginal[a.student_id] = new Set(excluded);
+      _naState.excludedCurrent[a.student_id]  = new Set(excluded);
     });
   } catch(e) {
     console.error('[매트릭스 로드]', e);
@@ -8528,40 +8541,322 @@ function naRenderMatrix(){
   var steps = _naState.setSteps;  // [{num, label, range}, ...]
 
   // 헤더 (첫 칸: 학생, 이후: 각 단계)
-  var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:420px">';
+  var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:480px;table-layout:fixed">';
   html += '<thead><tr style="background:#eff6ff">';
-  html += '<th onclick="naToggleAllStudents()" style="padding:8px 10px;border:1px solid #dbeafe;text-align:left;font-weight:700;color:#1e40af;cursor:pointer;white-space:nowrap" title="전체 학생 토글">학생 ↕</th>';
+  html += '<th onclick="naToggleAllStudents()" style="padding:8px 10px;border:1px solid #dbeafe;text-align:left;font-weight:700;color:#1e40af;cursor:pointer;white-space:nowrap;width:90px" title="전체 학생 토글">학생 ↕</th>';
   steps.forEach(function(st){
     var title = st.label + ' (' + st.range + ')';
-    html += '<th onclick="naToggleStepColumn(' + st.num + ')" style="padding:8px 6px;border:1px solid #dbeafe;text-align:center;font-weight:700;color:#1e40af;cursor:pointer;min-width:54px;white-space:nowrap" title="'+_esc(title)+'">' + st.num + '단계</th>';
+    html += '<th onclick="naToggleStepColumn(' + st.num + ')" style="padding:8px 4px;border:1px solid #dbeafe;text-align:center;font-weight:700;color:#1e40af;cursor:pointer;white-space:nowrap" title="'+_esc(title)+'">' + st.num + '단계</th>';
   });
   html += '</tr></thead><tbody>';
 
+  // 단계의 문항 번호 범위
+  var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+  var stageEndNums   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
+
   students.forEach(function(s){
     html += '<tr>';
-    html += '<td onclick="naToggleStudentRow(\'' + s.id + '\')" style="padding:7px 10px;border:1px solid #dbeafe;font-weight:600;color:#1e293b;cursor:pointer;white-space:nowrap" title="이 학생 전체 토글">' + _esc(s.name) + '</td>';
+    html += '<td onclick="naToggleStudentRow(\'' + s.id + '\')" style="padding:7px 10px;border:1px solid #dbeafe;font-weight:600;color:#1e293b;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="이 학생 전체 토글">' + _esc(s.name) + '</td>';
     steps.forEach(function(st){
-      var checked = _naState.current[s.id] && _naState.current[s.id].has(st.num);
+      var stepHas = _naState.current[s.id] && _naState.current[s.id].has(st.num);
       var origHas = _naState.original[s.id] && _naState.original[s.id].has(st.num);
-      var changed = checked !== origHas;
+      var stepChanged = stepHas !== origHas;
+
+      // 이 단계의 문항 번호 범위
+      var idx = st.num - 1;
+      var fromN = stageStartNums[idx] || 0;
+      var toN   = stageEndNums[idx]   || 0;
+      // 이 학생, 이 단계에서 제외된 문항 카운트
+      var excludedSet = _naState.excludedCurrent[s.id] || new Set();
+      var excludedInStep = 0;
+      excludedSet.forEach(function(n){ if(n >= fromN && n <= toN) excludedInStep++; });
+      var origExcludedSet = _naState.excludedOriginal[s.id] || new Set();
+      var origExcludedInStep = 0;
+      origExcludedSet.forEach(function(n){ if(n >= fromN && n <= toN) origExcludedInStep++; });
+
+      // 부분 선택 변경 여부 (excludedInStep과 origExcludedInStep 비교는 부정확 — 문항 단위로 비교 필요)
+      var excludedChanged = false;
+      if(stepHas && origHas){
+        // 이 단계 부여 상태에서 제외 문항이 바뀌었는지 비교
+        var curStepExcluded = new Set();
+        var origStepExcluded = new Set();
+        excludedSet.forEach(function(n){ if(n >= fromN && n <= toN) curStepExcluded.add(n); });
+        origExcludedSet.forEach(function(n){ if(n >= fromN && n <= toN) origStepExcluded.add(n); });
+        if(curStepExcluded.size !== origStepExcluded.size){ excludedChanged = true; }
+        else {
+          curStepExcluded.forEach(function(n){ if(!origStepExcluded.has(n)) excludedChanged = true; });
+        }
+      }
+
+      var changed = stepChanged || excludedChanged;
       var bg = changed ? '#fef3c7' : '#fff';
-      html += '<td style="padding:4px;border:1px solid #dbeafe;text-align:center;background:' + bg + '">'
-        + '<input type="checkbox" ' + (checked?'checked':'') + ' '
-        + 'onchange="naToggleCell(\'' + s.id + '\',' + st.num + ',this.checked)" '
-        + 'style="width:16px;height:16px;cursor:pointer;accent-color:#2563eb">'
+
+      // 셀 상태 결정
+      // - stepHas == false → 미부여 (☐)
+      // - stepHas == true && excludedInStep == 0 → 전체 부여 (☑)
+      // - stepHas == true && excludedInStep > 0 && excludedInStep < 8 → 부분 (◐)
+      // - stepHas == true && excludedInStep == (toN-fromN+1) → 사실상 미부여인데 단계 체크는 true... 이런 케이스도 가능
+      //   → 일단 그것도 ◐로 표시 (실제 제출 시점에 처리)
+      var stepProblemCount = (toN >= 999) ? 5 : (toN - fromN + 1); // 11단계는 81~85 정도
+      var assignedCount = stepHas ? Math.max(0, stepProblemCount - excludedInStep) : 0;
+
+      // 체크박스 상태 (전체 부여=on, 그 외=off; 부분도 off로 표시 - 시각은 ◐이 알려줌)
+      var checkboxChecked = stepHas;
+
+      html += '<td style="padding:0;border:1px solid #dbeafe;text-align:center;background:' + bg + ';position:relative">'
+        // 셀 내부: 체크박스 영역 + 부분 선택 진입 영역 분리
+        + '<div style="display:flex;align-items:stretch;justify-content:center;min-height:32px">'
+        // 좌측: 체크박스 (전체 토글)
+        + '<div onclick="naToggleCell(\'' + s.id + '\',' + st.num + ',!' + checkboxChecked + ')" '
+        + 'style="flex:1;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:4px 2px" title="단계 전체 토글">'
+        + (stepHas
+            ? (excludedInStep > 0 
+                ? '<span style="font-size:14px;color:#2563eb;font-weight:700">◐</span>'  // 부분
+                : '<span style="font-size:14px;color:#2563eb;font-weight:700">☑</span>') // 전체
+            : '<span style="font-size:14px;color:#cbd5e1">☐</span>')                     // 미부여
+        + '</div>'
+        // 우측: ⋯ (부분 선택 팝오버 진입)
+        + '<div onclick="event.stopPropagation();naOpenStepPopover(\'' + s.id + '\',' + st.num + ',this)" '
+        + 'style="display:flex;align-items:center;justify-content:center;cursor:pointer;padding:4px 6px;border-left:1px dashed #e0eaff;color:#9ca3af;font-size:13px;line-height:1" '
+        + 'onmouseover="this.style.background=\'#dbeafe\';this.style.color=\'#1e40af\'" '
+        + 'onmouseout="this.style.background=\'transparent\';this.style.color=\'#9ca3af\'" '
+        + 'title="문항별 부분 선택">'
+        + '⋯'
+        + '</div>'
+        + '</div>'
         + '</td>';
     });
     html += '</tr>';
   });
   html += '</tbody></table>';
+  // 팝오버 컨테이너
+  html += '<div id="na-step-popover" style="display:none;position:fixed;z-index:600;background:#fff;border:1.5px solid #93c5fd;border-radius:10px;box-shadow:0 8px 24px rgba(30,64,175,0.18);padding:12px;min-width:240px"></div>';
+
   wrap.innerHTML = html;
 }
 
+// 부분 선택 팝오버 열기
+function naOpenStepPopover(studentId, stepNum, anchorEl){
+  var popover = document.getElementById('na-step-popover');
+  if(!popover) return;
+
+  var students = _naState.classStudents[_naState.classId] || [];
+  var stu = students.find(function(s){ return s.id === studentId; });
+  if(!stu){ popover.style.display = 'none'; return; }
+
+  var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+  var stageEndNums   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
+  var idx = stepNum - 1;
+  var fromN = stageStartNums[idx] || 0;
+  var toN   = stageEndNums[idx] || 0;
+
+  // 단계 정의에서 라벨 가져오기
+  var stageInfo = (_NAJE_STAGES||[]).find(function(s){return s.num===stepNum;});
+  var stepLabel = stageInfo ? stageInfo.label : '';
+
+  // 11단계는 끝 번호가 999 (실제로는 N제 max 번호로 잘림). 일단 81~88로 표시.
+  // 실제 N제 max 번호 정보는 _naState.maxProblemNumber에 저장하지 않았으므로 일단 8문항 단위로 처리
+  var displayToN = toN === 999 ? (fromN + 7) : toN;
+
+  // 현재 해당 학생의 이 단계 부여 여부
+  var stepHas = _naState.current[studentId] && _naState.current[studentId].has(stepNum);
+  var excludedSet = _naState.excludedCurrent[studentId] || new Set();
+
+  // 팝오버 컨텐츠
+  var nameEsc = (stu.name||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px">'
+    + '<div style="font-size:12px;font-weight:700;color:#1e40af">'+nameEsc+' · '+stepNum+'단계 ('+stepLabel+')</div>'
+    + '<button onclick="naClosePopover()" style="border:none;background:none;font-size:14px;cursor:pointer;color:#6b7280;padding:0;line-height:1">✕</button>'
+    + '</div>';
+
+  if(!stepHas){
+    html += '<div style="font-size:11px;color:#9ca3af;padding:8px 0;text-align:center">'
+      + '⚠️ 이 단계가 부여되지 않은 상태입니다.<br>먼저 단계 체크박스를 활성화해야 부분 선택이 가능해요.'
+      + '</div>';
+  } else {
+    // 8문항 그리드
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:8px">';
+    for(var n = fromN; n <= displayToN; n++){
+      var isExcluded = excludedSet.has(n);
+      var isAssigned = !isExcluded;
+      var bg = isAssigned ? '#dbeafe' : '#f5f6fa';
+      var color = isAssigned ? '#1e40af' : '#9ca3af';
+      var border = isAssigned ? '#93c5fd' : '#e5e7eb';
+      var icon = isAssigned ? '☑' : '☐';
+      html += '<div onclick="naToggleProblem(\''+studentId+'\','+n+')" '
+        + 'style="display:flex;align-items:center;justify-content:center;gap:4px;padding:7px 4px;background:'+bg+';color:'+color+';border:1px solid '+border+';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;user-select:none;transition:all 0.1s" '
+        + 'onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'\'">'
+        + '<span style="font-size:13px">'+icon+'</span>'
+        + '<span>'+n+'</span>'
+        + '</div>';
+    }
+    html += '</div>';
+    html += '<div style="display:flex;gap:6px;justify-content:flex-end">'
+      + '<button onclick="naSelectAllInStep(\''+studentId+'\','+stepNum+')" style="padding:5px 10px;font-size:11px;border:1px solid #93c5fd;border-radius:6px;background:#fff;color:#1e40af;cursor:pointer;font-weight:600">전체 선택</button>'
+      + '<button onclick="naClearAllInStep(\''+studentId+'\','+stepNum+')" style="padding:5px 10px;font-size:11px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;cursor:pointer;font-weight:600">전체 해제</button>'
+      + '</div>';
+  }
+
+  popover.innerHTML = html;
+  popover.style.display = 'block';
+
+  // 위치 잡기 (anchorEl 기준)
+  var rect = anchorEl.getBoundingClientRect();
+  var pw = popover.offsetWidth;
+  var ph = popover.offsetHeight;
+  var winW = window.innerWidth;
+  var winH = window.innerHeight;
+  var left = rect.left + (rect.width/2) - (pw/2);
+  var top = rect.bottom + 6;
+  // 화면 우측 넘침 보정
+  if(left + pw > winW - 8) left = winW - pw - 8;
+  if(left < 8) left = 8;
+  // 화면 아래 넘침 보정 (위로 띄움)
+  if(top + ph > winH - 8) top = rect.top - ph - 6;
+  popover.style.left = left + 'px';
+  popover.style.top  = top + 'px';
+
+  // 외부 클릭 닫기 핸들러
+  setTimeout(function(){
+    document.addEventListener('click', _naPopoverOutsideClick, {once: true});
+  }, 0);
+}
+
+function _naPopoverOutsideClick(e){
+  var popover = document.getElementById('na-step-popover');
+  if(!popover) return;
+  if(popover.contains(e.target)) {
+    // 다시 등록
+    setTimeout(function(){
+      document.addEventListener('click', _naPopoverOutsideClick, {once: true});
+    }, 0);
+    return;
+  }
+  naClosePopover();
+}
+
+function naClosePopover(){
+  var popover = document.getElementById('na-step-popover');
+  if(popover) popover.style.display = 'none';
+}
+
+// 팝오버 안에서 문항 토글
+function naToggleProblem(studentId, problemNum){
+  if(!_naState.excludedCurrent[studentId]) _naState.excludedCurrent[studentId] = new Set();
+  var set = _naState.excludedCurrent[studentId];
+  if(set.has(problemNum)) set.delete(problemNum);
+  else set.add(problemNum);
+
+  // 팝오버 자체만 다시 그리고 매트릭스 셀도 갱신
+  var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+  var stageEndNums   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
+  var stepNum = 1;
+  for(var i=0; i<stageStartNums.length; i++){
+    if(problemNum >= stageStartNums[i] && problemNum <= stageEndNums[i]){
+      stepNum = i+1; break;
+    }
+  }
+  // 매트릭스 다시 그림 (셀 ◐/☑ 갱신)
+  naRenderMatrix();
+  naUpdateUnsavedBadge();
+  // 팝오버 다시 열기 (같은 위치)
+  setTimeout(function(){
+    var students = _naState.classStudents[_naState.classId] || [];
+    var anchorSel = '[onclick*="naOpenStepPopover(\\\''+studentId+'\\\','+stepNum+'"]';
+    // 정확한 셀 찾기 어려울 수 있어, 다시 querySelectorAll
+    var cells = document.querySelectorAll('#na-matrix-table-wrap td > div > div[onclick*="naOpenStepPopover"]');
+    for(var i=0; i<cells.length; i++){
+      var c = cells[i];
+      if(c.getAttribute('onclick').indexOf("'"+studentId+"',"+stepNum+",") !== -1){
+        naOpenStepPopover(studentId, stepNum, c);
+        return;
+      }
+    }
+  }, 0);
+}
+
+function naSelectAllInStep(studentId, stepNum){
+  var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+  var stageEndNums   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
+  var idx = stepNum - 1;
+  var fromN = stageStartNums[idx] || 0;
+  var toN   = stageEndNums[idx] || 0;
+  var displayToN = toN === 999 ? (fromN + 7) : toN;
+  if(!_naState.excludedCurrent[studentId]) _naState.excludedCurrent[studentId] = new Set();
+  var set = _naState.excludedCurrent[studentId];
+  for(var n = fromN; n <= displayToN; n++) set.delete(n);
+  naRenderMatrix();
+  naUpdateUnsavedBadge();
+  // 팝오버 다시 그림
+  setTimeout(function(){
+    var cells = document.querySelectorAll('#na-matrix-table-wrap td > div > div[onclick*="naOpenStepPopover"]');
+    for(var i=0; i<cells.length; i++){
+      var c = cells[i];
+      if(c.getAttribute('onclick').indexOf("'"+studentId+"',"+stepNum+",") !== -1){
+        naOpenStepPopover(studentId, stepNum, c);
+        return;
+      }
+    }
+  }, 0);
+}
+
+function naClearAllInStep(studentId, stepNum){
+  var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+  var stageEndNums   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
+  var idx = stepNum - 1;
+  var fromN = stageStartNums[idx] || 0;
+  var toN   = stageEndNums[idx] || 0;
+  var displayToN = toN === 999 ? (fromN + 7) : toN;
+  if(!_naState.excludedCurrent[studentId]) _naState.excludedCurrent[studentId] = new Set();
+  var set = _naState.excludedCurrent[studentId];
+  for(var n = fromN; n <= displayToN; n++) set.add(n);
+  naRenderMatrix();
+  naUpdateUnsavedBadge();
+  // 팝오버 다시 그림
+  setTimeout(function(){
+    var cells = document.querySelectorAll('#na-matrix-table-wrap td > div > div[onclick*="naOpenStepPopover"]');
+    for(var i=0; i<cells.length; i++){
+      var c = cells[i];
+      if(c.getAttribute('onclick').indexOf("'"+studentId+"',"+stepNum+",") !== -1){
+        naOpenStepPopover(studentId, stepNum, c);
+        return;
+      }
+    }
+  }, 0);
+}
+
 // 개별 셀 토글 (step은 이제 숫자)
+// 단계의 문항 번호 범위 헬퍼
+function _naStepProblemNums(stepNum){
+  var stageStartNums = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+  var stageEndNums   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
+  var idx = stepNum - 1;
+  if(idx < 0 || idx >= stageStartNums.length) return [];
+  var fromN = stageStartNums[idx];
+  var toN = stageEndNums[idx];
+  var displayToN = toN === 999 ? (fromN + 7) : toN;
+  var arr = [];
+  for(var n = fromN; n <= displayToN; n++) arr.push(n);
+  return arr;
+}
+
+// 학생의 특정 단계의 excluded 항목들을 제거 (단계 해제 시)
+function _naClearExcludedForStep(studentId, stepNum){
+  if(!_naState.excludedCurrent[studentId]) return;
+  var nums = _naStepProblemNums(stepNum);
+  var set = _naState.excludedCurrent[studentId];
+  nums.forEach(function(n){ set.delete(n); });
+}
+
 function naToggleCell(studentId, stepNum, checked){
   if(!_naState.current[studentId]) _naState.current[studentId] = new Set();
   if(checked) _naState.current[studentId].add(stepNum);
-  else _naState.current[studentId].delete(stepNum);
+  else {
+    _naState.current[studentId].delete(stepNum);
+    // 단계 해제 시 그 단계의 excluded 정리 (의미 없는 데이터 방지)
+    _naClearExcludedForStep(studentId, stepNum);
+  }
+  naClosePopover();  // 팝오버 떠있으면 닫기
   naRenderMatrix();  // 변경 표시 하이라이트 갱신
   naUpdateUnsavedBadge();
 }
@@ -8573,9 +8868,12 @@ function naToggleStudentRow(studentId){
   var allChecked = _naState.setSteps.every(function(st){ return _naState.current[studentId].has(st.num); });
   if(allChecked){
     _naState.current[studentId].clear();
+    // 모든 단계 해제 → excluded 도 모두 클리어
+    if(_naState.excludedCurrent[studentId]) _naState.excludedCurrent[studentId].clear();
   } else {
     _naState.setSteps.forEach(function(st){ _naState.current[studentId].add(st.num); });
   }
+  naClosePopover();
   naRenderMatrix();
   naUpdateUnsavedBadge();
 }
@@ -8589,9 +8887,14 @@ function naToggleStepColumn(stepNum){
   });
   students.forEach(function(s){
     if(!_naState.current[s.id]) _naState.current[s.id] = new Set();
-    if(allChecked) _naState.current[s.id].delete(stepNum);
+    if(allChecked){
+      _naState.current[s.id].delete(stepNum);
+      // 그 단계 excluded도 정리
+      _naClearExcludedForStep(s.id, stepNum);
+    }
     else _naState.current[s.id].add(stepNum);
   });
+  naClosePopover();
   naRenderMatrix();
   naUpdateUnsavedBadge();
 }
@@ -8608,10 +8911,12 @@ function naToggleAllStudents(){
     if(!_naState.current[s.id]) _naState.current[s.id] = new Set();
     if(allChecked){
       _naState.current[s.id].clear();
+      if(_naState.excludedCurrent[s.id]) _naState.excludedCurrent[s.id].clear();
     } else {
       steps.forEach(function(st){ _naState.current[s.id].add(st.num); });
     }
   });
+  naClosePopover();
   naRenderMatrix();
   naUpdateUnsavedBadge();
 }
@@ -8645,11 +8950,23 @@ function naCountChanges(){
   students.forEach(function(s){
     var orig = _naState.original[s.id] || new Set();
     var cur  = _naState.current[s.id]  || new Set();
-    // 두 Set 다름 = 변경
-    if(orig.size !== cur.size){ cnt++; return; }
-    var different = false;
-    cur.forEach(function(v){ if(!orig.has(v)) different = true; });
-    if(different) cnt++;
+    var origExc = _naState.excludedOriginal[s.id] || new Set();
+    var curExc  = _naState.excludedCurrent[s.id]  || new Set();
+
+    var changed = false;
+    // 단계 변경 체크
+    if(orig.size !== cur.size){ changed = true; }
+    else {
+      cur.forEach(function(v){ if(!orig.has(v)) changed = true; });
+    }
+    // 부분 선택 변경 체크
+    if(!changed){
+      if(origExc.size !== curExc.size){ changed = true; }
+      else {
+        curExc.forEach(function(v){ if(!origExc.has(v)) changed = true; });
+      }
+    }
+    if(changed) cnt++;
   });
   return cnt;
 }
@@ -8665,8 +8982,11 @@ function naRevertChanges(){
   var students = _naState.classStudents[_naState.classId] || [];
   students.forEach(function(s){
     var orig = _naState.original[s.id] || new Set();
+    var origExc = _naState.excludedOriginal[s.id] || new Set();
     _naState.current[s.id] = new Set(orig);
+    _naState.excludedCurrent[s.id] = new Set(origExc);
   });
+  naClosePopover();
   naRenderMatrix();
   naUpdateUnsavedBadge();
 }
@@ -8687,21 +9007,42 @@ async function naSaveMatrix(){
   students.forEach(function(s){
     var orig = _naState.original[s.id] || new Set();
     var cur  = _naState.current[s.id]  || new Set();
-    // 변경 없으면 skip
-    var same = (orig.size === cur.size);
-    if(same){
-      cur.forEach(function(v){ if(!orig.has(v)) same = false; });
+    var origExc = _naState.excludedOriginal[s.id] || new Set();
+    var curExc  = _naState.excludedCurrent[s.id]  || new Set();
+
+    // 단계 변경 여부
+    var stepsSame = (orig.size === cur.size);
+    if(stepsSame){
+      cur.forEach(function(v){ if(!orig.has(v)) stepsSame = false; });
     }
-    if(same) return;
+    // 부분 선택 변경 여부
+    var excSame = (origExc.size === curExc.size);
+    if(excSame){
+      curExc.forEach(function(v){ if(!origExc.has(v)) excSame = false; });
+    }
+    if(stepsSame && excSame) return;  // 변경 없으면 skip
 
     var stepsArr = Array.from(cur);
     if(stepsArr.length === 0){
       deletes.push(s.id);
     } else {
+      // 부여된 단계 안에 속한 excluded만 저장 (부여 안 된 단계의 excluded는 무의미)
+      var validExcluded = [];
+      curExc.forEach(function(n){
+        // 어느 단계에 속하는지 확인
+        var inStep = false;
+        cur.forEach(function(stepNum){
+          var nums = _naStepProblemNums(stepNum);
+          if(nums.indexOf(n) !== -1) inStep = true;
+        });
+        if(inStep) validExcluded.push(n);
+      });
+      validExcluded.sort(function(a,b){return a-b;});
       upserts.push({
         student_id: s.id,
         set_id: _naState.setId,
-        steps: stepsArr
+        steps: stepsArr,
+        excluded_problems: validExcluded
       });
     }
   });
@@ -8718,9 +9059,10 @@ async function naSaveMatrix(){
       if(delErr) throw delErr;
     }
 
-    // original 갱신
+    // original 갱신 (단계 + 부분선택 모두)
     students.forEach(function(s){
-      _naState.original[s.id] = new Set(_naState.current[s.id]);
+      _naState.original[s.id] = new Set(_naState.current[s.id] || new Set());
+      _naState.excludedOriginal[s.id] = new Set(_naState.excludedCurrent[s.id] || new Set());
     });
     naRenderMatrix();
     naUpdateUnsavedBadge();
