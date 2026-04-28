@@ -2650,9 +2650,20 @@
       <!-- 진도계획서 미리보기 모달 -->
       <div class="modal-backdrop" id="modal-syllabusPreview" style="z-index:500;align-items:center">
         <div style="background:#f0f0f0;border-radius:16px;padding:20px;width:95vw;max-width:860px;max-height:92vh;overflow-y:auto;position:relative">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
             <div style="font-size:16px;font-weight:700;color:#1F3A51">📄 진도계획서 미리보기 (A4)</div>
-            <button onclick="closeModal('syllabusPreview')" style="border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280">✕</button>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <button id="syl-preview-jpg-btn" onclick="sylPreviewExport('jpg')"
+                style="padding:6px 12px;border:1px solid #86efac;border-radius:7px;background:#f0fdf4;color:#16a34a;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px">
+                🖼️ JPG 저장
+              </button>
+              <button id="syl-preview-pdf-btn" onclick="sylPreviewExport('pdf')"
+                style="padding:6px 12px;border:1px solid #93c5fd;border-radius:7px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px">
+                📄 PDF 저장
+              </button>
+              <span id="syl-preview-export-status" style="font-size:11px;color:#6b7280;margin-left:4px"></span>
+              <button onclick="closeModal('syllabusPreview')" style="border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280;margin-left:4px">✕</button>
+            </div>
           </div>
           <div id="syl-preview-content"></div>
         </div>
@@ -19615,6 +19626,9 @@ function sylViewToggleCourse(cardId){
 }
 
 async function sylViewPreview(sylId, courseIdx){
+  // 🆕 미리보기에서 강좌 단위로 다운로드할 수 있도록 sylId + courseIdx 저장
+  window._sylPreviewSylId = sylId;
+  window._sylPreviewCourseIdx = courseIdx;
   var {data} = await db.from('syllabuses').select('*').eq('id', sylId).single();
   if(!data) return;
   var prevCourses = _sylCourses;
@@ -19738,6 +19752,106 @@ function sylvCanvasToJpgBlob(canvas, quality){
 // 파일명 안전화 (특수문자 제거)
 function sylvSafeName(s){
   return String(s||'').replace(/[\\\/:*?"<>|\n\r\t]/g,'').trim() || '무제';
+}
+
+// 🆕 미리보기 모달에서 현재 강좌만 JPG/PDF 다운로드
+async function sylPreviewExport(format){
+  var sylId = window._sylPreviewSylId;
+  var courseIdx = window._sylPreviewCourseIdx;
+  if(!sylId || courseIdx === undefined || courseIdx === null){ alert('미리보기 정보가 없습니다'); return; }
+  if(format === 'pdf' && (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF)){
+    alert('jsPDF 라이브러리 로드 실패'); return;
+  }
+
+  var jpgBtn = document.getElementById('syl-preview-jpg-btn');
+  var pdfBtn = document.getElementById('syl-preview-pdf-btn');
+  var statusEl = document.getElementById('syl-preview-export-status');
+  if(jpgBtn) jpgBtn.disabled = true;
+  if(pdfBtn) pdfBtn.disabled = true;
+  if(statusEl){ statusEl.textContent = '⏳ 생성 중...'; statusEl.style.color = '#1F3A51'; }
+
+  // 현재 전역 상태 백업 (미리보기에서 출력 후 복원)
+  var backup = {
+    courses: _sylCourses, name: _sylTeacherName, photo: _sylTeacherPhoto,
+    curr: _sylTeacherCurriculum, brand: window._sylBrandColor,
+    accent: window._sylAccentColor, period: _sylPeriod
+  };
+
+  try {
+    // DB 에서 현재 진도계획서 다시 로드
+    var {data} = await db.from('syllabuses').select('*').eq('id', sylId).single();
+    if(!data){ alert('진도계획서를 불러오지 못했습니다'); return; }
+
+    _sylCourses = sylNormalizeCourses(data.courses || []);
+    _sylTeacherName = data.teacher_name || '';
+    _sylTeacherPhoto = data.teacher_photo || '';
+    _sylTeacherCurriculum = sylMigrateCurriculum(data.curriculum);
+    window._sylBrandColor = data.brand_color || '#1F3A51';
+    window._sylAccentColor = data.accent_color || '#c8a96e';
+    _sylPeriod = data.period || '';
+
+    var c = _sylCourses[courseIdx];
+    if(!c){ alert('강좌 정보를 찾을 수 없습니다'); return; }
+
+    var teacherSafe = sylvSafeName(_sylTeacherName || '미지정');
+    var periodSafe = sylvSafeName(_sylPeriod || '기간미정');
+    var courseSafe = sylvSafeName(c.title || '무제');
+    var pages = sylGetCoursePagesHTML(c, _sylPeriod);
+
+    if(format === 'jpg'){
+      // 단일 페이지면 바로 다운로드, 여러 페이지면 ZIP 으로 묶기
+      if(pages.length === 1){
+        var canvas = await sylCaptureA4(pages[0].html, 0.95, 'portrait');
+        var blob = await sylvCanvasToJpgBlob(canvas, 0.92);
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = teacherSafe + '_' + periodSafe + '_' + courseSafe + '.jpg';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+      } else {
+        if(typeof JSZip === 'undefined'){ alert('JSZip 라이브러리 로드 실패'); return; }
+        var zip = new JSZip();
+        for(var pi=0; pi<pages.length; pi++){
+          var canvas2 = await sylCaptureA4(pages[pi].html, 0.95, 'portrait');
+          var blob2 = await sylvCanvasToJpgBlob(canvas2, 0.92);
+          zip.file(courseSafe + '_p' + (pi+1) + '.jpg', blob2);
+        }
+        var zipBlob = await zip.generateAsync({type:'blob'});
+        var zurl = URL.createObjectURL(zipBlob);
+        var za = document.createElement('a');
+        za.href = zurl;
+        za.download = teacherSafe + '_' + periodSafe + '_' + courseSafe + '.zip';
+        document.body.appendChild(za); za.click(); document.body.removeChild(za);
+        setTimeout(function(){ URL.revokeObjectURL(zurl); }, 1000);
+      }
+    } else if(format === 'pdf'){
+      var jsPDF = window.jspdf.jsPDF;
+      var pdf = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4', compress:true });
+      for(var pi2=0; pi2<pages.length; pi2++){
+        var canvasP = await sylCaptureA4(pages[pi2].html, 0.95, 'portrait');
+        var imgP = canvasP.toDataURL('image/jpeg', 0.88);
+        if(pi2 > 0) pdf.addPage();
+        pdf.addImage(imgP, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+      }
+      pdf.save(teacherSafe + '_' + periodSafe + '_' + courseSafe + '.pdf');
+    }
+
+    if(statusEl){ statusEl.textContent = '✅ 완료'; statusEl.style.color = '#16a34a'; }
+    setTimeout(function(){ if(statusEl) statusEl.textContent = ''; }, 2500);
+  } catch(e){
+    console.error('미리보기 출력 실패:', e);
+    if(statusEl){ statusEl.textContent = '❌ 실패: ' + (e.message||''); statusEl.style.color = '#dc2626'; }
+    alert('출력 실패: ' + (e.message || ''));
+  } finally {
+    // 전역 상태 복원
+    _sylCourses = backup.courses; _sylTeacherName = backup.name;
+    _sylTeacherPhoto = backup.photo; _sylTeacherCurriculum = backup.curr;
+    window._sylBrandColor = backup.brand; window._sylAccentColor = backup.accent;
+    _sylPeriod = backup.period;
+    if(jpgBtn) jpgBtn.disabled = false;
+    if(pdfBtn) pdfBtn.disabled = false;
+  }
 }
 
 // 메인: 전체 일괄 다운로드
