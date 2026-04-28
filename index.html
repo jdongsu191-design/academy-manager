@@ -21862,18 +21862,43 @@ async function wmsgLoadFilters(){
     var teacherSel = document.getElementById('wmsg-filter-teacher');
     if(!branchSel || !teacherSel) return;
 
-    // 분원 목록
-    if(branchSel.options.length <= 1){
+    // 🎯 데스크 모드일 때는 본인 분원만 옵션에 표시 (다른 분원 차단)
+    var role = (currentUser && currentUser.role) || 'teacher';
+    var isDesk = (role === 'desk');
+    var deskAllowedBranches = isDesk
+      ? (Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [])
+      : null;
+
+    // 분원 목록 (현재 비어있으면 채우기, 데스크면 강제 재구성)
+    if(branchSel.options.length <= 1 || isDesk){
       var {data: branches} = await db.from('branches').select('id, name').order('name');
-      (branches||[]).forEach(function(b){
-        branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
-      });
+      // 데스크면 "전체 분원" 제거 + 본인 분원만
+      if(isDesk){
+        branchSel.innerHTML = '';
+        (branches||[]).forEach(function(b){
+          if(deskAllowedBranches.indexOf(b.id) !== -1){
+            branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+          }
+        });
+        // 첫 분원 자동 선택 + 1개면 disabled
+        if(branchSel.options.length > 0){
+          branchSel.value = branchSel.options[0].value;
+        }
+        branchSel.disabled = (deskAllowedBranches.length === 1);
+      } else {
+        // 기존 동작: 전체 분원 옵션 + 모든 분원
+        if(branchSel.options.length <= 1){
+          (branches||[]).forEach(function(b){
+            branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+          });
+        }
+        branchSel.disabled = false;
+      }
     }
 
     // 선생님이 접속했으면 본인 분원을 기본 선택 (아직 값이 비어있을 때만)
-    var isTeacher = currentUser && currentUser.role === 'teacher';
+    var isTeacher = (role === 'teacher');
     if(isTeacher && currentUser.branch_id && !branchSel.value){
-      // 옵션에 실제로 존재하는 경우만 설정 (안전)
       if(branchSel.querySelector('option[value="'+currentUser.branch_id+'"]')){
         branchSel.value = currentUser.branch_id;
       }
@@ -21896,12 +21921,18 @@ async function wmsgRefreshTeacherFilter(branchId){
   if(!teacherSel) return;
   var prevVal = teacherSel.value;
   teacherSel.innerHTML = '<option value="">전체 선생님</option>';
+  // 🎯 데스크 모드: 본인 분원의 선생님만 옵션 표시
+  var role = (currentUser && currentUser.role) || 'teacher';
+  var deskAllowed = (role === 'desk' && Array.isArray(currentUser.branch_ids))
+    ? currentUser.branch_ids : null;
   try {
     var query = db.from('users').select('id, name, branch_id').eq('role','teacher').eq('status','active').order('name');
     var {data: teachers} = await query;
     var {data: branches} = await db.from('branches').select('id, name');
     var branchMap = {}; (branches||[]).forEach(function(b){ branchMap[b.id]=b.name; });
     (teachers||[]).forEach(function(t){
+      // 데스크는 본인 분원 선생님만
+      if(deskAllowed && (!t.branch_id || deskAllowed.indexOf(t.branch_id) === -1)) return;
       if(branchId && t.branch_id !== branchId) return;
       var opt = document.createElement('option');
       opt.value = t.id;
@@ -21980,9 +22011,21 @@ async function wmsgLoadData(){
 
     // 선생님 필터 적용
     var filterTeacherId = document.getElementById('wmsg-filter-teacher')?.value || '';
+    // 🎯 데스크 모드: "전체 선생님" 선택 시에도 본인 분원 선생님 학생만
+    var role = (currentUser && currentUser.role) || 'teacher';
+    var deskAllowedTeacherIds = null;
+    if(role === 'desk' && Array.isArray(currentUser.branch_ids) && currentUser.branch_ids.length > 0){
+      // 데스크 본인 분원의 선생님 ID 들 미리 조회
+      var allowedB = currentUser.branch_ids;
+      var {data: deskTeachers} = await db.from('users')
+        .select('id').eq('role','teacher').in('branch_id', allowedB);
+      deskAllowedTeacherIds = (deskTeachers||[]).map(function(t){ return t.id; });
+    }
     var stuMap = {};
     (stuData||[]).forEach(function(s){
       if(filterTeacherId && s.teacher_id !== filterTeacherId) return;
+      // 데스크 분원 필터
+      if(deskAllowedTeacherIds && (!s.teacher_id || deskAllowedTeacherIds.indexOf(s.teacher_id) === -1)) return;
       stuMap[s.id] = s;
     });
 
