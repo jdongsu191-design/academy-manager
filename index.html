@@ -27423,8 +27423,8 @@ async function eaPdfToImages(file, onProgress){
   var ab = await file.arrayBuffer();
   var pdf = await pdfjsLib.getDocument({data: ab}).promise;
   var images = [];
-  var TARGET_WIDTH = 1200;  // 텍스트 인식 가능한 충분한 해상도 + Vercel 한도 안전
-  var QUALITY = 0.82;       // JPEG 품질 (텍스트 인식 가능 + 사이즈 작게)
+  var TARGET_WIDTH = 1500;  // 텍스트/수식 인식을 위해 고해상도 (작은 글씨 인식)
+  var QUALITY = 0.88;       // JPEG 품질 (선명도 우선)
 
   for(var i = 1; i <= pdf.numPages; i++){
     if(typeof onProgress === 'function'){
@@ -27504,9 +27504,20 @@ async function eaAnalyzePdf(){
     var totalKB = eaTotalBase64KB(_eaState.pdfImages);
     console.log('[내신분석] ' + _eaState.pdfImages.length + '개 페이지, 총 ' + totalKB + 'KB');
 
+    // 시험 정보 수집 (단원 추측 방지를 위해 AI 에 직접 주입)
+    var examInfo = {
+      school: (document.getElementById('ea-school')?.value || '').trim(),
+      grade: (document.getElementById('ea-grade')?.value || '').trim(),
+      year: (document.getElementById('ea-year')?.value || '').trim(),
+      semester: (document.getElementById('ea-semester')?.value || '').trim(),
+      round: (document.getElementById('ea-round')?.value || '').trim(),
+      subject: (document.getElementById('ea-subject')?.value || '').trim()
+    };
+    console.log('[내신분석] 시험 정보:', examInfo);
+
     // 2) Gemini에 문항 분석 요청
     eaSetProgress(30, '🤖 AI가 문항을 분석 중입니다... (1~2분 소요, 서버 상태에 따라 더 걸릴 수 있어요)');
-    var items = await eaCallGeminiForItems(_eaState.pdfImages);
+    var items = await eaCallGeminiForItems(_eaState.pdfImages, examInfo);
     if(!items || items.length === 0){
       throw new Error('문항 분석 결과가 비어있습니다.');
     }
@@ -27526,7 +27537,7 @@ async function eaAnalyzePdf(){
 
     // 4) 총평 분석 요청
     eaSetProgress(70, '📝 AI가 총평을 작성 중입니다...');
-    var review = await eaCallGeminiForReview(_eaState.pdfImages, _eaState.items);
+    var review = await eaCallGeminiForReview(_eaState.pdfImages, _eaState.items, examInfo);
     _eaState.review = {
       difficulty: review.difficulty || '',
       discrimination: review.discrimination || '',
@@ -27561,28 +27572,57 @@ function eaReanalyze(){
 }
 
 // Gemini: 문항 분석 호출
-async function eaCallGeminiForItems(pdfImages){
+async function eaCallGeminiForItems(pdfImages, examInfo){
+  examInfo = examInfo || {};
+  var examContext = '';
+  if(examInfo.subject || examInfo.school || examInfo.grade){
+    examContext = '【시험 정보 (사용자가 입력한 확정 정보 - 이를 반드시 준수)】\n';
+    if(examInfo.school) examContext += '- 학교: ' + examInfo.school + '\n';
+    if(examInfo.grade) examContext += '- 학년: 고' + examInfo.grade + '\n';
+    if(examInfo.year) examContext += '- 연도: ' + examInfo.year + '\n';
+    if(examInfo.semester) examContext += '- 학기: ' + examInfo.semester + '학기\n';
+    if(examInfo.round) examContext += '- 시험: ' + examInfo.round + '고사\n';
+    if(examInfo.subject) examContext += '- 과목: ' + examInfo.subject + ' ⭐ 단원은 반드시 이 과목 범위 내에서만 판단할 것!\n';
+    examContext += '\n';
+  }
+
+  var subjectGuide = '';
+  var subj = (examInfo.subject || '').replace(/\s/g,'');
+  if(/확률.*통계|확통/.test(subj)){
+    subjectGuide = '【확률과 통계 단원 예시】\n- 경우의 수: 순열, 조합, 중복순열, 같은 것이 있는 순열, 중복조합, 이항정리\n- 확률: 조건부확률, 독립사건, 베이즈, 확률의 덧셈/곱셈정리\n- 통계: 이산확률변수, 연속확률변수, 정규분포, 표본평균분포, 모평균 추정, 신뢰구간\n⛔ 함수의 극한, 도함수, 적분 등은 확률과 통계 범위가 아니므로 절대 사용 금지\n\n';
+  } else if(/수학.*1|수1/.test(subj) || subj === '수학1'){
+    subjectGuide = '【수학1 단원 예시】\n- 지수와 로그: 지수법칙, 로그의 성질, 지수/로그함수, 그래프\n- 삼각함수: sin/cos/tan, 단위원, 사인/코사인법칙\n- 수열: 등차수열, 등비수열, 수학적귀납법, 시그마\n\n';
+  } else if(/수학.*2|수2/.test(subj) || subj === '수학2'){
+    subjectGuide = '【수학2 단원 예시】\n- 함수의 극한과 연속\n- 미분: 도함수, 접선의 방정식, 함수의 증감/극값, 변곡점\n- 적분: 부정적분, 정적분, 정적분의 활용, 넓이, 속도/거리\n\n';
+  } else if(/미적분/.test(subj)){
+    subjectGuide = '【미적분 단원 예시】\n- 수열의 극한, 급수\n- 여러가지 함수의 미분 (지수/로그/삼각함수)\n- 적분법, 정적분의 활용\n\n';
+  } else if(/기하/.test(subj)){
+    subjectGuide = '【기하 단원 예시】\n- 이차곡선: 포물선, 타원, 쌍곡선\n- 평면벡터, 공간벡터\n- 공간도형\n\n';
+  }
+
   var prompt = [
     '당신은 한국 고등학교 수학 시험지 분석 전문가입니다.',
-    '주어진 기출문제 시험지 이미지의 모든 문항을 순서대로 분석해서 JSON으로 반환하세요.',
-    '시험지가 회전되어 있을 수 있으니 알맞게 보고 인식하세요.',
+    '주어진 기출문제 시험지 이미지의 모든 문항을 빠짐없이 순서대로 분석해서 JSON으로 반환하세요.',
+    '⚠️ 시험지가 회전되어 있을 수 있으니 글자가 거꾸로/옆으로 보이면 머리를 돌려 읽듯이 정확히 읽으세요.',
     '',
-    '각 문항마다 다음 정보를 추출:',
-    '1. number: 문항 번호 라벨',
-    '   - 객관식: "객관식1", "객관식2", ... 형태',
-    '   - 서술형/논술형: "서술형1", "서술형2", ... 형태',
-    '2. unit: 단원명 (예: "극한", "도함수", "접선의 방정식", "함수의 연속성" 등)',
-    '3. type_description: 구체적인 문제 유형을 간결하게 한 줄로',
-    '   - 예: "평균변화율 계산", "다항식 나머지정리", "절댓값 함수 교점"',
-    '4. score: 문제에 명시된 배점 숫자 (예: 3.8, 4.0, 4.2, 10.0). 없으면 null',
+    examContext + subjectGuide,
+    '【추출할 정보 (각 문항마다)】',
+    '1. number: 문항 번호 라벨 (반드시 시험지에 적힌 실제 번호 따라)',
+    '   - 객관식 1번 → "객관식1", 객관식 18번 → "객관식18"',
+    '   - 서술형 1번 → "서술형1", 서술형 2번 → "서술형2", 서술형 3번 → "서술형3"',
+    '   - 시험지에 [서술형] 또는 [논술형] 표시가 있는 영역은 모두 서술형으로 분류',
+    '2. unit: 단원명 (위에 명시된 ⭐ 과목 범위 내에서만 사용)',
+    '3. type_description: 구체적 문제 유형을 한 줄로',
+    '   - 예 (확통): "조건부확률 계산", "정규분포 표준화", "이항정리 계수"',
+    '4. score: 시험지에 명시된 배점 숫자 (없으면 null)',
     '5. difficulty: 1(쉬움), 2(보통), 3(어려움)',
-    '   - 1: 교과서 기본 수준, 단순 공식 대입',
-    '   - 2: 개념 응용, 두 단계 풀이',
-    '   - 3: 여러 개념 융합, 계산량 많음',
     '',
-    '주의사항:',
-    '- 정답 페이지나 표지는 문항에 포함하지 말 것',
-    '- 번호는 반드시 PDF에 나타나는 순서대로',
+    '⚠️ 매우 중요한 주의사항:',
+    '- 시험지의 모든 페이지를 빠짐없이 확인하세요. 객관식이 18개, 서술형이 3개 있다면 총 21개 항목이 나와야 합니다.',
+    '- 표지/정답 페이지/안내 페이지는 문항에서 제외',
+    '- 단원은 절대 추측하지 말고, 위에 명시된 과목 단원에 해당하는 것만 사용 (다른 과목 단원 사용 금지)',
+    '- 시험지에서 단원명이 명확히 안 보이면 문제 내용을 보고 위 단원 예시 중 가장 가까운 것 선택',
+    '- 객관식과 서술형을 명확히 구분 (서술형 영역의 문제를 객관식으로 인식하지 말 것)',
     '',
     '반드시 아래 JSON 형식만 반환 (마크다운 코드블록 없이):',
     '{"items":[{"number":"객관식1","unit":"...","type_description":"...","score":3.8,"difficulty":1}, ...]}'
@@ -27593,8 +27633,8 @@ async function eaCallGeminiForItems(pdfImages){
     return {inlineData: {mimeType: 'image/jpeg', data: b64}};
   });
 
-  // 🔄 모델 폴백 체인: Flash 우선 → 과부하면 Flash Lite → 마지막 Pro
-  var modelChain = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro'];
+  // 🔄 모델 폴백 체인: Pro 우선 (정확도) → 과부하면 Flash → 마지막 Flash Lite
+  var modelChain = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
   var lastError = null;
 
   for(var mi=0; mi<modelChain.length; mi++){
@@ -27669,7 +27709,17 @@ async function eaCallGeminiForItems(pdfImages){
 }
 
 // Gemini: 총평 작성 호출
-async function eaCallGeminiForReview(pdfImages, items){
+async function eaCallGeminiForReview(pdfImages, items, examInfo){
+  examInfo = examInfo || {};
+  var examContext = '';
+  if(examInfo.subject || examInfo.school){
+    examContext = '\n=== 시험 정보 ===\n';
+    if(examInfo.school) examContext += '학교: ' + examInfo.school + '\n';
+    if(examInfo.grade) examContext += '학년: 고' + examInfo.grade + '\n';
+    if(examInfo.subject) examContext += '과목: ' + examInfo.subject + '\n';
+    if(examInfo.round) examContext += '시험: ' + examInfo.round + '고사\n';
+  }
+
   var itemsBrief = items.map(function(it){
     return it.number_label + ' [' + it.unit + '] ' + it.type_description + ' (' + (it.score || '?') + '점, 난이도 ' + it.difficulty + ')';
   }).join('\n');
@@ -27677,7 +27727,7 @@ async function eaCallGeminiForReview(pdfImages, items){
   var prompt = [
     '당신은 한국 고등학교 수학 교사이자 시험 분석 전문가입니다.',
     '주어진 기출문제 시험지 이미지와 아래 문항 분석 결과를 바탕으로, 학원생들을 위한 시험 총평을 작성하세요.',
-    '',
+    examContext,
     '=== 문항 분석 결과 ===',
     itemsBrief,
     '',
@@ -27702,8 +27752,8 @@ async function eaCallGeminiForReview(pdfImages, items){
     return {inlineData: {mimeType: 'image/jpeg', data: b64}};
   });
 
-  // 🔄 모델 폴백 체인
-  var modelChain = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro'];
+  // 🔄 모델 폴백 체인: Pro 우선
+  var modelChain = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 
   for(var mi=0; mi<modelChain.length; mi++){
     var model = modelChain[mi];
