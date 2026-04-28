@@ -1540,7 +1540,7 @@
         </div>
 
         <!-- ① 시험 명칭 설정 카드 -->
-        <div class="card" style="margin-bottom:12px;border:1.5px solid #bbf7d0;background:#f0fdf4">
+        <div id="wn-testname-card" class="card" style="margin-bottom:12px;border:1.5px solid #bbf7d0;background:#f0fdf4">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
             <div style="font-size:13px;font-weight:700;color:#15803d">⚙️ 시험 명칭 설정</div>
             <button onclick="wnToggleTestNameSettings()" id="wn-settings-toggle-btn"
@@ -4865,6 +4865,9 @@ function showApp(){
       weekendNajePanel.classList.remove('active');
       weekendNajePanel.style.display = '';
     }
+    // 🔄 옵션 D: 데스크에서 숨긴 시험명 설정 카드를 선생님 모드에선 다시 보이게
+    var tnCard = document.getElementById('wn-testname-card');
+    if(tnCard) tnCard.style.display = '';
 
     document.getElementById('teacherApp').style.display  = 'block';
     document.getElementById('teacherNav').style.display  = 'block';
@@ -14891,8 +14894,13 @@ var _wnTestNameCache = null;  // {defaultName, periods: [{id, start, end, name, 
 var _wnTestNameLoaded = false;
 
 // DB에서 설정 읽어오기 (캐시 갱신)
-async function wnLoadTestNameSettingsFromDB(){
-  if(!currentUser || !currentUser.id){
+// targetTeacherId: 옵션 D - 데스크 모드에서 다른 선생님의 시험명 캐시를 로드할 때 사용
+//                  (생략하면 currentUser.id 기준으로 동작 - 선생님 모드)
+async function wnLoadTestNameSettingsFromDB(targetTeacherId){
+  // 데스크/관리자 모드 + 선택된 선생님이 있으면 그 선생님의 캐시를 로드
+  // 그 외에는 currentUser.id (선생님 본인) 기준
+  var teacherIdToUse = targetTeacherId || (currentUser && currentUser.id);
+  if(!teacherIdToUse){
     _wnTestNameCache = {defaultName: 'N제 TEST', periods: []};
     _wnTestNameLoaded = true;
     return _wnTestNameCache;
@@ -14900,13 +14908,13 @@ async function wnLoadTestNameSettingsFromDB(){
   try {
     // 기본 명칭
     var {data: setting} = await db.from('weekend_naje_testname_settings')
-      .select('default_name').eq('teacher_id', currentUser.id).maybeSingle();
+      .select('default_name').eq('teacher_id', teacherIdToUse).maybeSingle();
     var defaultName = (setting && setting.default_name) || 'N제 TEST';
 
     // 기간 목록
     var {data: periods} = await db.from('weekend_naje_testname_periods')
       .select('id,start_date,end_date,name,student_ids')
-      .eq('teacher_id', currentUser.id)
+      .eq('teacher_id', teacherIdToUse)
       .order('start_date', {ascending: true});
 
     _wnTestNameCache = {
@@ -15665,6 +15673,21 @@ async function wnLoadData(){
       .select('*').eq('session_date', date)
       .in('student_id', _wnStudents.map(function(s){ return s.id; }));
     (records||[]).forEach(function(r){ _wnData[r.student_id] = r; });
+  }
+
+  // 🎯 옵션 D: 데스크/관리자 모드 - 선택된 선생님의 시험명 캐시를 다시 로드
+  // (선생님 모드일 땐 본인 캐시가 이미 _wnTestNameCache 에 있음)
+  var role = (currentUser && currentUser.role) || 'teacher';
+  if(role === 'desk' || role === 'admin'){
+    if(selectedIds.length === 1){
+      // 한 선생님 선택 시: 그 선생님의 시험명 캐시 로드
+      await wnLoadTestNameSettingsFromDB(selectedIds[0]);
+      // 화면에 표시되는 "현재 적용 명칭" 도 갱신
+      if(typeof wnRefreshTestNameDisplay === 'function'){
+        await wnRefreshTestNameDisplay();
+      }
+    }
+    // 여러 선생님 선택 시는 일단 currentUser 캐시 유지 (멘트 생성 시 학생별 분기 가능)
   }
 
   wnRenderTable();
@@ -19780,6 +19803,14 @@ async function initAdminWeekendNaje(){
   if(srcPanel){
     srcPanel.classList.add('active');
     srcPanel.style.display = 'block';
+  }
+
+  // 🎯 옵션 D: 데스크는 시험명 편집 권한 없음 - 설정 카드 숨김
+  // (관리자/선생님은 보이게)
+  var card = document.getElementById('wn-testname-card');
+  if(card){
+    var role = (currentUser && currentUser.role) || 'teacher';
+    card.style.display = (role === 'desk') ? 'none' : '';
   }
 
   // wn 초기화 함수가 있으면 호출 (선생님 페이지 로직 그대로)
