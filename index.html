@@ -27505,7 +27505,7 @@ async function eaAnalyzePdf(){
     console.log('[내신분석] ' + _eaState.pdfImages.length + '개 페이지, 총 ' + totalKB + 'KB');
 
     // 2) Gemini에 문항 분석 요청
-    eaSetProgress(30, '🤖 AI가 문항을 분석 중입니다... (최대 1분 소요)');
+    eaSetProgress(30, '🤖 AI가 문항을 분석 중입니다... (1~2분 소요, 서버 상태에 따라 더 걸릴 수 있어요)');
     var items = await eaCallGeminiForItems(_eaState.pdfImages);
     if(!items || items.length === 0){
       throw new Error('문항 분석 결과가 비어있습니다.');
@@ -27592,53 +27592,80 @@ async function eaCallGeminiForItems(pdfImages){
   var imageParts = pdfImages.map(function(b64){
     return {inlineData: {mimeType: 'image/jpeg', data: b64}};
   });
-  var payload = {
-    model: 'gemini-2.5-flash',
-    contents: [{
-      parts: imageParts.concat([{text: prompt}])
-    }],
-    generationConfig: {
-      temperature: 0,
-      maxOutputTokens: 8192,
-      responseMimeType: 'application/json'
+
+  // 🔄 모델 폴백 체인: Flash 우선 → 과부하면 Flash Lite → 마지막 Pro
+  var modelChain = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro'];
+  var lastError = null;
+
+  for(var mi=0; mi<modelChain.length; mi++){
+    var model = modelChain[mi];
+    var payload = {
+      model: model,
+      contents: [{
+        parts: imageParts.concat([{text: prompt}])
+      }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 8192,
+        responseMimeType: 'application/json'
+      }
+    };
+
+    var MAX_RETRY = 3;
+    for(var attempt=1; attempt<=MAX_RETRY; attempt++){
+      try {
+        var resp = await fetch('/api/gemini-proxy', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if(!resp.ok){
+          var txt = await resp.text();
+          var err = new Error('HTTP ' + resp.status + ': ' + txt.slice(0,200));
+          err.status = resp.status;
+          throw err;
+        }
+        var data = await resp.json();
+        if(data.error){
+          var err2 = new Error(data.error.message);
+          err2.status = data.error.code;
+          throw err2;
+        }
+
+        var text = '';
+        if(data.candidates && data.candidates[0]){
+          var parts = data.candidates[0].content && data.candidates[0].content.parts;
+          text = (parts && parts[0] && parts[0].text) || '';
+        }
+        if(!text) throw new Error('AI 응답이 비어있습니다.');
+
+        var clean = text.replace(/```json|```/g, '').trim();
+        var parsed = JSON.parse(clean);
+        if(!parsed.items || !Array.isArray(parsed.items)){
+          throw new Error('items 배열이 없습니다.');
+        }
+        console.log('[내신분석] ' + model + ' 으로 ' + parsed.items.length + '개 문항 인식');
+        return parsed.items;
+      } catch(e) {
+        lastError = e;
+        console.warn('[내신분석] ' + model + ' 시도 ' + attempt + '/' + MAX_RETRY + ' 실패:', e.message);
+        // 503 (과부하) 면 더 길게 대기 + 다음 모델로 빠르게 폴백
+        var is503 = e.status === 503 || /503|UNAVAILABLE|high demand/i.test(e.message||'');
+        if(is503 && attempt >= 2) break;  // 같은 모델로 더 시도하지 말고 다음 모델로
+        if(attempt === MAX_RETRY) break;
+        // 백오프: 503 이면 더 길게 (5초→10초→15초), 그 외는 3초→6초→9초
+        var waitMs = is503 ? 5000 * attempt : 3000 * attempt;
+        await new Promise(function(r){ setTimeout(r, waitMs); });
+      }
     }
-  };
-
-  var MAX_RETRY = 3;
-  for(var attempt=1; attempt<=MAX_RETRY; attempt++){
-    try {
-      var resp = await fetch('/api/gemini-proxy', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)
-      });
-      if(!resp.ok){
-        var txt = await resp.text();
-        throw new Error('HTTP ' + resp.status + ': ' + txt.slice(0,200));
-      }
-      var data = await resp.json();
-      if(data.error) throw new Error(data.error.message);
-
-      var text = '';
-      if(data.candidates && data.candidates[0]){
-        var parts = data.candidates[0].content && data.candidates[0].content.parts;
-        text = (parts && parts[0] && parts[0].text) || '';
-      }
-      if(!text) throw new Error('AI 응답이 비어있습니다.');
-
-      var clean = text.replace(/```json|```/g, '').trim();
-      var parsed = JSON.parse(clean);
-      if(!parsed.items || !Array.isArray(parsed.items)){
-        throw new Error('items 배열이 없습니다.');
-      }
-      console.log('[내신분석] 문항 ' + parsed.items.length + '개 인식');
-      return parsed.items;
-    } catch(e) {
-      console.warn('[내신분석] 시도 ' + attempt + '/' + MAX_RETRY + ' 실패:', e.message);
-      if(attempt === MAX_RETRY) throw e;
-      await new Promise(function(r){ setTimeout(r, 3000 * attempt); });
+    // 다음 모델로 넘어가기 전 잠깐 대기 (서버 부하 분산)
+    if(mi < modelChain.length - 1){
+      console.log('[내신분석] 다음 모델로 폴백: ' + modelChain[mi+1]);
+      await new Promise(function(r){ setTimeout(r, 2000); });
     }
   }
+  // 모든 모델 실패
+  throw lastError || new Error('모든 AI 모델이 실패했습니다.');
 }
 
 // Gemini: 총평 작성 호출
@@ -27674,53 +27701,71 @@ async function eaCallGeminiForReview(pdfImages, items){
   var imageParts = pdfImages.map(function(b64){
     return {inlineData: {mimeType: 'image/jpeg', data: b64}};
   });
-  var payload = {
-    model: 'gemini-2.5-flash',
-    contents: [{
-      parts: imageParts.concat([{text: prompt}])
-    }],
-    generationConfig: {
-      temperature: 0.3,
-      maxOutputTokens: 4096,
-      responseMimeType: 'application/json'
+
+  // 🔄 모델 폴백 체인
+  var modelChain = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro'];
+
+  for(var mi=0; mi<modelChain.length; mi++){
+    var model = modelChain[mi];
+    var payload = {
+      model: model,
+      contents: [{
+        parts: imageParts.concat([{text: prompt}])
+      }],
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 4096,
+        responseMimeType: 'application/json'
+      }
+    };
+
+    var MAX_RETRY = 2;
+    for(var attempt=1; attempt<=MAX_RETRY; attempt++){
+      try {
+        var resp = await fetch('/api/gemini-proxy', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if(!resp.ok){
+          var txt = await resp.text();
+          var err = new Error('HTTP ' + resp.status + ': ' + txt.slice(0,200));
+          err.status = resp.status;
+          throw err;
+        }
+        var data = await resp.json();
+        if(data.error){
+          var err2 = new Error(data.error.message);
+          err2.status = data.error.code;
+          throw err2;
+        }
+
+        var text = '';
+        if(data.candidates && data.candidates[0]){
+          var parts = data.candidates[0].content && data.candidates[0].content.parts;
+          text = (parts && parts[0] && parts[0].text) || '';
+        }
+        if(!text) throw new Error('총평 응답이 비어있음');
+
+        var clean = text.replace(/```json|```/g, '').trim();
+        var parsed = JSON.parse(clean);
+        console.log('[내신분석 총평] ' + model + ' 으로 성공');
+        return parsed;
+      } catch(e) {
+        console.warn('[내신분석 총평] ' + model + ' 시도 ' + attempt + '/' + MAX_RETRY + ' 실패:', e.message);
+        var is503 = e.status === 503 || /503|UNAVAILABLE|high demand/i.test(e.message||'');
+        if(is503 && attempt >= 1) break;  // 503 이면 바로 다음 모델
+        if(attempt === MAX_RETRY) break;
+        var waitMs = is503 ? 5000 * attempt : 3000 * attempt;
+        await new Promise(function(r){ setTimeout(r, waitMs); });
+      }
     }
-  };
-
-  var MAX_RETRY = 2;
-  for(var attempt=1; attempt<=MAX_RETRY; attempt++){
-    try {
-      var resp = await fetch('/api/gemini-proxy', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)
-      });
-      if(!resp.ok){
-        var txt = await resp.text();
-        throw new Error('HTTP ' + resp.status + ': ' + txt.slice(0,200));
-      }
-      var data = await resp.json();
-      if(data.error) throw new Error(data.error.message);
-
-      var text = '';
-      if(data.candidates && data.candidates[0]){
-        var parts = data.candidates[0].content && data.candidates[0].content.parts;
-        text = (parts && parts[0] && parts[0].text) || '';
-      }
-      if(!text) throw new Error('총평 응답이 비어있음');
-
-      var clean = text.replace(/```json|```/g, '').trim();
-      var parsed = JSON.parse(clean);
-      return parsed;
-    } catch(e) {
-      console.warn('[내신분석 총평] 시도 ' + attempt + '/' + MAX_RETRY + ' 실패:', e.message);
-      if(attempt === MAX_RETRY){
-        // 총평 실패는 빈 상태로 반환 (문항 분석은 유지)
-        console.error('[내신분석 총평] 모두 실패, 빈 총평 반환');
-        return {difficulty:'', discrimination:'', strategy:''};
-      }
-      await new Promise(function(r){ setTimeout(r, 3000 * attempt); });
+    if(mi < modelChain.length - 1){
+      await new Promise(function(r){ setTimeout(r, 2000); });
     }
   }
+  // 총평 실패는 빈 상태로 반환 (문항 분석은 유지)
+  console.error('[내신분석 총평] 모든 모델 실패, 빈 총평 반환');
   return {difficulty:'', discrimination:'', strategy:''};
 }
 
