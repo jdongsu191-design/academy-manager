@@ -8642,7 +8642,8 @@ var DESK_PERMISSIONS = [
   {key:'weekend_msg',  label:'💬 주말 메시지 전송', group:'주말 프로그램'},
   {key:'students',     label:'👥 학생 관리',  group:'기타'},
   {key:'classes',      label:'🏫 반 관리',    group:'기타'},
-  {key:'reading_room', label:'📚 독서실',     group:'기타'}
+  {key:'reading_room', label:'📚 독서실',     group:'기타'},
+  {key:'syllabus_view',label:'📑 진도계획서 조회', group:'기타'}
 ];
 
 // 권한 키로 라벨 빠르게 찾기
@@ -8666,6 +8667,7 @@ var DESK_PERM_TO_MENUS = {
   'weekend_bety':  [{btnId:'amenu-weekend-bety',     tabId:'admin-weekend-bety',     parent:'amenu-weekend-group'}],
   'weekend_ns':    [{btnId:'amenu-weekend-naesin',   tabId:'admin-weekend-naesin',   parent:'amenu-weekend-group'}],
   'weekend_msg':   [{btnId:'amenu-weekend-msg',      tabId:'admin-weekend-msg',      parent:'amenu-weekend-group'}],
+  'syllabus_view': [{btnId:'amenu-syllabus-view',    tabId:'admin-syllabus-view',    parent:'amenu-syllabus-group'}],
   'students':      [{btnId:'amenu-accounts',         tabId:'admin-accounts',         parent:null}],
   'classes':       [{btnId:'amenu-accounts',         tabId:'admin-accounts',         parent:null}],
   'reading_room':  [{btnId:'amenu-rr-weekly',        tabId:'admin-rr-weekly',        parent:'amenu-reading-room-group'}]
@@ -8727,6 +8729,14 @@ function applyDeskSidebarFilter(){
     if(!el) return;
     el.style.display = allowedBtnIds.has(id) ? '' : 'none';
   });
+
+  // 진도계획서 그룹: 데스크는 "조회하기"만 부여 (제작하기는 항상 숨김)
+  var syllabusChildren = ['amenu-syllabus','amenu-syllabus-view'];
+  syllabusChildren.forEach(function(id){
+    var el = document.getElementById(id);
+    if(!el) return;
+    el.style.display = allowedBtnIds.has(id) ? '' : 'none';
+  });
 }
 
 // 데스크가 가진 권한 중 첫 번째 메뉴 (자동 진입용)
@@ -8760,7 +8770,8 @@ function restoreAdminSidebar(){
   });
   // 그룹 안의 자식들도 모두 복원
   ['amenu-weekend-naje','amenu-weekend-potential','amenu-weekend-bety','amenu-weekend-naesin','amenu-weekend-msg',
-   'amenu-rr-weekly'].forEach(function(id){
+   'amenu-rr-weekly',
+   'amenu-syllabus','amenu-syllabus-view'].forEach(function(id){
     var el = document.getElementById(id);
     if(el) el.style.display = '';
   });
@@ -19271,13 +19282,33 @@ async function initSyllabusView(){
   if(listEl) listEl.innerHTML = '<div style="font-size:13px;color:#9ca3af;padding:20px;text-align:center">불러오는 중...</div>';
   
   var branchSel = document.getElementById('sylv-filter-branch');
-  if(branchSel && branchSel.options.length <= 1){
-    try {
-      var {data: branches} = await db.from('branches').select('id, name').order('name');
-      (branches||[]).forEach(function(b){
-        branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
-      });
-    } catch(e){}
+  // 🎯 데스크 모드: 본인 분원만 옵션 + 자동 선택 + 1개면 disabled
+  var isDesk = currentUser && currentUser.role === 'desk';
+  if(branchSel){
+    if(isDesk){
+      var allowedB = getDeskAllowedBranchIds();
+      branchSel.innerHTML = '';
+      try {
+        var {data: branches} = await db.from('branches').select('id, name').order('name');
+        (branches||[]).forEach(function(b){
+          if(allowedB.indexOf(b.id) !== -1){
+            branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+          }
+        });
+      } catch(e){}
+      if(branchSel.options.length > 0){
+        branchSel.value = branchSel.options[0].value;
+      }
+      branchSel.disabled = (allowedB.length === 1);
+    } else if(branchSel.options.length <= 1){
+      try {
+        var {data: branches2} = await db.from('branches').select('id, name').order('name');
+        (branches2||[]).forEach(function(b){
+          branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+        });
+      } catch(e){}
+      branchSel.disabled = false;
+    }
   }
   await sylViewLoad();
 }
@@ -19364,10 +19395,14 @@ async function sylViewLoad(){
       periods.forEach(function(p){ pSel.innerHTML += '<option value="'+p+'">'+p+'</option>'; });
     }
 
+    // 🎯 데스크 안전망: 분원 필터 우회해도 본인 분원만
+    var deskAllowedBranchIds = (currentUser && currentUser.role === 'desk' && Array.isArray(currentUser.branch_ids))
+      ? currentUser.branch_ids : null;
     var filtered = rows.filter(function(r){
       if(filterBranch && r._realBranchId !== filterBranch) return false;
       if(filterTeacher && r.teacher_name !== filterTeacher) return false;
       if(filterPeriod && r.period !== filterPeriod) return false;
+      if(deskAllowedBranchIds && (!r._realBranchId || deskAllowedBranchIds.indexOf(r._realBranchId) === -1)) return false;
       return true;
     });
 
