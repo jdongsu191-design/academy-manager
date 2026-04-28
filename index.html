@@ -5302,7 +5302,12 @@ async function loadAdminData(){
   const cf=document.getElementById('admClassFilter');
   const tf=document.getElementById('admTeacherFilter');
   if(tf){
-    const teachers=allUsers.filter(u=>u.role==='teacher'&&u.status==='active'&&!u.deleted_at);
+    let teachers=allUsers.filter(u=>u.role==='teacher'&&u.status==='active'&&!u.deleted_at);
+    // 🎯 데스크: 본인 분원 선생님만
+    if(currentUser && currentUser.role === 'desk'){
+      const allowedB = getDeskAllowedBranchIds();
+      teachers = teachers.filter(t => t.branch_id && allowedB.indexOf(t.branch_id) !== -1);
+    }
     tf.innerHTML='<option value="">전체 선생님</option>'
       +teachers.map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
   }
@@ -5352,15 +5357,42 @@ function admTeacherLevelFilter(level){
 function renderAdmBranchFilterBtns(){
   var sel = document.getElementById('adm-branch-filter-select');
   if(!sel) return;
-  sel.innerHTML = '<option value="">전체 분원</option>';
-  (window._allBranches||[]).forEach(function(b){
-    sel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
-  });
-  sel.innerHTML += '<option value="__none__">미배정</option>';
+  // 🎯 데스크: 본인 분원만 (다른 분원/미배정 옵션 제거)
+  var isDeskMode = currentUser && currentUser.role === 'desk';
+  if(isDeskMode){
+    var allowedB = getDeskAllowedBranchIds();
+    sel.innerHTML = '';
+    (window._allBranches||[]).filter(function(b){ return allowedB.indexOf(b.id) !== -1; })
+      .forEach(function(b){
+        sel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+      });
+    // 분원 1개면 disabled
+    sel.disabled = (allowedB.length === 1);
+    if(allowedB.length > 0){
+      sel.value = allowedB[0];  // 첫 분원 자동 선택
+      _admBranchFilter = allowedB[0];
+    }
+  } else {
+    sel.disabled = false;
+    sel.innerHTML = '<option value="">전체 분원</option>';
+    (window._allBranches||[]).forEach(function(b){
+      sel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
+    });
+    sel.innerHTML += '<option value="__none__">미배정</option>';
+  }
 }
 
 function renderTeacherAccounts(filterBranchId, filterLevel){
   var t = allUsers.filter(function(u){ return u.role==='teacher' && !u.deleted_at; });
+  // 🎯 데스크: 본인 분원의 선생님만
+  if(currentUser && currentUser.role === 'desk'){
+    var allowedB = getDeskAllowedBranchIds();
+    if(allowedB.length > 0){
+      t = t.filter(function(u){ return u.branch_id && allowedB.indexOf(u.branch_id) !== -1; });
+    } else {
+      t = [];  // 부여된 분원 없으면 빈 목록
+    }
+  }
   if(filterBranchId === '__none__'){
     t = t.filter(function(u){ return !u.branch_id; });
   } else if(filterBranchId) {
@@ -5442,11 +5474,25 @@ function renderAdminStudents(){
   const q=document.getElementById('admStudentSearch').value.toLowerCase();
   const tf=document.getElementById('admTeacherFilter').value;
   const students=allUsers.filter(u=>u.role==='student');
+  // 🎯 데스크: 본인 분원 학생만 (학생.branch_id 또는 담당 선생님의 branch_id 로 판단)
+  const isDeskMode = currentUser && currentUser.role === 'desk';
+  const allowedBranchIds = isDeskMode ? getDeskAllowedBranchIds() : [];
   const f=students.filter(u=>{
     if(q && !u.name.toLowerCase().includes(q)) return false;
     if(tf && u.teacher_id!==tf) return false;
     if(_admStatusFilter==='active' && u.status!=='active') return false;
     if(_admStatusFilter==='inactive' && u.status!=='inactive') return false;
+    // 🎯 데스크 분원 필터
+    if(isDeskMode){
+      if(allowedBranchIds.length === 0) return false;
+      var matched = false;
+      if(u.branch_id && allowedBranchIds.indexOf(u.branch_id) !== -1) matched = true;
+      if(!matched && u.teacher_id){
+        var teacher = (allUsers||[]).find(function(t){ return t.id === u.teacher_id; });
+        if(teacher && teacher.branch_id && allowedBranchIds.indexOf(teacher.branch_id) !== -1) matched = true;
+      }
+      if(!matched) return false;
+    }
     return true;
   });
   const el=document.getElementById('studentAccountList');
@@ -8539,6 +8585,37 @@ function restoreAdminSidebar(){
     var el = document.getElementById(id);
     if(el) el.style.display = '';
   });
+}
+
+// 🎯 데스크가 볼 수 있는 branch_ids 배열 (선생님/관리자는 빈 배열 = 전체)
+function getDeskAllowedBranchIds(){
+  if(currentUser && currentUser.role === 'desk'){
+    return Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+  }
+  return [];  // admin/teacher: 빈 배열 = 제한 없음
+}
+
+// 데스크가 특정 분원 ID 에 접근 가능한지
+function deskCanAccessBranch(branchId){
+  if(!currentUser || currentUser.role !== 'desk') return true;
+  var allowed = getDeskAllowedBranchIds();
+  return allowed.length === 0 || allowed.indexOf(branchId) !== -1;
+}
+
+// 데스크가 특정 user 에 접근 가능한지 (학생/선생님 카드 필터링)
+function deskCanAccessUser(user){
+  if(!currentUser || currentUser.role !== 'desk') return true;
+  if(!user) return false;
+  var allowed = getDeskAllowedBranchIds();
+  if(allowed.length === 0) return true;
+  // 학생/선생님은 branch_id 또는 (학생의 경우) class 의 teacher 의 branch_id 로 판단
+  if(user.branch_id && allowed.indexOf(user.branch_id) !== -1) return true;
+  // teacher_id 로 본인 선생님의 branch_id 확인
+  if(user.teacher_id){
+    var teacher = (allUsers||[]).find(function(u){ return u.id === user.teacher_id; });
+    if(teacher && teacher.branch_id && allowed.indexOf(teacher.branch_id) !== -1) return true;
+  }
+  return false;
 }
 
 // 🎯 데스크 분원 필터 자동 고정 (주말 프로그램 등)
@@ -23720,11 +23797,25 @@ async function deleteAdminAccount(id, name){
 var _acctCurrentTab = 'teacher';
 
 function switchAcctTab(tab){
+  // 🎯 데스크 모드: admin/desk 탭은 접근 차단
+  if(currentUser && currentUser.role === 'desk' && (tab === 'admin' || tab === 'desk')){
+    return;  // 무시 (데스크는 이 두 탭 사용 불가)
+  }
   _acctCurrentTab = tab;
+  // 데스크 모드일 땐 admin/desk 탭 자체를 숨김
+  var isDesk = currentUser && currentUser.role === 'desk';
   ['teacher','class','student','admin','desk'].forEach(function(t){
     var panel = document.getElementById('acct-panel-'+t);
     var btn   = document.getElementById('acct-tab-'+t);
     if(!panel || !btn) return;
+    // 데스크는 admin/desk 탭 버튼 자체 숨김
+    if(isDesk && (t === 'admin' || t === 'desk')){
+      btn.style.display = 'none';
+      panel.style.display = 'none';
+      return;
+    } else {
+      btn.style.display = '';
+    }
     var active = t === tab;
     panel.style.display = active ? 'block' : 'none';
     btn.style.background  = active ? 'var(--primary)' : 'transparent';
@@ -23744,8 +23835,13 @@ function admRenderTeacherSelect(){
   if(!sel) return;
   var cur = sel.value;
   sel.innerHTML = '<option value="">전체 선생님</option>';
-  (allUsers||[]).filter(function(u){ return u.role==='teacher' && u.status==='active'; })
-    .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); })
+  // 🎯 데스크: 본인 분원 선생님만
+  var teachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && u.status==='active'; });
+  if(currentUser && currentUser.role === 'desk'){
+    var allowedB = getDeskAllowedBranchIds();
+    teachers = teachers.filter(function(t){ return t.branch_id && allowedB.indexOf(t.branch_id) !== -1; });
+  }
+  teachers.sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); })
     .forEach(function(t){
       sel.innerHTML += '<option value="'+t.id+'">'+t.name+' 선생님</option>';
     });
@@ -23758,8 +23854,26 @@ function admRenderClasses(){
   var el = document.getElementById('adm-class-list');
   if(!el) return;
 
+  // 🎯 데스크: 본인 분원의 선생님이 담당하는 반만
+  var isDeskMode = currentUser && currentUser.role === 'desk';
+  var allowedBranchIds = isDeskMode ? getDeskAllowedBranchIds() : [];
+  var allowedTeacherIds = null;
+  if(isDeskMode){
+    if(allowedBranchIds.length === 0){
+      allowedTeacherIds = [];  // 빈 분원 → 빈 선생님 → 빈 반
+    } else {
+      allowedTeacherIds = (allUsers||[])
+        .filter(function(u){ return u.role === 'teacher' && u.branch_id && allowedBranchIds.indexOf(u.branch_id) !== -1; })
+        .map(function(u){ return u.id; });
+    }
+  }
+
   var filtered = (allClasses||[]).filter(function(c){
-    return !teacherId || c.teacher_id === teacherId;
+    if(teacherId && c.teacher_id !== teacherId) return false;
+    if(allowedTeacherIds !== null){
+      if(!c.teacher_id || allowedTeacherIds.indexOf(c.teacher_id) === -1) return false;
+    }
+    return true;
   });
 
   if(!filtered.length){
