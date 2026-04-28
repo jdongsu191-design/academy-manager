@@ -14893,6 +14893,42 @@ let wlCurrentLogId = null;
 var _wnTestNameCache = null;  // {defaultName, periods: [{id, start, end, name, student_ids: []}]}
 var _wnTestNameLoaded = false;
 
+// 🎯 옵션 D: 데스크/관리자 모드용 - 학생별로 다른 선생님의 시험명을 적용해야 하므로
+// 선생님 ID → 시험명 캐시 맵 (한 화면에 여러 선생님의 학생이 섞여 있을 때)
+var _wnTestNameCacheByTeacher = {};
+
+// 여러 선생님의 시험명 캐시를 한 번에 batch 로드 (데스크/관리자 모드용)
+async function wnLoadTestNamesForTeachers(teacherIds){
+  if(!teacherIds || teacherIds.length === 0) return;
+  var unique = Array.from(new Set(teacherIds.filter(Boolean)));
+  if(unique.length === 0) return;
+  try {
+    var [{data: settings}, {data: periods}] = await Promise.all([
+      db.from('weekend_naje_testname_settings').select('teacher_id,default_name').in('teacher_id', unique),
+      db.from('weekend_naje_testname_periods').select('teacher_id,id,start_date,end_date,name,student_ids').in('teacher_id', unique).order('start_date', {ascending:true})
+    ]);
+    // 선생님별로 캐시 빌드
+    var settingMap = {};
+    (settings||[]).forEach(function(s){ settingMap[s.teacher_id] = s.default_name; });
+    var periodsByTeacher = {};
+    (periods||[]).forEach(function(p){
+      if(!periodsByTeacher[p.teacher_id]) periodsByTeacher[p.teacher_id] = [];
+      periodsByTeacher[p.teacher_id].push({
+        id: p.id, start: p.start_date, end: p.end_date, name: p.name,
+        student_ids: Array.isArray(p.student_ids) ? p.student_ids : []
+      });
+    });
+    unique.forEach(function(tid){
+      _wnTestNameCacheByTeacher[tid] = {
+        defaultName: settingMap[tid] || 'N제 TEST',
+        periods: periodsByTeacher[tid] || []
+      };
+    });
+  } catch(e){
+    console.error('[시험명칭] batch 로드 실패:', e);
+  }
+}
+
 // DB에서 설정 읽어오기 (캐시 갱신)
 // targetTeacherId: 옵션 D - 데스크 모드에서 다른 선생님의 시험명 캐시를 로드할 때 사용
 //                  (생략하면 currentUser.id 기준으로 동작 - 선생님 모드)
@@ -15018,8 +15054,26 @@ function wnGetTestNameSettings(){
 // 날짜 + 학생ID 기반 시험 명칭 반환
 // - studentId 없으면: 날짜만 보고 기본/기간명 반환 (전체용)
 // - studentId 있으면: 해당 학생이 포함된 기간을 우선적으로 확인
+// 🎯 옵션 D: 데스크/관리자 모드일 때는 학생의 담당 선생님 캐시를 사용 (선생님마다 시험명이 다를 수 있음)
 function wnGetTestName(dateStr, studentId){
-  var settings = wnGetTestNameSettings();
+  // 어떤 캐시를 쓸지 결정
+  var settings;
+  var role = (currentUser && currentUser.role) || 'teacher';
+  if((role === 'desk' || role === 'admin') && studentId){
+    // 학생 → 담당 선생님 → 그 선생님의 캐시
+    var stu = (typeof _wnStudents !== 'undefined' && _wnStudents)
+      ? _wnStudents.find(function(s){ return s.id === studentId; })
+      : null;
+    var tid = stu && stu.teacher_id;
+    if(tid && _wnTestNameCacheByTeacher && _wnTestNameCacheByTeacher[tid]){
+      settings = _wnTestNameCacheByTeacher[tid];
+    } else {
+      settings = wnGetTestNameSettings();  // fallback (현재 캐시)
+    }
+  } else {
+    // 선생님 모드: 기존대로 본인 캐시
+    settings = wnGetTestNameSettings();
+  }
   var defaultName = settings.defaultName || 'N제 TEST';
   if(!dateStr) return defaultName;
   var periods = settings.periods || [];
@@ -15031,12 +15085,10 @@ function wnGetTestName(dateStr, studentId){
     if(dateStr < p.start || dateStr > p.end) continue;  // 기간 밖
     var sids = p.student_ids || [];
     if(studentId){
-      // 학생ID가 있으면: 빈 배열(전체 적용) or 해당 학생이 포함된 경우만 매칭
       if(sids.length === 0 || sids.indexOf(studentId) !== -1){
         return p.name;
       }
     } else {
-      // 학생ID가 없으면: 기존 동작 (기간 매칭되면 반환)
       return p.name;
     }
   }
@@ -15675,19 +15727,14 @@ async function wnLoadData(){
     (records||[]).forEach(function(r){ _wnData[r.student_id] = r; });
   }
 
-  // 🎯 옵션 D: 데스크/관리자 모드 - 선택된 선생님의 시험명 캐시를 다시 로드
-  // (선생님 모드일 땐 본인 캐시가 이미 _wnTestNameCache 에 있음)
+  // 🎯 옵션 D: 데스크/관리자 모드 - 학생들의 담당 선생님 시험명 캐시를 batch 로드
+  // (한 화면에 여러 선생님 학생이 섞여 있어도 각각 그 선생님의 시험명 적용)
   var role = (currentUser && currentUser.role) || 'teacher';
   if(role === 'desk' || role === 'admin'){
-    if(selectedIds.length === 1){
-      // 한 선생님 선택 시: 그 선생님의 시험명 캐시 로드
-      await wnLoadTestNameSettingsFromDB(selectedIds[0]);
-      // 화면에 표시되는 "현재 적용 명칭" 도 갱신
-      if(typeof wnRefreshTestNameDisplay === 'function'){
-        await wnRefreshTestNameDisplay();
-      }
+    var teacherIdsToLoad = Array.from(new Set(_wnStudents.map(function(s){ return s.teacher_id; }).filter(Boolean)));
+    if(teacherIdsToLoad.length > 0){
+      await wnLoadTestNamesForTeachers(teacherIdsToLoad);
     }
-    // 여러 선생님 선택 시는 일단 currentUser 캐시 유지 (멘트 생성 시 학생별 분기 가능)
   }
 
   wnRenderTable();
