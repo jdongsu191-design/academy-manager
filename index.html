@@ -2837,31 +2837,8 @@
 
       <!-- 관리자 주말 N제 조회 패널 -->
       <div class="panel" id="panel-admin-weekend-naje">
-        <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#14532d">📅 주말 N제 조회</div>
-        <div style="font-size:13px;color:#6b7280;margin-bottom:16px">선생님별 주말 N제 결과를 조회합니다 (읽기 전용)</div>
-        <div class="card" style="margin-bottom:12px">
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-            <div style="flex:1;min-width:120px">
-              <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">분원</div>
-              <select id="awn-branch-select" onchange="awnFilterTeachers()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
-                <option value="">전체 분원</option>
-              </select>
-            </div>
-            <div style="flex:1;min-width:140px">
-              <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">선생님</div>
-              <select id="awn-teacher-select" onchange="awnLoad()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
-                <option value="">전체 선생님</option>
-              </select>
-            </div>
-            <div style="flex:1;min-width:140px">
-              <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500">날짜</div>
-              <input type="date" id="awn-date" onchange="awnLoad()" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:#fff">
-            </div>
-          </div>
-        </div>
-        <div id="awn-table-wrap">
-          <div class="empty-state"><div class="ei">📅</div><p>날짜를 선택하면 결과가 표시됩니다</p></div>
-        </div>
+        <!-- 옵션 D: 선생님의 panel-weekend-naje를 여기로 이동시켜 그대로 사용 -->
+        <!-- 사이드바 메뉴 클릭 시 initAdminWeekendNaje() 가 panel-weekend-naje 를 이 안으로 이동 -->
       </div>
 
       <!-- 관리자 포텐셜 조회 패널 -->
@@ -4879,6 +4856,16 @@ function showApp(){
     loadAdminData();
 
   } else if(currentUser.role === 'teacher'){
+    // 🔄 옵션 D: 데스크/관리자가 옮겨놓은 panel-weekend-naje를 teacherApp으로 복원
+    var weekendNajePanel = document.getElementById('panel-weekend-naje');
+    var teacherAppEl = document.getElementById('teacherApp');
+    if(weekendNajePanel && teacherAppEl && weekendNajePanel.parentElement !== teacherAppEl){
+      teacherAppEl.appendChild(weekendNajePanel);
+      // 복원 후엔 비활성 (선생님이 메뉴 클릭 시 활성화됨)
+      weekendNajePanel.classList.remove('active');
+      weekendNajePanel.style.display = '';
+    }
+
     document.getElementById('teacherApp').style.display  = 'block';
     document.getElementById('teacherNav').style.display  = 'block';
     document.getElementById('atRoleLabel').textContent   = '선생님';
@@ -15542,14 +15529,28 @@ async function wnLoad(){
 }
 
 async function wnLoadFilters(){
-  var myBranchId = currentUser.branch_id || null;
+  // 🎯 옵션 D: currentUser.role 에 따라 분기
+  // - teacher: 본인 분원 선생님 + 본인 자동 포함 (기존 동작)
+  // - desk:    본인 분원들(branch_ids) 선생님만, 본인은 선생님이 아니므로 자동 체크 없음
+  // - admin:   모든 선생님 (분원 제한 없음)
+  var role = (currentUser && currentUser.role) || 'teacher';
   var tQuery = db.from('users').select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
-  if(myBranchId) tQuery = tQuery.eq('branch_id', myBranchId);
+
+  if(role === 'teacher'){
+    var myBranchId = currentUser.branch_id || null;
+    if(myBranchId) tQuery = tQuery.eq('branch_id', myBranchId);
+  } else if(role === 'desk'){
+    var myBranchIds = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+    if(myBranchIds.length > 0) tQuery = tQuery.in('branch_id', myBranchIds);
+  }
+  // admin: 분원 제한 없음 (전체 선생님)
+
   var {data: teachers} = await tQuery;
   _wnAllTeachers = teachers || [];
 
-  if(!_wnAllTeachers.find(function(t){ return t.id===currentUser.id; })){
-    _wnAllTeachers.unshift({id:currentUser.id, name:currentUser.name, branch_id:myBranchId});
+  // 선생님 본인일 때만 본인 자동 추가 (드롭다운에 보이지 않을 수 있어서)
+  if(role === 'teacher' && !_wnAllTeachers.find(function(t){ return t.id===currentUser.id; })){
+    _wnAllTeachers.unshift({id:currentUser.id, name:currentUser.name, branch_id:currentUser.branch_id||null});
   }
 
   wnRenderTeacherCheckboxes();
@@ -15558,8 +15559,10 @@ async function wnLoadFilters(){
 function wnRenderTeacherCheckboxes(){
   var list = document.getElementById('wn-teacher-chk-list');
   if(!list) return;
+  // 선생님일 때만 본인 자동 체크 (데스크/관리자는 직접 선택)
+  var role = (currentUser && currentUser.role) || 'teacher';
   list.innerHTML = _wnAllTeachers.map(function(t){
-    var checked = (t.id === currentUser.id) ? ' checked' : '';
+    var checked = (role === 'teacher' && t.id === currentUser.id) ? ' checked' : '';
     return '<label style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:13px" '
       +'onmouseover="this.style.background=\'#f0fdf4\'" onmouseout="this.style.background=\'\'">'
       +'<input type="checkbox" class="wn-teacher-chk" value="'+t.id+'"'+checked+' '
@@ -15637,7 +15640,11 @@ async function wnLoadData(){
   var selectedIds = typeof wnGetSelectedTeacherIds === 'function' ? wnGetSelectedTeacherIds() : [];
   if(!selectedIds.length){
     selectedIds = _wnAllTeachers.map(function(t){ return t.id; });
-    if(!selectedIds.length) selectedIds = [currentUser.id];
+    // 선생님 모드일 때만 본인을 fallback (데스크/관리자는 본인이 선생님 아님)
+    if(!selectedIds.length){
+      var role = (currentUser && currentUser.role) || 'teacher';
+      if(role === 'teacher') selectedIds = [currentUser.id];
+    }
   }
 
   var query = db.from('users').select('id,name,school,grade,teacher_id,weekend_level,weekend_attend_time')
@@ -19761,27 +19768,40 @@ function isTeacherInActiveBranch(teacher){
 var _awnAllTeachers = [];
 
 async function initAdminWeekendNaje(){
-  var today = new Date();
-  var day = today.getDay();
-  var diff = day===6?0:(day===0?-1:6-day);
-  var sat = new Date(today); sat.setDate(today.getDate()+(day===0?-1:diff));
-  var dateEl = document.getElementById('awn-date');
-  if(dateEl && !dateEl.value) dateEl.value = sat.toISOString().split('T')[0];
+  // 🎯 옵션 D: 선생님의 panel-weekend-naje 패널을 여기로 이동시켜 그대로 사용
+  // - UI/기능/데이터가 모두 자동 일치
+  // - wn 함수들이 그대로 동작
+  var srcPanel = document.getElementById('panel-weekend-naje');
+  var dstContainer = document.getElementById('panel-admin-weekend-naje');
+  if(srcPanel && dstContainer && srcPanel.parentElement !== dstContainer){
+    dstContainer.appendChild(srcPanel);
+  }
+  // 패널 자체를 active로 표시 (panel-admin-weekend-naje는 placeholder)
+  if(srcPanel){
+    srcPanel.classList.add('active');
+    srcPanel.style.display = 'block';
+  }
 
-  var branchSel = document.getElementById('awn-branch-select');
-  branchSel.innerHTML = '<option value="">전체 분원</option>';
-  (window._allBranches||[]).filter(function(b){ return b.active !== false; }).forEach(function(b){
-    branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
-  });
-  // 🏢 데스크는 본인 분원으로 자동 고정
-  applyDeskBranchLock('awn-branch-select');
-
-  _awnAllTeachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && isTeacherInActiveBranch(u); })
-    .sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
-  // 데스크면 본인 분원 학생만 보이도록 초기 필터
-  var initialBranch = (currentUser && currentUser.role === 'desk') ? branchSel.value : '';
-  awnRenderTeachers(initialBranch);
-  await awnLoad();
+  // wn 초기화 함수가 있으면 호출 (선생님 페이지 로직 그대로)
+  if(typeof initWeekendNaje === 'function'){
+    await initWeekendNaje();
+  } else if(typeof wnLoad === 'function'){
+    // 시험명 표시 + 데이터 로드
+    if(typeof wnLoadTestNameSettingsFromDB === 'function'){
+      await wnLoadTestNameSettingsFromDB();
+    }
+    if(typeof wnLoadFilters === 'function'){
+      await wnLoadFilters();
+    }
+    // 토요일 자동 채우기
+    var today = new Date();
+    var day = today.getDay();
+    var diff = day===6?0:(day===0?-1:6-day);
+    var sat = new Date(today); sat.setDate(today.getDate()+(day===0?-1:diff));
+    var dateEl = document.getElementById('wn-date');
+    if(dateEl && !dateEl.value) dateEl.value = sat.toISOString().split('T')[0];
+    await wnLoad();
+  }
 }
 
 function awnFilterTeachers(){
