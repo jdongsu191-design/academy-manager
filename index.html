@@ -27383,7 +27383,7 @@ function downloadStudentCodes(){
 
 var _eaState = {
   pdfFile: null,       // 업로드된 PDF File 객체
-  pdfBase64: null,     // base64 데이터 (Gemini 전송용)
+  pdfImages: [],       // PDF 페이지별 base64 이미지 (Gemini 전송용)
   items: [],           // 문항 분석 결과 배열
   review: {            // 총평
     difficulty: '',
@@ -27409,7 +27409,7 @@ function eaResetForm(){
   document.getElementById('ea-round').value = '중간';
   document.getElementById('ea-year').value = '2025';
   document.getElementById('ea-pdf-file').value = '';
-  _eaState = {pdfFile:null, pdfBase64:null, items:[], review:{difficulty:'',discrimination:'',strategy:''}, analyzed:false};
+  _eaState = {pdfFile:null, pdfImages:[], items:[], review:{difficulty:'',discrimination:'',strategy:''}, analyzed:false};
   document.getElementById('ea-items-wrap').style.display = 'none';
   document.getElementById('ea-review-wrap').style.display = 'none';
   document.getElementById('ea-export-wrap').style.display = 'none';
@@ -27417,16 +27417,42 @@ function eaResetForm(){
 }
 
 // PDF를 Base64로 변환
-function eaPdfToBase64(file){
-  return new Promise(function(resolve, reject){
-    var reader = new FileReader();
-    reader.onload = function(){
-      var base64 = reader.result.split(',')[1];
-      resolve(base64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+// PDF → 이미지 배열 (Vercel 4.5MB 한도 우회 + 회전 자동 보정)
+async function eaPdfToImages(file, onProgress){
+  if(typeof pdfjsLib === 'undefined') throw new Error('PDF.js 라이브러리 없음');
+  var ab = await file.arrayBuffer();
+  var pdf = await pdfjsLib.getDocument({data: ab}).promise;
+  var images = [];
+  var TARGET_WIDTH = 1400;  // 충분한 해상도 (텍스트 인식 가능) + 너무 크지 않게
+  var QUALITY = 0.85;       // JPEG 품질
+
+  for(var i = 1; i <= pdf.numPages; i++){
+    if(typeof onProgress === 'function'){
+      onProgress(i, pdf.numPages);
+    }
+    var page = await pdf.getPage(i);
+    var vp1 = page.getViewport({scale: 1});
+    var scale = TARGET_WIDTH / vp1.width;
+    var viewport = page.getViewport({scale: scale});
+    var canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    var ctx = canvas.getContext('2d');
+    // 흰 배경 (투명 PDF 대비)
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({canvasContext: ctx, viewport: viewport}).promise;
+    // JPEG base64 (data URL 의 헤더 제거)
+    var dataUrl = canvas.toDataURL('image/jpeg', QUALITY);
+    var base64 = dataUrl.split(',')[1];
+    images.push(base64);
+  }
+  return images;
+}
+
+// 이미지 배열의 총 base64 사이즈 측정 (KB)
+function eaTotalBase64KB(images){
+  return Math.round(images.reduce(function(s, img){ return s + img.length; }, 0) / 1024);
 }
 
 // 진행바 업데이트
@@ -27468,14 +27494,19 @@ async function eaAnalyzePdf(){
   btn.textContent = '🤖 분석 중...';
 
   try {
-    // 1) PDF → Base64
-    eaSetProgress(10, '📤 PDF 파일 읽는 중...');
+    // 1) PDF → 이미지 배열 (Vercel 4.5MB 한도 우회)
+    eaSetProgress(5, '📤 PDF 파일 읽는 중...');
     _eaState.pdfFile = file;
-    _eaState.pdfBase64 = await eaPdfToBase64(file);
+    _eaState.pdfImages = await eaPdfToImages(file, function(cur, total){
+      var pct = 5 + Math.round((cur / total) * 20);  // 5~25%
+      eaSetProgress(pct, '📷 PDF 페이지 변환 중... (' + cur + '/' + total + ')');
+    });
+    var totalKB = eaTotalBase64KB(_eaState.pdfImages);
+    console.log('[내신분석] ' + _eaState.pdfImages.length + '개 페이지, 총 ' + totalKB + 'KB');
 
     // 2) Gemini에 문항 분석 요청
     eaSetProgress(30, '🤖 AI가 문항을 분석 중입니다... (최대 1분 소요)');
-    var items = await eaCallGeminiForItems(_eaState.pdfBase64);
+    var items = await eaCallGeminiForItems(_eaState.pdfImages);
     if(!items || items.length === 0){
       throw new Error('문항 분석 결과가 비어있습니다.');
     }
@@ -27495,7 +27526,7 @@ async function eaAnalyzePdf(){
 
     // 4) 총평 분석 요청
     eaSetProgress(70, '📝 AI가 총평을 작성 중입니다...');
-    var review = await eaCallGeminiForReview(_eaState.pdfBase64, _eaState.items);
+    var review = await eaCallGeminiForReview(_eaState.pdfImages, _eaState.items);
     _eaState.review = {
       difficulty: review.difficulty || '',
       discrimination: review.discrimination || '',
@@ -27530,10 +27561,11 @@ function eaReanalyze(){
 }
 
 // Gemini: 문항 분석 호출
-async function eaCallGeminiForItems(pdfBase64){
+async function eaCallGeminiForItems(pdfImages){
   var prompt = [
     '당신은 한국 고등학교 수학 시험지 분석 전문가입니다.',
-    '주어진 기출문제 PDF의 모든 문항을 순서대로 분석해서 JSON으로 반환하세요.',
+    '주어진 기출문제 시험지 이미지의 모든 문항을 순서대로 분석해서 JSON으로 반환하세요.',
+    '시험지가 회전되어 있을 수 있으니 알맞게 보고 인식하세요.',
     '',
     '각 문항마다 다음 정보를 추출:',
     '1. number: 문항 번호 라벨',
@@ -27556,13 +27588,14 @@ async function eaCallGeminiForItems(pdfBase64){
     '{"items":[{"number":"객관식1","unit":"...","type_description":"...","score":3.8,"difficulty":1}, ...]}'
   ].join('\n');
 
+  // 이미지 배열을 parts 로 변환 (각 페이지가 별도 이미지)
+  var imageParts = pdfImages.map(function(b64){
+    return {inlineData: {mimeType: 'image/jpeg', data: b64}};
+  });
   var payload = {
     model: 'gemini-2.5-pro',
     contents: [{
-      parts: [
-        {inlineData: {mimeType: 'application/pdf', data: pdfBase64}},
-        {text: prompt}
-      ]
+      parts: imageParts.concat([{text: prompt}])
     }],
     generationConfig: {
       temperature: 0,
@@ -27609,14 +27642,14 @@ async function eaCallGeminiForItems(pdfBase64){
 }
 
 // Gemini: 총평 작성 호출
-async function eaCallGeminiForReview(pdfBase64, items){
+async function eaCallGeminiForReview(pdfImages, items){
   var itemsBrief = items.map(function(it){
     return it.number_label + ' [' + it.unit + '] ' + it.type_description + ' (' + (it.score || '?') + '점, 난이도 ' + it.difficulty + ')';
   }).join('\n');
 
   var prompt = [
     '당신은 한국 고등학교 수학 교사이자 시험 분석 전문가입니다.',
-    '주어진 기출문제 PDF와 아래 문항 분석 결과를 바탕으로, 학원생들을 위한 시험 총평을 작성하세요.',
+    '주어진 기출문제 시험지 이미지와 아래 문항 분석 결과를 바탕으로, 학원생들을 위한 시험 총평을 작성하세요.',
     '',
     '=== 문항 분석 결과 ===',
     itemsBrief,
@@ -27637,13 +27670,14 @@ async function eaCallGeminiForReview(pdfBase64, items){
     '{"difficulty":"...","discrimination":"...","strategy":"..."}'
   ].join('\n');
 
+  // 이미지 배열을 parts 로 변환
+  var imageParts = pdfImages.map(function(b64){
+    return {inlineData: {mimeType: 'image/jpeg', data: b64}};
+  });
   var payload = {
     model: 'gemini-2.5-pro',
     contents: [{
-      parts: [
-        {inlineData: {mimeType: 'application/pdf', data: pdfBase64}},
-        {text: prompt}
-      ]
+      parts: imageParts.concat([{text: prompt}])
     }],
     generationConfig: {
       temperature: 0.3,
