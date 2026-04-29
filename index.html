@@ -1032,7 +1032,10 @@
         </div>
         <div class="card">
           <div class="card-title">📋 내 반 관리
-            <button class="btn btn-primary btn-sm" onclick="openModal('addClass')">+ 반 추가</button>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button class="btn btn-sm" onclick="openTimetableModal()" style="background:#f0fdf4;border-color:#86efac;color:#16a34a;font-size:12px">📅 시간표 보기</button>
+              <button class="btn btn-primary btn-sm" onclick="openModal('addClass')">+ 반 추가</button>
+            </div>
           </div>
           <div id="classList"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
         </div>
@@ -3804,6 +3807,18 @@
       <button class="btn btn-full" onclick="closeModal('addTeacher')">취소</button>
       <button class="btn btn-primary btn-full" onclick="addTeacherAccount()">추가</button>
     </div>
+  </div>
+</div>
+
+<!-- 모달: 내 시간표 -->
+<div class="modal-backdrop" id="modal-timetable">
+  <div class="modal" style="max-width:600px;width:95vw">
+    <div class="modal-handle"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h3 style="margin:0;font-size:17px;font-weight:700">📅 내 시간표</h3>
+      <button onclick="closeModal('timetable')" style="border:none;background:none;font-size:20px;color:#9ca3af;cursor:pointer">✕</button>
+    </div>
+    <div id="timetable-body"></div>
   </div>
 </div>
 
@@ -6783,6 +6798,148 @@ function getDayTimeFromWrap(wrapId){
 // 초기화
 function resetDayTimeWrap(wrapId){
   renderDayTimeWrap(wrapId, '', '');
+}
+
+// ── 시간표 파싱 헬퍼 ──────────────────────────────
+// class_days: "월·화·목", class_time: "17:00~19:00|19:00~21:00|19:00~21:00"
+// 반환: [{day:'월', start:'17:00', end:'19:00'}, ...]
+function parseClassSchedule(cls){
+  if(!cls.class_days || !cls.class_time) return [];
+  var days = cls.class_days.split('·').map(function(d){ return d.trim(); }).filter(Boolean);
+  var times = cls.class_time.split('|');
+  var isSingle = times.length === 1;
+  return days.map(function(day, i){
+    var t = isSingle ? times[0] : (times[i] || times[0] || '');
+    var parts = t.split('~');
+    return {
+      day:   day,
+      start: parts[0] ? parts[0].trim() : '',
+      end:   parts[1] ? parts[1].trim() : ''
+    };
+  }).filter(function(s){ return s.start && s.end; }); // 시간 없는 요일 제외
+}
+
+// 시간 문자열 → 분 단위 숫자 (비교용)
+function timeToMin(t){
+  if(!t) return 0;
+  var parts = t.split(':');
+  return parseInt(parts[0]||0)*60 + parseInt(parts[1]||0);
+}
+
+// ── 시간표 모달 열기 ──────────────────────────────
+function openTimetableModal(){
+  var body = document.getElementById('timetable-body');
+  if(!body) return;
+
+  // 시간 정보 있는 반만 수집
+  var validClasses = (classes||[]).filter(function(c){
+    return c.active && c.class_days && c.class_time;
+  });
+
+  if(!validClasses.length){
+    body.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af;font-size:14px">시간 정보가 입력된 반이 없습니다.</div>';
+    openModal('timetable');
+    return;
+  }
+
+  // 모든 스케줄 수집
+  var allSchedules = []; // {cls, day, start, end}
+  validClasses.forEach(function(cls){
+    parseClassSchedule(cls).forEach(function(s){
+      allSchedules.push({cls:cls, day:s.day, start:s.start, end:s.end});
+    });
+  });
+
+  if(!allSchedules.length){
+    body.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af;font-size:14px">시간 정보가 입력된 반이 없습니다.</div>';
+    openModal('timetable');
+    return;
+  }
+
+  // 사용된 요일만 (원래 순서 유지)
+  var dayOrder = ['월','화','수','목','금','토','일'];
+  var usedDays = dayOrder.filter(function(d){
+    return allSchedules.some(function(s){ return s.day === d; });
+  });
+
+  // 시간 범위 계산 (30분 단위 반올림)
+  var minStart = Math.min.apply(null, allSchedules.map(function(s){ return timeToMin(s.start); }));
+  var maxEnd   = Math.max.apply(null, allSchedules.map(function(s){ return timeToMin(s.end); }));
+  minStart = Math.floor(minStart/60)*60;
+  maxEnd   = Math.ceil(maxEnd/60)*60;
+
+  // 반 색상 팔레트
+  var palette = ['#dbeafe','#dcfce7','#fef9c3','#fce7f3','#ede9fe','#ffedd5','#e0f2fe','#d1fae5'];
+  var borderPalette = ['#3b82f6','#22c55e','#eab308','#ec4899','#8b5cf6','#f97316','#0ea5e9','#10b981'];
+  var clsColorMap = {};
+  var ci = 0;
+  validClasses.forEach(function(cls){
+    clsColorMap[cls.id] = ci % palette.length;
+    ci++;
+  });
+
+  // 렌더링
+  var CELL_H = 56; // px per 60min
+  var HEADER_H = 36;
+  var TIME_W = 46;
+  var COL_W = Math.max(80, Math.floor((540 - TIME_W) / usedDays.length));
+
+  var totalMins = maxEnd - minStart;
+  var tableH = HEADER_H + Math.round(totalMins / 60 * CELL_H);
+
+  var html = '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">';
+  html += '<div style="position:relative;min-width:'+(TIME_W + COL_W*usedDays.length)+'px;font-size:12px">';
+
+  // 헤더
+  html += '<div style="display:flex;height:'+HEADER_H+'px;border-bottom:2px solid #e5e7eb;background:#f9fafb;border-radius:8px 8px 0 0">';
+  html += '<div style="width:'+TIME_W+'px;flex-shrink:0"></div>';
+  usedDays.forEach(function(d){
+    html += '<div style="flex:0 0 '+COL_W+'px;text-align:center;font-weight:700;color:#374151;line-height:'+HEADER_H+'px;border-left:1px solid #e5e7eb">'+d+'요일</div>';
+  });
+  html += '</div>';
+
+  // 바디 (상대 위치)
+  html += '<div style="position:relative;height:'+(tableH - HEADER_H)+'px">';
+
+  // 시간 눈금선 + 라벨
+  for(var m=minStart; m<=maxEnd; m+=60){
+    var topPx = Math.round((m-minStart)/60*CELL_H);
+    var hh = Math.floor(m/60);
+    var label = hh+':00';
+    html += '<div style="position:absolute;top:'+topPx+'px;left:0;right:0;border-top:1px solid #e5e7eb;display:flex;align-items:flex-start">'
+          + '<span style="width:'+TIME_W+'px;font-size:11px;color:#9ca3af;padding-left:4px;margin-top:-8px">'+label+'</span>'
+          + '</div>';
+  }
+
+  // 각 요일 세로선
+  usedDays.forEach(function(d, di){
+    var leftPx = TIME_W + COL_W*di;
+    html += '<div style="position:absolute;top:0;bottom:0;left:'+leftPx+'px;border-left:1px solid #e5e7eb"></div>';
+  });
+
+  // 수업 블록
+  allSchedules.forEach(function(s){
+    var di = usedDays.indexOf(s.day);
+    if(di < 0) return;
+    var topPx  = Math.round((timeToMin(s.start)-minStart)/60*CELL_H);
+    var height = Math.max(20, Math.round((timeToMin(s.end)-timeToMin(s.start))/60*CELL_H) - 2);
+    var leftPx = TIME_W + COL_W*di + 3;
+    var ci2    = clsColorMap[s.cls.id];
+    var bg     = palette[ci2];
+    var border = borderPalette[ci2];
+    html += '<div style="position:absolute;top:'+(topPx+2)+'px;left:'+leftPx+'px;width:'+(COL_W-8)+'px;height:'+height+'px;'
+          + 'background:'+bg+';border-left:3px solid '+border+';border-radius:4px;padding:3px 5px;overflow:hidden;box-sizing:border-box">'
+          + '<div style="font-weight:700;color:#1e293b;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+s.cls.name+'</div>'
+          + '<div style="color:#475569;font-size:10px">'+s.start+'~'+s.end+'</div>'
+          + '</div>';
+  });
+
+  html += '</div>'; // body
+  html += '</div>'; // relative wrap
+  html += '</div>'; // overflow
+
+  body.innerHTML = html;
+  openModal('timetable');
 }
 // ────────────────────────────────────────────────────
 
