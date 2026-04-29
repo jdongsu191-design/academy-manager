@@ -6719,6 +6719,7 @@ function renderDayTimeWrap(wrapId, daysStr, timesStr){
       + '</label>';
   });
   html += '</div>';
+  html += '<div style="font-size:11px;color:#6b7280;margin-bottom:6px">⏱ 24시간제로 입력해주세요 (예: 16:30 ~ 18:30)</div>';
 
   // 요일별 시간 행
   html += '<div id="'+wrapId+'-time-rows">';
@@ -6727,7 +6728,7 @@ function renderDayTimeWrap(wrapId, daysStr, timesStr){
     var parts = t.split('~');
     var s = parts[0]?parts[0].trim():'';
     var e = parts[1]?parts[1].trim():'';
-    html += buildTimeRow(wrapId, kr, s, e);
+    html += buildTimeRow(wrapId, kr, s, e, ci===0);
   });
   html += '</div>';
 
@@ -6735,16 +6736,24 @@ function renderDayTimeWrap(wrapId, daysStr, timesStr){
 }
 
 // 시간 행 HTML 생성
-function buildTimeRow(wrapId, dayKr, startVal, endVal){
+function buildTimeRow(wrapId, dayKr, startVal, endVal, isFirst){
   var sid = wrapId+'-s-'+dayKr;
   var eid = wrapId+'-e-'+dayKr;
-  return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+  // 첫 요일에만 "나머지 요일에 동일 적용" 버튼 표시
+  var syncBtn = isFirst
+    ? '<button type="button" onclick="syncTimeFromFirst(\''+wrapId+'\')" '
+      + 'style="white-space:nowrap;padding:5px 8px;border:1px solid #dbeafe;border-radius:6px;background:#eff6ff;color:#3b82f6;font-size:11px;font-weight:600;cursor:pointer">전체 적용</button>'
+    : '';
+  return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
     + '<span style="width:20px;font-size:13px;font-weight:700;color:#2563eb;flex-shrink:0">'+dayKr+'</span>'
-    + '<input type="time" id="'+sid+'" value="'+startVal+'"'
-    + ' style="flex:1;padding:7px 8px;border:1.5px solid #dbeafe;border-radius:8px;font-size:13px;outline:none">'
-    + '<span style="font-size:12px;color:#9ca3af">~</span>'
-    + '<input type="time" id="'+eid+'" value="'+endVal+'"'
-    + ' style="flex:1;padding:7px 8px;border:1.5px solid #dbeafe;border-radius:8px;font-size:13px;outline:none">'
+    + '<input type="text" id="'+sid+'" value="'+startVal+'" placeholder="16:30"'
+    + ' maxlength="5" oninput="autoColonTime(this)"'
+    + ' style="flex:1;padding:7px 8px;border:1.5px solid #dbeafe;border-radius:8px;font-size:13px;outline:none;text-align:center">'
+    + '<span style="font-size:12px;color:#9ca3af;flex-shrink:0">~</span>'
+    + '<input type="text" id="'+eid+'" value="'+endVal+'" placeholder="18:30"'
+    + ' maxlength="5" oninput="autoColonTime(this)"'
+    + ' style="flex:1;padding:7px 8px;border:1.5px solid #dbeafe;border-radius:8px;font-size:13px;outline:none;text-align:center">'
+    + syncBtn
     + '</div>';
 }
 
@@ -6765,9 +6774,9 @@ function onDayCheck(wrapId){
     if(s || e) existing[kr] = {s: s?s.value:'', e: e?e.value:''};
   });
   var html = '';
-  checked.forEach(function(kr){
+  checked.forEach(function(kr, idx){
     var prev = existing[kr] || {s:'',e:''};
-    html += buildTimeRow(wrapId, kr, prev.s, prev.e);
+    html += buildTimeRow(wrapId, kr, prev.s, prev.e, idx===0);
   });
   rowsEl.innerHTML = html;
 }
@@ -6798,6 +6807,32 @@ function getDayTimeFromWrap(wrapId){
 // 초기화
 function resetDayTimeWrap(wrapId){
   renderDayTimeWrap(wrapId, '', '');
+}
+
+// 첫 요일 시간 → 나머지 요일 전체 복사
+function syncTimeFromFirst(wrapId){
+  var checked = _DAY_KR.filter(function(kr, i){
+    var cb = document.getElementById(wrapId+'-cb-'+_DAY_IDS[i]);
+    return cb && cb.checked;
+  });
+  if(checked.length < 2) return;
+  var firstS = (document.getElementById(wrapId+'-s-'+checked[0])||{}).value||'';
+  var firstE = (document.getElementById(wrapId+'-e-'+checked[0])||{}).value||'';
+  checked.slice(1).forEach(function(kr){
+    var s = document.getElementById(wrapId+'-s-'+kr);
+    var e = document.getElementById(wrapId+'-e-'+kr);
+    if(s) s.value = firstS;
+    if(e) e.value = firstE;
+  });
+}
+
+// 숫자 4자리 입력 시 자동 콜론 삽입 (예: 1630 → 16:30)
+function autoColonTime(input){
+  var v = input.value.replace(/[^0-9:]/g,'');
+  if(v.length === 4 && v.indexOf(':') < 0){
+    v = v.slice(0,2) + ':' + v.slice(2);
+  }
+  input.value = v;
 }
 
 // ── 시간표 파싱 헬퍼 ──────────────────────────────
@@ -6917,21 +6952,45 @@ function openTimetableModal(){
     html += '<div style="position:absolute;top:0;bottom:0;left:'+leftPx+'px;border-left:1px solid #e5e7eb"></div>';
   });
 
-  // 수업 블록
-  allSchedules.forEach(function(s){
-    var di = usedDays.indexOf(s.day);
-    if(di < 0) return;
-    var topPx  = Math.round((timeToMin(s.start)-minStart)/60*CELL_H);
-    var height = Math.max(20, Math.round((timeToMin(s.end)-timeToMin(s.start))/60*CELL_H) - 2);
-    var leftPx = TIME_W + COL_W*di + 3;
-    var ci2    = clsColorMap[s.cls.id];
-    var bg     = palette[ci2];
-    var border = borderPalette[ci2];
-    html += '<div style="position:absolute;top:'+(topPx+2)+'px;left:'+leftPx+'px;width:'+(COL_W-8)+'px;height:'+height+'px;'
-          + 'background:'+bg+';border-left:3px solid '+border+';border-radius:4px;padding:3px 5px;overflow:hidden;box-sizing:border-box">'
-          + '<div style="font-weight:700;color:#1e293b;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+s.cls.name+'</div>'
-          + '<div style="color:#475569;font-size:10px">'+s.start+'~'+s.end+'</div>'
-          + '</div>';
+  // 수업 블록 (겹침 처리)
+  // 같은 요일에서 겹치는 블록들을 그룹화해서 나란히 배치
+  usedDays.forEach(function(day, di){
+    var dayScheds = allSchedules.filter(function(s){ return s.day === day; });
+    if(!dayScheds.length) return;
+
+    // 겹침 그룹 계산 (간단한 column 배치)
+    var columns = []; // columns[i] = [schedule, ...]
+    dayScheds.forEach(function(s){
+      var placed = false;
+      for(var ci2=0; ci2<columns.length; ci2++){
+        var col = columns[ci2];
+        var overlaps = col.some(function(existing){
+          return timeToMin(s.start) < timeToMin(existing.end)
+              && timeToMin(s.end)   > timeToMin(existing.start);
+        });
+        if(!overlaps){ col.push(s); placed=true; break; }
+      }
+      if(!placed) columns.push([s]);
+    });
+
+    var totalCols = columns.length;
+    var blockW = Math.floor((COL_W - 8) / totalCols);
+
+    columns.forEach(function(col, colIdx){
+      col.forEach(function(s){
+        var topPx  = Math.round((timeToMin(s.start)-minStart)/60*CELL_H);
+        var height = Math.max(20, Math.round((timeToMin(s.end)-timeToMin(s.start))/60*CELL_H) - 2);
+        var leftPx = TIME_W + COL_W*di + 3 + blockW*colIdx;
+        var ci3    = clsColorMap[s.cls.id];
+        var bg     = palette[ci3];
+        var border = borderPalette[ci3];
+        html += '<div style="position:absolute;top:'+(topPx+2)+'px;left:'+leftPx+'px;width:'+(blockW-2)+'px;height:'+height+'px;'
+              + 'background:'+bg+';border-left:3px solid '+border+';border-radius:4px;padding:3px 5px;overflow:hidden;box-sizing:border-box">'
+              + '<div style="font-weight:700;color:#1e293b;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+s.cls.name+'</div>'
+              + '<div style="color:#475569;font-size:10px">'+s.start+'~'+s.end+'</div>'
+              + '</div>';
+      });
+    });
   });
 
   html += '</div>'; // body
