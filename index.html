@@ -3011,6 +3011,37 @@
         </div>
 
 
+        <!-- Step 2: 시험지 이미지 업로드 + AI 분석 (관리자 전용) -->
+        <div id="ea-image-upload-section" class="card" style="display:none;margin-bottom:12px;border:1.5px solid #e9d5ff">
+          <div style="font-size:14px;font-weight:700;color:#6d28d9;margin-bottom:12px">② 시험지 이미지 업로드 <span style="font-size:11px;color:#9ca3af;font-weight:500">(JPG / PNG, 여러 장 가능)</span></div>
+          <div style="margin-bottom:10px">
+            <label for="ea-image-files" style="display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border:1.5px dashed #c4b5fd;border-radius:8px;background:#faf5ff;color:#6d28d9;font-size:13px;font-weight:600;cursor:pointer">
+              📎 파일 선택
+            </label>
+            <input type="file" id="ea-image-files" accept="image/jpeg,image/png" multiple
+              style="display:none" onchange="eaOnImageSelect(this)">
+            <span id="ea-image-count" style="margin-left:10px;font-size:12px;color:#6b7280"></span>
+          </div>
+          <div id="ea-image-preview-list" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px"></div>
+          <!-- 진행바 -->
+          <div id="ea-progress-wrap" style="display:none;margin-bottom:10px">
+            <div style="height:6px;background:#e9d5ff;border-radius:4px;overflow:hidden">
+              <div id="ea-progress-bar" style="height:100%;background:#7c3aed;width:0%;transition:width .3s"></div>
+            </div>
+            <div id="ea-progress-text" style="font-size:11px;color:#6b7280;margin-top:4px"></div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <button id="ea-analyze-btn" onclick="eaAnalyzeImages()"
+              style="padding:9px 18px;border:none;border-radius:8px;background:#7c3aed;color:#fff;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 6px rgba(124,58,237,0.2)">
+              🤖 AI 분석 시작
+            </button>
+            <button id="ea-reanalyze-btn" onclick="eaAnalyzeImages()"
+              style="display:none;padding:9px 18px;border:1.5px solid #7c3aed;border-radius:8px;background:#fff;color:#7c3aed;font-size:13px;font-weight:600;cursor:pointer">
+              🔄 재분석
+            </button>
+          </div>
+        </div>
+
         <!-- Step 3: 문항 분석 결과 (AI 분석 후 표시) -->
         <div id="ea-items-wrap" style="display:none;margin-bottom:12px">
           <div class="card" style="border:1.5px solid #e9d5ff">
@@ -27504,6 +27535,11 @@ async function initAdminExamAnalysis(){
           branchSel.value = currentUser.branch_ids[0];
         }
         // 관리자는 비워둠 → 직접 선택 필요
+        // 관리자만 이미지 업로드 섹션 표시
+        var imgSection = document.getElementById('ea-image-upload-section');
+        if(imgSection){
+          imgSection.style.display = (currentUser.role === 'admin') ? 'block' : 'none';
+        }
       }
     } catch(e){
       console.error('분원 로드 실패:', e);
@@ -27523,6 +27559,12 @@ function eaResetForm(){
   document.getElementById('ea-year').value = '2025';
   var pdfFileEl = document.getElementById('ea-pdf-file');
   if(pdfFileEl) pdfFileEl.value = '';
+  var imgFilesEl = document.getElementById('ea-image-files');
+  if(imgFilesEl) imgFilesEl.value = '';
+  var imgCountEl = document.getElementById('ea-image-count');
+  if(imgCountEl) imgCountEl.textContent = '';
+  var imgPreviewEl = document.getElementById('ea-image-preview-list');
+  if(imgPreviewEl) imgPreviewEl.innerHTML = '';
   _eaState = {pdfFile:null, pdfImages:[], items:[], review:{difficulty:'',discrimination:'',strategy:''}, analyzed:false, savedId:null};
   document.getElementById('ea-items-wrap').style.display = 'none';
   document.getElementById('ea-review-wrap').style.display = 'none';
@@ -27582,7 +27624,124 @@ function eaSetProgress(percent, text){
   if(text) txt.textContent = text;
 }
 
-// ================ AI 분석 메인 =================
+// ================ 이미지 파일 선택 처리 =================
+function eaOnImageSelect(input){
+  var files = Array.from(input.files || []);
+  var countEl = document.getElementById('ea-image-count');
+  var previewEl = document.getElementById('ea-image-preview-list');
+  if(!files.length){
+    if(countEl) countEl.textContent = '';
+    if(previewEl) previewEl.innerHTML = '';
+    return;
+  }
+  if(countEl) countEl.textContent = files.length + '장 선택됨';
+  if(previewEl){
+    previewEl.innerHTML = '';
+    files.forEach(function(f, i){
+      var url = URL.createObjectURL(f);
+      var div = document.createElement('div');
+      div.style.cssText = 'position:relative;width:80px;height:80px;border-radius:6px;overflow:hidden;border:1.5px solid #e9d5ff;flex-shrink:0';
+      div.innerHTML = '<img src="'+url+'" style="width:100%;height:100%;object-fit:cover">'
+        + '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.5);color:#fff;font-size:9px;text-align:center;padding:2px">'+(i+1)+'페이지</div>';
+      previewEl.appendChild(div);
+    });
+  }
+}
+
+// ================ 이미지 → Gemini AI 분석 =================
+async function eaAnalyzeImages(){
+  var input = document.getElementById('ea-image-files');
+  var files = input ? Array.from(input.files || []) : [];
+  if(!files.length){
+    alert('시험지 이미지를 먼저 선택해주세요. (JPG/PNG)');
+    return;
+  }
+  // 재분석 확인
+  if(_eaState.analyzed){
+    if(!confirm('재분석을 하면 기존 수정 내용이 모두 사라집니다. 계속하시겠어요?')) return;
+  }
+  var btn = document.getElementById('ea-analyze-btn');
+  var reBtn = document.getElementById('ea-reanalyze-btn');
+  if(btn){ btn.disabled = true; btn.textContent = '🤖 분석 중...'; }
+  if(reBtn) reBtn.style.display = 'none';
+
+  try {
+    // 1) 이미지 → base64 배열
+    eaSetProgress(5, '📷 이미지 읽는 중...');
+    var images = [];
+    for(var i=0; i<files.length; i++){
+      var f = files[i];
+      if(!f.type.startsWith('image/')){ continue; }
+      var b64 = await new Promise(function(resolve, reject){
+        var reader = new FileReader();
+        reader.onload = function(e){ resolve(e.target.result.split(',')[1]); };
+        reader.onerror = reject;
+        reader.readAsDataURL(f);
+      });
+      images.push(b64);
+      eaSetProgress(5 + Math.round((i+1)/files.length*20), '📷 이미지 변환 중... ('+(i+1)+'/'+files.length+')');
+    }
+    if(!images.length) throw new Error('유효한 이미지 파일이 없습니다.');
+    _eaState.pdfImages = images;
+
+    // 시험 정보 수집
+    var examInfo = {
+      school:   (document.getElementById('ea-school')?.value || '').trim(),
+      grade:    (document.getElementById('ea-grade')?.value || '').trim(),
+      year:     (document.getElementById('ea-year')?.value || '').trim(),
+      semester: (document.getElementById('ea-semester')?.value || '').trim(),
+      round:    (document.getElementById('ea-round')?.value || '').trim(),
+      subject:  (document.getElementById('ea-subject')?.value || '').trim()
+    };
+
+    // 2) 문항 분석
+    eaSetProgress(30, '🤖 AI가 문항을 분석 중입니다... (1~2분 소요)');
+    var items = await eaCallGeminiForItems(images, examInfo);
+    if(!items || items.length === 0) throw new Error('문항 분석 결과가 비어있습니다.');
+
+    _eaState.items = items.map(function(it, idx){
+      return {
+        order: idx+1,
+        number_label: it.number || ('문항'+(idx+1)),
+        is_essay: /서술|논술/.test(it.number || ''),
+        unit: it.unit || '',
+        type_description: it.type_description || '',
+        score: (typeof it.score === 'number') ? it.score : null,
+        difficulty: (typeof it.difficulty === 'number') ? it.difficulty : 2
+      };
+    });
+
+    // 3) 총평 분석
+    eaSetProgress(70, '📝 AI가 총평을 작성 중입니다...');
+    var review = await eaCallGeminiForReview(images, _eaState.items, examInfo);
+    _eaState.review = {
+      difficulty:     review.difficulty || '',
+      discrimination: review.discrimination || '',
+      strategy:       review.strategy || ''
+    };
+
+    // 4) UI 렌더링
+    eaSetProgress(95, '✅ 결과를 표시하는 중...');
+    eaRenderItems();
+    eaRenderReview();
+    document.getElementById('ea-items-wrap').style.display  = 'block';
+    document.getElementById('ea-review-wrap').style.display = 'block';
+    document.getElementById('ea-export-wrap').style.display = 'block';
+    if(reBtn) reBtn.style.display = 'inline-block';
+    _eaState.analyzed = true;
+    eaSetProgress(100, '✅ 분석 완료! 결과를 확인하고 필요시 수정해주세요.');
+    setTimeout(function(){ eaSetProgress(-1); }, 1500);
+
+  } catch(e){
+    console.error('[내신분석] 이미지 분석 오류:', e);
+    alert('AI 분석 실패: ' + (e.message || e));
+    eaSetProgress(-1);
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '🤖 AI 분석 시작'; }
+  }
+}
+
+// ================ AI 분석 메인 (PDF - 레거시, 유지) =================
 async function eaAnalyzePdf(){
   var fileInput = document.getElementById('ea-pdf-file');
   if(!fileInput.files || fileInput.files.length === 0){
