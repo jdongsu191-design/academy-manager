@@ -27656,7 +27656,6 @@ async function eaAnalyzeImages(){
     alert('시험지 이미지를 먼저 선택해주세요. (JPG/PNG)');
     return;
   }
-  // 재분석 확인
   if(_eaState.analyzed){
     if(!confirm('재분석을 하면 기존 수정 내용이 모두 사라집니다. 계속하시겠어요?')) return;
   }
@@ -27665,24 +27664,31 @@ async function eaAnalyzeImages(){
   if(btn){ btn.disabled = true; btn.textContent = '🤖 분석 중...'; }
   if(reBtn) reBtn.style.display = 'none';
 
+  var uploadedPaths = [];  // 분석 후 삭제용
+
   try {
-    // 1) 이미지 → base64 배열
-    eaSetProgress(5, '📷 이미지 읽는 중...');
-    var images = [];
+    // 1) Supabase Storage 업로드 (원본 화질)
+    eaSetProgress(5, '☁️ 이미지 업로드 중...');
+    var imageUrls = [];
+    var ts = Date.now();
     for(var i=0; i<files.length; i++){
       var f = files[i];
       if(!f.type.startsWith('image/')){ continue; }
-      var b64 = await new Promise(function(resolve, reject){
-        var reader = new FileReader();
-        reader.onload = function(e){ resolve(e.target.result.split(',')[1]); };
-        reader.onerror = reject;
-        reader.readAsDataURL(f);
+      var ext = f.type === 'image/png' ? 'png' : 'jpg';
+      var path = 'tmp/' + ts + '_' + i + '.' + ext;
+      var {error: upErr} = await db.storage.from('exam-temp').upload(path, f, {
+        contentType: f.type,
+        upsert: true
       });
-      images.push(b64);
-      eaSetProgress(5 + Math.round((i+1)/files.length*20), '📷 이미지 변환 중... ('+(i+1)+'/'+files.length+')');
+      if(upErr) throw new Error('업로드 실패 (' + f.name + '): ' + upErr.message);
+      uploadedPaths.push(path);
+      var {data: urlData} = db.storage.from('exam-temp').getPublicUrl(path);
+      imageUrls.push(urlData.publicUrl);
+      eaSetProgress(5 + Math.round((i+1)/files.length*20), '☁️ 업로드 중... (' + (i+1) + '/' + files.length + ')');
     }
-    if(!images.length) throw new Error('유효한 이미지 파일이 없습니다.');
-    _eaState.pdfImages = images;
+    if(!imageUrls.length) throw new Error('유효한 이미지 파일이 없습니다.');
+    _eaState.pdfImages = imageUrls;  // URL 배열로 저장
+    _eaState.imageMode = true;       // URL 모드 플래그
 
     // 시험 정보 수집
     var examInfo = {
@@ -27696,7 +27702,7 @@ async function eaAnalyzeImages(){
 
     // 2) 문항 분석
     eaSetProgress(30, '🤖 AI가 문항을 분석 중입니다... (1~2분 소요)');
-    var items = await eaCallGeminiForItems(images, examInfo);
+    var items = await eaCallGeminiForItems(imageUrls, examInfo, true);
     if(!items || items.length === 0) throw new Error('문항 분석 결과가 비어있습니다.');
 
     _eaState.items = items.map(function(it, idx){
@@ -27713,7 +27719,7 @@ async function eaAnalyzeImages(){
 
     // 3) 총평 분석
     eaSetProgress(70, '📝 AI가 총평을 작성 중입니다...');
-    var review = await eaCallGeminiForReview(images, _eaState.items, examInfo);
+    var review = await eaCallGeminiForReview(imageUrls, _eaState.items, examInfo, true);
     _eaState.review = {
       difficulty:     review.difficulty || '',
       discrimination: review.discrimination || '',
@@ -27737,6 +27743,12 @@ async function eaAnalyzeImages(){
     alert('AI 분석 실패: ' + (e.message || e));
     eaSetProgress(-1);
   } finally {
+    // 5) Storage 임시 파일 삭제
+    if(uploadedPaths.length){
+      db.storage.from('exam-temp').remove(uploadedPaths).catch(function(e){
+        console.warn('[내신분석] 임시 파일 삭제 실패:', e);
+      });
+    }
     if(btn){ btn.disabled = false; btn.textContent = '🤖 AI 분석 시작'; }
   }
 }
@@ -28624,7 +28636,7 @@ async function exlDelete(id){
 }
 
 // Gemini: 문항 분석 호출
-async function eaCallGeminiForItems(pdfImages, examInfo){
+async function eaCallGeminiForItems(pdfImages, examInfo, isUrlMode){
   examInfo = examInfo || {};
   var examContext = '';
   if(examInfo.subject || examInfo.school || examInfo.grade){
@@ -28681,7 +28693,7 @@ async function eaCallGeminiForItems(pdfImages, examInfo){
   ].join('\n');
 
   // 이미지 배열을 parts 로 변환 (각 페이지가 별도 이미지)
-  var imageParts = pdfImages.map(function(b64){
+  var imageParts = isUrlMode ? [] : pdfImages.map(function(b64){
     return {inlineData: {mimeType: 'image/jpeg', data: b64}};
   });
 
@@ -28691,17 +28703,11 @@ async function eaCallGeminiForItems(pdfImages, examInfo){
 
   for(var mi=0; mi<modelChain.length; mi++){
     var model = modelChain[mi];
-    var payload = {
-      model: model,
-      contents: [{
-        parts: imageParts.concat([{text: prompt}])
-      }],
-      generationConfig: {
-        temperature: 0,
-        maxOutputTokens: 8192,
-        responseMimeType: 'application/json'
-      }
-    };
+    var payload = isUrlMode
+      ? { model: model, imageUrls: pdfImages, prompt: prompt,
+          generationConfig: { temperature: 0, maxOutputTokens: 8192, responseMimeType: 'application/json' } }
+      : { model: model, contents: [{ parts: imageParts.concat([{text: prompt}]) }],
+          generationConfig: { temperature: 0, maxOutputTokens: 8192, responseMimeType: 'application/json' } };
 
     var MAX_RETRY = 3;
     for(var attempt=1; attempt<=MAX_RETRY; attempt++){
@@ -28761,7 +28767,7 @@ async function eaCallGeminiForItems(pdfImages, examInfo){
 }
 
 // Gemini: 총평 작성 호출
-async function eaCallGeminiForReview(pdfImages, items, examInfo){
+async function eaCallGeminiForReview(pdfImages, items, examInfo, isUrlMode){
   examInfo = examInfo || {};
   var examContext = '';
   if(examInfo.subject || examInfo.school){
@@ -28800,7 +28806,7 @@ async function eaCallGeminiForReview(pdfImages, items, examInfo){
   ].join('\n');
 
   // 이미지 배열을 parts 로 변환
-  var imageParts = pdfImages.map(function(b64){
+  var imageParts = isUrlMode ? [] : pdfImages.map(function(b64){
     return {inlineData: {mimeType: 'image/jpeg', data: b64}};
   });
 
@@ -28809,17 +28815,11 @@ async function eaCallGeminiForReview(pdfImages, items, examInfo){
 
   for(var mi=0; mi<modelChain.length; mi++){
     var model = modelChain[mi];
-    var payload = {
-      model: model,
-      contents: [{
-        parts: imageParts.concat([{text: prompt}])
-      }],
-      generationConfig: {
-        temperature: 0.3,
-        maxOutputTokens: 4096,
-        responseMimeType: 'application/json'
-      }
-    };
+    var payload = isUrlMode
+      ? { model: model, imageUrls: pdfImages, prompt: prompt,
+          generationConfig: { temperature: 0.3, maxOutputTokens: 4096, responseMimeType: 'application/json' } }
+      : { model: model, contents: [{ parts: imageParts.concat([{text: prompt}]) }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 4096, responseMimeType: 'application/json' } };
 
     var MAX_RETRY = 2;
     for(var attempt=1; attempt<=MAX_RETRY; attempt++){
