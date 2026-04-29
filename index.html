@@ -16,6 +16,11 @@
 
   <!-- 에이사만루 폰트 (로그인 화면) -->
   <style>
+/* 내신 분석표 제작 패널이 카드 안에 인라인 모드로 들어갔을 때 헤더 숨김 */
+.exl-inline-mode .ea-panel-header { display: none !important; }
+/* 인라인 모드일 때 패널 자체의 padding 제거 (카드가 이미 padding 가짐) */
+.exl-inline-mode { padding: 0 !important; margin: 0 !important; }
+
     @font-face {
       font-family: 'Esamanru';
       font-weight: 700;
@@ -2927,13 +2932,13 @@
         </div>
       </div>
 
-      <!-- 관리자 내신 분석표 패널 (제작/편집) -->
+      <!-- 관리자 내신 분석표 패널 (제작/편집 - 인라인 모드 시 헤더 숨김) -->
       <div class="panel" id="panel-admin-exam-analysis">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
+        <div class="ea-panel-header" style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
           <button onclick="exlBackToList()" style="padding:6px 12px;border:1.5px solid #e5e7eb;border-radius:8px;background:#fff;color:#4b5563;font-size:12px;font-weight:600;cursor:pointer">← 목록으로</button>
           <div style="font-size:20px;font-weight:700;color:#7c3aed">📊 내신 분석표 제작</div>
         </div>
-        <div style="font-size:13px;color:#8b5cf6;margin-bottom:16px">기본 정보를 입력한 후 분석 결과를 작성하거나, 외부 분석 결과를 받아서 저장할 수 있어요</div>
+        <div class="ea-panel-header" style="font-size:13px;color:#8b5cf6;margin-bottom:16px">기본 정보를 입력한 후 분석 결과를 작성하거나, 외부 분석 결과를 받아서 저장할 수 있어요</div>
 
         <!-- Step 1: 기본 정보 입력 -->
         <div class="card" style="margin-bottom:12px;border:1.5px solid #e9d5ff">
@@ -27801,8 +27806,23 @@ async function eaSaveAnalysis(){
     }
 
     if(result.error) throw result.error;
+    var wasNew = !_eaState.savedId;  // INSERT 였는지
     _eaState.savedId = result.data?.id;
     alert('✅ 저장되었습니다!');
+
+    // 인라인 모드에서 저장한 경우 - 목록 새로고침
+    if(typeof _exlExpandedId !== 'undefined' && _exlExpandedId){
+      // 가짜 새 카드에서 저장한 경우 → 닫고 목록 새로고침
+      if(_exlExpandedId === '__new__'){
+        exlCloseExpanded();
+        if(typeof exlResetAndLoad === 'function'){
+          await exlResetAndLoad();
+        }
+      } else {
+        // 기존 카드 편집 후 저장 → 데이터만 업데이트 (현재 화면 유지)
+        if(typeof exlLoadData === 'function') await exlLoadData();
+      }
+    }
   } catch(e){
     console.error('저장 실패:', e);
     alert('저장 실패: ' + (e.message || '알 수 없는 오류'));
@@ -27840,46 +27860,62 @@ function exlClearFilters(){
 }
 
 // 새 분석표 제작 화면 진입
-function exlOpenCreate(){
-  // 현재 폴더 위치 백업 (편집 후 뒤로가기 위해)
-  _exlReturnPath = _exlPath.slice();
-  // 새 분석표 모드로 초기화
-  if(typeof eaResetForm === 'function'){
-    // confirm 없이 강제 리셋
-    ['ea-title','ea-school','ea-subject','ea-teacher'].forEach(function(id){
-      var el = document.getElementById(id);
-      if(el) el.value = '';
-    });
-    var year = new Date().getFullYear();
-    var yEl = document.getElementById('ea-year'); if(yEl) yEl.value = year;
-    var sEl = document.getElementById('ea-semester'); if(sEl) sEl.value = '1';
-    var rEl = document.getElementById('ea-round'); if(rEl) rEl.value = '중간';
-    var gEl = document.getElementById('ea-grade'); if(gEl) gEl.value = '';
-  }
-  _eaState = {pdfFile:null, pdfImages:[], items:[], review:{difficulty:'',discrimination:'',strategy:''}, analyzed:false, savedId:null};
-  // UI 초기화
-  ['ea-items-wrap','ea-review-wrap','ea-export-wrap'].forEach(function(id){
-    var el = document.getElementById(id);
-    if(el) el.style.display = 'none';
-  });
-  var saveBtn = document.getElementById('ea-save-btn');
-  if(saveBtn){ saveBtn.disabled = false; saveBtn.title = ''; }
+// 새 분석표 제작 - 목록 최상단에 가짜 카드 (펼쳐진 상태) 표시
+async function exlOpenCreate(){
+  // 이미 다른 카드 펼쳐져 있으면 먼저 닫기
+  if(_exlExpandedId) exlCloseExpanded();
 
-  // 제작 패널로 전환
-  switchAdminTab('admin-exam-analysis', null);
-  if(typeof initAdminExamAnalysis === 'function') initAdminExamAnalysis();
+  // _exlNewMode 플래그 ON (저장 시 INSERT 처리)
+  _exlNewMode = true;
+
+  // 컨텐츠 영역에 가짜 카드 한 개 prepend
+  var contentEl = document.getElementById('exam-list-content');
+  if(!contentEl) return;
+
+  var fakeCardId = '__new__';
+  var fakeCardHtml = '<div class="card exl-card" data-id="' + fakeCardId + '" id="exl-card-' + fakeCardId + '" style="border:1.5px solid #10b981;background:#f0fdf4;transition:all .15s;margin-bottom:10px">'
+    + '<div onclick="exlToggleCard(\''+fakeCardId+'\')" style="cursor:pointer;display:flex;justify-content:space-between;align-items:flex-start;gap:10px">'
+      + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:14px;font-weight:700;color:#047857;margin-bottom:4px;display:flex;align-items:center;gap:6px">'
+          + '<span class="exl-card-arrow" id="exl-arrow-'+fakeCardId+'" style="font-size:10px;color:#10b981;transition:transform .2s">▶</span>'
+          + '✏️ 새 분석표 제작'
+        + '</div>'
+        + '<div style="font-size:11px;color:#6b7280;padding-left:18px">기본 정보 입력 후 분석 결과를 작성하거나 외부 분석 결과를 받아 저장할 수 있어요</div>'
+      + '</div>'
+      + '<div>'
+        + '<button onclick="event.stopPropagation();exlCancelNew()" style="padding:5px 10px;border:1px solid #e5e7eb;border-radius:6px;background:#fff;color:#6b7280;font-size:11px;font-weight:600;cursor:pointer">✕ 취소</button>'
+      + '</div>'
+    + '</div>'
+    + '<div class="exl-card-expand" id="exl-expand-' + fakeCardId + '" style="display:none;margin-top:14px;padding-top:14px;border-top:1.5px dashed #bbf7d0"></div>'
+  + '</div>';
+
+  // 컨텐츠 최상단에 prepend
+  contentEl.insertAdjacentHTML('afterbegin', fakeCardHtml);
+
+  // 펼치기 (제작 패널 이동 + 새 분석표 모드로 초기화)
+  await exlToggleCard(fakeCardId, {isNew: true});
 }
 
-// 제작 화면 → 조회 화면 (이전 폴더 위치로 복귀)
+// 새 분석표 가짜 카드 취소 (제거)
+function exlCancelNew(){
+  if(_exlExpandedId === '__new__') exlCloseExpanded();
+  _exlNewMode = false;
+  var fakeCard = document.getElementById('exl-card-__new__');
+  if(fakeCard) fakeCard.remove();
+}
+
+// 제작 화면 → 조회 화면 (이전 폴더 위치로 복귀) - 인라인 모드 도입 후 거의 안 쓰임
 function exlBackToList(){
+  // 펼쳐져있는 카드가 있으면 닫기
+  if(_exlExpandedId) exlCloseExpanded();
+  // 가짜 새 카드도 정리
+  exlCancelNew();
   switchAdminTab('admin-exam-list', null);
-  // 사이드바 active 동기화
   var btn = document.getElementById('amenu-exam-list');
   if(btn){
     document.querySelectorAll('#adminNav .at-menu-item').forEach(function(t){t.classList.remove('active');});
     btn.classList.add('active');
   }
-  // 백업한 폴더 경로 복원
   if(_exlReturnPath){
     _exlPath = _exlReturnPath;
     _exlReturnPath = null;
@@ -28139,16 +28175,20 @@ function exlRenderCards(contentEl, rows){
   (window._allBranches||[]).forEach(function(b){ branchMap[b.id] = b.name; });
 
   var html = '<div style="margin-bottom:10px;font-size:13px;color:#6b7280">📄 분석표 ('+rows.length+'건)</div>';
-  html += '<div style="display:grid;gap:10px">';
+  html += '<div style="display:grid;gap:10px" id="exl-cards-grid">';
   rows.forEach(function(r){
     var canEdit = (currentUser?.role === 'admin') || (currentUser?.id && currentUser.id === r.created_by);
     var dateStr = r.updated_at ? new Date(r.updated_at).toLocaleDateString('ko-KR') : '';
     var branchName = r.branch_id ? (branchMap[r.branch_id] || '분원') : '';
-    html += '<div class="card" style="border:1.5px solid #e9d5ff;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor=\'#a78bfa\'" onmouseout="this.style.borderColor=\'#e9d5ff\'" onclick="exlOpen(\'' + r.id + '\')">'
-      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">'
+    html += '<div class="card exl-card" data-id="' + r.id + '" style="border:1.5px solid #e9d5ff;transition:all .15s">'
+      // 헤더 (클릭하면 펼침/접힘)
+      + '<div onclick="exlToggleCard(\''+r.id+'\')" style="cursor:pointer;display:flex;justify-content:space-between;align-items:flex-start;gap:10px" onmouseover="this.parentElement.style.borderColor=\'#a78bfa\'" onmouseout="this.parentElement.style.borderColor=\'#e9d5ff\'">'
         + '<div style="flex:1;min-width:0">'
-          + '<div style="font-size:14px;font-weight:700;color:#1F3A51;margin-bottom:4px">' + _eaEsc(r.title || '제목없음') + '</div>'
-          + '<div style="font-size:12px;color:#6b7280;display:flex;flex-wrap:wrap;gap:6px;align-items:center">'
+          + '<div style="font-size:14px;font-weight:700;color:#1F3A51;margin-bottom:4px;display:flex;align-items:center;gap:6px">'
+            + '<span class="exl-card-arrow" id="exl-arrow-'+r.id+'" style="font-size:10px;color:#9ca3af;transition:transform .2s">▶</span>'
+            + _eaEsc(r.title || '제목없음')
+          + '</div>'
+          + '<div style="font-size:12px;color:#6b7280;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-left:18px">'
             + (r.school ? '<span style="background:#f5f3ff;color:#7c3aed;padding:2px 7px;border-radius:5px">' + _eaEsc(r.school) + '</span>' : '')
             + (r.grade ? '<span>' + _eaEsc(r.grade) + '</span>' : '')
             + (r.year ? '<span>' + _eaEsc(r.year) + '</span>' : '')
@@ -28156,39 +28196,95 @@ function exlRenderCards(contentEl, rows){
             + (r.round ? '<span>' + _eaEsc(r.round) + '</span>' : '')
             + (r.subject ? '<span style="color:#7c3aed;font-weight:600">' + _eaEsc(r.subject) + '</span>' : '')
           + '</div>'
-          + '<div style="font-size:11px;color:#9ca3af;margin-top:5px">'
+          + '<div style="font-size:11px;color:#9ca3af;margin-top:5px;padding-left:18px">'
             + (branchName ? '🏢 ' + _eaEsc(branchName) : '')
             + (r.teacher_name ? ' · 👨‍🏫 ' + _eaEsc(r.teacher_name) : '')
             + ' · 📅 ' + dateStr
           + '</div>'
         + '</div>'
         + '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">'
-          + '<button onclick="event.stopPropagation();exlOpen(\'' + r.id + '\')" style="padding:5px 10px;border:1px solid #c7d2fe;border-radius:6px;background:#eef2ff;color:#4f46e5;font-size:11px;font-weight:600;cursor:pointer">' + (canEdit ? '✏️ 편집' : '👁 보기') + '</button>'
           + (canEdit ? '<button onclick="event.stopPropagation();exlDelete(\'' + r.id + '\')" style="padding:5px 10px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;font-size:11px;cursor:pointer">🗑 삭제</button>' : '')
         + '</div>'
       + '</div>'
+      // 펼침 영역 (기본 hidden)
+      + '<div class="exl-card-expand" id="exl-expand-' + r.id + '" style="display:none;margin-top:14px;padding-top:14px;border-top:1.5px dashed #e9d5ff"></div>'
     + '</div>';
   });
   html += '</div>';
   contentEl.innerHTML = html;
 }
 
-// 카드 클릭 → 제작 화면 + 데이터 주입
-async function exlOpen(id){
-  var {data: rec} = await db.from('exam_analyses').select('*').eq('id', id).maybeSingle();
-  if(!rec){ alert('분석표를 찾을 수 없습니다.'); return; }
+// 펼친 카드 ID (한 번에 하나만 펼침)
+var _exlExpandedId = null;
+// 제작 패널의 컨텐츠 노드 (이동/복원용)
+var _exlEaContentNode = null;
+var _exlEaContentParent = null;
+var _exlEaActionsNode = null;  // 저장/미리보기/PDF 버튼 영역
+var _exlNewMode = false;       // 새 분석표 제작 모드 (가짜 카드 펼침)
 
-  // 현재 폴더 위치 백업 (편집 후 뒤로가기 위해)
-  _exlReturnPath = _exlPath.slice();
+// 카드 클릭 → 펼침/접힘 토글
+async function exlToggleCard(id, opts){
+  opts = opts || {};
+  // 이미 펼쳐진 카드면 → 접기
+  if(_exlExpandedId === id){
+    exlCloseExpanded();
+    return;
+  }
+  // 다른 카드 펼쳐진 상태면 → 닫기
+  if(_exlExpandedId){
+    exlCloseExpanded();
+  }
 
-  // 제작 패널로 직접 전환 (사이드바에 메뉴가 hidden 이라 .click() 안 통함)
-  switchAdminTab('admin-exam-analysis', null);
-  // 분원 셀렉트 옵션 로딩 완료까지 대기
+  // 새 분석표 모드인 경우 — DB 조회 안 함, 빈 데이터로 시작
+  var rec = null;
+  if(id === '__new__' || opts.isNew){
+    rec = {
+      title: '', school: '', grade: '', year: String(new Date().getFullYear()),
+      semester: '1', round: '중간', subject: '', teacher_name: '',
+      branch_id: null, items: [], review: {difficulty:'',discrimination:'',strategy:''}
+    };
+  } else {
+    // DB 에서 분석표 데이터 가져오기
+    var {data} = await db.from('exam_analyses').select('*').eq('id', id).maybeSingle();
+    if(!data){ alert('분석표를 찾을 수 없습니다.'); return; }
+    rec = data;
+  }
+
+  // 분원 옵션 로드 보장 (제작 패널 init 의 핵심 로직만 실행)
   if(typeof initAdminExamAnalysis === 'function'){
     try { await initAdminExamAnalysis(); } catch(e){}
   }
 
-  // 잠깐 대기 후 데이터 주입 (DOM 안정화)
+  // 제작 패널의 컨텐츠 노드 보관 (한 번만)
+  if(!_exlEaContentNode){
+    var examPanel = document.getElementById('panel-admin-exam-analysis');
+    if(examPanel){
+      // panel-admin-exam-analysis 안의 자식들 중 헤더(첫 두 줄) 빼고 모두 이동 대상
+      // 헤더: ← 목록으로 + 제목 / 안내문
+      // → 카드 영역에서는 헤더 숨김 처리하고 나머지만 이동하는 방식이 깔끔
+      // 제작 패널 자체를 통째로 옮기면 단순함
+      _exlEaContentNode = examPanel;
+      _exlEaContentParent = examPanel.parentElement;
+    }
+  }
+
+  // 카드의 펼침 영역에 제작 패널을 통째로 이동
+  var expandEl = document.getElementById('exl-expand-' + id);
+  var arrowEl = document.getElementById('exl-arrow-' + id);
+  if(!expandEl || !_exlEaContentNode){ return; }
+
+  // 패널을 카드의 펼침 영역으로 이동
+  expandEl.appendChild(_exlEaContentNode);
+  // 패널 자체는 보이게 (panel.active 와 무관, inline 표시)
+  _exlEaContentNode.style.display = 'block';
+  _exlEaContentNode.classList.add('exl-inline-mode');
+
+  expandEl.style.display = 'block';
+  if(arrowEl) arrowEl.style.transform = 'rotate(90deg)';
+
+  _exlExpandedId = id;
+
+  // 데이터 주입
   setTimeout(function(){
     eaInjectAnalysis({
       examInfo: {
@@ -28205,16 +28301,73 @@ async function exlOpen(id){
       items: rec.items || [],
       review: rec.review || {}
     });
-    _eaState.savedId = rec.id;
-    var canEdit = (currentUser?.role === 'admin') || (currentUser?.id && currentUser.id === rec.created_by);
-    if(!canEdit){
-      var saveBtn = document.getElementById('ea-save-btn');
+    _eaState.savedId = (id === '__new__') ? null : rec.id;
+
+    // 권한 체크 (새 카드는 항상 편집 가능)
+    var saveBtn = document.getElementById('ea-save-btn');
+    if(id === '__new__'){
+      if(saveBtn){ saveBtn.disabled = false; saveBtn.title = ''; }
+      // 새 분석표 — 분석 결과 영역 숨김 (사용자가 채울 때까지)
+      ['ea-items-wrap','ea-review-wrap','ea-export-wrap'].forEach(function(eid){
+        var el = document.getElementById(eid);
+        if(el) el.style.display = 'none';
+      });
+      // 저장 버튼은 미리 보이게 (분석 후가 아니어도 빈 상태에서 저장 가능 - 다만 검증으로 막힘)
+    } else {
+      var canEdit = (currentUser?.role === 'admin') || (currentUser?.id && currentUser.id === rec.created_by);
       if(saveBtn){
-        saveBtn.disabled = true;
-        saveBtn.title = '본인이 만든 분석표만 편집/저장할 수 있어요';
+        if(!canEdit){
+          saveBtn.disabled = true;
+          saveBtn.title = '본인이 만든 분석표만 편집/저장할 수 있어요';
+        } else {
+          saveBtn.disabled = false;
+          saveBtn.title = '';
+        }
       }
     }
-  }, 300);
+
+    // 카드 위치로 부드럽게 스크롤
+    expandEl.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }, 200);
+}
+
+// 펼친 카드 닫기 (제작 패널을 원래 자리로 복원)
+function exlCloseExpanded(){
+  if(!_exlExpandedId) return;
+  var prevId = _exlExpandedId;
+  var arrowEl = document.getElementById('exl-arrow-' + prevId);
+  var expandEl = document.getElementById('exl-expand-' + prevId);
+  if(expandEl) expandEl.style.display = 'none';
+  if(arrowEl) arrowEl.style.transform = 'rotate(0deg)';
+
+  // 제작 패널을 원래 부모 (adminApp) 로 복원
+  if(_exlEaContentNode && _exlEaContentParent){
+    _exlEaContentNode.classList.remove('exl-inline-mode');
+    _exlEaContentNode.style.display = '';  // panel.active 의 CSS 가 다시 작동
+    _exlEaContentParent.appendChild(_exlEaContentNode);
+  }
+
+  // _eaState 초기화
+  _eaState = {pdfFile:null, pdfImages:[], items:[], review:{difficulty:'',discrimination:'',strategy:''}, analyzed:false, savedId:null};
+  _exlExpandedId = null;
+
+  // 새 분석표 모드였으면 가짜 카드 제거
+  if(prevId === '__new__'){
+    var fakeCard = document.getElementById('exl-card-__new__');
+    if(fakeCard) fakeCard.remove();
+    _exlNewMode = false;
+  }
+}
+
+// 변경 감지 (지금은 단순히 _eaState.analyzed 가 true 면 변경 가능성 있음으로 판단)
+function _eaIsDirty(){
+  // 향후 정교한 dirty check 가능 (현재는 false 반환 - 사용자 경고 최소화)
+  return false;
+}
+
+// 외부 호환: exlOpen 호출 → 토글로 위임
+async function exlOpen(id){
+  return exlToggleCard(id);
 }
 
 async function exlDelete(id){
