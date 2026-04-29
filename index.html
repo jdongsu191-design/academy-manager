@@ -2994,6 +2994,12 @@
               <input type="text" id="ea-teacher" placeholder="홍길동"
                 style="width:100%;padding:8px 10px;border:1.5px solid #e9d5ff;border-radius:8px;font-size:13px;outline:none">
             </div>
+            <div>
+              <div style="font-size:11px;color:#6b7280;margin-bottom:4px;font-weight:600">분원 <span style="color:#dc2626">*</span></div>
+              <select id="ea-branch" style="width:100%;padding:8px 10px;border:1.5px solid #e9d5ff;border-radius:8px;font-size:13px;outline:none;background:#fff">
+                <option value="">분원 선택</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -3057,44 +3063,25 @@
       <!-- 관리자 내신 분석표 조회 패널 -->
       <div class="panel" id="panel-admin-exam-list">
         <div style="font-size:20px;font-weight:700;margin-bottom:6px;color:#7c3aed">🔍 내신 분석표 조회</div>
-        <div style="font-size:13px;color:#8b5cf6;margin-bottom:16px">저장된 내신 분석표 목록을 조회하고 편집할 수 있어요</div>
+        <div style="font-size:13px;color:#8b5cf6;margin-bottom:16px">저장된 내신 분석표를 폴더별로 조회하고 편집할 수 있어요</div>
 
-        <!-- 필터 -->
+        <!-- 분원 필터 -->
         <div class="card" style="border:1.5px solid #e9d5ff;margin-bottom:14px">
-          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(120px, 1fr));gap:10px">
-            <div>
-              <div style="font-size:11px;color:#6b7280;margin-bottom:4px;font-weight:600">분원</div>
-              <select id="exam-list-branch" onchange="exlLoad()" style="width:100%;padding:7px 10px;border:1.5px solid #e9d5ff;border-radius:8px;font-size:13px;outline:none;background:#fff">
-                <option value="">전체 분원</option>
-              </select>
-            </div>
-            <div>
-              <div style="font-size:11px;color:#6b7280;margin-bottom:4px;font-weight:600">학교</div>
-              <input id="exam-list-school" oninput="exlDebounceLoad()" placeholder="학교명 검색"
-                style="width:100%;padding:7px 10px;border:1.5px solid #e9d5ff;border-radius:8px;font-size:13px;outline:none">
-            </div>
-            <div>
-              <div style="font-size:11px;color:#6b7280;margin-bottom:4px;font-weight:600">학년</div>
-              <select id="exam-list-grade" onchange="exlLoad()" style="width:100%;padding:7px 10px;border:1.5px solid #e9d5ff;border-radius:8px;font-size:13px;outline:none;background:#fff">
-                <option value="">전체</option>
-                <option value="중1">중1</option>
-                <option value="중2">중2</option>
-                <option value="중3">중3</option>
-                <option value="고1">고1</option>
-                <option value="고2">고2</option>
-                <option value="고3">고3</option>
-              </select>
-            </div>
-            <div>
-              <div style="font-size:11px;color:#6b7280;margin-bottom:4px;font-weight:600">연도</div>
-              <select id="exam-list-year" onchange="exlLoad()" style="width:100%;padding:7px 10px;border:1.5px solid #e9d5ff;border-radius:8px;font-size:13px;outline:none;background:#fff">
-                <option value="">전체</option>
-              </select>
-            </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <div style="font-size:12px;font-weight:700;color:#6d28d9">🏢 분원 필터:</div>
+            <select id="exam-list-branch" onchange="exlResetAndLoad()" style="padding:7px 10px;border:1.5px solid #e9d5ff;border-radius:8px;font-size:13px;outline:none;background:#fff;min-width:160px">
+              <option value="">전체 분원</option>
+            </select>
           </div>
         </div>
 
-        <!-- 목록 -->
+        <!-- Breadcrumb 네비게이션 -->
+        <div id="exam-list-breadcrumb" style="display:none;margin-bottom:12px;padding:10px 14px;background:#faf5ff;border:1.5px solid #e9d5ff;border-radius:10px;align-items:center;gap:8px;flex-wrap:wrap">
+          <button onclick="exlGoToRoot()" style="padding:5px 10px;border:1.5px solid #e5e7eb;border-radius:6px;background:#fff;color:#4b5563;font-size:12px;font-weight:600;cursor:pointer">🏠 홈</button>
+          <span id="exam-list-crumb-path" style="font-size:13px;color:#1f2937;font-weight:600;display:flex;flex-wrap:wrap;gap:4px;align-items:center"></span>
+        </div>
+
+        <!-- 폴더/목록 컨텐츠 -->
         <div id="exam-list-content"></div>
       </div>
 
@@ -27442,9 +27429,30 @@ var _eaState = {
   savedId: null        // 저장된 분석표 ID (편집 모드)
 };
 
-function initAdminExamAnalysis(){
-  // 탭 진입 시 초기화 (처음 한 번만, 기존 상태 유지)
-  // 필요시 폼 리셋 로직 추가 가능
+async function initAdminExamAnalysis(){
+  // 분원 셀렉트 옵션 채우기 (한 번만)
+  var branchSel = document.getElementById('ea-branch');
+  if(branchSel && branchSel.options.length <= 1){
+    try {
+      var {data: branches} = await db.from('branches').select('id, name').order('name');
+      (branches || []).forEach(function(b){
+        branchSel.innerHTML += '<option value="' + b.id + '">' + b.name + '</option>';
+      });
+
+      // 데스크는 본인 분원 자동 선택 + disabled (참고: 데스크는 제작 못 하므로 사실 진입 X)
+      // 선생님은 본인 분원 자동 선택
+      if(currentUser){
+        if(currentUser.role === 'teacher' && currentUser.branch_id){
+          branchSel.value = currentUser.branch_id;
+        } else if(currentUser.role === 'desk' && Array.isArray(currentUser.branch_ids) && currentUser.branch_ids.length > 0){
+          branchSel.value = currentUser.branch_ids[0];
+        }
+        // 관리자는 비워둠 → 직접 선택 필요
+      }
+    } catch(e){
+      console.error('분원 로드 실패:', e);
+    }
+  }
 }
 
 function eaResetForm(){
@@ -27647,6 +27655,7 @@ function eaInjectAnalysis(payload){
     setVal('ea-round', info.round);
     setVal('ea-subject', info.subject);
     setVal('ea-teacher', info.teacher);
+    setVal('ea-branch', info.branch_id);
   }
 
   // 2) 문항 데이터 정규화 후 _eaState 에 저장
@@ -27711,6 +27720,12 @@ async function eaSaveAnalysis(){
     document.getElementById('ea-title')?.focus();
     return;
   }
+  var branchId = (document.getElementById('ea-branch')?.value || '').trim();
+  if(!branchId){
+    alert('분원을 선택해주세요.');
+    document.getElementById('ea-branch')?.focus();
+    return;
+  }
 
   var saveBtn = document.getElementById('ea-save-btn');
   if(saveBtn) saveBtn.disabled = true;
@@ -27736,7 +27751,7 @@ async function eaSaveAnalysis(){
       round: examInfo.round,
       subject: examInfo.subject,
       teacher_name: examInfo.teacher_name,
-      branch_id: currentUser?.branch_id || null,
+      branch_id: branchId,
       items: _eaState.items,
       review: _eaState.review || {},
       created_by: currentUser?.id || null,
@@ -27764,17 +27779,23 @@ async function eaSaveAnalysis(){
   }
 }
 
-// ============== 분석표 조회 (목록) ==============
-var _exlData = [];
-var _exlDebounceTimer = null;
-function exlDebounceLoad(){
-  if(_exlDebounceTimer) clearTimeout(_exlDebounceTimer);
-  _exlDebounceTimer = setTimeout(exlLoad, 400);
-}
+// ============== 분석표 조회 (폴더 뷰) ==============
+// 폴더 계층: 연도 → 학기 → 학년 → 학교 → 분석표 목록
+var _exlData = [];           // 현재 분원 필터 적용된 전체 데이터 (캐시)
+var _exlPath = [];           // 현재 폴더 경로 [year, semester, grade, school]
+var _exlBranchFilter = '';   // 분원 필터 (별도)
 
 async function initAdminExamList(){
   var contentEl = document.getElementById('exam-list-content');
   if(contentEl) contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af">불러오는 중...</div>';
+
+  // _allBranches 안 채워졌으면 채우기 (분원 이름 매핑용)
+  if(!window._allBranches || window._allBranches.length === 0){
+    try {
+      var {data: bs} = await db.from('branches').select('id, name').order('name');
+      window._allBranches = bs || [];
+    } catch(e){}
+  }
 
   // 분원 필터 셀렉트 채우기
   var branchSel = document.getElementById('exam-list-branch');
@@ -27806,35 +27827,27 @@ async function initAdminExamList(){
     }
   }
 
-  // 연도 필터 셀렉트 (최근 3년 + 올해)
-  var yearSel = document.getElementById('exam-list-year');
-  if(yearSel && yearSel.options.length <= 1){
-    var thisYear = new Date().getFullYear();
-    for(var y=thisYear; y>=thisYear-3; y--){
-      yearSel.innerHTML += '<option value="'+y+'">'+y+'</option>';
-    }
-  }
-
-  await exlLoad();
+  // 데이터 로드 (분원 필터 + 폴더 뷰 렌더링)
+  await exlResetAndLoad();
 }
 
-async function exlLoad(){
+// 분원 필터 변경 시 - 폴더 경로 초기화 + 다시 로드
+async function exlResetAndLoad(){
+  _exlPath = [];
+  await exlLoadData();
+  exlRender();
+}
+
+async function exlLoadData(){
   var contentEl = document.getElementById('exam-list-content');
-  if(!contentEl) return;
-  contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af">불러오는 중...</div>';
+  if(contentEl) contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af">불러오는 중...</div>';
 
   try {
     var query = db.from('exam_analyses').select('id,title,school,grade,year,semester,round,subject,teacher_name,branch_id,created_by,created_at,updated_at').order('created_at', {ascending:false});
 
     var fBranch = document.getElementById('exam-list-branch')?.value || '';
-    var fSchool = (document.getElementById('exam-list-school')?.value || '').trim();
-    var fGrade  = document.getElementById('exam-list-grade')?.value || '';
-    var fYear   = document.getElementById('exam-list-year')?.value || '';
-
+    _exlBranchFilter = fBranch;
     if(fBranch) query = query.eq('branch_id', fBranch);
-    if(fSchool) query = query.ilike('school', '%' + fSchool + '%');
-    if(fGrade)  query = query.eq('grade', fGrade);
-    if(fYear)   query = query.eq('year', fYear);
 
     var {data, error} = await query;
     if(error) throw error;
@@ -27847,73 +27860,174 @@ async function exlLoad(){
     }
 
     _exlData = data || [];
-
-    if(_exlData.length === 0){
-      contentEl.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#9ca3af"><div style="font-size:36px;margin-bottom:10px">📋</div><div style="font-size:14px">저장된 분석표가 없습니다</div></div>';
-      return;
-    }
-
-    // 분원 이름 매핑
-    var branchMap = {};
-    (window._allBranches||[]).forEach(function(b){ branchMap[b.id] = b.name; });
-
-    var html = '<div style="display:grid;gap:10px">';
-    _exlData.forEach(function(r){
-      var canEdit = (currentUser?.role === 'admin') || (currentUser?.id && currentUser.id === r.created_by);
-      var dateStr = r.updated_at ? new Date(r.updated_at).toLocaleDateString('ko-KR') : '';
-      var branchName = r.branch_id ? (branchMap[r.branch_id] || '분원') : '';
-      html += '<div class="card" style="border:1.5px solid #e9d5ff;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor=\'#a78bfa\'" onmouseout="this.style.borderColor=\'#e9d5ff\'" onclick="exlOpen(\'' + r.id + '\')">'
-        + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">'
-          + '<div style="flex:1;min-width:0">'
-            + '<div style="font-size:14px;font-weight:700;color:#1F3A51;margin-bottom:4px">' + _eaEsc(r.title || '제목없음') + '</div>'
-            + '<div style="font-size:12px;color:#6b7280;display:flex;flex-wrap:wrap;gap:6px;align-items:center">'
-              + (r.school ? '<span style="background:#f5f3ff;color:#7c3aed;padding:2px 7px;border-radius:5px">' + _eaEsc(r.school) + '</span>' : '')
-              + (r.grade ? '<span>' + _eaEsc(r.grade) + '</span>' : '')
-              + (r.year ? '<span>' + _eaEsc(r.year) + '</span>' : '')
-              + (r.semester ? '<span>' + _eaEsc(r.semester) + '학기</span>' : '')
-              + (r.round ? '<span>' + _eaEsc(r.round) + '</span>' : '')
-              + (r.subject ? '<span style="color:#7c3aed;font-weight:600">' + _eaEsc(r.subject) + '</span>' : '')
-            + '</div>'
-            + '<div style="font-size:11px;color:#9ca3af;margin-top:5px">'
-              + (branchName ? '🏢 ' + _eaEsc(branchName) : '')
-              + (r.teacher_name ? ' · 👨‍🏫 ' + _eaEsc(r.teacher_name) : '')
-              + ' · 📅 ' + dateStr
-            + '</div>'
-          + '</div>'
-          + '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">'
-            + '<button onclick="event.stopPropagation();exlOpen(\'' + r.id + '\')" style="padding:5px 10px;border:1px solid #c7d2fe;border-radius:6px;background:#eef2ff;color:#4f46e5;font-size:11px;font-weight:600;cursor:pointer">' + (canEdit ? '✏️ 편집' : '👁 보기') + '</button>'
-            + (canEdit ? '<button onclick="event.stopPropagation();exlDelete(\'' + r.id + '\')" style="padding:5px 10px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;font-size:11px;cursor:pointer">🗑 삭제</button>' : '')
-          + '</div>'
-        + '</div>'
-      + '</div>';
-    });
-    html += '</div>';
-    contentEl.innerHTML = html;
   } catch(e){
     console.error('조회 실패:', e);
-    contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#dc2626">목록 불러오기 실패: ' + (e.message||'') + '</div>';
+    if(contentEl) contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#dc2626">목록 불러오기 실패: ' + (e.message||'') + '</div>';
+    _exlData = [];
   }
 }
 
-// 목록에서 클릭 → 제작 화면으로 이동 + 데이터 주입
-async function exlOpen(id){
-  var rec = _exlData.find(function(r){ return r.id === id; });
-  if(!rec){
-    // 다시 조회
-    var {data} = await db.from('exam_analyses').select('*').eq('id', id).maybeSingle();
-    rec = data;
-  } else {
-    // 전체 데이터 다시 조회 (items, review 포함)
-    var {data} = await db.from('exam_analyses').select('*').eq('id', id).maybeSingle();
-    rec = data;
+// 폴더 경로 → breadcrumb 렌더링
+function exlRenderBreadcrumb(){
+  var bc = document.getElementById('exam-list-breadcrumb');
+  var path = document.getElementById('exam-list-crumb-path');
+  if(!bc || !path) return;
+  if(_exlPath.length === 0){
+    bc.style.display = 'none';
+    return;
   }
+  bc.style.display = 'flex';
+  var labels = ['연도','학기','학년','학교'];
+  var html = '';
+  _exlPath.forEach(function(seg, idx){
+    html += '<span style="color:#9ca3af">›</span>';
+    html += '<button onclick="exlGoToLevel('+idx+')" style="padding:4px 9px;border:1.5px solid #c4b5fd;border-radius:6px;background:#fff;color:#6d28d9;font-size:12px;font-weight:600;cursor:pointer">'+_eaEsc(seg.label)+'</button>';
+  });
+  path.innerHTML = html;
+}
+
+function exlGoToRoot(){
+  _exlPath = [];
+  exlRender();
+}
+
+function exlGoToLevel(idx){
+  _exlPath = _exlPath.slice(0, idx + 1);
+  exlRender();
+}
+
+function exlEnterFolder(value, label){
+  _exlPath.push({value: value, label: label});
+  exlRender();
+}
+
+// 현재 _exlPath 에 따라 적절한 뷰 렌더링
+function exlRender(){
+  exlRenderBreadcrumb();
+  var contentEl = document.getElementById('exam-list-content');
+  if(!contentEl) return;
+
+  if(_exlData.length === 0){
+    contentEl.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#9ca3af"><div style="font-size:36px;margin-bottom:10px">📋</div><div style="font-size:14px">저장된 분석표가 없습니다</div></div>';
+    return;
+  }
+
+  // 현재 경로에 맞는 데이터 필터링
+  var filtered = _exlData.filter(function(r){
+    if(_exlPath[0] && r.year !== _exlPath[0].value) return false;
+    if(_exlPath[1] && r.semester !== _exlPath[1].value) return false;
+    if(_exlPath[2] && r.grade !== _exlPath[2].value) return false;
+    if(_exlPath[3] && r.school !== _exlPath[3].value) return false;
+    return true;
+  });
+
+  if(filtered.length === 0){
+    contentEl.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#9ca3af"><div style="font-size:36px;margin-bottom:10px">📂</div><div style="font-size:14px">이 폴더에 분석표가 없습니다</div></div>';
+    return;
+  }
+
+  // 4단계 다 들어가면 → 분석표 카드 목록
+  if(_exlPath.length === 4){
+    exlRenderCards(contentEl, filtered);
+    return;
+  }
+
+  // 그 외엔 다음 단계 폴더 그리드
+  var levels = [
+    {key:'year',     label:'연도', emoji:'📅', extractFn: function(r){ return r.year || '미정'; }, sortFn: function(a,b){ return b.localeCompare(a); }},
+    {key:'semester', label:'학기', emoji:'📚', extractFn: function(r){ return r.semester || '미정'; }, sortFn: function(a,b){ return a.localeCompare(b); }, suffix:'학기'},
+    {key:'grade',    label:'학년', emoji:'🎓', extractFn: function(r){ return r.grade || '미정'; }, sortFn: function(a,b){ return exlGradeSort(a, b); }},
+    {key:'school',   label:'학교', emoji:'🏫', extractFn: function(r){ return r.school || '미정'; }, sortFn: function(a,b){ return a.localeCompare(b); }}
+  ];
+  var level = levels[_exlPath.length];
+  exlRenderFolderGrid(contentEl, filtered, level);
+}
+
+// 학년 정렬 순서: 중1 → 중2 → 중3 → 고1 → 고2 → 고3
+function exlGradeSort(a, b){
+  var order = ['중1','중2','중3','고1','고2','고3'];
+  var ia = order.indexOf(a);
+  var ib = order.indexOf(b);
+  if(ia === -1) ia = 99;
+  if(ib === -1) ib = 99;
+  return ia - ib;
+}
+
+function exlRenderFolderGrid(contentEl, data, level){
+  // 그룹별 카운트 집계
+  var counts = {};
+  data.forEach(function(r){
+    var key = level.extractFn(r);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  var keys = Object.keys(counts);
+  keys.sort(level.sortFn);
+
+  var cards = keys.map(function(key){
+    var displayKey = level.suffix ? (key + level.suffix) : key;
+    return '<div onclick="exlEnterFolder('+JSON.stringify(key).replace(/"/g, '&quot;')+', '+JSON.stringify(displayKey).replace(/"/g, '&quot;')+')" '
+      + 'style="background:#faf5ff;border:1.5px solid #e9d5ff;border-radius:14px;padding:20px 16px;cursor:pointer;text-align:center;transition:all 0.15s ease;user-select:none" '
+      + 'onmouseover="this.style.transform=\'translateY(-2px)\';this.style.boxShadow=\'0 4px 12px rgba(124,58,237,0.15)\';this.style.borderColor=\'#a78bfa\'" '
+      + 'onmouseout="this.style.transform=\'\';this.style.boxShadow=\'\';this.style.borderColor=\'#e9d5ff\'">'
+      + '<div style="font-size:42px;line-height:1;margin-bottom:8px">'+level.emoji+'</div>'
+      + '<div style="font-size:14px;font-weight:700;color:#6d28d9;margin-bottom:3px">'+_eaEsc(displayKey)+'</div>'
+      + '<div style="font-size:11px;color:#6b7280;font-weight:600">'+counts[key]+'건</div>'
+      + '</div>';
+  }).join('');
+  contentEl.innerHTML = '<div style="margin-bottom:10px;font-size:13px;color:#6b7280">'+level.emoji+' '+_eaEsc(level.label)+' 선택 ('+keys.length+'개 그룹)</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(140px, 1fr));gap:12px">'+cards+'</div>';
+}
+
+function exlRenderCards(contentEl, rows){
+  // 분원 이름 매핑
+  var branchMap = {};
+  (window._allBranches||[]).forEach(function(b){ branchMap[b.id] = b.name; });
+
+  var html = '<div style="margin-bottom:10px;font-size:13px;color:#6b7280">📄 분석표 ('+rows.length+'건)</div>';
+  html += '<div style="display:grid;gap:10px">';
+  rows.forEach(function(r){
+    var canEdit = (currentUser?.role === 'admin') || (currentUser?.id && currentUser.id === r.created_by);
+    var dateStr = r.updated_at ? new Date(r.updated_at).toLocaleDateString('ko-KR') : '';
+    var branchName = r.branch_id ? (branchMap[r.branch_id] || '분원') : '';
+    html += '<div class="card" style="border:1.5px solid #e9d5ff;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor=\'#a78bfa\'" onmouseout="this.style.borderColor=\'#e9d5ff\'" onclick="exlOpen(\'' + r.id + '\')">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">'
+        + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:14px;font-weight:700;color:#1F3A51;margin-bottom:4px">' + _eaEsc(r.title || '제목없음') + '</div>'
+          + '<div style="font-size:12px;color:#6b7280;display:flex;flex-wrap:wrap;gap:6px;align-items:center">'
+            + (r.school ? '<span style="background:#f5f3ff;color:#7c3aed;padding:2px 7px;border-radius:5px">' + _eaEsc(r.school) + '</span>' : '')
+            + (r.grade ? '<span>' + _eaEsc(r.grade) + '</span>' : '')
+            + (r.year ? '<span>' + _eaEsc(r.year) + '</span>' : '')
+            + (r.semester ? '<span>' + _eaEsc(r.semester) + '학기</span>' : '')
+            + (r.round ? '<span>' + _eaEsc(r.round) + '</span>' : '')
+            + (r.subject ? '<span style="color:#7c3aed;font-weight:600">' + _eaEsc(r.subject) + '</span>' : '')
+          + '</div>'
+          + '<div style="font-size:11px;color:#9ca3af;margin-top:5px">'
+            + (branchName ? '🏢 ' + _eaEsc(branchName) : '')
+            + (r.teacher_name ? ' · 👨‍🏫 ' + _eaEsc(r.teacher_name) : '')
+            + ' · 📅 ' + dateStr
+          + '</div>'
+        + '</div>'
+        + '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">'
+          + '<button onclick="event.stopPropagation();exlOpen(\'' + r.id + '\')" style="padding:5px 10px;border:1px solid #c7d2fe;border-radius:6px;background:#eef2ff;color:#4f46e5;font-size:11px;font-weight:600;cursor:pointer">' + (canEdit ? '✏️ 편집' : '👁 보기') + '</button>'
+          + (canEdit ? '<button onclick="event.stopPropagation();exlDelete(\'' + r.id + '\')" style="padding:5px 10px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;font-size:11px;cursor:pointer">🗑 삭제</button>' : '')
+        + '</div>'
+      + '</div>'
+    + '</div>';
+  });
+  html += '</div>';
+  contentEl.innerHTML = html;
+}
+
+// 카드 클릭 → 제작 화면 + 데이터 주입
+async function exlOpen(id){
+  var {data: rec} = await db.from('exam_analyses').select('*').eq('id', id).maybeSingle();
   if(!rec){ alert('분석표를 찾을 수 없습니다.'); return; }
 
   // 제작 패널로 이동
   var btn = document.getElementById('amenu-exam-analysis');
   if(btn) btn.click();
 
-  // 잠깐 대기 후 데이터 주입 (패널 전환 완료)
+  // 잠깐 대기 후 데이터 주입 (패널 전환 + 분원 옵션 로드 완료 보장)
   setTimeout(function(){
     eaInjectAnalysis({
       examInfo: {
@@ -27924,23 +28038,22 @@ async function exlOpen(id){
         semester: rec.semester,
         round: rec.round,
         subject: rec.subject,
-        teacher: rec.teacher_name
+        teacher: rec.teacher_name,
+        branch_id: rec.branch_id
       },
       items: rec.items || [],
       review: rec.review || {}
     });
-    _eaState.savedId = rec.id;  // 다음 저장 시 업데이트로 처리
-    // 편집 권한 확인
+    _eaState.savedId = rec.id;
     var canEdit = (currentUser?.role === 'admin') || (currentUser?.id && currentUser.id === rec.created_by);
     if(!canEdit){
-      // 본인이 만든 게 아니면 저장 버튼 비활성화 + 안내
       var saveBtn = document.getElementById('ea-save-btn');
       if(saveBtn){
         saveBtn.disabled = true;
         saveBtn.title = '본인이 만든 분석표만 편집/저장할 수 있어요';
       }
     }
-  }, 100);
+  }, 300);
 }
 
 async function exlDelete(id){
@@ -27949,7 +28062,7 @@ async function exlDelete(id){
     var {error} = await db.from('exam_analyses').delete().eq('id', id);
     if(error) throw error;
     alert('삭제 완료');
-    await exlLoad();
+    await exlResetAndLoad();
   } catch(e){
     alert('삭제 실패: ' + (e.message||''));
   }
