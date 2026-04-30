@@ -963,6 +963,10 @@
             </button>
           </div>
         </div>
+        <!-- 내신 점수 관리 -->
+        <button class="at-menu-item" id="amenu-exam-score" onclick="switchAdminTab('admin-exam-score',this);initAdminExamScore()" style="font-size:12px;padding:8px 10px">
+          <span class="at-menu-icon" style="font-size:14px">📊</span>내신 점수
+        </button>
         <!-- 관리자 독서실 아코디언 -->
         <div id="amenu-reading-room-group">
           <button class="at-menu-item" id="amenu-reading-room-toggle" onclick="toggleAdminReadingRoomMenu()"
@@ -2957,6 +2961,75 @@
       <!-- 관리자 메시지 전송 패널 (옵션 D: 선생님 패널을 이동) -->
       <div class="panel" id="panel-admin-weekend-msg">
         <!-- 옵션 D: 선생님의 panel-weekend-msg 를 여기로 이동시켜 그대로 사용 -->
+      </div>
+
+
+      <!-- 내신 점수 관리 패널 -->
+      <div class="panel" id="panel-admin-exam-score">
+        <div style="font-size:18px;font-weight:700;color:#7c3aed;margin-bottom:4px">📊 내신 점수 관리</div>
+        <div style="font-size:12px;color:#8b5cf6;margin-bottom:16px">학생별 내신 원점수를 기록하고 조회합니다</div>
+
+        <!-- 필터 -->
+        <div class="card" style="margin-bottom:12px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <div>
+              <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">분원</div>
+              <select id="es-filter-branch" onchange="esOnBranchChange()"
+                style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+                <option value="">전체</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">선생님</div>
+              <select id="es-filter-teacher" onchange="esOnTeacherChange()"
+                style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+                <option value="">선택하세요</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+            <div>
+              <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">연도</div>
+              <select id="es-filter-year"
+                style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+              </select>
+            </div>
+            <div>
+              <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">학기</div>
+              <select id="es-filter-semester"
+                style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+                <option value="1">1학기</option>
+                <option value="2">2학기</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">시험</div>
+              <select id="es-filter-exam"
+                style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+                <option value="midterm">중간고사</option>
+                <option value="final">기말고사</option>
+              </select>
+            </div>
+          </div>
+          <!-- 과목 (고등 복수과목 대비) -->
+          <div style="margin-bottom:10px">
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:4px">과목</div>
+            <div id="es-subject-tags" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+              <span id="es-subject-tag-수학" class="es-subject-tag es-subject-active"
+                onclick="esToggleSubject('수학')"
+                style="padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;border:1.5px solid #7c3aed;background:#f5f3ff;color:#7c3aed;cursor:pointer">수학</span>
+              <button onclick="esAddSubject()"
+                style="padding:4px 10px;border-radius:999px;font-size:11px;border:1px dashed #d1d5db;background:#fff;color:#9ca3af;cursor:pointer">+ 과목 추가</button>
+            </div>
+          </div>
+          <button onclick="esLoadScores()"
+            style="width:100%;padding:9px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">
+            🔍 조회
+          </button>
+        </div>
+
+        <!-- 학생 점수 입력 테이블 -->
+        <div id="es-table-wrap"></div>
       </div>
 
       <!-- 관리자 독서실 주간 출결 입력 패널 -->
@@ -21379,6 +21452,254 @@ async function initAdminWeekendNaesin(){
   // 추가메시지 설정 화면 갱신은 관리자/선생님만
   if(currentUser && currentUser.role !== 'desk') nsRefreshExtraMsgDisplay();
   if(typeof nsLoad === 'function') await nsLoad();
+}
+
+
+/* ── 내신 점수 관리 ── */
+var _esSubjects = ['수학'];
+var _esStudents = [];
+var _esScoreMap = {}; // key: studentId_subject → score
+
+async function initAdminExamScore(){
+  // 연도 옵션 생성 (현재 연도 기준 ±2)
+  var yearSel = document.getElementById('es-filter-year');
+  if(yearSel && !yearSel.options.length){
+    var cur = new Date().getFullYear();
+    for(var y = cur+1; y >= cur-2; y--){
+      var opt = document.createElement('option');
+      opt.value = y; opt.textContent = y+'년';
+      if(y === cur) opt.selected = true;
+      yearSel.appendChild(opt);
+    }
+  }
+  await esLoadBranches();
+}
+
+async function esLoadBranches(){
+  var sel = document.getElementById('es-filter-branch');
+  if(!sel) return;
+  try {
+    var {data:branches} = await db.from('branches').select('id,name').eq('active',true).order('name');
+    sel.innerHTML = '<option value="">전체</option>';
+    (branches||[]).forEach(function(b){
+      var opt = document.createElement('option');
+      opt.value = b.id; opt.textContent = b.name;
+      sel.appendChild(opt);
+    });
+  } catch(e){ console.error('[내신점수] 분원 로드 실패:',e); }
+}
+
+async function esOnBranchChange(){
+  var branchId = document.getElementById('es-filter-branch').value;
+  var sel = document.getElementById('es-filter-teacher');
+  sel.innerHTML = '<option value="">선택하세요</option>';
+  _esStudents = []; _esScoreMap = {};
+  document.getElementById('es-table-wrap').innerHTML = '';
+  try {
+    var q = db.from('users').select('id,name').eq('role','teacher').eq('status','active');
+    if(branchId) q = q.eq('branch_id', branchId);
+    var {data:teachers} = await q.order('name');
+    (teachers||[]).forEach(function(t){
+      var opt = document.createElement('option');
+      opt.value = t.id; opt.textContent = t.name;
+      sel.appendChild(opt);
+    });
+  } catch(e){ console.error('[내신점수] 선생님 로드 실패:',e); }
+}
+
+async function esOnTeacherChange(){
+  _esStudents = []; _esScoreMap = {};
+  document.getElementById('es-table-wrap').innerHTML = '';
+}
+
+function esToggleSubject(subject){
+  var tag = document.getElementById('es-subject-tag-'+subject);
+  var idx = _esSubjects.indexOf(subject);
+  if(idx === -1){
+    _esSubjects.push(subject);
+    if(tag){ tag.classList.add('es-subject-active'); tag.style.borderColor='#7c3aed'; tag.style.background='#f5f3ff'; tag.style.color='#7c3aed'; tag.style.fontWeight='700'; }
+  } else {
+    if(_esSubjects.length === 1){ alert('과목은 최소 1개 이상이어야 합니다'); return; }
+    _esSubjects.splice(idx,1);
+    if(tag){ tag.classList.remove('es-subject-active'); tag.style.borderColor='#e5e7eb'; tag.style.background='#fff'; tag.style.color='#9ca3af'; tag.style.fontWeight='400'; }
+  }
+}
+
+function esAddSubject(){
+  var subjects = ['수학Ⅰ','수학Ⅱ','미적분','확률과통계','기하','공통수학1','공통수학2'];
+  var existing = document.getElementById('es-subject-tags');
+  var available = subjects.filter(function(s){
+    return !document.getElementById('es-subject-tag-'+s);
+  });
+  if(!available.length){ alert('추가할 수 있는 과목이 없습니다'); return; }
+  var subject = prompt('추가할 과목명을 선택하거나 입력하세요:\n'+available.join(', '));
+  if(!subject || !subject.trim()) return;
+  subject = subject.trim();
+  if(document.getElementById('es-subject-tag-'+subject)){ alert('이미 있는 과목입니다'); return; }
+  var addBtn = existing.querySelector('button');
+  var tag = document.createElement('span');
+  tag.id = 'es-subject-tag-'+subject;
+  tag.className = 'es-subject-tag es-subject-active';
+  tag.setAttribute('onclick','esToggleSubject(\''+subject+'\')');
+  tag.style.cssText = 'padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;border:1.5px solid #7c3aed;background:#f5f3ff;color:#7c3aed;cursor:pointer';
+  tag.textContent = subject;
+  existing.insertBefore(tag, addBtn);
+  if(!_esSubjects.includes(subject)) _esSubjects.push(subject);
+}
+
+async function esLoadScores(){
+  var teacherId = document.getElementById('es-filter-teacher').value;
+  if(!teacherId){ alert('선생님을 선택하세요'); return; }
+  var year     = document.getElementById('es-filter-year').value;
+  var semester = document.getElementById('es-filter-semester').value;
+  var examType = document.getElementById('es-filter-exam').value;
+
+  var wrap = document.getElementById('es-table-wrap');
+  wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">불러오는 중...</div>';
+
+  try {
+    // 학생 목록 (해당 선생님 담당 활성 학생)
+    var {data:stus} = await db.from('users').select('id,name,school,grade,class_id')
+      .eq('teacher_id', teacherId).eq('status','active').order('school').order('grade').order('name');
+    _esStudents = stus || [];
+
+    if(!_esStudents.length){
+      wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">👤</div><p>해당 선생님의 학생이 없습니다</p></div>';
+      return;
+    }
+
+    // 기존 점수 로드
+    var studentIds = _esStudents.map(function(s){ return s.id; });
+    var {data:scores} = await db.from('exam_scores').select('student_id,subject,score,note')
+      .in('student_id', studentIds)
+      .eq('year', year).eq('semester', semester).eq('exam_type', examType)
+      .in('subject', _esSubjects);
+
+    _esScoreMap = {};
+    (scores||[]).forEach(function(sc){
+      _esScoreMap[sc.student_id+'_'+sc.subject] = {score: sc.score, note: sc.note||''};
+    });
+
+    esRenderTable(year, semester, examType, teacherId);
+  } catch(e){
+    wrap.innerHTML = '<div style="color:#dc2626;padding:20px">로드 실패: '+(e.message||e)+'</div>';
+  }
+}
+
+function esRenderTable(year, semester, examType, teacherId){
+  var wrap = document.getElementById('es-table-wrap');
+  var examLabel = examType==='midterm'?'중간고사':'기말고사';
+  var semLabel  = semester+'학기';
+
+  var subjectCols = _esSubjects.map(function(s){
+    return '<th style="padding:8px 10px;font-size:12px;font-weight:700;color:#7c3aed;white-space:nowrap">'+s+'<br><span style="font-size:10px;font-weight:400;color:#9ca3af">원점수</span></th>'
+          +'<th style="padding:8px 10px;font-size:12px;font-weight:700;color:#6b7280;white-space:nowrap">비고</th>';
+  }).join('');
+
+  var rows = _esStudents.map(function(stu){
+    var subjectInputs = _esSubjects.map(function(subj){
+      var key = stu.id+'_'+subj;
+      var existing = _esScoreMap[key] || {};
+      var scoreVal = existing.score !== undefined && existing.score !== null ? existing.score : '';
+      var noteVal  = existing.note || '';
+      return '<td style="padding:6px 8px;text-align:center">'
+        +'<input type="number" min="0" max="100" placeholder="-"'
+        +' data-sid="'+stu.id+'" data-subj="'+subj+'" class="es-score-input"'
+        +' value="'+scoreVal+'"'
+        +' style="width:60px;padding:5px 6px;border:1.5px solid #e5e7eb;border-radius:6px;font-size:13px;text-align:center;outline:none"'
+        +' onfocus="this.style.borderColor=\'#7c3aed\'" onblur="this.style.borderColor=\'#e5e7eb\'">'
+        +'</td>'
+        +'<td style="padding:6px 8px">'
+        +'<input type="text" placeholder="메모" data-sid="'+stu.id+'" data-subj="'+subj+'" class="es-note-input"'
+        +' value="'+noteVal+'"'
+        +' style="width:100%;padding:5px 8px;border:1.5px solid #e5e7eb;border-radius:6px;font-size:12px;outline:none;box-sizing:border-box"'
+        +' onfocus="this.style.borderColor=\'#7c3aed\'" onblur="this.style.borderColor=\'#e5e7eb\'">'
+        +'</td>';
+    }).join('');
+
+    var school = stu.school || '-';
+    var grade  = stu.grade  ? stu.grade+'학년' : '-';
+
+    return '<tr style="border-bottom:1px solid #f3f4f6">'
+      +'<td style="padding:8px 10px;font-size:13px;color:#374151;white-space:nowrap">'+school+'</td>'
+      +'<td style="padding:8px 10px;font-size:13px;color:#374151;white-space:nowrap">'+grade+'</td>'
+      +'<td style="padding:8px 10px;font-size:13px;font-weight:600;color:#1e293b;white-space:nowrap">'+stu.name+'</td>'
+      +subjectInputs
+      +'</tr>';
+  }).join('');
+
+  wrap.innerHTML = '<div class="card" style="padding:0;overflow:hidden">'
+    +'<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#f5f3ff;border-bottom:1px solid #ede9fe">'
+    +'<div style="font-size:13px;font-weight:700;color:#7c3aed">'+year+'년 '+semLabel+' '+examLabel+' · '+_esStudents.length+'명</div>'
+    +'<button onclick="esSaveScores(\''+teacherId+'\','+year+','+semester+',\''+examType+'\')"'
+    +' style="padding:7px 18px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button>'
+    +'</div>'
+    +'<div style="overflow-x:auto">'
+    +'<table style="width:100%;border-collapse:collapse;min-width:500px">'
+    +'<thead><tr style="background:#faf5ff">'
+    +'<th style="padding:8px 10px;font-size:12px;font-weight:700;color:#6b7280;text-align:left">학교</th>'
+    +'<th style="padding:8px 10px;font-size:12px;font-weight:700;color:#6b7280;text-align:left">학년</th>'
+    +'<th style="padding:8px 10px;font-size:12px;font-weight:700;color:#6b7280;text-align:left">이름</th>'
+    +subjectCols
+    +'</tr></thead>'
+    +'<tbody>'+rows+'</tbody>'
+    +'</table>'
+    +'</div>'
+    +'</div>';
+}
+
+async function esSaveScores(teacherId, year, semester, examType){
+  var scoreInputs = document.querySelectorAll('.es-score-input');
+  var noteInputs  = document.querySelectorAll('.es-note-input');
+
+  // 학생+과목별로 묶기
+  var dataMap = {};
+  scoreInputs.forEach(function(inp){
+    var sid  = inp.getAttribute('data-sid');
+    var subj = inp.getAttribute('data-subj');
+    var key  = sid+'__'+subj;
+    if(!dataMap[key]) dataMap[key] = {student_id:sid, subject:subj, score:null, note:''};
+    var v = inp.value.trim();
+    dataMap[key].score = v !== '' ? parseFloat(v) : null;
+  });
+  noteInputs.forEach(function(inp){
+    var sid  = inp.getAttribute('data-sid');
+    var subj = inp.getAttribute('data-subj');
+    var key  = sid+'__'+subj;
+    if(!dataMap[key]) dataMap[key] = {student_id:sid, subject:subj, score:null, note:''};
+    dataMap[key].note = inp.value.trim();
+  });
+
+  var upsertData = Object.values(dataMap).map(function(d){
+    return {
+      student_id: d.student_id,
+      teacher_id: teacherId,
+      year: parseInt(year),
+      semester: parseInt(semester),
+      exam_type: examType,
+      subject: d.subject,
+      score: d.score,
+      note: d.note
+    };
+  });
+
+  try {
+    var {error} = await db.from('exam_scores').upsert(upsertData, {
+      onConflict: 'student_id,year,semester,exam_type,subject'
+    });
+    if(error) throw error;
+    // 저장 성공 피드백
+    var btn = document.querySelector('#es-table-wrap button');
+    if(btn){
+      var orig = btn.innerHTML;
+      btn.innerHTML = '✅ 저장됨'; btn.style.background='#059669';
+      setTimeout(function(){ btn.innerHTML = orig; btn.style.background='#7c3aed'; }, 2000);
+    }
+    // 캐시 업데이트
+    upsertData.forEach(function(d){
+      _esScoreMap[d.student_id+'_'+d.subject] = {score:d.score, note:d.note};
+    });
+  } catch(e){ alert('저장 실패: '+(e.message||e)); }
 }
 
 // 관리자/데스크 메시지 전송 (옵션 D: 선생님 panel-weekend-msg 그대로 사용)
