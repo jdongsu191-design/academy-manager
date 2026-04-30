@@ -880,6 +880,9 @@
             </button>
           </div>
         </div>
+        <button class="at-menu-item" id="tmenu-monthly-report" onclick="switchTeacherTab('teacher-monthly-report',this);initTeacherMonthlyReport()">
+          <span class="at-menu-icon">📊</span>월별 수강인원
+        </button>
         <button class="at-menu-item" id="tmenu-syllabus" onclick="switchTeacherTab('syllabus',this);initTeacherSyllabus()">
           <span class="at-menu-icon">📑</span>진도계획서
         </button>
@@ -2097,6 +2100,39 @@
 
     <!-- 관리자 앱 -->
     <!-- 선생님 내신 점수 패널 -->
+    <!-- 선생님 월별 수강인원 패널 -->
+    <div class="panel" id="panel-teacher-monthly-report">
+      <div style="font-size:18px;font-weight:700;color:#1a1a2e;margin-bottom:4px">📊 월별 수강인원</div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:16px">담당 반 기준 월별 수강인원 현황</div>
+      <!-- 필터 -->
+      <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px">
+          <div>
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">연도</div>
+            <select id="tmr-year" style="padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none"></select>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">월</div>
+            <select id="tmr-month" style="padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+              <option value="1">1월</option><option value="2">2월</option><option value="3">3월</option>
+              <option value="4">4월</option><option value="5">5월</option><option value="6">6월</option>
+              <option value="7">7월</option><option value="8">8월</option><option value="9">9월</option>
+              <option value="10">10월</option><option value="11">11월</option><option value="12">12월</option>
+            </select>
+          </div>
+          <button onclick="generateTeacherMonthlyReport()"
+            style="padding:8px 18px;background:#1e293b;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">
+            🔍 조회
+          </button>
+          <button id="tmr-btn-save" onclick="saveTeacherMonthlyReportImage()" style="display:none;padding:8px 14px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">
+            🖼️ 이미지 저장
+          </button>
+        </div>
+      </div>
+      <!-- 결과 -->
+      <div id="tmr-content-wrap"></div>
+    </div>
+
     <div class="panel" id="panel-teacher-exam-score">
       <div style="font-size:18px;font-weight:700;color:#7c3aed;margin-bottom:4px">📊 내신 점수</div>
       <div style="font-size:12px;color:#8b5cf6;margin-bottom:16px">담당 학생들의 내신 원점수를 기록합니다</div>
@@ -21239,6 +21275,156 @@ function toggleAdminWeekendMenu(){
   var isOpen = submenu.style.display !== 'none';
   submenu.style.display = isOpen ? 'none' : 'block';
   if(arrow) arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
+/* ── 선생님 월별 수강인원 ── */
+var _tmrData = null;
+
+async function initTeacherMonthlyReport(){
+  var now = new Date();
+  var yearSel = document.getElementById('tmr-year');
+  if(yearSel && !yearSel.options.length){
+    for(var y = now.getFullYear(); y >= 2024; y--){
+      yearSel.innerHTML += '<option value="'+y+'">'+y+'\ub144</option>';
+    }
+  }
+  var monthSel = document.getElementById('tmr-month');
+  if(monthSel) monthSel.value = String(now.getMonth()+1);
+}
+
+async function generateTeacherMonthlyReport(){
+  if(!currentUser) return;
+  var year  = parseInt(document.getElementById('tmr-year').value);
+  var month = parseInt(document.getElementById('tmr-month').value);
+  var monthStart = year+'-'+String(month).padStart(2,'0')+'-01';
+  var lastDay    = new Date(year, month, 0).getDate();
+  var monthEnd   = year+'-'+String(month).padStart(2,'0')+'-'+String(lastDay).padStart(2,'0');
+  var wrap = document.getElementById('tmr-content-wrap');
+  wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">\uc870\ud68c \uc911...</div>';
+
+  try {
+    // 본인 선생님 정보
+    var {data:teacherRow} = await db.from('users').select('id,name,branch_id').eq('id', currentUser.id).single();
+    var teachers = [teacherRow];
+
+    var {data:classes} = await db.from('classes').select('id,name,teacher_id').eq('teacher_id', currentUser.id).eq('active',true);
+
+    var {data:allStudents} = await db.from('users')
+      .select('id,name,school,grade,teacher_id,class_id,status,enrolled_at,withdrawn_at,naje_steps,withdraw_reason')
+      .eq('role','student').eq('teacher_id', currentUser.id)
+      .or('status.eq.active,and(status.eq.inactive,withdrawn_at.gte.'+monthStart+')');
+
+    var {data:newStudents} = await db.from('users')
+      .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_steps')
+      .eq('role','student').eq('teacher_id', currentUser.id)
+      .gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
+
+    var {data:transfers} = await db.from('transfer_requests')
+      .select('*, student:student_id(id,name,school,grade,naje_steps), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
+      .eq('status','approved')
+      .or('from_teacher_id.eq.'+currentUser.id+',to_teacher_id.eq.'+currentUser.id)
+      .gte('responded_at', monthStart+'T00:00:00')
+      .lte('responded_at', monthEnd+'T23:59:59');
+
+    _tmrData = { year, month, monthStart, monthEnd, teachers, classes, allStudents: allStudents||[], newStudents: newStudents||[], transfers: transfers||[] };
+
+    // 관리자 mrBuildReportHTML 재사용
+    var r = mrGetTeacherReportFromData(teacherRow.id, _tmrData);
+    if(!r){ wrap.innerHTML = '<div class="empty-state"><p>\ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4</p></div>'; return; }
+
+    var branchName = '';
+    if(teacherRow.branch_id && window._allBranches){
+      var br = window._allBranches.find(function(b){ return b.id===teacherRow.branch_id; });
+      branchName = br ? br.name : '';
+    }
+
+    var html = mrBuildReportHTML(r, _tmrData, branchName, false);
+    wrap.innerHTML = '<div style="background:#f0f0f0;border-radius:16px;padding:16px">'+html+'</div>';
+
+    var saveBtn = document.getElementById('tmr-btn-save');
+    if(saveBtn) saveBtn.style.display = '';
+  } catch(e){
+    wrap.innerHTML = '<div style="color:#dc2626;padding:20px">\uc870\ud68c \uc2e4\ud328: '+(e.message||e)+'</div>';
+    console.error('[선생님 수강인원]', e);
+  }
+}
+
+function mrGetTeacherReportFromData(tid, d){
+  // mrGetTeacherReport와 동일 로직이지만 d를 파라미터로 받음
+  var teacher = (d.teachers||[]).find(function(t){ return t.id===tid; });
+  if(!teacher) return null;
+
+  var myClasses = (d.classes||[]).filter(function(c){ return c.teacher_id===tid; });
+  var myClassIds = myClasses.map(function(c){ return c.id; });
+
+  var startStudents = (d.allStudents||[]).filter(function(s){
+    if(s.teacher_id !== tid) return false;
+    var enrolled = s.enrolled_at || '1900-01-01';
+    var withdrawn = s.withdrawn_at || '9999-12-31';
+    return enrolled < d.monthStart && withdrawn >= d.monthStart;
+  });
+
+  var endStudents = (d.allStudents||[]).filter(function(s){
+    if(s.teacher_id !== tid) return false;
+    if(s.status === 'active') return true;
+    if(s.status === 'inactive' && s.withdrawn_at && s.withdrawn_at > d.monthEnd) return true;
+    return false;
+  });
+
+  var myNew = (d.newStudents||[]).filter(function(s){ return s.teacher_id===tid; });
+
+  var myWithdrawn = (d.allStudents||[]).filter(function(s){
+    return s.teacher_id===tid && s.status==='inactive' && s.withdrawn_at >= d.monthStart && s.withdrawn_at <= d.monthEnd;
+  });
+
+  var myIn = (d.transfers||[]).filter(function(t){ return t.to_teacher && t.to_teacher.id===tid; });
+  var myOut= (d.transfers||[]).filter(function(t){ return t.from_teacher && t.from_teacher.id===tid; });
+
+  var groupByClass = function(students){
+    var map={}, keys=[];
+    students.forEach(function(s){
+      var cls = myClasses.find(function(c){ return c.id===s.class_id; });
+      var k = cls ? cls.name : '\ubc18 \ubbf8\uc9c0\uc815';
+      if(!map[k]){ map[k]=[]; keys.push(k); }
+      map[k].push(s);
+    });
+    return {map:map, keys:keys};
+  };
+
+  var sg = function(s){ return [s.school, s.grade].filter(Boolean).join(' ') || '-'; };
+  var getBranch = function(t){
+    if(!t || !t.branch_id || !window._allBranches) return '';
+    var br = window._allBranches.find(function(b){ return b.id===t.branch_id; });
+    return br ? br.name : '';
+  };
+
+  return { teacher, sg, getBranch, groupByClass, startStudents, myNew, myWithdrawn, myIn, myOut, endStudents };
+}
+
+async function saveTeacherMonthlyReportImage(){
+  if(!_tmrData) return;
+  var wrap = document.getElementById('tmr-content-wrap');
+  var inner = wrap.querySelector('div');
+  if(!inner){ alert('\uc870\ud68c \ud6c4 \uc800\uc7a5\ud558\uc138\uc694'); return; }
+  var btn = document.getElementById('tmr-btn-save');
+  if(btn){ btn.textContent='\u23F3 \uc800\uc7a5 \uc911...'; btn.disabled=true; }
+  try {
+    var canvas = await html2canvas(inner, {
+      scale:2, useCORS:true, backgroundColor:'#f0f0f0',
+      width:inner.offsetWidth, height:inner.scrollHeight
+    });
+    var blob = await new Promise(function(res){ canvas.toBlob(function(b){ res(b); }, 'image/png', 0.95); });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = _tmrData.year+'\ub144_'+_tmrData.month+'\uc6d4_\uc218\uac15\uc778\uc6d0.png';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    if(btn){ btn.textContent='\u2705 \uc800\uc7a5\ub428'; setTimeout(function(){ btn.textContent='\uD83D\uDDBC\uFE0F \uc774\ubbf8\uc9c0 \uc800\uc7a5'; btn.disabled=false; }, 2000); }
+  } catch(e){
+    alert('\uc800\uc7a5 \uc2e4\ud328: '+(e.message||e));
+    if(btn){ btn.textContent='\uD83D\uDDBC\uFE0F \uc774\ubbf8\uc9c0 \uc800\uc7a5'; btn.disabled=false; }
+  }
 }
 
 function toggleTeacherNaesinExamMenu(){
