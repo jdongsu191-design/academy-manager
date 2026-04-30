@@ -7466,7 +7466,9 @@ async function addStudentsBulk(){
   let ok=0,fail=[];
   for(const e of entries){
     const classId2Val=document.getElementById('inp-sclass-bulk2')?.value||null;
-    const{error}=await db.from('users').insert({
+    // 학생 코드 자동 발급
+    const newCode = await generateStudentCode();
+    const{error,data:inserted}=await db.from('users').insert({
       name:e.name, class_id:classId, class_id2:classId2Val||null, role:'student',
       phone:e.phone||null, school:e.school||null, grade:e.grade||null,
       enrolled_at:e.enrolled||null,
@@ -7476,8 +7478,9 @@ async function addStudentsBulk(){
       potential_yn:e.potentialYn||false,
       potential_level:e.potentialLevel||null,
       potential_attend_time:e.potentialTime||null,
-      status:'active', teacher_id:currentUser.id
-    });
+      status:'active', teacher_id:currentUser.id,
+      student_code:newCode
+    }).select('id').single();
     if(error) fail.push(e.name);
     else ok++;
   }
@@ -29129,18 +29132,23 @@ async function teacherReissueCode(id, name){
 
 // 코드 미발급 학생 일괄 발급
 async function issueCodesForAll(){
-  var targetStudents = (typeof students !== 'undefined' ? students : allUsers.filter(u=>u.role==='student'&&u.status==='active'))
-    .filter(s => !s.student_code);
-  if(!targetStudents.length){ alert('미발급 학생이 없습니다'); return; }
-  if(!confirm(targetStudents.length+'명에게 코드를 발급할까요?')) return;
+  // 로컬 캐시 대신 DB에서 직접 미발급 학생 조회 (캐시 불일치 방지)
+  var {data:noCodeStudents, error} = await db.from('users')
+    .select('id,name')
+    .eq('role','student')
+    .eq('status','active')
+    .is('student_code', null);
+  if(error){ alert('조회 실패: '+(error.message||error)); return; }
+  if(!noCodeStudents || !noCodeStudents.length){ alert('\ubbf8\ubc1c\uae09 \ud559\uc0dd\uc774 \uc5c6\uc2b5\ub2c8\ub2e4'); return; }
+  if(!confirm(noCodeStudents.length+'\uba85\uc5d0\uac8c \ucf54\ub4dc\ub97c \ubc1c\uae09\ud560\uae4c\uc694?')) return;
 
   var successCount = 0;
-  for(var s of targetStudents){
+  for(var s of noCodeStudents){
     var newCode = await generateStudentCode();
-    var {error} = await db.from('users').update({student_code: newCode}).eq('id', s.id);
-    if(!error) successCount++;
+    var {error:e2} = await db.from('users').update({student_code: newCode}).eq('id', s.id);
+    if(!e2) successCount++;
   }
-  alert('\u2705 '+successCount+'명 코드 발급 완료!');
+  alert('\u2705 '+successCount+'\uba85 \ucf54\ub4dc \ubc1c\uae09 \uc644\ub8cc!');
   if(typeof loadAdminData === 'function') await loadAdminData();
   else if(typeof loadStudents === 'function') await loadStudents();
 }
