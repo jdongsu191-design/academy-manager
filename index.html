@@ -20968,7 +20968,12 @@ async function sylPreviewExport(format){
         var canvasP = await sylCaptureA4(pages[pi2].html, 0.95, 'portrait');
         var imgP = canvasP.toDataURL('image/jpeg', 0.88);
         if(pi2 > 0) pdf.addPage();
-        pdf.addImage(imgP, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+        // 캔버스 실제 비율로 PDF에 삽입 (가로 강제 늘림 방지)
+        var canvasAR = canvasP.width / canvasP.height; // 실제 비율
+        var pdfW = 210;
+        var pdfH = pdfW / canvasAR;
+        if(pdfH > 297){ pdfH = 297; pdfW = pdfH * canvasAR; }
+        pdf.addImage(imgP, 'JPEG', 0, 0, pdfW, pdfH, undefined, 'FAST');
       }
       pdf.save(teacherSafe + '_' + periodSafe + '_' + courseSafe + '.pdf');
     }
@@ -21123,7 +21128,10 @@ async function sylvBulkExport(format){
               var sumCanvas = await sylCaptureA4(summaryHtml2, 0.95, 'portrait');
               var sumImg = sumCanvas.toDataURL('image/jpeg', 0.88);
               if(pdfPageIdx > 0) pdf.addPage();
-              pdf.addImage(sumImg, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+              var sumAR = sumCanvas.width / sumCanvas.height;
+              var sumW = 210, sumH = sumW / sumAR;
+              if(sumH > 297){ sumH = 297; sumW = sumH * sumAR; }
+              pdf.addImage(sumImg, 'JPEG', 0, 0, sumW, sumH, undefined, 'FAST');
               pdfPageIdx++;
             }
 
@@ -21135,7 +21143,10 @@ async function sylvBulkExport(format){
                 var courseCanvas = await sylCaptureA4(pages2[pi2].html, 0.95, 'portrait');
                 var courseImg = courseCanvas.toDataURL('image/jpeg', 0.88);
                 if(pdfPageIdx > 0) pdf.addPage();
-                pdf.addImage(courseImg, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                var cAR = courseCanvas.width / courseCanvas.height;
+                var cW = 210, cH = cW / cAR;
+                if(cH > 297){ cH = 297; cW = cH * cAR; }
+                pdf.addImage(courseImg, 'JPEG', 0, 0, cW, cH, undefined, 'FAST');
                 pdfPageIdx++;
               }
             }
@@ -28755,7 +28766,10 @@ async function syllabusSummaryExport(type){
     var imgData = canvas.toDataURL('image/jpeg', 0.95);
     var {jsPDF} = window.jspdf;
     var pdf2 = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
-    pdf2.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+    var ar3 = canvas3.width / canvas3.height;
+    var w3 = 210, h3 = w3 / ar3;
+    if(h3 > 297){ h3 = 297; w3 = h3 * ar3; }
+    pdf2.addImage(imgData, 'JPEG', 0, 0, w3, h3);
     var pdf2Blob = pdf2.output('blob');
     await sylSaveFile(pdf2Blob, filename+'.pdf', 'application/pdf', 'pdf');
   }
@@ -28807,7 +28821,7 @@ async function sylCaptureA4(html, quality, orientation){
   await new Promise(function(r){ setTimeout(r, 400); });
   var fullH = tmp.scrollHeight;
 
-  // 콘텐츠 원본 크기로 캡처
+  // 콘텐츠 원본 크기로 캡처 (scale:2 → @2x)
   var fullCanvas = await html2canvas(tmp, {
     scale: 2, useCORS: true, backgroundColor: '#ffffff',
     width: A4W, height: fullH,
@@ -28824,16 +28838,17 @@ async function sylCaptureA4(html, quality, orientation){
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, a4.width, a4.height);
 
-  // 콘텐츠가 A4보다 짧으면 원본 크기 그대로, 길면 A4에 맞게 축소
-  var scaleX = (A4W * 2) / fullCanvas.width;
+  // fullCanvas.width = A4W*2 (고정) → scaleX는 항상 1.0
+  // 세로만 비율에 따라 축소 (가로는 절대 늘리지 않음)
   var scaleY = (A4H * 2) / fullCanvas.height;
   var scale  = fullCanvas.height <= A4H * 2
-               ? 1.0          // A4 이내: 원본 크기 유지
-               : Math.min(scaleX, scaleY); // A4 초과: 비율 유지하며 축소
-  var dw = fullCanvas.width  * scale;
+               ? 1.0           // A4 이내: 원본 크기 유지
+               : scaleY;       // A4 초과: 세로 기준으로만 축소
+  var dw = fullCanvas.width  * scale;  // = A4W*2*scale
   var dh = fullCanvas.height * scale;
-  var dx = (a4.width  - dw) / 2; // 수평 중앙
-  var dy = 0;                      // 상단 정렬
+  // 가로 중앙정렬 제거 → 좌상단 기준 (가로 비율 변형 방지)
+  var dx = 0;
+  var dy = 0;
   ctx.drawImage(fullCanvas, 0, 0, fullCanvas.width, fullCanvas.height, dx, dy, dw, dh);
 
   return a4;
