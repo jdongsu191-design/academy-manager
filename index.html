@@ -3020,7 +3020,7 @@
 
         <!-- 필터 -->
         <div class="card" style="margin-bottom:12px">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          <div id="es-branch-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
             <div>
               <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">분원</div>
               <select id="es-filter-branch" onchange="esOnBranchChange()"
@@ -5032,7 +5032,7 @@ function showApp(){
     if(typeof _admBranchFilter !== 'undefined') _admBranchFilter = '';
     if(typeof _admLevelFilter !== 'undefined') _admLevelFilter = '';
     if(typeof _admStatusFilter !== 'undefined') _admStatusFilter = '';
-    // \uD83D\uDD04 데스크가 사용했던 주말 프로그램 캐시 reset (잔재 학생/선생님 표시 방지)
+    // 데스크가 사용했던 캐시 reset
     if(typeof _wnAllTeachers !== 'undefined') _wnAllTeachers = [];
     if(typeof _wnStudents !== 'undefined') _wnStudents = [];
     if(typeof _wnData !== 'undefined') _wnData = {};
@@ -5043,6 +5043,11 @@ function showApp(){
     if(typeof _nsAllTeachers !== 'undefined') _nsAllTeachers = [];
     if(typeof _nsStudents !== 'undefined') _nsStudents = [];
     if(typeof _nsData !== 'undefined') _nsData = {};
+    if(typeof _esStudents !== 'undefined') _esStudents = [];
+    if(typeof _esScoreMap !== 'undefined') _esScoreMap = {};
+    window._esDeskBranchIds = null;
+    var esTW2 = document.getElementById('es-table-wrap');
+    if(esTW2) esTW2.innerHTML = '';
     if(typeof _byAllTeachers !== 'undefined') _byAllTeachers = [];
     if(typeof _byStudents !== 'undefined') _byStudents = [];
     if(typeof _byData !== 'undefined') _byData = {};
@@ -5100,7 +5105,7 @@ function showApp(){
     // \uD83D\uDD04 이전 사용자(관리자/다른 데스크)가 보던 패널 잔재 제거
     document.querySelectorAll('#adminApp .panel').forEach(function(p){ p.classList.remove('active'); });
     document.querySelectorAll('#adminNav .at-menu-item').forEach(function(t){ t.classList.remove('active'); });
-    // \uD83D\uDD04 이전 사용자(관리자/다른 데스크)의 캐시 reset (잔재로 잘못된 데이터 보이는 것 방지)
+    // 이전 사용자(관리자/다른 데스크)의 캐시 reset
     if(typeof _admBranchFilter !== 'undefined') _admBranchFilter = '';
     if(typeof _admLevelFilter !== 'undefined') _admLevelFilter = '';
     if(typeof _admStatusFilter !== 'undefined') _admStatusFilter = '';
@@ -5117,6 +5122,13 @@ function showApp(){
     if(typeof _byAllTeachers !== 'undefined') _byAllTeachers = [];
     if(typeof _byStudents !== 'undefined') _byStudents = [];
     if(typeof _byData !== 'undefined') _byData = {};
+    // 내신점수 캐시 초기화
+    if(typeof _esStudents !== 'undefined') _esStudents = [];
+    if(typeof _esScoreMap !== 'undefined') _esScoreMap = {};
+    window._esDeskBranchIds = null;
+    // es 필터 초기화 (이전 관리자/데스크 상태 잔재 제거)
+    var esTW = document.getElementById('es-table-wrap');
+    if(esTW) esTW.innerHTML = '';
     // \uD83C\uDFAF 깜빡임 방지: 즉시 admin/desk 탭 hidden (loadAdminData 끝나기 전)
     ['admin','desk'].forEach(function(t){
       var btn = document.getElementById('acct-tab-'+t);
@@ -9420,6 +9432,16 @@ function applyDeskSidebarFilter(){
     el.style.display = allowedBtnIds.has(id) ? '' : 'none';
   });
 
+  // 내신고사 그룹: 데스크는 기본 허용 (내신점수만, 내신분析표는 권한 있을 때만)
+  var naesinGroup = document.getElementById('amenu-naesin-group');
+  if(naesinGroup) naesinGroup.style.display = '';
+  var examScoreBtn = document.getElementById('amenu-exam-score');
+  if(examScoreBtn) examScoreBtn.style.display = '';
+  var examListBtn = document.getElementById('amenu-exam-list');
+  if(examListBtn) examListBtn.style.display = allowedBtnIds.has('amenu-exam-list') ? '' : 'none';
+  var examAnalysisBtn = document.getElementById('amenu-exam-analysis');
+  if(examAnalysisBtn) examAnalysisBtn.style.display = 'none';
+
 }
 
 // 데스크가 가진 권한 중 첫 번째 메뉴 (자동 진입용)
@@ -9434,7 +9456,9 @@ function getDeskFirstTab(){
 
 // 데스크가 특정 탭에 접근 권한이 있는지 (URL 직접 접근 차단용)
 function deskHasTabAccess(tabId){
-  if(currentUser && currentUser.role !== 'desk') return true;  // 데스크 아니면 통과
+  if(currentUser && currentUser.role !== 'desk') return true;
+  // 내신점수는 데스크 기본 허용
+  if(tabId === 'admin-exam-score') return true;
   var permKeys = getDeskPermKeys(currentUser);
   for(var i = 0; i < permKeys.length; i++){
     var menus = DESK_PERM_TO_MENUS[permKeys[i]] || [];
@@ -21766,18 +21790,53 @@ var _esStudents = [];
 var _esScoreMap = {}; // key: studentId_subject → score
 
 async function initAdminExamScore(){
-  // 연도 옵션 생성 (현재 연도 기준 ±2)
+  var isDesk = currentUser && currentUser.role === 'desk';
+
+  // 연도 옵션 생성
   var yearSel = document.getElementById('es-filter-year');
   if(yearSel && !yearSel.options.length){
     var cur = new Date().getFullYear();
     for(var y = cur+1; y >= cur-2; y--){
       var opt = document.createElement('option');
-      opt.value = y; opt.textContent = y+'년';
+      opt.value = y; opt.textContent = y+'\ub144';
       if(y === cur) opt.selected = true;
       yearSel.appendChild(opt);
     }
   }
-  await esLoadBranches();
+
+  // 데스크: 분원 필터 숨기고 배정 분원만 사용
+  var branchRow = document.getElementById('es-branch-row');
+  if(isDesk){
+    if(branchRow) branchRow.style.display = 'none';
+    // 데스크 배정 분원의 선생님만 드롭다운에 표시
+    var branchIds = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+    var teacherSel = document.getElementById('es-filter-teacher');
+    if(teacherSel){
+      teacherSel.innerHTML = '';
+      var allOpt = document.createElement('option');
+      allOpt.value = '__all__';
+      allOpt.textContent = '\ubc30\uc815 \ubd84\uc6d0 \uc804\uccb4';
+      teacherSel.appendChild(allOpt);
+      if(branchIds.length){
+        try {
+          var {data:tList} = await db.from('users').select('id,name')
+            .eq('role','teacher').eq('status','active')
+            .in('branch_id', branchIds).order('name');
+          (tList||[]).forEach(function(t){
+            var o = document.createElement('option');
+            o.value = t.id; o.textContent = t.name;
+            teacherSel.appendChild(o);
+          });
+        } catch(e){ console.error('[내신점수] 데스크 선생님 로드 실패:',e); }
+      }
+    }
+    // _esDeskBranchIds 저장 (esLoadScores에서 사용)
+    window._esDeskBranchIds = branchIds;
+  } else {
+    if(branchRow) branchRow.style.display = '';
+    window._esDeskBranchIds = null;
+    await esLoadBranches();
+  }
 }
 
 async function esLoadBranches(){
@@ -21868,7 +21927,18 @@ async function esLoadScores(){
     var stuQ = db.from('users').select('id,name,school,grade,class_id,teacher_id')
       .eq('status','active').order('school').order('grade').order('name');
     if(teacherId === '__all__'){
-      if(branchId){
+      var isDesk2 = currentUser && currentUser.role === 'desk';
+      if(isDesk2){
+        // 데스크: 배정 분원 선생님만
+        var deskBids = window._esDeskBranchIds || [];
+        if(deskBids.length){
+          var {data:deskTeachers} = await db.from('users').select('id')
+            .eq('role','teacher').eq('status','active').in('branch_id', deskBids);
+          var dtids = (deskTeachers||[]).map(function(t){ return t.id; });
+          if(dtids.length) stuQ = stuQ.in('teacher_id', dtids);
+          else stuQ = stuQ.eq('teacher_id','no-match');
+        }
+      } else if(branchId){
         var {data:branchTeachers} = await db.from('users').select('id')
           .eq('role','teacher').eq('status','active').eq('branch_id', branchId);
         var tids = (branchTeachers||[]).map(function(t){ return t.id; });
