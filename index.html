@@ -27835,6 +27835,7 @@ function sylCourseCardHTML(c,ci){
       ? '<button data-cid="'+cid+'" data-pi="'+pi+'" onclick="event.stopPropagation();sylDeleteExtraPage(this.dataset.cid,+this.dataset.pi)" style="padding:3px 10px;border:1px solid #fca5a5;border-radius:6px;background:#fff0f0;color:#dc2626;font-size:11px;cursor:pointer;font-weight:600">\uD83D\uDDD1\uFE0F 이 페이지 삭제</button>'
       : '';
     var addRowBtn = '<button data-cid="'+cid+'" data-pi="'+pi+'" onclick="event.stopPropagation();sylAddScheduleRow(this.dataset.cid,+this.dataset.pi)" style="padding:4px 12px;border:1px solid #93c5fd;border-radius:6px;background:#eff6ff;color:#1d4ed8;font-size:12px;cursor:pointer;font-weight:600">+ 행 추가</button>';
+    var loadDatesBtn = '<button data-cid="'+cid+'" data-pi="'+pi+'" onclick="event.stopPropagation();sylLoadDatesFromClass(this.dataset.cid,+this.dataset.pi)" style="padding:4px 12px;border:1px solid #6ee7b7;border-radius:6px;background:#f0fdf4;color:#059669;font-size:12px;cursor:pointer;font-weight:600">📅 날짜 불러오기</button>';
 
     var header = '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#f4f7fa;border:1px solid #d0dde6;border-radius:8px;cursor:pointer;gap:10px;flex-wrap:wrap" onclick="sylToggleSchedPage(\''+cid+'\','+(pi<0?'-1':pi)+')">'
       +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
@@ -27845,6 +27846,7 @@ function sylCourseCardHTML(c,ci){
       +'</div>'
       +'<div style="display:flex;align-items:center;gap:8px" onclick="event.stopPropagation()">'
         +deleteBtn
+        +loadDatesBtn
         +addRowBtn
       +'</div>'
     +'</div>';
@@ -28377,6 +28379,102 @@ function sylUpdateCurriculum(id, ci, field, val){
   var c = _sylCourses.find(function(c){ return c.id===id; });
   if(_sylTeacherCurriculum && _sylTeacherCurriculum[ci]) _sylTeacherCurriculum[ci][field] = val;
   else if(c && c.curriculum && c.curriculum[ci]) c.curriculum[ci][field] = val;
+}
+
+// 회차별 진도 계획 날짜 불러오기: 반 수업요일 기준으로 기간 내 날짜 자동 생성
+async function sylLoadDatesFromClass(id, pi){
+  var c = _sylCourses.find(function(c){ return c.id===id; });
+  if(!c) return;
+
+  // 수업 시간 텍스트(c.time)에서 요일 파싱: "화·목 17:30~19:45" → ['화','목']
+  var DAY_MAP = {'월':1,'화':2,'수':3,'목':4,'금':5,'토':6,'일':0};
+  var DAY_KO  = ['일','월','화','수','목','금','토'];
+
+  // c.time 또는 c.classDays에서 요일 추출
+  var timeText = (c.time||'').replace(/\s/g,'');
+  var matchedDays = [];
+  Object.keys(DAY_MAP).forEach(function(d){
+    if(timeText.indexOf(d) !== -1) matchedDays.push(d);
+  });
+
+  // 요일이 감지 안되면 DB 반 정보에서 시도
+  if(!matchedDays.length && c.classId){
+    try {
+      var {data:cls} = await db.from('classes').select('class_days').eq('id', c.classId).single();
+      if(cls && cls.class_days){
+        var cdText = cls.class_days.replace(/\s/g,'');
+        Object.keys(DAY_MAP).forEach(function(d){
+          if(cdText.indexOf(d) !== -1) matchedDays.push(d);
+        });
+      }
+    } catch(e){}
+  }
+
+  if(!matchedDays.length){
+    alert('수업 요일을 인식할 수 없습니다.\n"수업 시간" 란에 요일이 포함되어 있는지 확인해주세요.\n예) 화·목 17:30~19:45');
+    return;
+  }
+
+  // 기간 파싱: _sylPeriod 또는 syl-period 입력값에서 읽기
+  // 형식: "2025.03 ~ 2026.02" 또는 "2025년 3월 ~ 2026년 2월"
+  var periodRaw = '';
+  var periodEl = document.getElementById('syl-period') || document.getElementById('t-syl-period');
+  if(periodEl) periodRaw = periodEl.value || '';
+  if(!periodRaw && typeof _sylPeriod !== 'undefined') periodRaw = _sylPeriod || '';
+
+  // 숫자 패턴: 2025.03 ~ 2026.02 또는 2025-03 ~ 2026-02
+  var periodMatch = periodRaw.match(/(\d{4})[.\-\/](\d{1,2})\s*[~\-]\s*(\d{4})[.\-\/](\d{1,2})/);
+  // 한글 패턴: 2025년 3월 ~ 2026년 2월
+  if(!periodMatch) periodMatch = periodRaw.match(/(\d{4})[년]\s*(\d{1,2})[월]\s*[~]\s*(\d{4})[년]\s*(\d{1,2})[월]/);
+
+  if(!periodMatch){
+    alert('기간을 파싱할 수 없습니다.\n기간 형식 예) 2025.03 ~ 2026.02\n현재 기간: ' + (periodRaw||'없음'));
+    return;
+  }
+  var startDate = new Date(parseInt(periodMatch[1]), parseInt(periodMatch[2])-1, 1);
+  var endDate   = new Date(parseInt(periodMatch[3]), parseInt(periodMatch[4]),   0); // 말일
+
+  // 기간 내 해당 요일 날짜 모두 수집
+  var dayNums = matchedDays.map(function(d){ return DAY_MAP[d]; });
+  dayNums.sort(function(a,b){ return a-b; });
+
+  var dates = [];
+  var cur = new Date(startDate);
+  while(cur <= endDate){
+    if(dayNums.indexOf(cur.getDay()) !== -1){
+      dates.push(new Date(cur));
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+
+  if(!dates.length){
+    alert('해당 기간 내 ' + matchedDays.join('·') + '요일 날짜가 없습니다.');
+    return;
+  }
+
+  var confirmed = confirm(
+    '수업 요일: ' + matchedDays.join('·') + '\n' +
+    '기간: ' + periodRaw + '\n' +
+    '총 ' + dates.length + '회차 행을 생성합니다.\n\n' +
+    '기존 행은 모두 지워지고 새로 채워집니다. 계속할까요?'
+  );
+  if(!confirmed) return;
+
+  // 날짜 → 행 데이터 생성
+  var newRows = dates.map(function(dt){
+    var mm = String(dt.getMonth()+1).padStart(2,'0');
+    var dd = String(dt.getDate()).padStart(2,'0');
+    var dayKo = DAY_KO[dt.getDay()];
+    return { date: mm+'/'+dd, day: dayKo, flag:'', main:'' };
+  });
+
+  // 해당 페이지 schedule 교체
+  var arr = sylGetSchedArr(c, pi);
+  if(!arr) return;
+  arr.splice(0, arr.length);
+  newRows.forEach(function(r){ arr.push(r); });
+
+  sylRenderCourseList();
 }
 
 function sylAddScheduleRow(id, pi){
