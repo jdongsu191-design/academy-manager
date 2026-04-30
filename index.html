@@ -2983,7 +2983,7 @@
               <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">선생님</div>
               <select id="es-filter-teacher" onchange="esOnTeacherChange()"
                 style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
-                <option value="">선택하세요</option>
+                <option value="__all__">전체 (분원 전체)</option>
               </select>
             </div>
           </div>
@@ -3013,14 +3013,18 @@
           </div>
           <!-- 과목 (고등 복수과목 대비) -->
           <div style="margin-bottom:10px">
-            <div style="font-size:11px;color:#9ca3af;margin-bottom:4px">과목</div>
-            <div id="es-subject-tags" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-              <span id="es-subject-tag-수학" class="es-subject-tag es-subject-active"
-                onclick="esToggleSubject('수학')"
-                style="padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;border:1.5px solid #7c3aed;background:#f5f3ff;color:#7c3aed;cursor:pointer">수학</span>
-              <button onclick="esAddSubject()"
-                style="padding:4px 10px;border-radius:999px;font-size:11px;border:1px dashed #d1d5db;background:#fff;color:#9ca3af;cursor:pointer">+ 과목 추가</button>
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:6px">과목</div>
+            <div id="es-subject-list" style="display:flex;flex-direction:column;gap:6px">
+              <div class="es-subject-row" style="display:flex;align-items:center;gap:6px">
+                <span style="font-size:12px;font-weight:700;color:#7c3aed;width:28px">#1</span>
+                <input type="text" value="수학" readonly
+                  style="flex:1;padding:5px 8px;border:1.5px solid #7c3aed;border-radius:7px;font-size:12px;background:#f5f3ff;color:#7c3aed;font-weight:700;outline:none">
+              </div>
             </div>
+            <button onclick="esAddSubjectRow()"
+              style="margin-top:6px;padding:4px 12px;border:1px dashed #d1d5db;border-radius:7px;font-size:11px;background:#fff;color:#9ca3af;cursor:pointer">
+              + 수학 과목 추가 (고등 복수과목)
+            </button>
           </div>
           <button onclick="esLoadScores()"
             style="width:100%;padding:9px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">
@@ -21550,18 +21554,32 @@ async function esLoadScores(){
   var year     = document.getElementById('es-filter-year').value;
   var semester = document.getElementById('es-filter-semester').value;
   var examType = document.getElementById('es-filter-exam').value;
+  var branchId = document.getElementById('es-filter-branch').value;
 
   var wrap = document.getElementById('es-table-wrap');
-  wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">불러오는 중...</div>';
+  wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">\ubd88\ub7ec\uc624\ub294 \uc911...</div>';
 
   try {
-    // 학생 목록 (해당 선생님 담당 활성 학생)
-    var {data:stus} = await db.from('users').select('id,name,school,grade,class_id')
-      .eq('teacher_id', teacherId).eq('status','active').order('school').order('grade').order('name');
+    // 학생 목록
+    var stuQ = db.from('users').select('id,name,school,grade,class_id,teacher_id')
+      .eq('status','active').order('school').order('grade').order('name');
+    if(teacherId === '__all__'){
+      if(branchId){
+        var {data:branchTeachers} = await db.from('users').select('id')
+          .eq('role','teacher').eq('status','active').eq('branch_id', branchId);
+        var tids = (branchTeachers||[]).map(function(t){ return t.id; });
+        if(tids.length) stuQ = stuQ.in('teacher_id', tids);
+        else stuQ = stuQ.eq('teacher_id','no-match');
+      }
+      // branchId 없으면 전체 학생
+    } else {
+      stuQ = stuQ.eq('teacher_id', teacherId);
+    }
+    var {data:stus} = await stuQ;
     _esStudents = stus || [];
 
     if(!_esStudents.length){
-      wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">👤</div><p>해당 선생님의 학생이 없습니다</p></div>';
+      wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">\ud83d\udc64</div><p>\ud559\uc0dd\uc774 \uc5c6\uc2b5\ub2c8\ub2e4</p></div>';
       return;
     }
 
@@ -21617,7 +21635,8 @@ function esRenderTable(year, semester, examType, teacherId, subjects){
     }).join('');
 
     var school = stu.school || '-';
-    var grade  = stu.grade  ? stu.grade+'학년' : '-';
+    var gradeRaw = stu.grade ? String(stu.grade) : '';
+    var grade = gradeRaw ? (gradeRaw.includes('\ud559\ub144') ? gradeRaw : gradeRaw+'\ud559\ub144') : '-';
 
     return '<tr style="border-bottom:1px solid #f3f4f6">'
       +'<td style="padding:8px 10px;font-size:13px;color:#374151;white-space:nowrap">'+school+'</td>'
