@@ -3020,6 +3020,7 @@
 
         <!-- 필터 -->
         <div class="card" style="margin-bottom:12px">
+          <!-- 관리자용 분원+선생님 필터 -->
           <div id="es-branch-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
             <div>
               <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">분원</div>
@@ -3034,6 +3035,23 @@
                 style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
                 <option value="__all__">전체 (분원 전체)</option>
               </select>
+            </div>
+          </div>
+          <!-- 데스크 전용 분원+선생님 필터 -->
+          <div id="es-desk-filter-row" style="display:none;margin-bottom:8px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div>
+                <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">분원</div>
+                <select id="es-desk-filter-branch" onchange="esDeskOnBranchChange()"
+                  style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+                </select>
+              </div>
+              <div>
+                <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">선생님</div>
+                <select id="es-desk-filter-teacher"
+                  style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+                </select>
+              </div>
             </div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
@@ -21798,45 +21816,79 @@ async function initAdminExamScore(){
     var cur = new Date().getFullYear();
     for(var y = cur+1; y >= cur-2; y--){
       var opt = document.createElement('option');
-      opt.value = y; opt.textContent = y+'\ub144';
+      opt.value = y; opt.textContent = y+'년';
       if(y === cur) opt.selected = true;
       yearSel.appendChild(opt);
     }
   }
 
-  // 데스크: 분원 필터 숨기고 배정 분원만 사용
-  var branchRow = document.getElementById('es-branch-row');
   if(isDesk){
+    // 데스크: 관리자 행 숨기고 데스크 전용 행 표시
+    var branchRow = document.getElementById('es-branch-row');
+    var deskRow   = document.getElementById('es-desk-filter-row');
     if(branchRow) branchRow.style.display = 'none';
-    // 데스크 배정 분원의 선생님만 드롭다운에 표시
+    if(deskRow)   deskRow.style.display   = '';
+
     var branchIds = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
-    var teacherSel = document.getElementById('es-filter-teacher');
-    if(teacherSel){
-      teacherSel.innerHTML = '';
-      var allOpt = document.createElement('option');
-      allOpt.value = '__all__';
-      allOpt.textContent = '\ubc30\uc815 \ubd84\uc6d0 \uc804\uccb4';
-      teacherSel.appendChild(allOpt);
+    window._esDeskBranchIds = branchIds;
+
+    // 데스크 분원 드롭다운 구성
+    var bSel = document.getElementById('es-desk-filter-branch');
+    if(bSel){
+      bSel.innerHTML = '<option value="__all__">전체 분원</option>';
       if(branchIds.length){
         try {
-          var {data:tList} = await db.from('users').select('id,name')
-            .eq('role','teacher').eq('status','active')
-            .in('branch_id', branchIds).order('name');
-          (tList||[]).forEach(function(t){
+          var {data:branches} = await db.from('branches').select('id,name')
+            .in('id', branchIds).eq('active',true).order('name');
+          (branches||[]).forEach(function(b){
             var o = document.createElement('option');
-            o.value = t.id; o.textContent = t.name;
-            teacherSel.appendChild(o);
+            o.value = b.id; o.textContent = b.name;
+            bSel.appendChild(o);
           });
-        } catch(e){ console.error('[내신점수] 데스크 선생님 로드 실패:',e); }
+        } catch(e){ console.error('[내신점수] 데스크 분원 로드 실패:',e); }
       }
+      // 선생님 초기 로드 (전체 분원)
+      await esDeskLoadTeachers('__all__');
     }
-    // _esDeskBranchIds 저장 (esLoadScores에서 사용)
-    window._esDeskBranchIds = branchIds;
   } else {
-    if(branchRow) branchRow.style.display = '';
+    // 관리자: 관리자 행 표시, 데스크 행 숨김
+    var branchRow2 = document.getElementById('es-branch-row');
+    var deskRow2   = document.getElementById('es-desk-filter-row');
+    if(branchRow2) branchRow2.style.display = '';
+    if(deskRow2)   deskRow2.style.display   = 'none';
     window._esDeskBranchIds = null;
     await esLoadBranches();
   }
+}
+
+async function esDeskLoadTeachers(branchId){
+  var tSel = document.getElementById('es-desk-filter-teacher');
+  if(!tSel) return;
+  var branchIds = window._esDeskBranchIds || [];
+  tSel.innerHTML = '<option value="__all__">전체 선생님</option>';
+  try {
+    var q = db.from('users').select('id,name').eq('role','teacher').eq('status','active');
+    if(branchId && branchId !== '__all__'){
+      q = q.eq('branch_id', branchId);
+    } else if(branchIds.length){
+      q = q.in('branch_id', branchIds);
+    }
+    var {data:teachers} = await q.order('name');
+    (teachers||[]).forEach(function(t){
+      var o = document.createElement('option');
+      o.value = t.id; o.textContent = t.name;
+      tSel.appendChild(o);
+    });
+  } catch(e){ console.error('[내신점수] 데스크 선생님 로드 실패:',e); }
+}
+
+async function esDeskOnBranchChange(){
+  var bSel = document.getElementById('es-desk-filter-branch');
+  var branchId = bSel ? bSel.value : '__all__';
+  await esDeskLoadTeachers(branchId);
+  // 테이블 초기화
+  _esStudents = []; _esScoreMap = {};
+  document.getElementById('es-table-wrap').innerHTML = '';
 }
 
 async function esLoadBranches(){
@@ -21912,12 +21964,19 @@ function esReindexSubjectRows(){
 }
 
 async function esLoadScores(){
-  var teacherId = document.getElementById('es-filter-teacher').value;
-  if(!teacherId){ alert('선생님을 선택하세요'); return; }
+  var isDesk = currentUser && currentUser.role === 'desk';
+  // 데스크는 전용 드롭다운, 관리자는 기존 드롭다운
+  var teacherId = isDesk
+    ? (document.getElementById('es-desk-filter-teacher') || {}).value || '__all__'
+    : document.getElementById('es-filter-teacher').value;
+  var branchId  = isDesk
+    ? (document.getElementById('es-desk-filter-branch') || {}).value || '__all__'
+    : document.getElementById('es-filter-branch').value;
+
+  if(!isDesk && !teacherId){ alert('\uc120\uc0dd\ub2d8\uc744 \uc120\ud0dd\ud558\uc138\uc694'); return; }
   var year     = document.getElementById('es-filter-year').value;
   var semester = document.getElementById('es-filter-semester').value;
   var examType = document.getElementById('es-filter-exam').value;
-  var branchId = document.getElementById('es-filter-branch').value;
 
   var wrap = document.getElementById('es-table-wrap');
   wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">\ubd88\ub7ec\uc624\ub294 \uc911...</div>';
