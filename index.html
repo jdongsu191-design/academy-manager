@@ -21569,35 +21569,37 @@ async function esLoadScores(){
     }
 
     // 기존 점수 로드
+    var _curSubjects = esGetSubjects();
     var studentIds = _esStudents.map(function(s){ return s.id; });
     var {data:scores} = await db.from('exam_scores').select('student_id,subject,score,note')
       .in('student_id', studentIds)
       .eq('year', year).eq('semester', semester).eq('exam_type', examType)
-      .in('subject', _esSubjects);
+      .in('subject', _curSubjects);
 
     _esScoreMap = {};
     (scores||[]).forEach(function(sc){
       _esScoreMap[sc.student_id+'_'+sc.subject] = {score: sc.score, note: sc.note||''};
     });
 
-    esRenderTable(year, semester, examType, teacherId);
+    esRenderTable(year, semester, examType, teacherId, _curSubjects);
   } catch(e){
     wrap.innerHTML = '<div style="color:#dc2626;padding:20px">로드 실패: '+(e.message||e)+'</div>';
   }
 }
 
-function esRenderTable(year, semester, examType, teacherId){
+function esRenderTable(year, semester, examType, teacherId, subjects){
+  subjects = subjects || esGetSubjects();
   var wrap = document.getElementById('es-table-wrap');
   var examLabel = examType==='midterm'?'중간고사':'기말고사';
   var semLabel  = semester+'학기';
 
-  var subjectCols = _esSubjects.map(function(s){
+  var subjectCols = subjects.map(function(s){
     return '<th style="padding:8px 10px;font-size:12px;font-weight:700;color:#7c3aed;white-space:nowrap">'+s+'<br><span style="font-size:10px;font-weight:400;color:#9ca3af">원점수</span></th>'
           +'<th style="padding:8px 10px;font-size:12px;font-weight:700;color:#6b7280;white-space:nowrap">비고</th>';
   }).join('');
 
   var rows = _esStudents.map(function(stu){
-    var subjectInputs = _esSubjects.map(function(subj){
+    var subjectInputs = subjects.map(function(subj){
       var key = stu.id+'_'+subj;
       var existing = _esScoreMap[key] || {};
       var scoreVal = existing.score !== undefined && existing.score !== null ? existing.score : '';
@@ -21646,6 +21648,20 @@ function esRenderTable(year, semester, examType, teacherId){
     +'</table>'
     +'</div>'
     +'</div>';
+
+  // 엔터 → 아래 행 같은 과목 점수 입력칸으로 이동
+  var allInputs = Array.from(document.querySelectorAll('.es-score-input'));
+  allInputs.forEach(function(inp, idx){
+    inp.addEventListener('keydown', function(e){
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        // subjects 수 만큼 건너뛰어서 같은 열(과목) 다음 행으로 이동
+        var next = allInputs[idx + subjects.length];
+        if(next) next.focus();
+        else allInputs[0] && allInputs[0].focus(); // 마지막이면 처음으로
+      }
+    });
+  });
 }
 
 async function esSaveScores(teacherId, year, semester, examType){
@@ -21671,9 +21687,13 @@ async function esSaveScores(teacherId, year, semester, examType){
   });
 
   var upsertData = Object.values(dataMap).map(function(d){
+    // __all__ 인 경우 학생의 실제 teacher_id 사용
+    var realTeacherId = teacherId === '__all__'
+      ? (_esStudents.find(function(s){return s.id===d.student_id;})||{}).teacher_id || teacherId
+      : teacherId;
     return {
       student_id: d.student_id,
-      teacher_id: teacherId,
+      teacher_id: realTeacherId,
       year: parseInt(year),
       semester: parseInt(semester),
       exam_type: examType,
