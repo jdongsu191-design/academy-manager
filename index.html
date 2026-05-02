@@ -1885,6 +1885,31 @@
           </div>
           <button onclick="weekendPrintAttendance('bety')" style="padding:7px 14px;background:#fff;border:1.5px solid #d97706;border-radius:8px;font-size:13px;font-weight:600;color:#b45309;cursor:pointer;display:flex;align-items:center;gap:5px">🖨️ 출석부 출력</button>
         </div>
+
+        <!-- 레벨·시간 일괄 설정 (관리자 전용) -->
+        <div id="by-setup-card" style="display:none;margin-bottom:12px">
+          <div class="card" style="border:1.5px solid #fde68a;background:#fffbeb">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+              <div style="font-size:13px;font-weight:700;color:#b45309">⚙️ 레벨 · 시간 일괄 설정</div>
+              <button onclick="bySetupLoad()" style="padding:5px 14px;background:#d97706;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">🔍 학생 불러오기</button>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
+              <div id="by-setup-branch-wrap" style="display:none;flex:1;min-width:120px">
+                <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">분원</div>
+                <select id="by-setup-branch" onchange="bySetupLoadTeachers(this.value)" style="width:100%;padding:6px 10px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff">
+                  <option value="">전체 분원</option>
+                </select>
+              </div>
+              <div style="flex:1;min-width:120px">
+                <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">선생님</div>
+                <select id="by-setup-teacher" style="width:100%;padding:6px 10px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff">
+                  <option value="">전체 선생님</option>
+                </select>
+              </div>
+            </div>
+            <div id="by-setup-table-wrap"></div>
+          </div>
+        </div>
         <div class="card" style="margin-bottom:12px;border:1.5px solid #fde68a">
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
             <div id="by-branch-wrap" style="display:none;flex:1;min-width:130px">
@@ -17134,6 +17159,10 @@ function byOnBranchChange(){
   var branchId = document.getElementById('by-branch-select').value;
   if(typeof byLoadFilters === 'function') byLoadFilters(branchId);
   else if(typeof byLoad === 'function') byLoad();
+  // 설정 카드 선생님도 갱신
+  var setupBranch = document.getElementById('by-setup-branch');
+  if(setupBranch) setupBranch.value = branchId;
+  bySetupLoadTeachers(branchId);
 }
 
 // 주말프로그램 출석부 출력 (프린트 방식 - 이미지 생성과 동일한 디자인)
@@ -24105,6 +24134,95 @@ async function initBety(){
   await byLoadData();
 }
 
+/* ── 베티모의고사 레벨·시간 일괄 설정 (관리자) ── */
+async function bySetupLoadTeachers(branchId){
+  var sel = document.getElementById('by-setup-teacher');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">\uc804\uccb4 \uc120\uc0dd\ub2d8</option>';
+  var q = db.from('users').select('id,name').eq('role','teacher').eq('status','active');
+  if(branchId) q = q.eq('branch_id', branchId);
+  var {data:ts} = await q.order('name');
+  (ts||[]).forEach(function(t){ sel.innerHTML += '<option value="'+t.id+'">'+t.name+' T</option>'; });
+}
+
+async function bySetupLoad(){
+  var branchId  = (document.getElementById('by-setup-branch')||{}).value  || '';
+  var teacherId = (document.getElementById('by-setup-teacher')||{}).value || '';
+  var wrap = document.getElementById('by-setup-table-wrap');
+  wrap.innerHTML = '<div style="text-align:center;padding:12px;color:#9ca3af">\ubd88\ub7ec\uc624\ub294 \uc911...</div>';
+
+  var q = db.from('users').select('id,name,school,grade,teacher_id,bety_level,bety_attend_time')
+    .eq('role','student').eq('status','active').eq('bety_yn',true);
+  if(teacherId) q = q.eq('teacher_id', teacherId);
+  else if(branchId){
+    var {data:ts} = await db.from('users').select('id').eq('role','teacher').eq('branch_id',branchId);
+    var tids = (ts||[]).map(function(t){return t.id;});
+    if(!tids.length){ wrap.innerHTML='<div style="text-align:center;padding:12px;color:#9ca3af">\ud95c\ub2f9 \ud559\uc0dd \uc5c6\uc74c</div>'; return; }
+    q = q.in('teacher_id', tids);
+  }
+  var {data:students} = await q.order('name');
+  if(!students||!students.length){ wrap.innerHTML='<div style="text-align:center;padding:12px;color:#9ca3af">\ubca0\ud2f0\ubaa8\uc758\uace0\uc0ac \ucc38\uc5ec \ud559\uc0dd\uc774 \uc5c6\uc2b5\ub2c8\ub2e4</div>'; return; }
+
+  var LEVEL_OPTS = ['','\uc2e4\uc804\ubaa8\uace0','\uc900\ud0ac\ub7ec'];
+  var rows = students.map(function(s,i){
+    var bg = i%2===0?'#fff':'#fffbeb';
+    var lvOpts = LEVEL_OPTS.map(function(v){ return '<option value="'+v+'"'+(s.bety_level===v?' selected':'')+'>'+v+'</option>'; }).join('');
+    return '<tr style="background:'+bg+'">'
+      +'<td style="padding:6px 10px;font-size:12px;color:#6b7280;white-space:nowrap">'+(s.school||'')+' '+(s.grade||'')+'</td>'
+      +'<td style="padding:6px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap">'+s.name+'</td>'
+      +'<td style="padding:5px 6px"><select class="by-setup-level" data-sid="'+s.id+'" style="width:90px;padding:5px 6px;border:1.5px solid #fde68a;border-radius:6px;font-size:12px;outline:none;background:#fff">'+lvOpts+'</select></td>'
+      +'<td style="padding:5px 6px"><input type="text" class="by-setup-time" data-sid="'+s.id+'" value="'+(s.bety_attend_time||'')+'" placeholder="10:00" style="width:70px;padding:5px 6px;border:1.5px solid #fde68a;border-radius:6px;font-size:12px;text-align:center;outline:none"></td>'
+      +'</tr>';
+  }).join('');
+
+  wrap.innerHTML = '<div style="overflow-x:auto">'
+    +'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+    +'<thead><tr style="background:#b45309">'
+    +'<th style="padding:6px 10px;color:#fff;text-align:left;font-size:11px">\ud559\uad50/\ud559\ub144</th>'
+    +'<th style="padding:6px 10px;color:#fff;text-align:left;font-size:11px">\uc774\ub984</th>'
+    +'<th style="padding:6px 10px;color:#fff;text-align:center;font-size:11px">\ub808\ubca8</th>'
+    +'<th style="padding:6px 10px;color:#fff;text-align:center;font-size:11px">\uc2dc\uac04</th>'
+    +'</tr></thead>'
+    +'<tbody>'+rows+'</tbody>'
+    +'</table></div>'
+    +'<div style="margin-top:10px;display:flex;justify-content:flex-end">'
+    +'<button onclick="bySetupSave()" style="padding:8px 20px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">\ud83d\udcbe \uc77c\uad04 \uc800\uc7a5</button>'
+    +'</div>';
+}
+
+async function bySetupSave(){
+  var levelEls = document.querySelectorAll('.by-setup-level');
+  var timeEls  = document.querySelectorAll('.by-setup-time');
+  if(!levelEls.length){ alert('\uba3c\uc800 \ud559\uc0dd\uc744 \ubd88\ub7ec\uc624\uc138\uc694'); return; }
+
+  var updates = [];
+  levelEls.forEach(function(el){
+    var sid = el.getAttribute('data-sid');
+    var timeEl = document.querySelector('.by-setup-time[data-sid="'+sid+'"]');
+    updates.push({ id: sid, bety_level: el.value||null, bety_attend_time: (timeEl?timeEl.value:'')||null });
+  });
+
+  var ok=0, fail=0;
+  await Promise.all(updates.map(async function(u){
+    var {error} = await db.from('users').update({bety_level:u.bety_level, bety_attend_time:u.bety_attend_time}).eq('id',u.id);
+    if(error) fail++; else ok++;
+  }));
+
+  var saveBtn = document.querySelector('#by-setup-table-wrap button');
+  if(saveBtn){
+    var orig = saveBtn.innerHTML;
+    saveBtn.innerHTML = '\u2705 '+ok+'\uba85 \uc800\uc7a5 \uc644\ub8cc'+(fail?'(\uc2e4\ud328 '+fail+')':'');
+    saveBtn.style.background = '#059669';
+    setTimeout(function(){ saveBtn.innerHTML=orig; saveBtn.style.background='#b45309'; }, 2000);
+  }
+
+  // _byStudents 캐시도 업데이트
+  updates.forEach(function(u){
+    var s = (_byStudents||[]).find(function(s){ return s.id===u.id; });
+    if(s){ s.bety_level=u.bety_level; s.bety_attend_time=u.bety_attend_time; }
+  });
+}
+
 async function byLoad(){ await byLoadData(); }
 
 async function byLoadFilters(branchId){
@@ -24980,6 +25098,18 @@ async function initAdminWeekendBety(){
       var {data:brsBy} = await db.from('branches').select('id,name').eq('active',true).order('name');
       (brsBy||[]).forEach(function(b){ bsBy.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>'; });
     }
+    // 레벨·시간 설정 카드 표시
+    var setupCard = document.getElementById('by-setup-card');
+    if(setupCard) setupCard.style.display = '';
+    // 설정 카드 분원 드롭다운
+    var setupBranchWrap = document.getElementById('by-setup-branch-wrap');
+    var setupBranch = document.getElementById('by-setup-branch');
+    if(setupBranchWrap) setupBranchWrap.style.display = '';
+    if(setupBranch && setupBranch.options.length <= 1){
+      (brsBy||[]).forEach(function(b){ setupBranch.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>'; });
+    }
+    // 설정 카드 선생님 드롭다운
+    await bySetupLoadTeachers('');
   }
   // by 초기화
   if(typeof byLoadFilters === 'function') await byLoadFilters();
