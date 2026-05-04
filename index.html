@@ -20382,7 +20382,7 @@ async function ptReportModal_openWrite(){
     +'<div style="padding:16px;overflow-y:auto;flex:1">'
       +'<div style="margin-bottom:12px">'
         +'<div style="font-size:12px;font-weight:600;color:#7c3aed;margin-bottom:4px">학생 선택</div>'
-        +'<select id="ptrw-student" style="width:100%;padding:8px 12px;border:1.5px solid #ddd6fe;border-radius:8px;font-size:13px;outline:none">'
+        +'<select id="ptrw-student" onchange="ptReportAutoLevel(this.value)" style="width:100%;padding:8px 12px;border:1.5px solid #ddd6fe;border-radius:8px;font-size:13px;outline:none">'
           +'<option value="">-- 학생 선택 --</option>'+studentOpts
         +'</select>'
       +'</div>'
@@ -20431,6 +20431,18 @@ async function ptReportModal_openWrite(){
   }
 }
 
+function ptReportAutoLevel(sid){
+  if(!sid) return;
+  var s = (_ptStudents||[]).find(function(s){ return s.id===sid; });
+  if(!s) return;
+  // potential_level 필드 확인 (A 또는 B)
+  var lv = (s.potential_level||'').toUpperCase();
+  if(lv === 'A' || lv === 'B'){
+    var lvSel = document.getElementById('ptrw-level');
+    if(lvSel) lvSel.value = lv;
+  }
+}
+
 async function ptReportLoadData(){
   var sid = document.getElementById('ptrw-student').value;
   if(!sid){ alert('학생을 먼저 선택해주세요'); return; }
@@ -20439,30 +20451,33 @@ async function ptReportLoadData(){
   var level = document.getElementById('ptrw-level').value;
   var wrap = document.getElementById('ptrw-data-wrap');
 
-  wrap.innerHTML = '<div style="text-align:center;padding:16px;color:#9ca3af">불러오는 중...</div>';
+  wrap.innerHTML = '<div style="text-align:center;padding:16px;color:#9ca3af">\ubd88\ub7ec\uc624\ub294 \uc911...</div>';
 
-  // 각 날짜별 출석부 데이터 로드
+  // 초기화
+  _ptrwAnswers = [[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null]];
+
   var weeks = [];
   for(var i=0;i<3;i++){
     var d = dates[i];
     var weekData = {date:d, att:'', hw:null, answers:Array(8).fill(null), score:null};
     if(d){
-      var {data:recs} = await db.from('weekend_potential_records')
-        .select('attendance,homework_done,wrong_answers,score')
-        .eq('student_id',sid).eq('date',d).single();
-      if(recs){
-        weekData.att = recs.attendance||'';
-        weekData.hw  = recs.homework_done;
-        weekData.score = recs.score;
-        // wrong_answers가 JSON 배열이면 사용
-        if(Array.isArray(recs.wrong_answers)) weekData.answers = recs.wrong_answers.slice(0,8);
-        else {
-          // _ptAnswers에서 가져오기
-          var ans = (_ptAnswers||{})[sid];
-          if(ans) weekData.answers = ans.slice(0,8);
-        }
+      // weekend_potential 테이블에서 출결/숙제/점수 로드
+      var {data:recs} = await db.from('weekend_potential')
+        .select('attendance,wrong_done,score,result')
+        .eq('student_id',sid).eq('session_date',d);
+      var rec = recs && recs[0] ? recs[0] : null;
+      if(rec){
+        weekData.att  = rec.attendance||'';
+        weekData.hw   = rec.wrong_done;
+        weekData.score= rec.score;
+      }
+      // _ptAnswers에서 정오답 가져오기 (해당 날짜가 현재 날짜면)
+      var ptDate = document.getElementById('pt-date') ? document.getElementById('pt-date').value : '';
+      if(d === ptDate && _ptAnswers && _ptAnswers[sid]){
+        weekData.answers = (_ptAnswers[sid]).slice(0,8);
       }
     }
+    _ptrwAnswers[i] = weekData.answers.slice();
     weeks.push(weekData);
   }
 
