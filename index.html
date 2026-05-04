@@ -20652,12 +20652,14 @@ async function ptReportSave(){
 
   document.getElementById('pt-report-write-modal').remove();
   _ptrwAnswers = [[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null]];
-  // 성공 토스트
+  // 토스트
   var toast = document.createElement('div');
   toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#5B21B6;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
   toast.textContent = '✅ 리포트 저장 완료';
   document.body.appendChild(toast);
   setTimeout(function(){ toast.remove(); }, 2000);
+  // 리포트 작성 모달 다시 열기
+  ptReportModal_openWrite();
 }
 
 /* ── 저장된 리포트 목록 ── */
@@ -20702,19 +20704,27 @@ async function ptReportListLoad(){
   // 학생 이름 조회
   var sids = [...new Set((data||[]).map(function(r){ return r.student_id; }))];
   var tids = [...new Set((data||[]).map(function(r){ return r.teacher_id; }).filter(Boolean))];
-  var nameMap = {}, teacherNameMap = {};
+  var nameMap = {}, teacherMap = {}, branchMap = {};
   if(sids.length){
     var {data:users} = await db.from('users').select('id,name,school,grade').in('id',sids);
     (users||[]).forEach(function(u){ nameMap[u.id] = u; });
   }
   if(tids.length){
-    var {data:teachers} = await db.from('users').select('id,name').in('id',tids);
-    (teachers||[]).forEach(function(t){ teacherNameMap[t.id] = t.name; });
+    var {data:teachers} = await db.from('users').select('id,name,branch_id').in('id',tids);
+    var bids = [...new Set((teachers||[]).map(function(t){ return t.branch_id; }).filter(Boolean))];
+    (teachers||[]).forEach(function(t){ teacherMap[t.id] = t; });
+    if(bids.length){
+      var {data:branches} = await db.from('branches').select('id,name').in('id',bids);
+      (branches||[]).forEach(function(b){ branchMap[b.id] = b.name; });
+    }
   }
   _ptReports = (data||[]).map(function(r){
+    var teacher = teacherMap[r.teacher_id]||null;
+    var branchName = teacher && teacher.branch_id ? (branchMap[teacher.branch_id]||'분원 미지정') : '분원 미지정';
     return Object.assign({}, r, {
       _student: nameMap[r.student_id]||null,
-      _teacherName: teacherNameMap[r.teacher_id]||'미지정'
+      _teacherName: teacher ? teacher.name : '미지정',
+      _branchName: branchName
     });
   });
   ptReportListRender(_ptReports);
@@ -20724,54 +20734,69 @@ function ptReportListRender(list){
   var wrap = document.getElementById('ptrl-list');
   if(!list||!list.length){ wrap.innerHTML='<div style="text-align:center;padding:20px;color:#9ca3af">저장된 리포트가 없습니다</div>'; return; }
 
-  // 월별 → 학생 그룹핑
+  // 월 > 분원 > 학생 그룹핑
   var monthMap = {};
   list.forEach(function(r){
     var month = r.month || '월 미지정';
-    if(!monthMap[month]) monthMap[month] = [];
-    monthMap[month].push(r);
+    var branch = r._branchName || '분원 미지정';
+    if(!monthMap[month]) monthMap[month] = {};
+    if(!monthMap[month][branch]) monthMap[month][branch] = [];
+    monthMap[month][branch].push(r);
   });
 
-  // 월 정렬 (최신순)
   var months = Object.keys(monthMap).sort().reverse();
-
   var html = '';
+
   months.forEach(function(month){
-    var reports = monthMap[month];
+    var branchMap2 = monthMap[month];
+    var totalCount = Object.values(branchMap2).reduce(function(s,a){ return s+a.length; }, 0);
     html += '<div style="margin-bottom:10px">'
       +'<div onclick="var nx=this.nextElementSibling;nx.style.display=nx.style.display===\'none\'?\'block\':\'none\'" style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:#5B21B6;color:#fff;border-radius:10px;cursor:pointer;font-size:13px;font-weight:700;user-select:none">'
         +'<span>📅</span><span>'+month+'</span>'
-        +'<span style="margin-left:auto;background:rgba(255,255,255,0.2);border-radius:100px;padding:2px 8px;font-size:11px">'+reports.length+'개</span>'
+        +'<span style="margin-left:auto;background:rgba(255,255,255,0.2);border-radius:100px;padding:2px 8px;font-size:11px">'+totalCount+'개</span>'
         +'<span style="font-size:10px;opacity:0.6">▼</span>'
       +'</div>'
       +'<div style="padding-left:10px;margin-top:6px">';
 
-    reports.forEach(function(r){
-      var s = r._student;
-      var name = s ? s.name : '(알 수 없음)';
-      var info = s ? ((s.school||'')+' '+(s.grade||'')).trim() : '';
-      var weeks = r.weeks||[];
-      var dates = weeks.filter(function(w){return w.date;}).map(function(w){return w.date.slice(5).replace('-','/');});
-      var dateStr = dates.length ? dates.join(' · ') : '날짜 미지정';
-      var updAt = r.updated_at ? new Date(r.updated_at).toLocaleDateString('ko-KR') : '';
-      html += '<div style="border:1px solid #E9D5FF;border-radius:8px;padding:10px 12px;margin-bottom:6px;background:#fff">'
-        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">'
-          +'<div>'
-            +'<span style="font-size:14px;font-weight:700;color:#1e293b">'+name+'</span>'
-            +(info?'<span style="font-size:11px;color:#9ca3af;margin-left:6px">'+info+'</span>':'')
-          +'</div>'
-          +'<div style="display:flex;gap:4px;align-items:center">'
-            +'<span style="background:#F3F4F6;color:#6b7280;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:600">Lv.'+r.level+'</span>'
-            +'<span style="font-size:10px;color:#d1d5db">'+updAt+'</span>'
-          +'</div>'
+    Object.keys(branchMap2).sort().forEach(function(branch){
+      var reports = branchMap2[branch];
+      html += '<div style="margin-bottom:8px">'
+        +'<div onclick="var nx=this.nextElementSibling;nx.style.display=nx.style.display===\'none\'?\'block\':\'none\'" style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#EDE9FE;border:1.5px solid #DDD6FE;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;color:#5B21B6;user-select:none">'
+          +'<span>🏫</span><span>'+branch+'</span>'
+          +'<span style="margin-left:auto;background:#7C3AED;color:#fff;border-radius:100px;padding:1px 8px;font-size:11px">'+reports.length+'</span>'
+          +'<span style="font-size:10px;opacity:0.4">▼</span>'
         +'</div>'
-        +'<div style="font-size:11px;color:#9ca3af;margin-bottom:8px">📅 '+dateStr+'</div>'
-        +'<div style="display:flex;gap:6px">'
-          +'<button onclick="ptReportEdit(\''+r.id+'\')" style="flex:1;padding:6px 0;border:1.5px solid #7C3AED;border-radius:7px;background:#F5F3FF;color:#5B21B6;font-size:11px;font-weight:700;cursor:pointer">✏️ 수정</button>'
-          +'<button onclick="ptReportViewImage(\''+r.id+'\')" style="flex:1;padding:6px 0;border:1.5px solid #5B21B6;border-radius:7px;background:#5B21B6;color:#fff;font-size:11px;font-weight:700;cursor:pointer">🖼️ 이미지</button>'
-          +'<button onclick="ptReportDelete(\''+r.id+'\')" style="padding:6px 10px;border:1.5px solid #FCA5A5;border-radius:7px;background:#FEF2F2;color:#dc2626;font-size:11px;font-weight:700;cursor:pointer">🗑</button>'
-        +'</div>'
-      +'</div>';
+        +'<div style="padding-left:10px;margin-top:4px">';
+
+      reports.forEach(function(r){
+        var s = r._student;
+        var name = s ? s.name : '(알 수 없음)';
+        var info = s ? ((s.school||'')+' '+(s.grade||'')).trim() : '';
+        var weeks = r.weeks||[];
+        var dates = weeks.filter(function(w){return w.date;}).map(function(w){return w.date.slice(5).replace('-','/');});
+        var dateStr = dates.length ? dates.join(' · ') : '날짜 미지정';
+        var updAt = r.updated_at ? new Date(r.updated_at).toLocaleDateString('ko-KR') : '';
+        html += '<div style="border:1px solid #E9D5FF;border-radius:8px;padding:10px 12px;margin-bottom:6px;background:#fff">'
+          +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">'
+            +'<div>'
+              +'<span style="font-size:14px;font-weight:700;color:#1e293b">'+name+'</span>'
+              +(info?'<span style="font-size:11px;color:#9ca3af;margin-left:6px">'+info+'</span>':'')
+            +'</div>'
+            +'<div style="display:flex;gap:4px;align-items:center">'
+              +'<span style="background:#F3F4F6;color:#6b7280;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:600">Lv.'+r.level+'</span>'
+              +'<span style="font-size:10px;color:#d1d5db">'+updAt+'</span>'
+            +'</div>'
+          +'</div>'
+          +'<div style="font-size:11px;color:#9ca3af;margin-bottom:8px">📅 '+dateStr+'</div>'
+          +'<div style="display:flex;gap:6px">'
+            +'<button onclick="ptReportEdit(\''+r.id+'\')" style="flex:1;padding:6px 0;border:1.5px solid #7C3AED;border-radius:7px;background:#F5F3FF;color:#5B21B6;font-size:11px;font-weight:700;cursor:pointer">✏️ 수정</button>'
+            +'<button onclick="ptReportViewImage(\''+r.id+'\')" style="flex:1;padding:6px 0;border:1.5px solid #5B21B6;border-radius:7px;background:#5B21B6;color:#fff;font-size:11px;font-weight:700;cursor:pointer">🖼️ 이미지</button>'
+            +'<button onclick="ptReportDelete(\''+r.id+'\')" style="padding:6px 10px;border:1.5px solid #FCA5A5;border-radius:7px;background:#FEF2F2;color:#dc2626;font-size:11px;font-weight:700;cursor:pointer">🗑</button>'
+          +'</div>'
+        +'</div>';
+      });
+
+      html += '</div></div>';
     });
 
     html += '</div></div>';
@@ -21030,7 +21055,6 @@ async function ptReportViewImage(rid){
       +'<div style="background:#5B21B6;color:#fff;padding:8px 14px;border-radius:8px 8px 0 0;font-size:12px;font-weight:700;letter-spacing:0.5px">📋 출결 및 오답</div>'
       +'<table style="width:100%;border-collapse:collapse;border:1px solid #DDD6FE;border-top:none">'
         +'<tr style="background:#F5F3FF">'
-          +'<th style="padding:8px;border:1px solid #DDD6FE;font-size:11px;color:#7C3AED;width:70px;text-align:center">구분</th>'
           +'<th style="padding:8px;border:1px solid #DDD6FE;font-size:11px;color:#7C3AED;text-align:center">1주차<div style="font-size:10px;font-weight:400;color:#9ca3af">'+((weeks[0]&&weeks[0].date)||'-')+'</div></th>'
           +'<th style="padding:8px;border:1px solid #DDD6FE;font-size:11px;color:#7C3AED;text-align:center">2주차<div style="font-size:10px;font-weight:400;color:#9ca3af">'+((weeks[1]&&weeks[1].date)||'-')+'</div></th>'
           +'<th style="padding:8px;border:1px solid #DDD6FE;font-size:11px;color:#7C3AED;text-align:center">3주차<div style="font-size:10px;font-weight:400;color:#9ca3af">'+((weeks[2]&&weeks[2].date)||'-')+'</div></th>'
