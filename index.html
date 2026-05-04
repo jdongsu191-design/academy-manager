@@ -1663,6 +1663,31 @@
           </div>
         </div>
 
+
+        <!-- 레벨·시간 일괄 설정 (관리자 전용) -->
+        <div id="wn-setup-card" style="display:none;margin-bottom:12px">
+          <div class="card" style="border:1.5px solid #bbf7d0;background:#f0fdf4">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+              <div style="font-size:13px;font-weight:700;color:#15803d">⚙️ 레벨 · 시간 일괄 설정</div>
+              <button onclick="wnSetupLoad()" style="padding:5px 14px;background:#16a34a;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">🔍 학생 불러오기</button>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
+              <div id="wn-setup-branch-wrap" style="display:none;flex:1;min-width:120px">
+                <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">분원</div>
+                <select id="wn-setup-branch" onchange="wnSetupLoadTeachers(this.value)" style="width:100%;padding:6px 10px;border:1.5px solid #bbf7d0;border-radius:8px;font-size:13px;outline:none;background:#fff">
+                  <option value="">전체 분원</option>
+                </select>
+              </div>
+              <div style="flex:1;min-width:120px">
+                <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">선생님</div>
+                <select id="wn-setup-teacher" style="width:100%;padding:6px 10px;border:1.5px solid #bbf7d0;border-radius:8px;font-size:13px;outline:none;background:#fff">
+                  <option value="">전체 선생님</option>
+                </select>
+              </div>
+            </div>
+            <div id="wn-setup-table-wrap"></div>
+          </div>
+        </div>
         <!-- 날짜 + 필터 + 버튼 -->
         <div class="card" style="margin-bottom:12px">
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
@@ -17369,6 +17394,104 @@ function weekendPrintAttendance(type){
   else { alert('\ud31d\uc5c5\uc774 \ucc28\ub2e8\ub418\uc5c8\uc2b5\ub2c8\ub2e4. \ud31d\uc5c5 \ud5c8\uc6a9 \ud6c4 \ub2e4\uc2dc \uc2dc\ub3c4\ud574\uc8fc\uc138\uc694.'); }
 }
 // 주말 N제 일괄 처리 모달
+/* ── 주말 N제 레벨·시간 일괄 설정 (관리자) ── */
+async function wnSetupLoadTeachers(branchId){
+  var sel = document.getElementById('wn-setup-teacher');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">\uc804\uccb4 \uc120\uc0dd\ub2d8</option>';
+  var q = db.from('users').select('id,name').eq('role','teacher').eq('status','active');
+  if(branchId) q = q.eq('branch_id', branchId);
+  var {data:ts} = await q.order('name');
+  (ts||[]).forEach(function(t){ sel.innerHTML += '<option value="'+t.id+'">'+t.name+' T</option>'; });
+}
+
+async function wnSetupLoad(){
+  var branchId  = (document.getElementById('wn-setup-branch')||{}).value  || '';
+  var teacherId = (document.getElementById('wn-setup-teacher')||{}).value || '';
+  var wrap = document.getElementById('wn-setup-table-wrap');
+  wrap.innerHTML = '<div style="text-align:center;padding:12px;color:#9ca3af">\ubd88\ub7ec\uc624\ub294 \uc911...</div>';
+
+  var q = db.from('users').select('id,name,school,grade,teacher_id,weekend_level,weekend_attend_time')
+    .eq('role','student').eq('status','active');
+  if(teacherId) q = q.eq('teacher_id', teacherId);
+  else if(branchId){
+    var {data:ts} = await db.from('users').select('id').eq('role','teacher').eq('branch_id',branchId);
+    var tids = (ts||[]).map(function(t){return t.id;});
+    if(!tids.length){ wrap.innerHTML='<div style="text-align:center;padding:12px;color:#9ca3af">\ud95c\ub2f9 \ud559\uc0dd \uc5c6\uc74c</div>'; return; }
+    q = q.in('teacher_id', tids);
+  }
+  var {data:students} = await q.order('name');
+  if(!students||!students.length){ wrap.innerHTML='<div style="text-align:center;padding:12px;color:#9ca3af">N\uc81c \ucc38\uc5ec \ud559\uc0dd\uc774 \uc5c6\uc2b5\ub2c8\ub2e4</div>'; return; }
+
+  var rows = students.map(function(s,i){
+    var bg = i%2===0?'#fff':'#f0fdf4';
+    return '<tr style="background:'+bg+'">'
+      +'<td style="padding:6px 10px;font-size:12px;color:#6b7280;white-space:nowrap">'+(s.school||'')+' '+(s.grade||'')+'</td>'
+      +'<td style="padding:6px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap">'+s.name+'</td>'
+      +'<td style="padding:5px 6px"><input type="text" class="wn-setup-level" data-sid="'+s.id+'" value="'+(s.weekend_level||'')+'" placeholder="\ub808\ubca8" style="width:80px;padding:5px 6px;border:1.5px solid #bbf7d0;border-radius:6px;font-size:12px;text-align:center;outline:none"></td>'
+      +'<td style="padding:5px 6px"><input type="text" class="wn-setup-time" data-sid="'+s.id+'" value="'+(s.weekend_attend_time||'')+'" placeholder="10:00" style="width:70px;padding:5px 6px;border:1.5px solid #bbf7d0;border-radius:6px;font-size:12px;text-align:center;outline:none"></td>'
+      +'</tr>';
+  }).join('');
+
+  wrap.innerHTML = '<div style="overflow-x:auto">'
+    +'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+    +'<thead><tr style="background:#166534">'
+    +'<th style="padding:6px 10px;color:#fff;text-align:left;font-size:11px">\ud559\uad50/\ud559\ub144</th>'
+    +'<th style="padding:6px 10px;color:#fff;text-align:left;font-size:11px">\uc774\ub984</th>'
+    +'<th style="padding:6px 10px;color:#fff;text-align:center;font-size:11px">\ub808\ubca8</th>'
+    +'<th style="padding:6px 10px;color:#fff;text-align:center;font-size:11px">\uc2dc\uac04</th>'
+    +'</tr></thead>'
+    +'<tbody>'+rows+'</tbody>'
+    +'</table></div>'
+    +'<div style="margin-top:10px;display:flex;justify-content:flex-end">'
+    +'<button onclick="wnSetupSave()" style="padding:8px 20px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">\ud83d\udcbe \uc77c\uad04 \uc800\uc7a5</button>'
+    +'</div>';
+}
+
+async function wnSetupSave(){
+  var levelEls = document.querySelectorAll('.wn-setup-level');
+  if(!levelEls.length){ alert('\uba3c\uc800 \ud559\uc0dd\uc744 \ubd88\ub7ec\uc624\uc138\uc694'); return; }
+
+  var updates = [];
+  levelEls.forEach(function(el){
+    var sid = el.getAttribute('data-sid');
+    var timeEl = document.querySelector('.wn-setup-time[data-sid="'+sid+'"]');
+    updates.push({ id:sid, weekend_level:el.value.trim()||null, weekend_attend_time:(timeEl?timeEl.value.trim():'')||null });
+  });
+
+  var ok=0, fail=0;
+  await Promise.all(updates.map(async function(u){
+    var {error} = await db.from('users').update({weekend_level:u.weekend_level, weekend_attend_time:u.weekend_attend_time}).eq('id',u.id);
+    if(error) fail++; else ok++;
+  }));
+
+  // allUsers + _wnStudents 캐시 갱신
+  updates.forEach(function(u){
+    if(typeof allUsers !== 'undefined'){
+      var au = allUsers.find(function(s){ return s.id===u.id; });
+      if(au){ au.weekend_level=u.weekend_level; au.weekend_attend_time=u.weekend_attend_time; }
+    }
+    if(typeof _wnStudents !== 'undefined'){
+      var ws = _wnStudents.find(function(s){ return s.id===u.id; });
+      if(ws){ ws.weekend_level=u.weekend_level; ws.weekend_attend_time=u.weekend_attend_time; }
+    }
+  });
+
+  // 전체 데이터 재로드로 완전 반영
+  if(typeof loadAdminData === 'function') await loadAdminData();
+
+  // N제 테이블 재렌더링
+  if(typeof wnRenderTable === 'function' && (_wnStudents||[]).length) wnRenderTable();
+
+  var saveBtn = document.querySelector('#wn-setup-table-wrap button');
+  if(saveBtn){
+    var orig = saveBtn.innerHTML;
+    saveBtn.innerHTML = '\u2705 '+ok+'\uba85 \uc800\uc7a5 \uc644\ub8cc'+(fail?'(\uc2e4\ud328 '+fail+')':'');
+    saveBtn.style.background = '#059669';
+    setTimeout(function(){ saveBtn.innerHTML=orig; saveBtn.style.background='#166534'; }, 2500);
+  }
+}
+
 function wnBulkModal(field){
   var existing = document.getElementById('wn-bulk-modal');
   if(existing) existing.remove();
@@ -22223,6 +22346,16 @@ async function initAdminWeekendNaje(){
       var {data:brs} = await db.from('branches').select('id,name').eq('active',true).order('name');
       (brs||[]).forEach(function(b){ bs.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>'; });
     }
+    // 레벨·시간 설정 카드 표시
+    var wnSetupCard = document.getElementById('wn-setup-card');
+    if(wnSetupCard) wnSetupCard.style.display = '';
+    var wnSetupBranchWrap = document.getElementById('wn-setup-branch-wrap');
+    if(wnSetupBranchWrap) wnSetupBranchWrap.style.display = '';
+    var wnSetupBranch = document.getElementById('wn-setup-branch');
+    if(wnSetupBranch && wnSetupBranch.options.length <= 1){
+      (brs||[]).forEach(function(b){ wnSetupBranch.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>'; });
+    }
+    await wnSetupLoadTeachers('');
   }
 
   if(typeof initWeekendNaje === 'function'){
