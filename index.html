@@ -20244,6 +20244,203 @@ async function ptLoadData(){
 }
 
 // 포텐셜 일괄 처리 모달
+/* ── 포텐셜 정오답 모달 ── */
+
+// 배점 테이블
+var PT_SCORES = {
+  // 레벨B 전용 (문항 1~4)
+  B_only: [10.8, 11.4, 11.6, 11.2],
+  // 공통 (문항 5~8) - A/B 각각
+  common_A: [12.6, 9.4, 11, 9.5],
+  common_B: [14, 13, 15, 13],
+  // 레벨A 전용 (문항 9~12)
+  A_only: [18.5, 14, 12.2, 12.8]
+};
+
+// 학생별 정오답 데이터 임시 저장
+var _ptAnswers = {}; // {sid: [true/false/null, ...] 8개}
+
+function ptGetQuestions(level){
+  // level: 'A', 'B', 그 외 → A 기준
+  var isB = (level||'').toUpperCase() === 'B';
+  var qs = [];
+  if(isB){
+    // 1~4 (B전용) + 5~8 (공통, B배점)
+    for(var i=0;i<4;i++) qs.push({num:i+1, score:PT_SCORES.B_only[i], label:'Potential B'});
+    for(var i=0;i<4;i++) qs.push({num:i+5, score:PT_SCORES.common_B[i], label:'Potential 공통'});
+  } else {
+    // 5~8 (공통, A배점) + 9~12 (A전용)
+    for(var i=0;i<4;i++) qs.push({num:i+5, score:PT_SCORES.common_A[i], label:'Potential 공통'});
+    for(var i=0;i<4;i++) qs.push({num:i+9, score:PT_SCORES.A_only[i], label:'Potential A'});
+  }
+  return qs;
+}
+
+function ptOpenAnswerModal(sid){
+  var existing = document.getElementById('pt-answer-modal');
+  if(existing) existing.remove();
+
+  // 학생 정보
+  var s = (_ptStudents||[]).find(function(s){ return s.id===sid; });
+  if(!s){ alert('학생 정보를 찾을 수 없습니다'); return; }
+
+  // 레벨 (현재 입력값 우선)
+  var levelEl = document.querySelector('.pt-inp[data-sid="'+sid+'"][data-field="level"]');
+  var level = levelEl ? levelEl.value.trim().toUpperCase() : (s.potential_level||'').toUpperCase();
+  if(level !== 'B') level = 'A'; // B 아니면 모두 A
+
+  var qs = ptGetQuestions(level);
+  var ans = _ptAnswers[sid] || new Array(8).fill(null);
+  if(ans.length < 8) ans = ans.concat(new Array(8-ans.length).fill(null));
+
+  // 기존 총점 계산
+  function calcTotal(ansArr){
+    return qs.reduce(function(sum, q, i){
+      return sum + (ansArr[i]===true ? q.score : 0);
+    }, 0);
+  }
+
+  var qRows = qs.map(function(q, i){
+    var cur = ans[i]; // true=정답, false=오답, null=미입력
+    var oBtn = cur===false
+      ? 'background:#fef2f2;border-color:#dc2626;color:#dc2626;font-weight:900'
+      : 'background:#fff;border-color:#e5e7eb;color:#9ca3af';
+    var xBtn = cur===true
+      ? 'background:#f0fdf4;border-color:#16a34a;color:#16a34a;font-weight:900'
+      : 'background:#fff;border-color:#e5e7eb;color:#9ca3af';
+    return '<tr id="pt-ans-row-'+i+'" style="border-bottom:1px solid #f3f4f6">'
+      +'<td style="padding:7px 12px;font-size:13px;font-weight:700;color:#374151;text-align:center">'+(i+1)+'</td>'
+      +'<td style="padding:7px 12px;font-size:12px;color:#5B21B6;text-align:center">'+q.num+'번</td>'
+      +'<td style="padding:7px 12px;font-size:12px;color:#6b7280;text-align:center">'+q.label+'</td>'
+      +'<td style="padding:7px 12px;font-size:12px;font-weight:600;color:#1e293b;text-align:center">'+q.score+'점</td>'
+      +'<td style="padding:7px 8px;text-align:center">'
+        +'<div style="display:flex;gap:6px;justify-content:center">'
+          +'<button onclick="ptSetAnswer(\''+sid+'\','+i+',true)" id="pt-ans-o-'+i+'" style="width:32px;height:32px;border-radius:50%;border:2px solid;font-size:16px;cursor:pointer;transition:all 0.15s;'+xBtn+'">○</button>'
+          +'<button onclick="ptSetAnswer(\''+sid+'\','+i+',false)" id="pt-ans-x-'+i+'" style="width:32px;height:32px;border-radius:50%;border:2px solid;font-size:16px;cursor:pointer;transition:all 0.15s;'+oBtn+'">✕</button>'
+        +'</div>'
+      +'</td>'
+    +'</tr>';
+  }).join('');
+
+  var total = calcTotal(ans);
+
+  var modal = document.createElement('div');
+  modal.id = 'pt-answer-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:16px;padding:0;max-width:440px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden">'
+      // 헤더
+      +'<div style="background:#5B21B6;padding:16px 20px;display:flex;align-items:center;justify-content:space-between">'
+        +'<div>'
+          +'<div style="font-size:15px;font-weight:800;color:#fff">🎯 정오답 입력</div>'
+          +'<div style="font-size:12px;color:#ddd6fe;margin-top:2px">'+s.name+' · Potential '+level+'</div>'
+        +'</div>'
+        +'<button onclick="document.getElementById(\'pt-answer-modal\').remove()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;width:30px;height:30px;border-radius:50%;font-size:16px;cursor:pointer;line-height:1">&times;</button>'
+      +'</div>'
+      // 문항 테이블
+      +'<div style="overflow-y:auto;max-height:60vh">'
+        +'<table style="width:100%;border-collapse:collapse">'
+          +'<thead><tr style="background:#f5f3ff">'
+            +'<th style="padding:7px;font-size:11px;color:#5B21B6;text-align:center">#</th>'
+            +'<th style="padding:7px;font-size:11px;color:#5B21B6;text-align:center">문항</th>'
+            +'<th style="padding:7px;font-size:11px;color:#5B21B6;text-align:center">분류</th>'
+            +'<th style="padding:7px;font-size:11px;color:#5B21B6;text-align:center">배점</th>'
+            +'<th style="padding:7px;font-size:11px;color:#5B21B6;text-align:center">정/오</th>'
+          +'</tr></thead>'
+          +'<tbody>'+qRows+'</tbody>'
+        +'</table>'
+      +'</div>'
+      // 합계 + 버튼
+      +'<div style="padding:14px 20px;border-top:1px solid #ede9fe;display:flex;align-items:center;justify-content:space-between">'
+        +'<div>'
+          +'<span style="font-size:12px;color:#6b7280">총점: </span>'
+          +'<span id="pt-ans-total" style="font-size:18px;font-weight:800;color:#5B21B6">'+total.toFixed(1)+'</span>'
+          +'<span style="font-size:12px;color:#6b7280">점</span>'
+        +'</div>'
+        +'<div style="display:flex;gap:8px">'
+          +'<button onclick="ptResetAnswers(\''+sid+'\')" style="padding:8px 14px;background:#fef2f2;border:1.5px solid #fca5a5;border-radius:8px;font-size:12px;color:#dc2626;font-weight:600;cursor:pointer">초기화</button>'
+          +'<button onclick="ptApplyAnswers(\''+sid+'\')" style="padding:8px 18px;background:#5B21B6;border:none;border-radius:8px;font-size:13px;color:#fff;font-weight:700;cursor:pointer">점수 반영</button>'
+        +'</div>'
+      +'</div>'
+    +'</div>';
+
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+function ptSetAnswer(sid, idx, isCorrect){
+  if(!_ptAnswers[sid]) _ptAnswers[sid] = new Array(8).fill(null);
+  // 같은 버튼 재클릭 시 토글 (취소)
+  _ptAnswers[sid][idx] = (_ptAnswers[sid][idx] === isCorrect) ? null : isCorrect;
+  var ans = _ptAnswers[sid];
+
+  // 레벨 재확인
+  var levelEl = document.querySelector('.pt-inp[data-sid="'+sid+'"][data-field="level"]');
+  var s = (_ptStudents||[]).find(function(s){ return s.id===sid; });
+  var level = levelEl ? levelEl.value.trim().toUpperCase() : (s?s.potential_level||'':'');
+  if(level !== 'B') level = 'A';
+  var qs = ptGetQuestions(level);
+
+  // 버튼 스타일 업데이트
+  var oBtn = document.getElementById('pt-ans-o-'+idx);
+  var xBtn = document.getElementById('pt-ans-x-'+idx);
+  if(oBtn) oBtn.style.cssText = oBtn.style.cssText.replace(/background:[^;]+;border-color:[^;]+;color:[^;]+;?/g,'')
+    + (ans[idx]===true ? ';background:#f0fdf4;border-color:#16a34a;color:#16a34a;font-weight:900' : ';background:#fff;border-color:#e5e7eb;color:#9ca3af');
+  if(xBtn) xBtn.style.cssText = xBtn.style.cssText.replace(/background:[^;]+;border-color:[^;]+;color:[^;]+;?/g,'')
+    + (ans[idx]===false ? ';background:#fef2f2;border-color:#dc2626;color:#dc2626;font-weight:900' : ';background:#fff;border-color:#e5e7eb;color:#9ca3af');
+
+  // 총점 업데이트
+  var total = qs.reduce(function(sum,q,i){ return sum+(ans[i]===true?q.score:0); }, 0);
+  var totalEl = document.getElementById('pt-ans-total');
+  if(totalEl) totalEl.textContent = total.toFixed(1);
+}
+
+function ptResetAnswers(sid){
+  _ptAnswers[sid] = new Array(8).fill(null);
+  var levelEl = document.querySelector('.pt-inp[data-sid="'+sid+'"][data-field="level"]');
+  var s = (_ptStudents||[]).find(function(s){ return s.id===sid; });
+  var level = levelEl ? levelEl.value.trim().toUpperCase() : (s?s.potential_level||'':'');
+  if(level !== 'B') level = 'A';
+  ptOpenAnswerModal(sid); // 재열기
+}
+
+function ptApplyAnswers(sid){
+  var ans = _ptAnswers[sid] || new Array(8).fill(null);
+  var levelEl = document.querySelector('.pt-inp[data-sid="'+sid+'"][data-field="level"]');
+  var s = (_ptStudents||[]).find(function(s){ return s.id===sid; });
+  var level = levelEl ? levelEl.value.trim().toUpperCase() : (s?s.potential_level||'':'');
+  if(level !== 'B') level = 'A';
+  var qs = ptGetQuestions(level);
+
+  // 정답 개수 있을 때만 점수 자동 반영
+  var hasAny = ans.some(function(a){ return a !== null; });
+  if(hasAny){
+    var total = qs.reduce(function(sum,q,i){ return sum+(ans[i]===true?q.score:0); }, 0);
+    var scoreEl = document.querySelector('.pt-inp[data-sid="'+sid+'"][data-field="score"]');
+    if(scoreEl){
+      scoreEl.value = total.toFixed(1);
+      scoreEl.dispatchEvent(new Event('change', {bubbles:true}));
+    }
+    // 오답 완료 여부 자동 설정 (모두 입력됐으면 완료)
+    var allFilled = ans.every(function(a){ return a !== null; });
+    if(allFilled){
+      var wrongEl = document.querySelector('.pt-sel[data-sid="'+sid+'"][data-field="wrong_done"]');
+      if(wrongEl){ wrongEl.value='true'; wrongEl.dispatchEvent(new Event('change',{bubbles:true})); }
+    }
+  }
+
+  document.getElementById('pt-answer-modal').remove();
+
+  // 버튼 색상으로 입력 완료 표시
+  var ansBtn = document.querySelector('button[onclick*="ptOpenAnswerModal(\''+sid+'\')"]');
+  if(ansBtn && hasAny){
+    var allDone = ans.every(function(a){ return a !== null; });
+    ansBtn.style.background = allDone ? '#f0fdf4' : '#fffbeb';
+    ansBtn.style.borderColor = allDone ? '#86efac' : '#fde68a';
+    ansBtn.style.color = allDone ? '#16a34a' : '#d97706';
+  }
+}
+
 function ptBulkModal(field){
   var existing = document.getElementById('pt-bulk-modal');
   if(existing) existing.remove();
@@ -20345,6 +20542,7 @@ function ptRenderTable(){
     +'<th style="min-width:52px">시간</th>'
     +'<th style="min-width:52px;cursor:pointer;user-select:none" onclick="ptBulkModal(\'attendance\')" title="클릭하여 일괄 처리"><span style="text-decoration:underline dotted 2px #c4b5fd">출결</span> ✦</th>'
     +'<th style="min-width:52px;cursor:pointer;user-select:none" onclick="ptBulkModal(\'wrong_done\')" title="클릭하여 일괄 처리"><span style="text-decoration:underline dotted 2px #c4b5fd">오답</span> ✦</th>'
+    +'<th style="min-width:52px">정오답</th>'
     +'<th style="min-width:44px">점수</th>'
     +'<th style="min-width:40px">결과</th>'
     +'<th style="text-align:left;padding-left:6px;min-width:80px">비고</th>'
@@ -20375,6 +20573,7 @@ function ptRenderTable(){
       +'<td><input class="pt-inp pt-focusable" data-sid="'+s.id+'" data-field="attend_time" value="'+(r.attend_time!=null&&r.id?r.attend_time:(s.potential_attend_time||''))+'" placeholder="14:00"></td>'
       +'<td><select class="pt-sel pt-focusable" data-sid="'+s.id+'" data-field="attendance">'+attSel+'</select></td>'
       +'<td><select class="pt-sel pt-focusable" data-sid="'+s.id+'" data-field="wrong_done">'+wrongSel+'</select></td>'
+      +'<td><button onclick="ptOpenAnswerModal(\''+s.id+'\')" style="padding:5px 6px;border:1px solid #C4B5FD;border-radius:5px;background:#F5F3FF;color:#5B21B6;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;width:100%">정오답</button></td>'
       +'<td><input class="pt-inp pt-focusable" data-sid="'+s.id+'" data-field="score" value="'+(r.score||'')+'" placeholder="0.00" inputmode="decimal"></td>'
       +'<td><select class="pt-sel pt-focusable" data-sid="'+s.id+'" data-field="result">'+resultSel+'</select></td>'
       +'<td><input class="pt-inp pt-focusable" data-sid="'+s.id+'" data-field="note" value="'+(r.note||'')+'" placeholder="비고"></td>'
