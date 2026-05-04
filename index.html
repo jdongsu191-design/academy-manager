@@ -10467,6 +10467,9 @@ async function mncLoadBranchAndTeachers(){
 function mncOnBranchChange(){
   var bSel = document.getElementById('mnc-branch-filter');
   var branchId = bSel ? bSel.value : '';
+  // 선생님 필터를 "전체"로 초기화
+  var tSel = document.getElementById('mnc-teacher-filter');
+  if(tSel) tSel.value = '';
   mncLoadTeachers(branchId);
   mncLoadStudents();
 }
@@ -10502,13 +10505,23 @@ async function mncLoadStudents(){
     +String(cUTC.getUTCDate()).padStart(2,'0');
 
   var teacherFilter = document.getElementById('mnc-teacher-filter')?.value || '';
+  var branchFilter  = document.getElementById('mnc-branch-filter')?.value  || '';
   var wrap = document.getElementById('mnc-table-wrap');
   if(wrap) wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
 
   var query = db.from('users').select('id,name,school,grade,teacher_id,school_level,mnc_note')
     .eq('role','student').eq('status','active')
     .in('school_level',['middle','both']).order('name');
-  if(teacherFilter) query = query.eq('teacher_id', teacherFilter);
+
+  if(teacherFilter){
+    query = query.eq('teacher_id', teacherFilter);
+  } else if(branchFilter){
+    // 분원 선택 시 해당 분원 선생님의 학생만
+    var {data:branchTeachers} = await db.from('users').select('id').eq('role','teacher').eq('status','active').eq('branch_id', branchFilter);
+    var btids = (branchTeachers||[]).map(function(t){ return t.id; });
+    if(btids.length) query = query.in('teacher_id', btids);
+    else { if(wrap) wrap.innerHTML='<div class="empty-state"><p>해당 분원에 선생님이 없습니다</p></div>'; return; }
+  }
   var {data: students, error} = await query;
   if(error){ if(wrap) wrap.innerHTML='<p style="color:red">오류: '+error.message+'</p>'; return; }
   _mncStudents = students || [];
