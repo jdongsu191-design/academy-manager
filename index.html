@@ -20703,27 +20703,33 @@ async function ptReportListLoad(){
 
   // 학생 이름 조회
   var sids = [...new Set((data||[]).map(function(r){ return r.student_id; }))];
-  var tids = [...new Set((data||[]).map(function(r){ return r.teacher_id; }).filter(Boolean))];
   var nameMap = {}, teacherMap = {}, branchMap = {};
+
   if(sids.length){
-    var {data:users} = await db.from('users').select('id,name,school,grade').in('id',sids);
+    // 학생 정보 + teacher_id 함께 조회
+    var {data:users} = await db.from('users').select('id,name,school,grade,teacher_id').in('id',sids);
     (users||[]).forEach(function(u){ nameMap[u.id] = u; });
-  }
-  if(tids.length){
-    var {data:teachers} = await db.from('users').select('id,name,branch_id').in('id',tids);
-    var bids = [...new Set((teachers||[]).map(function(t){ return t.branch_id; }).filter(Boolean))];
-    (teachers||[]).forEach(function(t){ teacherMap[t.id] = t; });
-    if(bids.length){
-      var {data:branches} = await db.from('branches').select('id,name').in('id',bids);
-      (branches||[]).forEach(function(b){ branchMap[b.id] = b.name; });
+
+    // 학생들의 teacher_id 수집
+    var studentTeacherIds = [...new Set((users||[]).map(function(u){ return u.teacher_id; }).filter(Boolean))];
+    if(studentTeacherIds.length){
+      var {data:teachers} = await db.from('users').select('id,name,branch_id').in('id',studentTeacherIds);
+      var bids = [...new Set((teachers||[]).map(function(t){ return t.branch_id; }).filter(Boolean))];
+      (teachers||[]).forEach(function(t){ teacherMap[t.id] = t; });
+      if(bids.length){
+        var {data:branches} = await db.from('branches').select('id,name').in('id',bids);
+        (branches||[]).forEach(function(b){ branchMap[b.id] = b.name; });
+      }
     }
   }
+
   _ptReports = (data||[]).map(function(r){
-    var teacher = teacherMap[r.teacher_id]||null;
+    var student = nameMap[r.student_id]||null;
+    var studentTeacherId = student ? student.teacher_id : null;
+    var teacher = studentTeacherId ? teacherMap[studentTeacherId] : null;
     var branchName = teacher && teacher.branch_id ? (branchMap[teacher.branch_id]||'분원 미지정') : '분원 미지정';
     return Object.assign({}, r, {
-      _student: nameMap[r.student_id]||null,
-      _teacherName: teacher ? teacher.name : '미지정',
+      _student: student,
       _branchName: branchName
     });
   });
