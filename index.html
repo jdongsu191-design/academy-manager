@@ -1770,6 +1770,7 @@
               </div>
             </div>
             <div style="display:flex;gap:8px;flex:1;min-width:220px;align-self:flex-end">
+              <button id="pt-score-config-btn" onclick="ptOpenScoreConfig()" style="display:none;flex:1;padding:9px 0;font-weight:700;background:#fff;color:#5B21B6;border:2px solid #7C3AED;border-radius:8px;font-size:13px;cursor:pointer">⚙️ 배점 설정</button>
               <button id="pt-save-btn" onclick="ptSaveAll()" class="btn" style="flex:1;padding:9px 0;font-weight:700;background:#7C3AED;color:#fff;border-color:#7C3AED">💾 전체 저장</button>
               <button id="pt-img-btn" onclick="ptGenerateImage()" class="btn" style="flex:1;padding:9px 0;background:#5B21B6;color:#fff;border-color:#5B21B6;font-weight:700;text-align:center">📊 이미지 생성</button>
             </div>
@@ -17386,7 +17387,7 @@ function weekendPrintAttendance(type){
       +'<div style="font-size:11px;color:'+COLOR+';font-weight:600">'+legendNaje+'</div>'
       +'<div style="font-size:11px;color:#9ca3af">BMAPS \u00b7 '+new Date().toLocaleString('ko-KR')+'</div>'
     +'</div>'
-    +'<script>window.onload=function(){window.print();}<\/script>'
+    +'<scr'+'ipt>window.onload=function(){window.print();}<\/scr'+'ipt>'
     +'</body></html>';
 
   var win = window.open('', '_blank', 'width=1000,height=800');
@@ -20244,7 +20245,212 @@ async function ptLoadData(){
 }
 
 // 포텐셜 일괄 처리 모달
-/* ── 포텐셜 정오답 모달 ── */
+/* ── 포텐셜 배점 설정 ── */
+
+var PT_DEFAULT_SCORES = {
+  B_only:   [10.8, 11.4, 11.6, 11.2],
+  common_A: [12.6, 9.4, 11, 9.5],
+  common_B: [14, 13, 15, 13],
+  A_only:   [18.5, 14, 12.2, 12.8]
+};
+
+var _ptScoreOverrides = {};
+
+function ptLoadScoreConfig(){
+  try {
+    var saved = localStorage.getItem('pt_score_config');
+    if(saved){
+      var parsed = JSON.parse(saved);
+      if(parsed.defaults){
+        PT_SCORES.B_only   = parsed.defaults.B_only   || PT_SCORES.B_only;
+        PT_SCORES.common_A = parsed.defaults.common_A || PT_SCORES.common_A;
+        PT_SCORES.common_B = parsed.defaults.common_B || PT_SCORES.common_B;
+        PT_SCORES.A_only   = parsed.defaults.A_only   || PT_SCORES.A_only;
+        PT_DEFAULT_SCORES  = JSON.parse(JSON.stringify(PT_SCORES));
+      }
+      if(parsed.overrides) _ptScoreOverrides = parsed.overrides;
+    }
+  } catch(e){}
+}
+
+function ptSaveScoreConfig(){
+  try {
+    localStorage.setItem('pt_score_config', JSON.stringify({
+      defaults: {
+        B_only:   PT_SCORES.B_only,
+        common_A: PT_SCORES.common_A,
+        common_B: PT_SCORES.common_B,
+        A_only:   PT_SCORES.A_only
+      },
+      overrides: _ptScoreOverrides
+    }));
+  } catch(e){}
+}
+
+// 앱 로드 시 설정 불러오기
+ptLoadScoreConfig();
+
+function ptMakeScoreRows(scores, inputClass){
+  var labels = [
+    {label:'B전용 1번', key:'B_only', i:0, c:'#1d4ed8'},
+    {label:'B전용 2번', key:'B_only', i:1, c:'#1d4ed8'},
+    {label:'B전용 3번', key:'B_only', i:2, c:'#1d4ed8'},
+    {label:'B전용 4번', key:'B_only', i:3, c:'#1d4ed8'},
+    {label:'공통 5번 (A)', key:'common_A', i:0, c:'#7c3aed'},
+    {label:'공통 5번 (B)', key:'common_B', i:0, c:'#7c3aed'},
+    {label:'공통 6번 (A)', key:'common_A', i:1, c:'#7c3aed'},
+    {label:'공통 6번 (B)', key:'common_B', i:1, c:'#7c3aed'},
+    {label:'공통 7번 (A)', key:'common_A', i:2, c:'#7c3aed'},
+    {label:'공통 7번 (B)', key:'common_B', i:2, c:'#7c3aed'},
+    {label:'공통 8번 (A)', key:'common_A', i:3, c:'#7c3aed'},
+    {label:'공통 8번 (B)', key:'common_B', i:3, c:'#7c3aed'},
+    {label:'A전용 9번', key:'A_only', i:0, c:'#0f766e'},
+    {label:'A전용 10번', key:'A_only', i:1, c:'#0f766e'},
+    {label:'A전용 11번', key:'A_only', i:2, c:'#0f766e'},
+    {label:'A전용 12번', key:'A_only', i:3, c:'#0f766e'}
+  ];
+  return labels.map(function(q){
+    var val = (scores[q.key] && scores[q.key][q.i] !== undefined) ? scores[q.key][q.i] : 0;
+    return '<tr style="border-bottom:1px solid #f3f4f6">'
+      + '<td style="padding:6px 10px;font-size:12px;color:'+q.c+';font-weight:600;white-space:nowrap">'+q.label+'</td>'
+      + '<td style="padding:6px 8px;text-align:center">'
+      + '<input type="number" step="0.1" min="0" class="'+inputClass+'" data-key="'+q.key+'" data-i="'+q.i+'" value="'+val+'" style="width:70px;padding:4px 6px;border:1.5px solid #ddd6fe;border-radius:6px;font-size:13px;text-align:center;outline:none">'
+      + '</td></tr>';
+  }).join('');
+}
+
+function ptOpenScoreConfig(){
+  var existing = document.getElementById('pt-score-config-modal');
+  if(existing) existing.remove();
+
+  ptLoadScoreConfig();
+
+  var curDate = document.getElementById('pt-date') ? document.getElementById('pt-date').value : '';
+  var overrideKeys = Object.keys(_ptScoreOverrides).sort();
+
+  var overrideListHTML = overrideKeys.length
+    ? overrideKeys.map(function(d){
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f3f4f6">'
+          + '<span style="font-size:13px;color:#374151;font-weight:600">'+d+'</span>'
+          + '<div style="display:flex;gap:6px">'
+            + '<button onclick="ptEditOverride(\''+d+'\')" style="padding:4px 10px;border:1px solid #ddd6fe;border-radius:6px;font-size:12px;color:#5B21B6;cursor:pointer;background:#f5f3ff">수정</button>'
+            + '<button onclick="ptDeleteOverride(\''+d+'\')" style="padding:4px 10px;border:1px solid #fca5a5;border-radius:6px;font-size:12px;color:#dc2626;cursor:pointer;background:#fef2f2">삭제</button>'
+          + '</div>'
+        + '</div>';
+      }).join('')
+    : '<div style="font-size:12px;color:#9ca3af;padding:8px 0">설정된 일자별 배점 없음</div>';
+
+  var modal = document.createElement('div');
+  modal.id = 'pt-score-config-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+
+  var inner = document.createElement('div');
+  inner.style.cssText = 'background:#fff;border-radius:16px;max-width:480px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden;max-height:90vh;display:flex;flex-direction:column';
+
+  var thead = '<table style="width:100%;border-collapse:collapse"><thead><tr style="background:#f5f3ff">'
+    + '<th style="padding:6px 10px;font-size:11px;color:#5B21B6;text-align:left">\ubb38\ud56d</th>'
+    + '<th style="padding:6px 8px;font-size:11px;color:#5B21B6;text-align:center">\ubc30\uc810</th>'
+    + '</tr></thead><tbody>';
+
+  inner.innerHTML =
+    '<div style="background:#5B21B6;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">'
+      + '<div style="font-size:16px;font-weight:800;color:#fff">\u2699\ufe0f \ud3ec\ud150\uc15c \ubc30\uc810 \uc124\uc815</div>'
+      + '<button onclick="document.getElementById(\'pt-score-config-modal\').remove()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;width:30px;height:30px;border-radius:50%;font-size:16px;cursor:pointer">&times;</button>'
+    + '</div>'
+    + '<div style="padding:20px;overflow-y:auto;flex:1">'
+      + '<div style="font-size:14px;font-weight:800;color:#5B21B6;margin-bottom:8px">\uD83D\uDCCC \uae30\ubcf8\uac12 \uc124\uc815</div>'
+      + '<div style="font-size:11px;color:#9ca3af;margin-bottom:8px">\ub0a0\uc9dc\ubcc4 \uc124\uc815\uc774 \uc5c6\uc73c\uba74 \uae30\ubcf8\uac12\uc774 \uc801\uc6a9\ub429\ub2c8\ub2e4</div>'
+      + thead + ptMakeScoreRows(PT_SCORES,'pt-score-inp') + '</tbody></table>'
+      + '<div style="display:flex;justify-content:flex-end;margin:10px 0 20px">'
+        + '<button onclick="ptSaveDefaultScores(this)" style="padding:7px 18px;background:#5B21B6;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">\uae30\ubcf8\uac12 \uc800\uc7a5</button>'
+      + '</div>'
+      + '<div style="font-size:14px;font-weight:800;color:#5B21B6;margin-bottom:8px">\uD83D\uDCC5 \uc77c\uc790\ubcc4 \ubc30\uc810 \uc124\uc815</div>'
+      + '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">'
+        + '<input type="date" id="pt-override-date" value="'+(curDate||'')+'" style="flex:1;padding:7px 10px;border:1.5px solid #ddd6fe;border-radius:8px;font-size:13px;outline:none">'
+        + '<button onclick="ptAddOverride()" style="padding:7px 14px;background:#5B21B6;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">+ \uc77c\uc790 \ucd94\uac00</button>'
+      + '</div>'
+      + '<div id="pt-override-list">'+overrideListHTML+'</div>'
+    + '</div>';
+
+  modal.appendChild(inner);
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+function ptSaveDefaultScores(btn){
+  var inps = document.querySelectorAll('.pt-score-inp');
+  inps.forEach(function(inp){
+    var key = inp.getAttribute('data-key');
+    var i   = parseInt(inp.getAttribute('data-i'));
+    var val = parseFloat(inp.value) || 0;
+    if(!PT_SCORES[key]) PT_SCORES[key] = [];
+    PT_SCORES[key][i] = val;
+    PT_DEFAULT_SCORES[key][i] = val;
+  });
+  ptSaveScoreConfig();
+  if(btn){ btn.textContent='\u2705 \uc800\uc7a5\ub428'; btn.style.background='#059669'; }
+  setTimeout(function(){ if(btn){ btn.textContent='\uae30\ubcf8\uac12 \uc800\uc7a5'; btn.style.background='#5B21B6'; } }, 1500);
+}
+
+function ptAddOverride(){
+  var date = document.getElementById('pt-override-date').value;
+  if(!date){ alert('\ub0a0\uc9dc\ub97c \uc120\ud0dd\ud574\uc8fc\uc138\uc694'); return; }
+  if(!_ptScoreOverrides[date]) _ptScoreOverrides[date] = JSON.parse(JSON.stringify(PT_SCORES));
+  ptEditOverride(date);
+}
+
+function ptEditOverride(date){
+  var ex = document.getElementById('pt-override-edit-modal');
+  if(ex) ex.remove();
+  var scores = _ptScoreOverrides[date] || JSON.parse(JSON.stringify(PT_SCORES));
+  var thead = '<table style="width:100%;border-collapse:collapse"><thead><tr style="background:#f5f3ff">'
+    + '<th style="padding:6px 10px;font-size:11px;color:#5B21B6;text-align:left">\ubb38\ud56d</th>'
+    + '<th style="padding:6px 8px;font-size:11px;color:#5B21B6;text-align:center">\ubc30\uc810</th>'
+    + '</tr></thead><tbody>';
+  var m2 = document.createElement('div');
+  m2.id = 'pt-override-edit-modal';
+  m2.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3100;display:flex;align-items:center;justify-content:center;padding:16px';
+  var inner2 = document.createElement('div');
+  inner2.style.cssText = 'background:#fff;border-radius:16px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;max-height:90vh;display:flex;flex-direction:column';
+  inner2.innerHTML =
+    '<div style="background:#5B21B6;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">'
+      + '<div style="font-size:14px;font-weight:800;color:#fff">\uD83D\uDCC5 '+date+' \ubc30\uc810 \uc124\uc815</div>'
+      + '<button onclick="document.getElementById(\'pt-override-edit-modal\').remove()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;width:28px;height:28px;border-radius:50%;font-size:15px;cursor:pointer">&times;</button>'
+    + '</div>'
+    + '<div style="padding:16px;overflow-y:auto;flex:1">'
+      + thead + ptMakeScoreRows(scores,'pt-ov-inp') + '</tbody></table>'
+    + '</div>'
+    + '<div style="padding:12px 16px;border-top:1px solid #ede9fe;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0">'
+      + '<button onclick="document.getElementById(\'pt-override-edit-modal\').remove()" style="padding:7px 14px;background:#f5f6fa;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;color:#6b7280;cursor:pointer;font-weight:600">\ucde8\uc18c</button>'
+      + '<button onclick="ptSaveOverride(\''+date+'\')" style="padding:7px 18px;background:#5B21B6;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">\uc800\uc7a5</button>'
+    + '</div>';
+  m2.appendChild(inner2);
+  m2.addEventListener('click', function(e){ if(e.target===m2) m2.remove(); });
+  document.body.appendChild(m2);
+}
+
+function ptSaveOverride(date){
+  var inps = document.querySelectorAll('.pt-ov-inp');
+  var sc = JSON.parse(JSON.stringify(PT_SCORES));
+  inps.forEach(function(inp){
+    var key = inp.getAttribute('data-key');
+    var i   = parseInt(inp.getAttribute('data-i'));
+    if(!sc[key]) sc[key] = [];
+    sc[key][i] = parseFloat(inp.value) || 0;
+  });
+  _ptScoreOverrides[date] = sc;
+  ptSaveScoreConfig();
+  document.getElementById('pt-override-edit-modal').remove();
+  ptOpenScoreConfig();
+}
+
+function ptDeleteOverride(date){
+  if(!confirm(date+' \uc77c\uc790\ubcc4 \ubc30\uc810\uc744 \uc0ad\uc81c\ud560\uae4c\uc694?')) return;
+  delete _ptScoreOverrides[date];
+  ptSaveScoreConfig();
+  ptOpenScoreConfig();
+}
+
 
 // 배점 테이블
 var PT_SCORES = {
@@ -20260,18 +20466,17 @@ var PT_SCORES = {
 // 학생별 정오답 데이터 임시 저장
 var _ptAnswers = {}; // {sid: [true/false/null, ...] 8개}
 
-function ptGetQuestions(level){
-  // level: 'A', 'B', 그 외 → A 기준
+function ptGetQuestions(level, date){
+  // 날짜별 배점이 있으면 사용, 없으면 기본값
+  var scores = (date && _ptScoreOverrides[date]) ? _ptScoreOverrides[date] : PT_SCORES;
   var isB = (level||'').toUpperCase() === 'B';
   var qs = [];
   if(isB){
-    // 1~4 (B전용) + 5~8 (공통, B배점)
-    for(var i=0;i<4;i++) qs.push({num:i+1, score:PT_SCORES.B_only[i], label:'Potential B'});
-    for(var i=0;i<4;i++) qs.push({num:i+5, score:PT_SCORES.common_B[i], label:'Potential 공통'});
+    for(var i=0;i<4;i++) qs.push({num:i+1, score:scores.B_only[i], label:'Potential B'});
+    for(var i=0;i<4;i++) qs.push({num:i+5, score:scores.common_B[i], label:'Potential 공통'});
   } else {
-    // 5~8 (공통, A배점) + 9~12 (A전용)
-    for(var i=0;i<4;i++) qs.push({num:i+5, score:PT_SCORES.common_A[i], label:'Potential 공통'});
-    for(var i=0;i<4;i++) qs.push({num:i+9, score:PT_SCORES.A_only[i], label:'Potential A'});
+    for(var i=0;i<4;i++) qs.push({num:i+5, score:scores.common_A[i], label:'Potential 공통'});
+    for(var i=0;i<4;i++) qs.push({num:i+9, score:scores.A_only[i], label:'Potential A'});
   }
   return qs;
 }
@@ -20289,7 +20494,7 @@ function ptOpenAnswerModal(sid){
   var level = levelEl ? levelEl.value.trim().toUpperCase() : (s.potential_level||'').toUpperCase();
   if(level !== 'B') level = 'A'; // B 아니면 모두 A
 
-  var qs = ptGetQuestions(level);
+  var curDate = document.getElementById('pt-date') ? document.getElementById('pt-date').value : ''; var qs = ptGetQuestions(level, curDate);
   var ans = _ptAnswers[sid] || new Array(8).fill(null);
   if(ans.length < 8) ans = ans.concat(new Array(8-ans.length).fill(null));
 
@@ -20379,7 +20584,7 @@ function ptSetAnswer(sid, idx, isCorrect){
   var s = (_ptStudents||[]).find(function(s){ return s.id===sid; });
   var level = levelEl ? levelEl.value.trim().toUpperCase() : (s?s.potential_level||'':'');
   if(level !== 'B') level = 'A';
-  var qs = ptGetQuestions(level);
+  var curDate = document.getElementById('pt-date') ? document.getElementById('pt-date').value : ''; var qs = ptGetQuestions(level, curDate);
 
   // 버튼 스타일 업데이트
   var oBtn = document.getElementById('pt-ans-o-'+idx);
@@ -20410,7 +20615,7 @@ function ptApplyAnswers(sid){
   var s = (_ptStudents||[]).find(function(s){ return s.id===sid; });
   var level = levelEl ? levelEl.value.trim().toUpperCase() : (s?s.potential_level||'':'');
   if(level !== 'B') level = 'A';
-  var qs = ptGetQuestions(level);
+  var curDate = document.getElementById('pt-date') ? document.getElementById('pt-date').value : ''; var qs = ptGetQuestions(level, curDate);
 
   // 정답 개수 있을 때만 점수 자동 반영
   var hasAny = ans.some(function(a){ return a !== null; });
@@ -22674,7 +22879,7 @@ async function initAdminWeekendPotential(){
     srcPanel.style.display = 'block';
   }
 
-  // 관리자: 분원 필터 표시 및 로드
+  // 관리자: 분원 필터 + 배점 설정 버튼 표시
   if(currentUser && currentUser.role === 'admin'){
     var bw = document.getElementById('pt-branch-wrap');
     if(bw) bw.style.display = '';
@@ -22683,6 +22888,8 @@ async function initAdminWeekendPotential(){
       var {data:brs} = await db.from('branches').select('id,name').eq('active',true).order('name');
       (brs||[]).forEach(function(b){ bs.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>'; });
     }
+    var scoreConfigBtn = document.getElementById('pt-score-config-btn');
+    if(scoreConfigBtn) scoreConfigBtn.style.display = '';
   }
   if(typeof ptLoadFilters === 'function') await ptLoadFilters();
   var today=new Date(); var day=today.getDay();
