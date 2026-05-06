@@ -17935,6 +17935,114 @@ async function wnSetupLoadTeachers(branchId){
   (ts||[]).forEach(function(t){ sel.innerHTML += '<option value="'+t.id+'">'+t.name+' T</option>'; });
 }
 
+/* ── 주말 일괄설정 붙여넣기 파서 ── */
+function setupParsePaste(text){
+  // 각 줄을 파싱: 학교학년 이름 레벨 시간
+  // 예) 하안중3 이선예 B1 13:00
+  //     하안중 3학년 김철수 A2 14:00
+  var results = [];
+  var lines = text.split('\n');
+  lines.forEach(function(line){
+    line = line.trim();
+    if(!line) return;
+    // 탭 또는 공백으로 분리
+    var parts = line.split(/\t/).map(function(p){ return p.trim(); }).filter(Boolean);
+    if(parts.length < 2) parts = line.split(/\s+/).filter(Boolean);
+    if(parts.length < 2) return;
+
+    // 학교학년 추출: 앞부분에서 학교명+학년 파싱
+    // 형식1: 하안중3 → school=하안중, grade=3학년
+    // 형식2: 하안중 3학년 → school=하안중, grade=3학년 (두 토큰)
+    // 형식3: 하안중학교 3학년 → school=하안중학교, grade=3학년
+    var schoolGrade = '', name = '', level = '', time = '';
+
+    // "3학년" 혹은 숫자만으로 끝나는 경우 감지
+    var gradePattern = /^(\d+)(학년)?$/;
+
+    if(gradePattern.test(parts[1]) || /^\d+$/.test(parts[1])){
+      // 형식2: parts[0]=학교, parts[1]=학년, parts[2]=이름, ...
+      schoolGrade = parts[0] + ' ' + parts[1];
+      name  = parts[2] || '';
+      level = parts[3] || '';
+      time  = parts[4] || '';
+    } else {
+      // 형식1: parts[0]=학교학년(붙어있음), parts[1]=이름, ...
+      schoolGrade = parts[0];
+      name  = parts[1] || '';
+      level = parts[2] || '';
+      time  = parts[3] || '';
+    }
+
+    // 학교학년 정규화: 숫자+학년 분리
+    // "하안중3" → school="하안중", gradeNum="3"
+    // "하안중 3학년" → school="하안중", gradeNum="3"
+    var m = schoolGrade.match(/^(.+?)(\d+)(학년)?$/);
+    var school = m ? m[1].trim() : schoolGrade.trim();
+    var gradeNum = m ? m[2] : '';
+
+    results.push({school: school, gradeNum: gradeNum, name: name.trim(), level: level.trim(), time: time.trim()});
+  });
+  return results;
+}
+
+function setupMatchStudents(parsed, levelSel, timeSel){
+  // levelSel: '.wn-setup-level' or '.by-setup-level'
+  // timeSel:  '.wn-setup-time'  or '.by-setup-time'
+  var matched = 0, unmatched = 0;
+
+  parsed.forEach(function(p){
+    if(!p.name) return;
+    // 학생 찾기: 이름 일치 + 학교/학년 유사 매칭
+    var levelEls = document.querySelectorAll(levelSel);
+    var found = false;
+    levelEls.forEach(function(el){
+      var sid = el.getAttribute('data-sid');
+      var row = el.closest('tr');
+      if(!row) return;
+      var tds = row.querySelectorAll('td');
+      var schoolGradeText = tds[0] ? tds[0].textContent.trim() : '';
+      var nameText = tds[1] ? tds[1].textContent.trim() : '';
+
+      // 이름 매칭
+      if(nameText !== p.name) return;
+
+      // 학교/학년 매칭 (학교명 포함 여부)
+      if(p.school && schoolGradeText.replace(/\s/g,'').indexOf(p.school.replace(/\s/g,'')) === -1) return;
+      if(p.gradeNum && schoolGradeText.indexOf(p.gradeNum) === -1) return;
+
+      // 매칭 성공 → 값 입력
+      if(p.level) el.value = p.level;
+      var timeEl = document.querySelector(timeSel+'[data-sid="'+sid+'"]');
+      if(timeEl && p.time) timeEl.value = p.time;
+      // 하이라이트
+      el.style.background = '#d1fae5';
+      if(timeEl) timeEl.style.background = '#d1fae5';
+      found = true;
+      matched++;
+    });
+    if(!found) unmatched++;
+  });
+  return {matched: matched, unmatched: unmatched};
+}
+
+function wnSetupApplyPaste(){
+  var text = (document.getElementById('wn-setup-paste')||{}).value||'';
+  if(!text.trim()){ alert('붙여넣기할 내용을 입력하세요'); return; }
+  var parsed = setupParsePaste(text);
+  var result = setupMatchStudents(parsed, '.wn-setup-level', '.wn-setup-time');
+  var el = document.getElementById('wn-paste-result');
+  if(el) el.textContent = '✅ 매칭 '+result.matched+'명 / 미매칭 '+result.unmatched+'명';
+}
+
+function bySetupApplyPaste(){
+  var text = (document.getElementById('by-setup-paste')||{}).value||'';
+  if(!text.trim()){ alert('붙여넣기할 내용을 입력하세요'); return; }
+  var parsed = setupParsePaste(text);
+  var result = setupMatchStudents(parsed, '.by-setup-level', '.by-setup-time');
+  var el = document.getElementById('by-paste-result');
+  if(el) el.textContent = '✅ 매칭 '+result.matched+'명 / 미매칭 '+result.unmatched+'명';
+}
+
 async function wnSetupLoad(){
   var branchId  = (document.getElementById('wn-setup-branch')||{}).value  || '';
   var teacherId = (document.getElementById('wn-setup-teacher')||{}).value || '';
@@ -17973,8 +18081,17 @@ async function wnSetupLoad(){
     +'</tr></thead>'
     +'<tbody>'+rows+'</tbody>'
     +'</table></div>'
+    +'<div style="margin-top:12px;border:1.5px solid #bbf7d0;border-radius:10px;padding:12px;background:#f0fdf4">'
+      +'<div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:6px">\uD83D\uDCCB \ubd99\uc5ec\ub123\uae30 \uc77c\uad04 \uc785\ub825</div>'
+      +'<div style="font-size:11px;color:#6b7280;margin-bottom:6px">\ud615\uc2dd: \ud559\uad50+\ud559\ub144 \uc774\ub984 \ub808\ubca8 \uc2dc\uac04 (\ud0ed/\uacf5\ubc31 \uad6c\ubd84, \uc5ec\ub7ec \uc904 \uac00\ub2a5)<br>\uc608) \ud558\uc548\uc911\ub144 \uc774\uc120\uc608 B1 13:00</div>'
+      +'<textarea id="wn-setup-paste" rows="5" placeholder="\uc5ec\uae30\uc5d0 \ubd99\uc5ec\ub123\uae30 (Ctrl+V)..." style="width:100%;padding:8px;border:1.5px solid #bbf7d0;border-radius:8px;font-size:12px;box-sizing:border-box;resize:vertical;outline:none;font-family:monospace"></textarea>'
+      +'<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
+        +'<button onclick="wnSetupApplyPaste()" style="padding:7px 16px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">\u26a1 \uc801\uc6a9</button>'
+        +'<span id="wn-paste-result" style="font-size:12px;color:#6b7280"></span>'
+      +'</div>'
+    +'</div>'
     +'<div style="margin-top:10px;display:flex;justify-content:flex-end">'
-    +'<button onclick="wnSetupSave()" style="padding:8px 20px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">\ud83d\udcbe \uc77c\uad04 \uc800\uc7a5</button>'
+    +'<button onclick="wnSetupSave()" style="padding:8px 20px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">\uD83D\uDCBE \uc77c\uad04 \uc800\uc7a5</button>'
     +'</div>';
 }
 
@@ -26314,8 +26431,17 @@ async function bySetupLoad(){
     +'</tr></thead>'
     +'<tbody>'+rows+'</tbody>'
     +'</table></div>'
+    +'<div style="margin-top:12px;border:1.5px solid #fde68a;border-radius:10px;padding:12px;background:#fffbeb">'
+      +'<div style="font-size:12px;font-weight:700;color:#b45309;margin-bottom:6px">\uD83D\uDCCB \ubd99\uc5ec\ub123\uae30 \uc77c\uad04 \uc785\ub825</div>'
+      +'<div style="font-size:11px;color:#6b7280;margin-bottom:6px">\ud615\uc2dd: \ud559\uad50+\ud559\ub144 \uc774\ub984 \ub808\ubca8 \uc2dc\uac04 (\ud0ed/\uacf5\ubc31 \uad6c\ubd84, \uc5ec\ub7ec \uc904 \uac00\ub2a5)<br>\uc608) \ud558\uc548\uc911\ub144 \uc774\uc120\uc608 B1 13:00</div>'
+      +'<textarea id="by-setup-paste" rows="5" placeholder="\uc5ec\uae30\uc5d0 \ubd99\uc5ec\ub123\uae30 (Ctrl+V)..." style="width:100%;padding:8px;border:1.5px solid #fde68a;border-radius:8px;font-size:12px;box-sizing:border-box;resize:vertical;outline:none;font-family:monospace"></textarea>'
+      +'<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
+        +'<button onclick="bySetupApplyPaste()" style="padding:7px 16px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">\u26a1 \uc801\uc6a9</button>'
+        +'<span id="by-paste-result" style="font-size:12px;color:#6b7280"></span>'
+      +'</div>'
+    +'</div>'
     +'<div style="margin-top:10px;display:flex;justify-content:flex-end">'
-    +'<button onclick="bySetupSave()" style="padding:8px 20px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">\ud83d\udcbe \uc77c\uad04 \uc800\uc7a5</button>'
+    +'<button onclick="bySetupSave()" style="padding:8px 20px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">\uD83D\uDCBE \uc77c\uad04 \uc800\uc7a5</button>'
     +'</div>';
 }
 
