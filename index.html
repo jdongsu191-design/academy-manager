@@ -19099,7 +19099,174 @@ if(typeof window._wlIndivDocClickBound === 'undefined'){
 }
 
 /* ── 업무일지 불러오기 ── */
+var _wlLoadedData = null;
+var _wlLoadedStudents = [];
+
 async function openWlLoadModal(){
+  var ex = document.getElementById('wl-load-modal');
+  if(ex) ex.remove();
+  _wlLoadedData = null;
+  _wlLoadedStudents = [];
+
+  var modal = document.createElement('div');
+  modal.id = 'wl-load-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:16px;max-width:520px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden;max-height:90vh;display:flex;flex-direction:column">'
+      +'<div style="background:#1d4ed8;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">'
+        +'<div>'
+          +'<div style="font-size:15px;font-weight:800;color:#fff">📂 이전 업무일지 불러오기</div>'
+          +'<div style="font-size:12px;color:#bfdbfe;margin-top:2px">날짜 선택 → 반 선택 → 불러오기</div>'
+        +'</div>'
+        +'<button onclick="document.getElementById(\'wl-load-modal\').remove()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;width:30px;height:30px;border-radius:50%;font-size:18px;cursor:pointer;line-height:1">&times;</button>'
+      +'</div>'
+      +'<div style="padding:14px 16px;flex-shrink:0;border-bottom:1px solid #e5e7eb">'
+        +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">날짜 선택 <span style="font-size:11px;font-weight:400;color:#9ca3af">(박스를 클릭하면 달력이 열립니다)</span></div>'
+        +'<input type="date" id="wl-load-date" onchange="wlLoadDateLogs()" onclick="this.showPicker&&this.showPicker()" style="width:100%;padding:9px 12px;border:1.5px solid #dbeafe;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box;cursor:pointer">'
+      +'</div>'
+      +'<div id="wl-load-preview" style="overflow-y:auto;flex:1;padding:12px 16px">'
+        +'<div style="text-align:center;padding:30px 0;color:#9ca3af">'
+          +'<div style="font-size:32px;margin-bottom:8px">📅</div>'
+          +'<div style="font-size:13px">날짜를 선택하면<br>해당 날짜의 업무일지 목록이 표시됩니다</div>'
+        +'</div>'
+      +'</div>'
+      +'<div style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;flex-shrink:0">'
+        +'<button onclick="document.getElementById(\'wl-load-modal\').remove()" style="flex:1;padding:9px;border:1.5px solid #d1d5db;border-radius:8px;background:#f9fafb;color:#6b7280;font-size:13px;font-weight:600;cursor:pointer">취소</button>'
+        +'<button id="wl-load-confirm-btn" onclick="wlApplyLoadedData()" disabled style="flex:2;padding:9px;border:none;border-radius:8px;background:#93c5fd;color:#fff;font-size:13px;font-weight:700;cursor:not-allowed">📂 선택한 내용 불러오기</button>'
+      +'</div>'
+    +'</div>';
+
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+async function wlLoadDateLogs(){
+  var date = (document.getElementById('wl-load-date')||{}).value||'';
+  var preview = document.getElementById('wl-load-preview');
+  var confirmBtn = document.getElementById('wl-load-confirm-btn');
+  _wlLoadedData = null; _wlLoadedStudents = [];
+  if(confirmBtn){ confirmBtn.disabled=true; confirmBtn.style.background='#93c5fd'; confirmBtn.style.cursor='not-allowed'; }
+  if(!date){ return; }
+
+  preview.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af">불러오는 중...</div>';
+
+  var {data:logs} = await db.from('work_logs')
+    .select('*')
+    .eq('teacher_id', currentUser.id)
+    .eq('log_date', date)
+    .order('created_at');
+
+  if(!logs||!logs.length){
+    preview.innerHTML = '<div style="text-align:center;padding:30px 0;color:#9ca3af"><div style="font-size:28px;margin-bottom:8px">📭</div><div style="font-size:13px">해당 날짜에 저장된 업무일지가 없습니다</div></div>';
+    return;
+  }
+
+  var cls = (typeof classes!=='undefined'?classes:[]);
+  preview.innerHTML =
+    '<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:8px">반을 선택하세요 ('+logs.length+'개)</div>'
+    + logs.map(function(log){
+        var c = cls.find(function(x){return x.id===log.class_id;});
+        var cName = c ? c.name : '알 수 없는 반';
+        var cInfo = c ? [c.class_days, c.class_time].filter(Boolean).join(' · ') : '';
+        return '<div onclick="wlSelectLogPreview(\''+log.id+'\')" id="wl-log-card-'+log.id+'" style="padding:12px 14px;border:1.5px solid #dbeafe;border-radius:10px;cursor:pointer;margin-bottom:8px;transition:all 0.15s">'
+          +'<div style="display:flex;align-items:center;justify-content:space-between">'
+            +'<div>'
+              +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+cName+'</div>'
+              +(cInfo?'<div style="font-size:11px;color:#9ca3af;margin-top:1px">'+cInfo+'</div>':'')
+            +'</div>'
+            +'<span style="font-size:11px;color:#9ca3af">클릭하여 선택</span>'
+          +'</div>'
+          +'<div style="margin-top:8px;display:flex;flex-direction:column;gap:3px">'
+            +(log.progress?'<div style="font-size:11px;color:#374151"><b>📖 진도:</b> '+log.progress.slice(0,60)+(log.progress.length>60?'…':'')+'</div>':'')
+            +(log.homework?'<div style="font-size:11px;color:#374151"><b>📝 숙제:</b> '+log.homework.slice(0,60)+(log.homework.length>60?'…':'')+'</div>':'')
+          +'</div>'
+        +'</div>';
+      }).join('');
+}
+
+async function wlSelectLogPreview(logId){
+  // 카드 선택 스타일
+  document.querySelectorAll('[id^="wl-log-card-"]').forEach(function(el){
+    el.style.borderColor = '#dbeafe';
+    el.style.background = '#fff';
+    el.querySelector('span').textContent = '클릭하여 선택';
+  });
+  var selected = document.getElementById('wl-log-card-'+logId);
+  if(selected){
+    selected.style.borderColor = '#1d4ed8';
+    selected.style.background = '#eff6ff';
+    selected.querySelector('span').textContent = '✅ 선택됨';
+  }
+
+  var {data:log} = await db.from('work_logs').select('*').eq('id',logId).single();
+  if(!log) return;
+  var {data:stus} = await db.from('work_log_students').select('*').eq('log_id',logId);
+  _wlLoadedData = log;
+  _wlLoadedStudents = stus||[];
+
+  var confirmBtn = document.getElementById('wl-load-confirm-btn');
+  if(confirmBtn){ confirmBtn.disabled=false; confirmBtn.style.background='#1d4ed8'; confirmBtn.style.cursor='pointer'; }
+}
+
+function wlApplyLoadedData(){
+  if(!_wlLoadedData){ alert('반을 선택해주세요'); return; }
+  var log = _wlLoadedData;
+
+  // 수업 내용 전체 채우기
+  var fields = {
+    'wl-progress': log.progress,
+    'wl-homework': log.homework,
+    'wl-memo':     log.memo,
+    'wl-trial':    log.trial_class,
+    'wl-new-student': log.new_student,
+    'wl-dropout':  log.dropout
+  };
+  Object.keys(fields).forEach(function(id){
+    var el = document.getElementById(id);
+    if(el && fields[id]) el.value = fields[id];
+  });
+
+  // 학생별 데이터 채우기
+  if(_wlLoadedStudents.length){
+    var rows = document.querySelectorAll('#wl-student-tbody tr');
+    rows.forEach(function(row){
+      var sid = (row.querySelector('[data-field="attendance"]')||{}).dataset&&row.querySelector('[data-field="attendance"]').dataset.sid;
+      if(!sid) return;
+      var stuData = _wlLoadedStudents.find(function(s){ return s.student_id === sid; });
+      if(!stuData) return;
+      var attEl  = row.querySelector('[data-field="attendance"]');
+      var nEl    = row.querySelector('[data-field="n_count"]');
+      var hwEl   = row.querySelector('[data-field="homework_done"]');
+      var testEl = row.querySelector('[data-field="test_score"]');
+      var noteEl = row.querySelector('[data-field="note"]');
+      if(attEl  && stuData.attendance)    attEl.value  = stuData.attendance;
+      if(nEl    && stuData.n_count)       nEl.value    = stuData.n_count;
+      if(hwEl   && stuData.homework_done !== null) hwEl.value = String(stuData.homework_done);
+      if(testEl && stuData.test_score)    testEl.value = stuData.test_score;
+      if(noteEl && stuData.note)          noteEl.value = stuData.note;
+      // 개별 진도/숙제
+      if(stuData.individual_progress || stuData.individual_homework){
+        if(!window._wlIndividualData) window._wlIndividualData = {};
+        window._wlIndividualData[sid] = {
+          progress: stuData.individual_progress||'',
+          homework: stuData.individual_homework||''
+        };
+      }
+    });
+    if(typeof wlIndivHydrateFromLogs === 'function') wlIndivHydrateFromLogs(_wlLoadedStudents);
+  }
+
+  document.getElementById('wl-load-modal').remove();
+
+  var toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#1d4ed8;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
+  toast.textContent = '✅ 업무일지 내용이 불러와졌습니다';
+  document.body.appendChild(toast);
+  setTimeout(function(){ toast.remove(); }, 2500);
+}
+
+async function saveWorkLog(){
   var classId = (document.getElementById('wl-class-select')||{}).value||'';
   if(!classId){ alert('먼저 반을 선택해주세요'); return; }
 
@@ -19134,124 +19301,6 @@ async function openWlLoadModal(){
 
   modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
   document.body.appendChild(modal);
-}
-
-var _wlLoadedData = null;
-
-async function wlLoadPreview(){
-  var date = (document.getElementById('wl-load-date')||{}).value||'';
-  var classId = (document.getElementById('wl-class-select')||{}).value||'';
-  var preview = document.getElementById('wl-load-preview');
-  var confirmBtn = document.getElementById('wl-load-confirm-btn');
-  _wlLoadedData = null;
-  if(confirmBtn){ confirmBtn.disabled=true; confirmBtn.style.background='#93c5fd'; confirmBtn.style.cursor='not-allowed'; }
-
-  if(!date){ preview.innerHTML='<div style="text-align:center;padding:20px;color:#9ca3af">날짜를 선택해주세요</div>'; return; }
-
-  preview.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af">불러오는 중...</div>';
-
-  // 해당 날짜 + 같은 반의 업무일지 조회
-  var {data:logs} = await db.from('work_logs')
-    .select('*')
-    .eq('teacher_id', currentUser.id)
-    .eq('class_id', classId)
-    .eq('log_date', date);
-
-  if(!logs||!logs.length){
-    // 같은 반이 없으면 해당 날짜의 모든 반 목록 표시
-    var {data:allLogs} = await db.from('work_logs')
-      .select('*')
-      .eq('teacher_id', currentUser.id)
-      .eq('log_date', date)
-      .order('created_at');
-
-    if(!allLogs||!allLogs.length){
-      preview.innerHTML='<div style="text-align:center;padding:20px;color:#9ca3af">해당 날짜에 저장된 업무일지가 없습니다</div>';
-      return;
-    }
-
-    // 다른 반 목록 표시
-    var cls = (typeof classes!=='undefined'?classes:[]);
-    preview.innerHTML = '<div style="font-size:12px;color:#6b7280;margin-bottom:8px">같은 반 업무일지가 없습니다. 다른 반의 업무일지를 선택해서 수업 내용만 불러올 수 있습니다:</div>'
-      + allLogs.map(function(log){
-          var c = cls.find(function(x){return x.id===log.class_id;});
-          return '<div onclick="wlSelectLog(\''+log.id+'\')" style="padding:10px 12px;border:1.5px solid #dbeafe;border-radius:8px;cursor:pointer;margin-bottom:6px;background:#f0f7ff">'
-            +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+(c?c.name:'알 수 없는 반')+'</div>'
-            +'<div style="font-size:12px;color:#6b7280;margin-top:4px;white-space:pre-wrap">📖 진도: '+(log.progress||'없음').slice(0,50)+'\n📝 숙제: '+(log.homework||'없음').slice(0,50)+'</div>'
-          +'</div>';
-        }).join('');
-    return;
-  }
-
-  // 같은 반 업무일지 바로 표시
-  var log = logs[0];
-  _wlLoadedData = log;
-  wlRenderPreview(log);
-  if(confirmBtn){ confirmBtn.disabled=false; confirmBtn.style.background='#1d4ed8'; confirmBtn.style.cursor='pointer'; }
-}
-
-async function wlSelectLog(logId){
-  var {data:log} = await db.from('work_logs').select('*').eq('id',logId).single();
-  if(!log) return;
-  _wlLoadedData = log;
-  wlRenderPreview(log);
-  var confirmBtn = document.getElementById('wl-load-confirm-btn');
-  if(confirmBtn){ confirmBtn.disabled=false; confirmBtn.style.background='#1d4ed8'; confirmBtn.style.cursor='pointer'; }
-}
-
-function wlRenderPreview(log){
-  var preview = document.getElementById('wl-load-preview');
-  if(!preview) return;
-  preview.innerHTML =
-    '<div style="background:#f0f7ff;border:1.5px solid #bfdbfe;border-radius:10px;padding:12px;margin-bottom:8px">'
-      +'<div style="font-size:11px;font-weight:700;color:#1d4ed8;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">불러올 내용 미리보기</div>'
-      +'<div style="display:flex;flex-direction:column;gap:8px">'
-        +wlPreviewRow('📖 진도', log.progress)
-        +wlPreviewRow('📝 숙제', log.homework)
-        +(log.memo ? wlPreviewRow('📌 메모', log.memo) : '')
-        +(log.trial_class ? wlPreviewRow('👋 체험 수업', log.trial_class) : '')
-        +(log.new_student ? wlPreviewRow('🎉 신규 학생', log.new_student) : '')
-        +(log.dropout ? wlPreviewRow('😢 퇴원', log.dropout) : '')
-      +'</div>'
-    +'</div>'
-    +'<div style="font-size:11px;color:#9ca3af;text-align:center">⚠️ 학생별 출결/숙제/N제 데이터는 불러오지 않습니다<br>수업 내용(진도·숙제·메모 등)만 현재 업무일지에 채워집니다</div>';
-}
-
-function wlPreviewRow(label, value){
-  if(!value) return '';
-  return '<div style="background:#fff;border-radius:6px;padding:8px 10px">'
-    +'<div style="font-size:11px;font-weight:600;color:#6b7280;margin-bottom:2px">'+label+'</div>'
-    +'<div style="font-size:12px;color:#1e293b;white-space:pre-wrap">'+value+'</div>'
-  +'</div>';
-}
-
-function wlApplyLoadedData(){
-  if(!_wlLoadedData){ alert('불러올 데이터가 없습니다'); return; }
-  var log = _wlLoadedData;
-
-  // 수업 내용만 채우기 (학생 출결 데이터는 건드리지 않음)
-  var progressEl = document.getElementById('wl-progress');
-  var homeworkEl = document.getElementById('wl-homework');
-  var memoEl     = document.getElementById('wl-memo');
-  var trialEl    = document.getElementById('wl-trial');
-  var newStuEl   = document.getElementById('wl-new-student');
-  var dropoutEl  = document.getElementById('wl-dropout');
-
-  if(progressEl && log.progress) progressEl.value = log.progress;
-  if(homeworkEl && log.homework) homeworkEl.value = log.homework;
-  if(memoEl     && log.memo)     memoEl.value     = log.memo;
-  if(trialEl    && log.trial_class) trialEl.value  = log.trial_class;
-  if(newStuEl   && log.new_student) newStuEl.value = log.new_student;
-  if(dropoutEl  && log.dropout)  dropoutEl.value   = log.dropout;
-
-  document.getElementById('wl-load-modal').remove();
-
-  // 성공 토스트
-  var toast = document.createElement('div');
-  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#1d4ed8;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
-  toast.textContent = '✅ 이전 업무일지 내용이 불러와졌습니다';
-  document.body.appendChild(toast);
-  setTimeout(function(){ toast.remove(); }, 2500);
 }
 
 async function saveWorkLog(){
