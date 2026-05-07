@@ -21045,6 +21045,8 @@ async function initNotifyRealtime(){
       var role = currentUser.role;
       var targets = notif.target_roles || [];
       if(!targets.length || targets.indexOf(role) !== -1){
+        _shownNotifyIds.add(notif.id);
+        notifyMarkChecked();
         showUpdateNotifyPopup(notif.message);
       }
     })
@@ -21054,6 +21056,68 @@ async function initNotifyRealtime(){
         if(!_notifyPollInterval) startNotifyPolling();
       }
     });
+
+  // 로그인 시 미확인 최근 알림 표시 (마스터 제외)
+  await checkMissedNotifications();
+}
+
+// localStorage 키: 유저별로 구분
+function notifyStorageKey(){
+  return 'notify_last_checked_' + (currentUser ? currentUser.id : 'anon');
+}
+
+// 마지막 확인 시각 저장
+function notifyMarkChecked(){
+  try{ localStorage.setItem(notifyStorageKey(), new Date().toISOString()); }catch(e){}
+}
+
+// 로그인 시 못 받은 알림 확인
+async function checkMissedNotifications(){
+  if(!currentUser || currentUser.is_master === true) return;
+
+  var role = currentUser.role;
+  var lastChecked = null;
+  try{ lastChecked = localStorage.getItem(notifyStorageKey()); }catch(e){}
+
+  // 조회 범위: 마지막 확인 이후 or 최근 7일
+  var since;
+  if(lastChecked){
+    since = lastChecked;
+  } else {
+    var d = new Date();
+    d.setDate(d.getDate() - 7);
+    since = d.toISOString();
+  }
+
+  try{
+    var {data} = await db.from('app_notifications')
+      .select('*')
+      .gt('created_at', since)
+      .order('created_at', {ascending: true});
+
+    if(!data || !data.length){
+      // 미확인 알림 없어도 현재 시각 저장
+      notifyMarkChecked();
+      return;
+    }
+
+    // 대상이 맞는 알림만 필터
+    var targets_ok = data.filter(function(n){
+      var targets = n.target_roles || [];
+      return !targets.length || targets.indexOf(role) !== -1;
+    });
+
+    if(!targets_ok.length){
+      notifyMarkChecked();
+      return;
+    }
+
+    // 가장 최근 알림 1건만 표시 (여러 개면 최신 것만)
+    var latest = targets_ok[targets_ok.length - 1];
+    targets_ok.forEach(function(n){ _shownNotifyIds.add(n.id); });
+    notifyMarkChecked();
+    showUpdateNotifyPopup(latest.message);
+  } catch(e){}
 }
 
 var _notifyLastChecked = null;
@@ -21076,6 +21140,7 @@ function startNotifyPolling(){
         var targets = notif.target_roles || [];
         if(!targets.length || targets.indexOf(role) !== -1){
           _shownNotifyIds.add(notif.id);
+          notifyMarkChecked();
           showUpdateNotifyPopup(notif.message);
         }
       });
@@ -21109,7 +21174,7 @@ function showUpdateNotifyPopup(message){
       +'<button onclick="document.getElementById(\'app-update-popup\').remove()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;width:24px;height:24px;border-radius:50%;font-size:14px;cursor:pointer;line-height:1;flex-shrink:0">&times;</button>'
     +'</div>'
     +'<div style="padding:14px 16px">'
-      +'<div style="font-size:13px;color:#374151;line-height:1.6;margin-bottom:14px">'+message+'</div>'
+      +'<div style="font-size:13px;color:#374151;line-height:1.6;margin-bottom:14px;white-space:pre-wrap">'+message+'</div>'
       +'<div style="display:flex;gap:8px">'
         +'<button onclick="document.getElementById(\'app-update-popup\').remove()" style="flex:1;padding:8px;border:1.5px solid #e5e7eb;border-radius:8px;background:#f9fafb;color:#6b7280;font-size:12px;font-weight:600;cursor:pointer">나중에</button>'
         +'<button onclick="location.reload(true)" style="flex:2;padding:8px;border:none;border-radius:8px;background:#4f46e5;color:#fff;font-size:12px;font-weight:700;cursor:pointer">🔄 지금 새로고침</button>'
