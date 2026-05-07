@@ -20976,30 +20976,50 @@ var _ptAllTeachers = [];
 /* ── 업데이트 알림 시스템 ── */
 var _notifyChannel = null;
 var _notifyPollInterval = null;
+
+async function initNotifyRealtime(){
+  if(_notifyChannel) return;
+
+  // Realtime 구독 (supabase_realtime publication에 app_notifications 등록됨)
+  _notifyChannel = db.channel('app-notifications-channel')
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'app_notifications'
+    }, function(payload){
+      var notif = payload.new;
+      if(!currentUser) return;
+      var isMaster = currentUser.is_master === true;
+      if(isMaster) return;
+      var role = currentUser.role;
+      var targets = notif.target_roles || [];
+      if(!targets.length || targets.indexOf(role) !== -1){
+        showUpdateNotifyPopup(notif.message);
+      }
+    })
+    .subscribe(function(status){
+      // 구독 실패 시 폴링 fallback
+      if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT'){
+        if(!_notifyPollInterval) startNotifyPolling();
+      }
+    });
+}
+
 var _notifyLastChecked = null;
 var _shownNotifyIds = new Set();
 
-// 앱 시작 시 폴링 시작 (로그인 후 호출)
-async function initNotifyRealtime(){
+function startNotifyPolling(){
   if(_notifyPollInterval) return;
   _notifyLastChecked = new Date().toISOString();
-
-  // 30초마다 새 알림 체크
   _notifyPollInterval = setInterval(async function(){
-    if(!currentUser) return;
+    if(!currentUser || currentUser.is_master === true) return;
     try {
       var {data} = await db.from('app_notifications')
-        .select('*')
-        .gt('created_at', _notifyLastChecked)
+        .select('*').gt('created_at', _notifyLastChecked)
         .order('created_at', {ascending: true});
-
       if(!data || !data.length) return;
       _notifyLastChecked = data[data.length-1].created_at;
-
       var role = currentUser.role;
-      var isMaster = currentUser.is_master === true;
-      if(isMaster) return;
-
       data.forEach(function(notif){
         if(_shownNotifyIds.has(notif.id)) return;
         var targets = notif.target_roles || [];
