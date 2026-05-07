@@ -21135,6 +21135,220 @@ async function loadNotifyHistory(){
       }).join('');
 }
 
+/* ══════════════════════════════════════
+   학습진행표 기능
+══════════════════════════════════════ */
+async function openLpClassModal(classId, className){
+  var ex = document.getElementById('lp-class-modal');
+  if(ex) ex.remove();
+
+  // 해당 반 학생 목록 로드
+  var {data:studs} = await db.from('users').select('id,name,school,grade')
+    .eq('class_id', classId).eq('status','active').order('name');
+
+  var modal = document.createElement('div');
+  modal.id = 'lp-class-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+
+  var rows = (studs||[]).map(function(s){
+    var school = [s.school, s.grade].filter(Boolean).join(' ');
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid #ede9fe;border-radius:10px;margin-bottom:6px;background:#faf5ff">'
+      +'<div>'
+        +'<div style="font-size:14px;font-weight:700;color:#1e293b">'+_esc(s.name)+'</div>'
+        +(school?'<div style="font-size:11px;color:#9ca3af;margin-top:1px">'+_esc(school)+'</div>':'')
+      +'</div>'
+      +'<button onclick="openLpWriteModal(\''+s.id+'\',\''+_esc(s.name)+'\',\''+classId+'\',\''+_esc(className)+'\')" '
+        +'style="padding:7px 14px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">'
+        +'\uD83D\uDCDD 작성'
+      +'</button>'
+    +'</div>';
+  }).join('');
+
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:16px;max-width:440px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden;max-height:90vh;display:flex;flex-direction:column">'
+      +'<div style="background:linear-gradient(135deg,#7c3aed,#a855f7);padding:18px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">'
+        +'<div>'
+          +'<div style="font-size:15px;font-weight:800;color:#fff">\uD83D\uDCCA 학습진행표</div>'
+          +'<div style="font-size:12px;color:#e9d5ff;margin-top:2px">'+_esc(className)+' · 학생을 선택하세요</div>'
+        +'</div>'
+        +'<button onclick="document.getElementById(\'lp-class-modal\').remove()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;width:30px;height:30px;border-radius:50%;font-size:18px;cursor:pointer;line-height:1">&times;</button>'
+      +'</div>'
+      +'<div style="padding:14px 16px;overflow-y:auto;flex:1">'
+        +(rows || '<div style="text-align:center;padding:30px;color:#9ca3af">이 반에 학생이 없습니다</div>')
+      +'</div>'
+    +'</div>';
+
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+async function openLpWriteModal(studentId, studentName, classId, className){
+  var ex = document.getElementById('lp-write-modal');
+  if(ex) ex.remove();
+
+  // 오늘 날짜 기준 가장 최근 업무일지 로드
+  var today = new Date().toISOString().split('T')[0];
+  var {data:logs} = await db.from('work_logs')
+    .select('*')
+    .eq('teacher_id', currentUser.id)
+    .eq('class_id', classId)
+    .lte('log_date', today)
+    .order('log_date', {ascending:false})
+    .limit(1);
+  var log = logs && logs[0] ? logs[0] : null;
+
+  // 학생 개별 진도/숙제 로드
+  var indivProgress = '', indivHomework = '';
+  if(log){
+    var {data:sl} = await db.from('work_log_students')
+      .select('*').eq('log_id', log.id).eq('student_id', studentId).single();
+    if(sl){
+      indivProgress = sl.individual_progress || '';
+      indivHomework = sl.individual_homework || '';
+    }
+  }
+
+  // 기존 학습진행표 데이터 로드
+  var {data:existing} = await db.from('learning_progress')
+    .select('*').eq('student_id', studentId).eq('class_id', classId)
+    .eq('log_date', log ? log.log_date : today).single();
+
+  var logDate = log ? log.log_date : today;
+  var logDateStr = logDate ? logDate.replace(/-/g,'.') : today.replace(/-/g,'.');
+
+  // 진도 표시: 개별 있으면 개별 우선, 없으면 공통
+  var progressText = indivProgress || (log ? log.progress || '' : '');
+  var homeworkText = indivHomework || (log ? log.homework || '' : '');
+
+  var modal = document.createElement('div');
+  modal.id = 'lp-write-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3100;display:flex;align-items:center;justify-content:center;padding:12px;overflow-y:auto';
+
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:20px;max-width:520px;width:100%;box-shadow:0 24px 80px rgba(124,58,237,0.18);overflow:hidden;margin:auto">'
+
+      // 헤더
+      +'<div style="background:linear-gradient(135deg,#7c3aed 0%,#a855f7 100%);padding:20px 22px 16px">'
+        +'<div style="display:flex;align-items:flex-start;justify-content:space-between">'
+          +'<div>'
+            +'<div style="font-size:11px;font-weight:600;color:#e9d5ff;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">BESTIAN 학습 진행표</div>'
+            +'<div style="font-size:18px;font-weight:800;color:#fff">'+_esc(studentName)+'</div>'
+            +'<div style="font-size:12px;color:#d8b4fe;margin-top:3px">'+_esc(className)+' · '+logDateStr+'</div>'
+          +'</div>'
+          +'<button onclick="document.getElementById(\'lp-write-modal\').remove()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;width:32px;height:32px;border-radius:50%;font-size:18px;cursor:pointer;flex-shrink:0">×</button>'
+        +'</div>'
+      +'</div>'
+
+      +'<div style="padding:18px 20px;display:flex;flex-direction:column;gap:14px">'
+
+        // 업무일지 기반 정보 섹션
+        +'<div style="background:#faf5ff;border:1.5px solid #e9d5ff;border-radius:12px;padding:14px">'
+          +'<div style="font-size:11px;font-weight:700;color:#7c3aed;letter-spacing:0.5px;margin-bottom:10px;display:flex;align-items:center;gap:6px">'
+            +'<span style="background:#7c3aed;color:#fff;padding:2px 8px;border-radius:100px;font-size:10px">업무일지 자동반영</span>'
+            +(log ? '<span style="color:#9ca3af;font-weight:400">'+logDateStr+' 기준</span>' : '<span style="color:#ef4444;font-weight:400">업무일지 없음</span>')
+          +'</div>'
+          +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+            +'<div style="background:#fff;border-radius:8px;padding:10px 12px;border:1px solid #ede9fe">'
+              +'<div style="font-size:11px;font-weight:600;color:#7c3aed;margin-bottom:5px">📖 진도</div>'
+              +'<div id="lp-progress-display" style="font-size:12px;color:#374151;line-height:1.6;min-height:36px;white-space:pre-wrap">'+_esc(progressText || '내용 없음')+'</div>'
+            +'</div>'
+            +'<div style="background:#fff;border-radius:8px;padding:10px 12px;border:1px solid #ede9fe">'
+              +'<div style="font-size:11px;font-weight:600;color:#7c3aed;margin-bottom:5px">📝 숙제</div>'
+              +'<div id="lp-homework-display" style="font-size:12px;color:#374151;line-height:1.6;min-height:36px;white-space:pre-wrap">'+_esc(homeworkText || '내용 없음')+'</div>'
+            +'</div>'
+          +'</div>'
+        +'</div>'
+
+        // 수기 입력 섹션
+        +'<div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:12px;padding:14px">'
+          +'<div style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;margin-bottom:10px">'
+            +'<span style="background:#f59e0b;color:#fff;padding:2px 8px;border-radius:100px;font-size:10px">직접 입력</span>'
+          +'</div>'
+          +'<div style="display:flex;flex-direction:column;gap:10px">'
+
+            +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+              +'<div>'
+                +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">✅ 과제 점검</div>'
+                +'<select id="lp-homework-check" style="width:100%;padding:8px 10px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff">'
+                  +'<option value="">선택</option>'
+                  +'<option value="완료" '+(existing&&existing.homework_check==='완료'?'selected':'')+'>✅ 완료</option>'
+                  +'<option value="미완료" '+(existing&&existing.homework_check==='미완료'?'selected':'')+'>❌ 미완료</option>'
+                  +'<option value="미제출" '+(existing&&existing.homework_check==='미제출'?'selected':'')+'>📭 미제출</option>'
+                  +'<option value="일부완료" '+(existing&&existing.homework_check==='일부완료'?'selected':'')+'>🔸 일부완료</option>'
+                +'</select>'
+              +'</div>'
+              +'<div>'
+                +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">📋 N제 점검</div>'
+                +'<select id="lp-naje-check" style="width:100%;padding:8px 10px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff">'
+                  +'<option value="">선택</option>'
+                  +'<option value="완료" '+(existing&&existing.naje_check==='완료'?'selected':'')+'>✅ 완료</option>'
+                  +'<option value="미완료" '+(existing&&existing.naje_check==='미완료'?'selected':'')+'>❌ 미완료</option>'
+                  +'<option value="미제출" '+(existing&&existing.naje_check==='미제출'?'selected':'')+'>📭 미제출</option>'
+                  +'<option value="일부완료" '+(existing&&existing.naje_check==='일부완료'?'selected':'')+'>🔸 일부완료</option>'
+                +'</select>'
+              +'</div>'
+            +'</div>'
+
+            +'<div>'
+              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">⚠️ 벌점</div>'
+              +'<div style="display:flex;gap:8px;align-items:center">'
+                +'<button onclick="lpPenaltyAdj(-1)" style="width:32px;height:32px;border:1.5px solid #fde68a;border-radius:8px;background:#fff;font-size:16px;font-weight:700;cursor:pointer;color:#b45309">−</button>'
+                +'<input type="number" id="lp-penalty" value="'+(existing&&existing.penalty!=null?existing.penalty:0)+'" min="0" style="flex:1;padding:8px;border:1.5px solid #fde68a;border-radius:8px;font-size:16px;font-weight:700;text-align:center;outline:none">'
+                +'<button onclick="lpPenaltyAdj(1)" style="width:32px;height:32px;border:1.5px solid #fde68a;border-radius:8px;background:#fff;font-size:16px;font-weight:700;cursor:pointer;color:#b45309">+</button>'
+                +'<span style="font-size:12px;color:#9ca3af">점</span>'
+              +'</div>'
+            +'</div>'
+
+          +'</div>'
+        +'</div>'
+
+        // 저장 버튼
+        +'<div style="display:flex;gap:8px">'
+          +'<button onclick="document.getElementById(\'lp-write-modal\').remove()" style="flex:1;padding:11px;border:1.5px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#6b7280;font-size:13px;font-weight:600;cursor:pointer">취소</button>'
+          +'<button onclick="saveLearningProgress(\''+studentId+'\',\''+classId+'\',\''+logDate+'\')" style="flex:2;padding:11px;border:none;border-radius:10px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button>'
+        +'</div>'
+
+      +'</div>'
+    +'</div>';
+
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+function lpPenaltyAdj(delta){
+  var el = document.getElementById('lp-penalty');
+  if(!el) return;
+  var v = parseInt(el.value)||0;
+  el.value = Math.max(0, v + delta);
+}
+
+async function saveLearningProgress(studentId, classId, logDate){
+  var homeworkCheck = (document.getElementById('lp-homework-check')||{}).value||'';
+  var najeCheck     = (document.getElementById('lp-naje-check')||{}).value||'';
+  var penalty       = parseInt((document.getElementById('lp-penalty')||{}).value)||0;
+
+  var {error} = await db.from('learning_progress').upsert({
+    student_id:     studentId,
+    class_id:       classId,
+    log_date:       logDate,
+    teacher_id:     currentUser.id,
+    homework_check: homeworkCheck,
+    naje_check:     najeCheck,
+    penalty:        penalty,
+    updated_at:     new Date().toISOString()
+  }, {onConflict: 'student_id,class_id,log_date'});
+
+  if(error){ alert('저장 실패: '+error.message); return; }
+
+  document.getElementById('lp-write-modal').remove();
+
+  var toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#7c3aed;color:#fff;padding:10px 22px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
+  toast.textContent = '✅ 학습진행표가 저장됐습니다';
+  document.body.appendChild(toast);
+  setTimeout(function(){ toast.remove(); }, 2200);
+}
+
 async function initPotential(){
   // 선생님/데스크: 배점 설정만 숨김 (관리자 전용), 리포트는 표시
   var scoreConfigBtn = document.getElementById('pt-score-config-btn');
