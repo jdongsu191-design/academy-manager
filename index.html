@@ -18873,21 +18873,16 @@ async function loadWorkLog(){
     .eq('role','student').eq('class_id',classId).eq('status','active').order('name');
   const activeIds = new Set((activeStuds||[]).map(s=>s.id));
 
-  const pastIds = studentLogs
-    .map(sl=>sl.student_id)
-    .filter(id => id && !activeIds.has(id)); // null 제외
-  let pastStudents = [];
-  if(pastIds.length > 0){
-    const{data:pastData} = await db.from('users').select('*').in('id', pastIds);
-    pastStudents = (pastData||[]).map(s=>({...s, _isInactive: true}));
-  }
+  // 기록에 있는 학생 중 현재 반에 없는 학생 (퇴원 or 반 이동)
+  // 옵션 A: 현재 이 반 소속이 아닌 학생은 표시하지 않음
+  // → missingStudents는 사용하지 않고 deletedPlaceholders(이름 삭제된 경우)만 보존
 
   const deletedLogs = studentLogs.filter(sl => !sl.student_id);
   const deletedPlaceholders = deletedLogs.map((sl, i) => ({
     id: `deleted_${sl.id}`, name: '삭제된 학생', _isDeleted: true, _logId: sl.id
   }));
 
-  wlStudents = [...(activeStuds||[]), ...pastStudents, ...deletedPlaceholders]
+  wlStudents = [...(activeStuds||[]), ...deletedPlaceholders]
     .sort((a,b) => a.name.localeCompare(b.name, 'ko'));
 
   // 개별 진도/숙제 복원
@@ -18902,10 +18897,8 @@ function renderWlStudentTable(students, studentLogs){
     return;
   }
   tbody.innerHTML = students.map(s => {
-    const rowBg = s._isInactive ? 'background:#fafafa;opacity:0.75' : s._isDeleted ? 'background:#fafafa;opacity:0.5' : '';
-    const badge = s._isInactive
-      ? '<span style="font-size:10px;background:#fecaca;color:#991b1b;padding:1px 5px;border-radius:4px;margin-left:4px">퇴원</span>'
-      : s._isDeleted
+    const rowBg = s._isDeleted ? 'background:#fafafa;opacity:0.5' : '';
+    const badge = s._isDeleted
       ? '<span style="font-size:10px;background:#e5e7eb;color:#6b7280;padding:1px 5px;border-radius:4px;margin-left:4px">삭제됨</span>'
       : s._isTemp
       ? '<span style="font-size:10px;background:#EAF3DE;color:#3B6D11;padding:1px 5px;border-radius:4px;margin-left:4px">보강</span>'
@@ -19424,7 +19417,9 @@ async function saveWorkLog(){
       if(!sid) continue;
       const attendance = row.querySelector('[data-field="attendance"]').value;
       const n_count = row.querySelector('[data-field="n_count"]').value;
-      const homework_done = row.querySelector('[data-field="homework_done"]').value === 'true';
+      const homework_done_raw = row.querySelector('[data-field="homework_done"]').value;
+      // '' → null, 'true'/'false'/'partial' → 그대로 text 저장
+      const homework_done = homework_done_raw === '' ? null : homework_done_raw;
       const test_score = row.querySelector('[data-field="test_score"]').value;
       const note = row.querySelector('[data-field="note"]').value;
 
