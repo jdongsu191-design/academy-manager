@@ -21224,11 +21224,7 @@ async function openLpViewModal(studentId, studentName, classId, className){
   var today = new Date();
   var curYear = today.getFullYear();
   var curMonth = today.getMonth();
-  if(lps && lps.length){
-    var lastDate = lps[lps.length-1].log_date;
-    var parts = lastDate.split('-');
-    curYear = parseInt(parts[0]); curMonth = parseInt(parts[1])-1;
-  }
+  // always use today as calendar base
 
   var modal = document.createElement('div');
   modal.id = 'lp-view-modal';
@@ -21323,19 +21319,24 @@ function lpSelectDate(dateStr){
   if(!detail)return;
   var d=dateStr.replace(/-/g,'.');
   detail.style.display='block';
+  var attendMap={'present':'\u2705 \ucd9c\uc11d','late':'\u23f0 \uc9c0\uac01','absent':'\u274c \uacb0\uc11d','makeup':'\uD83D\uDD04 \ubcf4\uac15'};
   if(lp){
     detail.innerHTML=
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;gap:6px">'
         +'<div style="font-size:13px;font-weight:800;color:#4c1d95">'+d+'</div>'
         +'<div style="display:flex;gap:4px;flex-wrap:wrap">'
+          +(lp.attendance?'<span style="font-size:10px;background:#dbeafe;color:#1d4ed8;padding:2px 7px;border-radius:100px;font-weight:700">'+(attendMap[lp.attendance]||lp.attendance)+'</span>':'')
           +(lp.homework_check?'<span style="font-size:10px;background:#7c3aed;color:#fff;padding:2px 7px;border-radius:100px;font-weight:700">\uacfc\uc81c '+lp.homework_check+'</span>':'')
           +(lp.naje_check?'<span style="font-size:10px;background:#7c3aed;color:#fff;padding:2px 7px;border-radius:100px;font-weight:700">N\uc81c '+lp.naje_check+'</span>':'')
           +(lp.penalty?'<span style="font-size:10px;background:#f59e0b;color:#fff;padding:2px 7px;border-radius:100px;font-weight:700">\ubc8c\uc810 '+lp.penalty+'\uc810</span>':'')
         +'</div>'
       +'</div>'
       +(lp.progress?'<div style="font-size:12px;color:#374151;margin-bottom:5px;line-height:1.6"><b>\uD83D\uDCD6 \uc9c4\ub3c4:</b> '+_esc(lp.progress)+'</div>':'')
-      +(lp.homework?'<div style="font-size:12px;color:#374151;line-height:1.6"><b>\uD83D\uDCDD \uc219\uc81c:</b> '+_esc(lp.homework)+'</div>':'')
-      +((!lp.homework_check&&!lp.naje_check&&!lp.penalty&&!lp.progress&&!lp.homework)?'<div style="font-size:12px;color:#9ca3af">\ub0b4\uc6a9 \uc5c6\uc74c</div>':'');
+      +(lp.homework?'<div style="font-size:12px;color:#374151;line-height:1.6;margin-bottom:5px"><b>\uD83D\uDCDD \uc219\uc81c:</b> '+_esc(lp.homework)+'</div>':'')
+      +(!lp.attendance&&!lp.homework_check&&!lp.naje_check&&!lp.penalty&&!lp.progress&&!lp.homework?'<div style="font-size:12px;color:#9ca3af">\ub0b4\uc6a9 \uc5c6\uc74c</div>':'')
+      +'<div style="display:flex;gap:6px;margin-top:8px">'
+        +'<button onclick="lpDeleteFromCal(\''+dateStr+'\')" style="padding:5px 10px;border:1px solid #fca5a5;border-radius:7px;background:#fef2f2;color:#dc2626;font-size:11px;font-weight:700;cursor:pointer">\uD83D\uDDD1 \uc0ad\uc81c</button>'
+      +'</div>';
     if(writeBtn){
       writeBtn.textContent='\uD83D\uDCDD '+d+' \uc218\uc815';
       writeBtn.onclick=function(){document.getElementById('lp-view-modal').remove();openLpWriteModal(s.studentId,s.studentName,s.classId,s.className,dateStr);};
@@ -21348,6 +21349,28 @@ function lpSelectDate(dateStr){
     }
   }
 }
+
+async function lpDeleteFromCal(dateStr){
+  var s=window._lpCalState; if(!s)return;
+  var d=dateStr.replace(/-/g,'.');
+  if(!confirm(d+' \ud559\uc2b5\uc9c4\ud589\ud45c\ub97c \uc0ad\uc81c\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?')) return;
+  var {error}=await db.from('learning_progress')
+    .delete().eq('student_id',s.studentId).eq('class_id',s.classId).eq('log_date',dateStr);
+  if(error){alert('\uc0ad\uc81c \uc2e4\ud328: '+error.message);return;}
+  delete s.lpByDate[dateStr];
+  lpRenderCalendar();
+  var detail=document.getElementById('lp-cal-detail');
+  if(detail)detail.style.display='none';
+  var writeBtn=document.getElementById('lp-write-from-cal');
+  if(writeBtn){writeBtn.textContent='\uD83D\uDCDD \uc0c8\ub85c \uc791\uc131';writeBtn.onclick=function(){document.getElementById('lp-view-modal').remove();openLpWriteModal(s.studentId,s.studentName,s.classId,s.className);};}
+  var toast=document.createElement('div');
+  toast.style.cssText='position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#dc2626;color:#fff;padding:10px 22px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
+  toast.textContent='\uD83D\uDDD1 '+d+' \ud559\uc2b5\uc9c4\ud589\ud45c \uc0ad\uc81c\ub428';
+  document.body.appendChild(toast);
+  setTimeout(function(){toast.remove();},2200);
+}
+
+
 async function openLpWriteModal(studentId, studentName, classId, className, initDate){
   var ex = document.getElementById('lp-write-modal');
   if(ex) ex.remove();
@@ -21406,6 +21429,16 @@ async function openLpWriteModal(studentId, studentName, classId, className, init
             +'<span style="background:#f59e0b;color:#fff;padding:2px 8px;border-radius:100px;font-size:10px">직접 입력</span>'
           +'</div>'
           +'<div style="display:flex;flex-direction:column;gap:10px">'
+            +'<div>'
+              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">🏫 출결</div>'
+              +'<select id="lp-attendance" style="width:100%;padding:8px 10px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff">'
+                +'<option value="">선택</option>'
+                +'<option value="present">✅ 출석</option>'
+                +'<option value="late">⏰ 지각</option>'
+                +'<option value="absent">❌ 결석</option>'
+                +'<option value="makeup">🔄 보강</option>'
+              +'</select>'
+            +'</div>'
             +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
               +'<div>'
                 +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">✅ 과제 점검</div>'
@@ -21443,6 +21476,7 @@ async function openLpWriteModal(studentId, studentName, classId, className, init
         // 저장 버튼
         +'<div style="display:flex;gap:8px">'
           +'<button onclick="document.getElementById(\'lp-write-modal\').remove()" style="flex:1;padding:11px;border:1.5px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#6b7280;font-size:13px;font-weight:600;cursor:pointer">취소</button>'
+          +'<button onclick="deleteLearningProgress(\''+studentId+'\',\''+classId+'\')" style="padding:11px 14px;border:1.5px solid #fca5a5;border-radius:10px;background:#fef2f2;color:#dc2626;font-size:13px;font-weight:600;cursor:pointer">🗑</button>'
           +'<button onclick="saveLearningProgress(\''+studentId+'\',\''+classId+'\')" style="flex:2;padding:11px;border:none;border-radius:10px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button>'
         +'</div>'
 
@@ -21459,47 +21493,70 @@ async function openLpWriteModal(studentId, studentName, classId, className, init
 async function lpLoadWorkLog(studentId, classId){
   var dateEl = document.getElementById('lp-date-input');
   var date = dateEl ? dateEl.value : new Date().toISOString().split('T')[0];
-  var statusEl = document.getElementById('lp-worklog-status');
-  var progressEl = document.getElementById('lp-progress-input');
-  var homeworkEl = document.getElementById('lp-homework-input');
-  var hwCheckEl  = document.getElementById('lp-homework-check');
-  var najeEl     = document.getElementById('lp-naje-check');
-  var penaltyEl  = document.getElementById('lp-penalty');
-  if(statusEl) statusEl.textContent = '불러오는 중...';
+  var statusEl    = document.getElementById('lp-worklog-status');
+  var progressEl  = document.getElementById('lp-progress-input');
+  var homeworkEl  = document.getElementById('lp-homework-input');
+  var hwCheckEl   = document.getElementById('lp-homework-check');
+  var najeEl      = document.getElementById('lp-naje-check');
+  var penaltyEl   = document.getElementById('lp-penalty');
+  var attendEl    = document.getElementById('lp-attendance');
+  if(statusEl) statusEl.textContent = '\ubd88\ub7ec\uc624\ub294 \uc911...';
 
-  // 해당 날짜 업무일지 로드
+  // 1) 정확한 날짜 먼저 검색
   var {data:logs} = await db.from('work_logs')
     .select('*').eq('teacher_id', currentUser.id).eq('class_id', classId).eq('log_date', date);
   var log = logs && logs[0] ? logs[0] : null;
 
-  // 학생 개별 진도/숙제
-  var indivProgress = '', indivHomework = '';
+  // 2) 없으면 선택 날짜 이전 가장 최근 업무일지 fallback
+  if(!log){
+    var {data:prevLogs} = await db.from('work_logs')
+      .select('*').eq('teacher_id', currentUser.id).eq('class_id', classId)
+      .lte('log_date', date).order('log_date', {ascending:false}).limit(1);
+    log = prevLogs && prevLogs[0] ? prevLogs[0] : null;
+  }
+
+  // 3) 학생 개별 진도/숙제/출결 로드
+  var indivProgress = '', indivHomework = '', stuAttendance = '';
   if(log){
     var {data:sl} = await db.from('work_log_students')
       .select('*').eq('log_id', log.id).eq('student_id', studentId).maybeSingle();
-    if(sl){ indivProgress = sl.individual_progress||''; indivHomework = sl.individual_homework||''; }
+    if(sl){
+      indivProgress  = sl.individual_progress || '';
+      indivHomework  = sl.individual_homework || '';
+      stuAttendance  = sl.attendance || '';
+    }
   }
 
-  // 진도/숙제 채우기 (개별 우선)
+  // 4) 진도/숙제 채우기 (개별 우선, 없으면 공통)
   var progressText = indivProgress || (log ? log.progress||'' : '');
   var homeworkText = indivHomework || (log ? log.homework||'' : '');
   if(progressEl) progressEl.value = progressText;
   if(homeworkEl) homeworkEl.value = homeworkText;
+  if(attendEl)   attendEl.value   = stuAttendance;
 
+  // 5) 상태 메시지
   if(statusEl){
-    statusEl.textContent = log
-      ? date.replace(/-/g,'.')+'  업무일지 자동반영'
-      : '해당 날짜 업무일지 없음 (직접 입력 가능)';
-    statusEl.style.color = log ? '#7c3aed' : '#ef4444';
+    if(log){
+      var logDateStr = log.log_date.replace(/-/g,'.');
+      var note = (indivProgress||indivHomework) ? ' (\uac1c\ubcc4 \uc9c4\ub3c4/\uc219\uc81c \uc801\uc6a9)' : ' (\uacf5\ud1b5 \uc9c4\ub3c4/\uc219\uc81c \uc801\uc6a9)';
+      statusEl.textContent = logDateStr + ' \uc5c5\ubb34\uc77c\uc9c0 \uc790\ub3d9\ubc18\uc601' + note;
+      statusEl.style.color = '#7c3aed';
+    } else {
+      statusEl.textContent = '\uc5c5\ubb34\uc77c\uc9c0 \uc5c6\uc74c \u2014 \uc9c1\uc811 \uc785\ub825\ud558\uc138\uc694';
+      statusEl.style.color = '#ef4444';
+    }
   }
 
-  // 기존 학습진행표 데이터 복원
+  // 6) 기존 학습진행표 데이터 복원
   var {data:existing} = await db.from('learning_progress')
     .select('*').eq('student_id', studentId).eq('class_id', classId).eq('log_date', date).maybeSingle();
   if(existing){
     if(hwCheckEl && existing.homework_check) hwCheckEl.value = existing.homework_check;
     if(najeEl    && existing.naje_check)     najeEl.value    = existing.naje_check;
     if(penaltyEl && existing.penalty != null) penaltyEl.value = existing.penalty;
+    if(attendEl  && existing.attendance)     attendEl.value  = existing.attendance;
+    if(existing.progress && progressEl) progressEl.value = existing.progress;
+    if(existing.homework && homeworkEl) homeworkEl.value = existing.homework;
   } else {
     if(hwCheckEl) hwCheckEl.value = '';
     if(najeEl)    najeEl.value    = '';
@@ -21513,6 +21570,25 @@ function lpPenaltyAdj(delta){
   el.value = Math.max(0, v + delta);
 }
 
+async function deleteLearningProgress(studentId, classId){
+  var logDate = (document.getElementById('lp-date-input')||{}).value;
+  if(!logDate){ alert('\ub0a0\uc9dc\uac00 \uc120\ud0dd\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4'); return; }
+  if(!confirm(logDate.replace(/-/g,'.')+' \ud559\uc2b5\uc9c4\ud589\ud45c\ub97c \uc0ad\uc81c\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?')) return;
+
+  var {error} = await db.from('learning_progress')
+    .delete().eq('student_id', studentId).eq('class_id', classId).eq('log_date', logDate);
+
+  if(error){ alert('\uc0ad\uc81c \uc2e4\ud328: '+error.message); return; }
+
+  document.getElementById('lp-write-modal').remove();
+
+  var toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#dc2626;color:#fff;padding:10px 22px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
+  toast.textContent = '\uD83D\uDDD1 \ud559\uc2b5\uc9c4\ud589\ud45c\uac00 \uc0ad\uc81c\ub418\uc5c8\uc2b5\ub2c8\ub2e4';
+  document.body.appendChild(toast);
+  setTimeout(function(){ toast.remove(); }, 2200);
+}
+
 async function saveLearningProgress(studentId, classId){
   var logDate       = (document.getElementById('lp-date-input')||{}).value || new Date().toISOString().split('T')[0];
   var homeworkCheck = (document.getElementById('lp-homework-check')||{}).value||'';
@@ -21520,6 +21596,7 @@ async function saveLearningProgress(studentId, classId){
   var penalty       = parseInt((document.getElementById('lp-penalty')||{}).value)||0;
   var progressText  = (document.getElementById('lp-progress-input')||{}).value||'';
   var homeworkText  = (document.getElementById('lp-homework-input')||{}).value||'';
+  var attendance    = (document.getElementById('lp-attendance')||{}).value||'';
 
   var {error} = await db.from('learning_progress').upsert({
     student_id:     studentId,
@@ -21531,10 +21608,11 @@ async function saveLearningProgress(studentId, classId){
     penalty:        penalty,
     progress:       progressText,
     homework:       homeworkText,
+    attendance:     attendance,
     updated_at:     new Date().toISOString()
   }, {onConflict: 'student_id,class_id,log_date'});
 
-  if(error){ alert('저장 실패: '+error.message); return; }
+  if(error){ alert('\uc800\uc7a5 \uc2e4\ud328: '+error.message); return; }
 
   document.getElementById('lp-write-modal').remove();
 
