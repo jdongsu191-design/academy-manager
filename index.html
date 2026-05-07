@@ -911,6 +911,9 @@
         <button class="at-menu-item" id="amenu-notify" onclick="switchAdminTab('admin-notify',this);initAdminNotify()" style="display:none">
           <span class="at-menu-icon">📢</span>업데이트 알림
         </button>
+        <button class="at-menu-item" id="amenu-lp-view" onclick="switchAdminTab('admin-lp-view',this);initDeskLpView()" style="display:none">
+          <span class="at-menu-icon">📋</span>학습 진행표
+        </button>
         <button class="at-menu-item" id="amenu-homework" onclick="switchAdminTab('admin-homework',this);loadAdminHomework()">
           <span class="at-menu-icon">📝</span>숙제 현황
         </button>
@@ -2257,7 +2260,41 @@
     <div class="panel" id="panel-teacher-exam-list"></div>
 
     <div id="adminApp" style="display:none">
-      <!-- 알림 전송 패널 -->
+      <!-- 학습진행표 패널 (데스크 전용) -->
+    <div class="panel" id="panel-admin-lp-view">
+      <div style="font-size:18px;font-weight:700;color:#7c3aed;margin-bottom:4px">📋 학습 진행표</div>
+      <div style="font-size:12px;color:#8b5cf6;margin-bottom:16px">반별 학생 학습진행표를 조회하고 이미지를 저장합니다</div>
+
+      <!-- 필터 -->
+      <div class="card" style="margin-bottom:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          <div>
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">분원</div>
+            <select id="dlp-branch" onchange="dlpOnBranchChange()"
+              style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+              <option value="">전체</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">반</div>
+            <select id="dlp-class" onchange="dlpOnClassChange()"
+              style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none">
+              <option value="">반 선택</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">📅 날짜</div>
+          <input type="date" id="dlp-date" onchange="dlpLoadData()"
+            style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
+        </div>
+      </div>
+
+      <!-- 결과 영역 -->
+      <div id="dlp-result"></div>
+    </div>
+
+    <!-- 알림 전송 패널 -->
     <div class="panel" id="panel-admin-notify">
       <div style="max-width:600px">
         <div style="font-size:16px;font-weight:800;color:#1e293b;margin-bottom:4px">📢 업데이트 알림 전송</div>
@@ -5242,6 +5279,13 @@ function showApp(){
   // 마스터 계정에만 업데이트 알림 메뉴 표시
   var notifyBtn = document.getElementById('amenu-notify');
   if(notifyBtn) notifyBtn.style.display = (currentUser && currentUser.is_master === true) ? '' : 'none';
+
+  // 마스터 계정에도 학습진행표 메뉴 표시 (데스크는 권한에 따라 applyDeskSidebarFilter에서 처리)
+  var lpViewBtn = document.getElementById('amenu-lp-view');
+  if(lpViewBtn){
+    // admin 역할은 항상 표시, desk는 applyDeskSidebarFilter에서 처리, 나머지 숨김
+    lpViewBtn.style.display = (currentUser && currentUser.role === 'admin') ? '' : 'none';
+  }
 
   // DOM 수정: adminApp이 teacherApp 안에 있으면 꺼내기
   var adminApp = document.getElementById('adminApp');
@@ -9743,7 +9787,8 @@ var DESK_PERMISSIONS = [
   {key:'classes',      label:'\uD83C\uDFEB 반 관리',    group:'기타'},
   {key:'reading_room', label:'\uD83D\uDCDA 독서실',     group:'기타'},
   {key:'syllabus_view',label:'\uD83D\uDCD1 진도계획서 조회', group:'기타'},
-  {key:'exam_view',    label:'\uD83D\uDCCA 내신 분석표 조회', group:'기타'}
+  {key:'exam_view',    label:'\uD83D\uDCCA 내신 분석표 조회', group:'기타'},
+  {key:'lp_view',      label:'\uD83D\uDCCB 학습 진행표', group:'기타'}
 ];
 
 // 권한 키로 라벨 빠르게 찾기
@@ -9771,16 +9816,17 @@ var DESK_PERM_TO_MENUS = {
   'exam_view':     [{btnId:'amenu-exam-list',        tabId:'admin-exam-list',        parent:'amenu-naesin-group'}],
   'students':      [{btnId:'amenu-accounts',         tabId:'admin-accounts',         parent:null}],
   'classes':       [{btnId:'amenu-accounts',         tabId:'admin-accounts',         parent:null}],
-  'reading_room':  [{btnId:'amenu-rr-weekly',        tabId:'admin-rr-weekly',        parent:'amenu-reading-room-group'}]
+  'reading_room':  [{btnId:'amenu-rr-weekly',        tabId:'admin-rr-weekly',        parent:'amenu-reading-room-group'}],
+  'lp_view':       [{btnId:'amenu-lp-view',          tabId:'admin-lp-view',          parent:null}]
 };
 
 // 모든 관리자 사이드바 메뉴 ID (필터링 시 "허용 안 된 메뉴"를 숨기기 위해)
 var ADMIN_SIDEBAR_BUTTON_IDS = [
   'amenu-accounts', 'amenu-homework',
-  'amenu-naje-accordion', // 고등 일일N제 그룹
+  'amenu-naje-accordion',
   'amenu-beti', 'amenu-syllabus-group', 'amenu-branches', 'amenu-worklog',
   'amenu-monthly-report', 'amenu-weekend-group', 'amenu-reading-room-group',
-  'amenu-naesin-group'
+  'amenu-naesin-group', 'amenu-lp-view'
 ];
 
 // 데스크가 부여받은 메뉴만 사이드바에 표시 (나머지 숨김)
@@ -21071,6 +21117,167 @@ function showUpdateNotifyPopup(message){
     +'</div>';
 
   document.body.appendChild(popup);
+}
+
+/* ══════════════════════════════════════
+   데스크 학습진행표 뷰
+══════════════════════════════════════ */
+async function initDeskLpView(){
+  var today = new Date().toISOString().split('T')[0];
+  var dateEl = document.getElementById('dlp-date');
+  if(dateEl && !dateEl.value) dateEl.value = today;
+
+  // 분원 드롭다운 초기화
+  var branchSel = document.getElementById('dlp-branch');
+  if(branchSel){
+    var branches = window._allBranches || [];
+    var isDesk = currentUser && currentUser.role === 'desk';
+    var allowedBranches = (isDesk && Array.isArray(currentUser.branch_ids)) ? currentUser.branch_ids : null;
+    branchSel.innerHTML = '<option value="">전체</option>';
+    branches.forEach(function(b){
+      if(allowedBranches && allowedBranches.indexOf(b.id) === -1) return;
+      branchSel.innerHTML += '<option value="'+b.id+'">'+_esc(b.name)+'</option>';
+    });
+    // 데스크이고 분원이 1개면 자동 선택
+    if(allowedBranches && allowedBranches.length === 1) branchSel.value = allowedBranches[0];
+  }
+  dlpOnBranchChange();
+}
+
+function dlpOnBranchChange(){
+  var branchVal = (document.getElementById('dlp-branch')||{}).value||'';
+  var classSel = document.getElementById('dlp-class');
+  if(!classSel) return;
+  var isDesk = currentUser && currentUser.role === 'desk';
+  var allowedBranches = (isDesk && Array.isArray(currentUser.branch_ids)) ? currentUser.branch_ids : null;
+  var filtered = (allClasses||[]).filter(function(c){
+    if(allowedBranches && allowedBranches.indexOf(c.branch_id) === -1) return false;
+    if(branchVal && c.branch_id !== branchVal) return false;
+    return true;
+  }).sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); });
+  classSel.innerHTML = '<option value="">\ub2f4 \uc120\ud0dd</option>';
+  filtered.forEach(function(c){ classSel.innerHTML += '<option value="'+c.id+'">'+_esc(c.name)+'</option>'; });
+  var result = document.getElementById('dlp-result');
+  if(result) result.innerHTML = '';
+}
+function dlpOnClassChange(){
+  dlpLoadData();
+}
+
+async function dlpLoadData(){
+  var classId = (document.getElementById('dlp-class')||{}).value||'';
+  var date    = (document.getElementById('dlp-date')||{}).value||'';
+  var result  = document.getElementById('dlp-result');
+  if(!result) return;
+
+  if(!classId || !date){
+    result.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af;font-size:14px">반과 날짜를 선택하세요</div>';
+    return;
+  }
+
+  result.innerHTML = '<div style="text-align:center;padding:30px;color:#7c3aed;font-size:13px">불러오는 중...</div>';
+
+  // 해당 반 학생 목록
+  var {data:studs} = await db.from('users').select('id,name,school,grade')
+    .eq('class_id', classId).eq('status','active').order('name');
+  studs = studs || [];
+
+  if(!studs.length){
+    result.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af;font-size:14px">이 반에 학생이 없습니다</div>';
+    return;
+  }
+
+  // 해당 날짜 학습진행표 일괄 조회
+  var sids = studs.map(function(s){ return s.id; });
+  var {data:lps} = await db.from('learning_progress')
+    .select('*').in('student_id', sids).eq('class_id', classId).eq('log_date', date);
+
+  var lpByStudent = {};
+  (lps||[]).forEach(function(lp){ lpByStudent[lp.student_id] = lp; });
+
+  // 해당 날짜 업무일지 (진도/숙제 참고)
+  var {data:wls} = await db.from('work_logs')
+    .select('*').eq('class_id', classId).eq('log_date', date);
+  var wl = wls && wls[0] ? wls[0] : null;
+
+  // 날짜 표시
+  var dStr = date.replace(/-/g,'.');
+  var classObj = (allClasses||[]).find(function(c){ return c.id === classId; });
+  var className = classObj ? classObj.name : '';
+
+  // 티처 이름 조회 (learning_progress에서 teacher_id 사용)
+  var teacherName = '';
+  var firstLp = lps && lps[0];
+  if(firstLp && firstLp.teacher_id){
+    var tUser = (allUsers||[]).find(function(u){ return u.id === firstLp.teacher_id; });
+    teacherName = tUser ? tUser.name : '';
+  }
+  if(!teacherName && wl && wl.teacher_id){
+    var tUser2 = (allUsers||[]).find(function(u){ return u.id === wl.teacher_id; });
+    teacherName = tUser2 ? tUser2.name : '';
+  }
+
+  var attendMap = {'present':'출석','late':'지각','absent':'결석','makeup':'보강'};
+
+  var cards = studs.map(function(s){
+    var lp = lpByStudent[s.id];
+    var hasLp = !!lp;
+    var school = [s.school, s.grade].filter(Boolean).join(' ');
+    var attendStr = lp && lp.attendance ? (attendMap[lp.attendance]||lp.attendance) : '';
+    var hwColor = lp&&lp.homework_check==='완료'?'#16a34a':lp&&lp.homework_check?'#dc2626':'#374151';
+    var njColor = lp&&lp.naje_check==='완료'?'#16a34a':lp&&lp.naje_check?'#dc2626':'#374151';
+
+    return '<div class="card" style="margin-bottom:10px;border:'+(hasLp?'1.5px solid #ddd6fe':'1.5px solid #e5e7eb')+'">'
+      // 학생 헤더
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:'+(hasLp?'12px':'0')+'">'
+        +'<div>'
+          +'<div style="font-size:14px;font-weight:700;color:#1e293b">'+_esc(s.name)+'</div>'
+          +(school?'<div style="font-size:11px;color:#9ca3af;margin-top:1px">'+_esc(school)+'</div>':'')
+        +'</div>'
+        +'<div style="display:flex;align-items:center;gap:7px">'
+          +(hasLp?'<span style="font-size:10px;background:#f5f3ff;color:#7c3aed;padding:2px 8px;border-radius:100px;font-weight:600">기록 있음</span>':'<span style="font-size:10px;color:#d1d5db">기록 없음</span>')
+          +(hasLp?'<button onclick="dlpExportImage(\''+s.id+'\',\''+_esc(s.name)+'\',\''+classId+'\',\''+_esc(className)+'\',\''+date+'\',\''+(_esc(teacherName)||'').replace(/'/g,"'")+'\',false)" style="padding:4px 10px;background:#f5f3ff;color:#7c3aed;border:1.5px solid #ddd6fe;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer">🖼 저장</button>':'')
+          +(hasLp?'<button onclick="dlpExportImage(\''+s.id+'\',\''+_esc(s.name)+'\',\''+classId+'\',\''+_esc(className)+'\',\''+date+'\',\''+(_esc(teacherName)||'').replace(/'/g,"'")+'\',true)" style="padding:4px 10px;background:#f5f3ff;color:#7c3aed;border:1.5px solid #ddd6fe;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer">📋 복사</button>':'')
+        +'</div>'
+      +'</div>'
+      // 기록 상세
+      +(hasLp?
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:12px;margin-bottom:8px">'
+          +(attendStr?'<div style="background:#dbeafe;color:#1d4ed8;padding:4px 8px;border-radius:6px;font-weight:600;text-align:center">'+attendStr+'</div>':'<div></div>')
+          +(lp.homework_check?'<div style="background:#f5f3ff;color:'+hwColor+';padding:4px 8px;border-radius:6px;font-weight:600;text-align:center">과제 '+_esc(lp.homework_check)+'</div>':'<div></div>')
+          +(lp.naje_check?'<div style="background:#f5f3ff;color:'+njColor+';padding:4px 8px;border-radius:6px;font-weight:600;text-align:center">N제 '+_esc(lp.naje_check)+'</div>':'<div></div>')
+          +(lp.penalty?'<div style="background:#fef3c7;color:#b45309;padding:4px 8px;border-radius:6px;font-weight:700;text-align:center">벌점 '+lp.penalty+'</div>':'<div></div>')
+        +'</div>'
+        +(lp.note?'<div style="font-size:12px;color:#374151;background:#f9fafb;padding:7px 10px;border-radius:7px;border:1px solid #e5e7eb"><b>특이:</b> '+_esc(lp.note)+'</div>':'')
+      :'')
+    +'</div>';
+  }).join('');
+
+  result.innerHTML =
+    '<div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:8px">'+dStr+' · '+_esc(className)+'</div>'
+    +'<div style="font-size:12px;color:#6b7280;margin-bottom:12px">총 '+studs.length+'명 · 기록 '+(lps?lps.length:0)+'명</div>'
+    +cards;
+}
+
+async function dlpExportImage(studentId, studentName, classId, className, dateStr, teacherName, copyMode){
+  // learning_progress 데이터 직접 조회
+  var {data:lp} = await db.from('learning_progress')
+    .select('*').eq('student_id', studentId).eq('class_id', classId).eq('log_date', dateStr).maybeSingle();
+  if(!lp){ alert('저장된 학습진행표가 없습니다'); return; }
+
+  // _lpCalState 임시 설정
+  var _prev = window._lpCalState;
+  window._lpCalState = {
+    lpByDate: {},
+    teacherName: teacherName || (currentUser?currentUser.name:''),
+    className: className,
+    studentId: studentId,
+    studentName: studentName
+  };
+  window._lpCalState.lpByDate[dateStr] = lp;
+
+  await lpExportImage(dateStr, studentName, copyMode);
+  window._lpCalState = _prev;
 }
 
 async function initAdminNotify(){
