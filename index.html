@@ -21473,6 +21473,26 @@ async function openLpWriteModal(studentId, studentName, classId, className, init
           +'</div>'
         +'</div>'
 
+        // 개별 진도/숙제 섹션
+        +'<div style="background:#f0f4ff;border:1.5px solid #c7d2fe;border-radius:12px;padding:14px">'
+          +'<div style="font-size:11px;font-weight:700;color:#3730a3;letter-spacing:0.5px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">'
+            +'<span style="background:#4f46e5;color:#fff;padding:2px 8px;border-radius:100px;font-size:10px">개별 진도/숙제</span>'
+            +'<span style="font-size:10px;color:#9ca3af;font-weight:400">학생별 다른 내용이 있을 때 추가</span>'
+          +'</div>'
+          +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+            +'<div>'
+              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">📖 개별 진도</div>'
+              +'<div id="lp-indiv-progress-list" style="display:flex;flex-direction:column;gap:5px;margin-bottom:6px"></div>'
+              +'<button onclick="lpAddIndivRow(\'progress\')" style="width:100%;padding:6px;border:1.5px dashed #c7d2fe;border-radius:7px;background:#fff;color:#4f46e5;font-size:11px;font-weight:600;cursor:pointer">+ 추가</button>'
+            +'</div>'
+            +'<div>'
+              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">📝 개별 숙제</div>'
+              +'<div id="lp-indiv-homework-list" style="display:flex;flex-direction:column;gap:5px;margin-bottom:6px"></div>'
+              +'<button onclick="lpAddIndivRow(\'homework\')" style="width:100%;padding:6px;border:1.5px dashed #c7d2fe;border-radius:7px;background:#fff;color:#4f46e5;font-size:11px;font-weight:600;cursor:pointer">+ 추가</button>'
+            +'</div>'
+          +'</div>'
+        +'</div>'
+
         // 저장 버튼
         +'<div style="display:flex;gap:8px">'
           +'<button onclick="document.getElementById(\'lp-write-modal\').remove()" style="flex:1;padding:11px;border:1.5px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#6b7280;font-size:13px;font-weight:600;cursor:pointer">취소</button>'
@@ -21502,18 +21522,10 @@ async function lpLoadWorkLog(studentId, classId){
   var attendEl    = document.getElementById('lp-attendance');
   if(statusEl) statusEl.textContent = '\ubd88\ub7ec\uc624\ub294 \uc911...';
 
-  // 1) 정확한 날짜 먼저 검색
+  // 해당 날짜 정확히 일치하는 업무일지만 검색 (fallback 없음)
   var {data:logs} = await db.from('work_logs')
     .select('*').eq('teacher_id', currentUser.id).eq('class_id', classId).eq('log_date', date);
   var log = logs && logs[0] ? logs[0] : null;
-
-  // 2) 없으면 선택 날짜 이전 가장 최근 업무일지 fallback
-  if(!log){
-    var {data:prevLogs} = await db.from('work_logs')
-      .select('*').eq('teacher_id', currentUser.id).eq('class_id', classId)
-      .lte('log_date', date).order('log_date', {ascending:false}).limit(1);
-    log = prevLogs && prevLogs[0] ? prevLogs[0] : null;
-  }
 
   // 3) 학생 개별 진도/숙제/출결 로드
   var indivProgress = '', indivHomework = '', stuAttendance = '';
@@ -21561,12 +21573,18 @@ async function lpLoadWorkLog(studentId, classId){
     if(najeEl    && existing.naje_check)     najeEl.value    = existing.naje_check;
     if(penaltyEl && existing.penalty != null) penaltyEl.value = existing.penalty;
     if(attendEl  && existing.attendance)     attendEl.value  = existing.attendance;
-    if(existing.progress && progressEl) progressEl.value = existing.progress;
-    if(existing.homework && homeworkEl) homeworkEl.value = existing.homework;
+    // 저장된 진도/숙제 있으면 덮어씀 (업무일지 자동반영보다 우선)
+    if(existing.progress)  progressEl && (progressEl.value = existing.progress);
+    if(existing.homework)  homeworkEl && (homeworkEl.value = existing.homework);
+    // 저장된 개별 항목 복원
+    if(existing.individual_progress) lpRestoreIndiv('progress', JSON.parse(existing.individual_progress||'[]'));
+    if(existing.individual_homework)  lpRestoreIndiv('homework', JSON.parse(existing.individual_homework||'[]'));
   } else {
     if(hwCheckEl) hwCheckEl.value = '';
     if(najeEl)    najeEl.value    = '';
     if(penaltyEl) penaltyEl.value = '0';
+    // 업무일지 개별 항목 자동 반영
+    if(log) lpAutoFillIndivFromWorklog(studentId, log.id);
   }
 }
 function lpPenaltyAdj(delta){
@@ -21574,6 +21592,48 @@ function lpPenaltyAdj(delta){
   if(!el) return;
   var v = parseInt(el.value)||0;
   el.value = Math.max(0, v + delta);
+}
+
+function lpAddIndivRow(type, value){
+  var listEl = document.getElementById('lp-indiv-'+type+'-list');
+  if(!listEl) return;
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:4px;align-items:flex-start';
+  row.innerHTML =
+    '<textarea rows="2" placeholder="내용 입력..." style="flex:1;padding:5px 7px;border:1.5px solid #c7d2fe;border-radius:7px;font-size:11px;resize:none;outline:none;line-height:1.5;font-family:inherit">'+(value||'')+'</textarea>'
+    +'<button onclick="this.parentElement.remove()" style="flex-shrink:0;width:22px;height:22px;border:none;background:#fee2e2;color:#dc2626;border-radius:5px;font-size:12px;cursor:pointer;margin-top:2px">×</button>';
+  listEl.appendChild(row);
+}
+
+function lpGetIndivList(type){
+  var listEl = document.getElementById('lp-indiv-'+type+'-list');
+  if(!listEl) return [];
+  return Array.from(listEl.querySelectorAll('textarea'))
+    .map(function(ta){ return ta.value.trim(); })
+    .filter(Boolean);
+}
+
+function lpRestoreIndiv(type, items){
+  var listEl = document.getElementById('lp-indiv-'+type+'-list');
+  if(!listEl) return;
+  listEl.innerHTML = '';
+  (items||[]).forEach(function(v){ lpAddIndivRow(type, v); });
+}
+
+async function lpAutoFillIndivFromWorklog(studentId, logId){
+  // 업무일지의 개별 진도/숙제가 있으면 자동 반영
+  var {data:sl} = await db.from('work_log_students')
+    .select('individual_progress,individual_homework')
+    .eq('log_id', logId).eq('student_id', studentId).maybeSingle();
+  if(!sl) return;
+  if(sl.individual_progress){
+    var pList = document.getElementById('lp-indiv-progress-list');
+    if(pList && !pList.children.length) lpAddIndivRow('progress', sl.individual_progress);
+  }
+  if(sl.individual_homework){
+    var hList = document.getElementById('lp-indiv-homework-list');
+    if(hList && !hList.children.length) lpAddIndivRow('homework', sl.individual_homework);
+  }
 }
 
 async function deleteLearningProgress(studentId, classId){
@@ -21604,18 +21664,23 @@ async function saveLearningProgress(studentId, classId){
   var homeworkText  = (document.getElementById('lp-homework-input')||{}).value||'';
   var attendance    = (document.getElementById('lp-attendance')||{}).value||'';
 
+  var indivProgress = JSON.stringify(lpGetIndivList('progress'));
+  var indivHomework  = JSON.stringify(lpGetIndivList('homework'));
+
   var {error} = await db.from('learning_progress').upsert({
-    student_id:     studentId,
-    class_id:       classId,
-    log_date:       logDate,
-    teacher_id:     currentUser.id,
-    homework_check: homeworkCheck,
-    naje_check:     najeCheck,
-    penalty:        penalty,
-    progress:       progressText,
-    homework:       homeworkText,
-    attendance:     attendance,
-    updated_at:     new Date().toISOString()
+    student_id:          studentId,
+    class_id:            classId,
+    log_date:            logDate,
+    teacher_id:          currentUser.id,
+    homework_check:      homeworkCheck,
+    naje_check:          najeCheck,
+    penalty:             penalty,
+    progress:            progressText,
+    homework:            homeworkText,
+    attendance:          attendance,
+    individual_progress: indivProgress,
+    individual_homework: indivHomework,
+    updated_at:          new Date().toISOString()
   }, {onConflict: 'student_id,class_id,log_date'});
 
   if(error){ alert('\uc800\uc7a5 \uc2e4\ud328: '+error.message); return; }
