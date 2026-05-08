@@ -18877,10 +18877,26 @@ async function loadWorkLog(){
   // 옵션 A: 현재 이 반 소속이 아닌 학생은 표시하지 않음
   // → missingStudents는 사용하지 않고 deletedPlaceholders(이름 삭제된 경우)만 보존
 
+  // student_id가 null인 기록 처리
+  // - note가 [이름 ...] 형태 → 보강 학생 기록 (이름 파싱해서 표시)
+  // - note가 없거나 다른 형태 → 삭제된 학생
   const deletedLogs = studentLogs.filter(sl => !sl.student_id);
-  const deletedPlaceholders = deletedLogs.map((sl, i) => ({
-    id: `deleted_${sl.id}`, name: '삭제된 학생', _isDeleted: true, _logId: sl.id
-  }));
+  const deletedPlaceholders = deletedLogs.map((sl, i) => {
+    const noteText = sl.note || '';
+    const tempMatch = noteText.match(/^\[([^\]]+)\]/); // [이름 · 학교] 패턴
+    if(tempMatch){
+      // 보강 학생 기록: 이름만 추출해서 표시
+      const displayName = tempMatch[1].split('·')[0].trim();
+      return {
+        id: `deleted_${sl.id}`, name: displayName,
+        _isDeleted: false, _isTemp: true, _logId: sl.id,
+        _tempLabel: '보강기록'
+      };
+    }
+    return {
+      id: `deleted_${sl.id}`, name: '삭제된 학생', _isDeleted: true, _logId: sl.id
+    };
+  });
 
   wlStudents = [...(activeStuds||[]), ...deletedPlaceholders]
     .sort((a,b) => a.name.localeCompare(b.name, 'ko'));
@@ -18900,6 +18916,8 @@ function renderWlStudentTable(students, studentLogs){
     const rowBg = s._isDeleted ? 'background:#fafafa;opacity:0.5' : '';
     const badge = s._isDeleted
       ? '<span style="font-size:10px;background:#e5e7eb;color:#6b7280;padding:1px 5px;border-radius:4px;margin-left:4px">삭제됨</span>'
+      : s._tempLabel
+      ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:4px;margin-left:4px">'+s._tempLabel+'</span>'
       : s._isTemp
       ? '<span style="font-size:10px;background:#EAF3DE;color:#3B6D11;padding:1px 5px;border-radius:4px;margin-left:4px">보강</span>'
       : '';
@@ -18914,8 +18932,7 @@ function renderWlStudentTable(students, studentLogs){
       <td style="padding:8px 10px;font-size:12px;color:#6b7280;white-space:nowrap">${[s.school,s.grade].filter(Boolean).join(' ')||'-'}</td>
       <td style="padding:8px 10px;font-weight:600;white-space:nowrap">
         ${s.name}${badge}
-        ${s.enrolled_at&&!s._isInactive?`<div style="font-size:10px;color:#6b7280;margin-top:1px">입학 ${s.enrolled_at}</div>`:''}
-        ${s.withdrawn_at&&s._isInactive?`<div style="font-size:10px;color:var(--danger);margin-top:1px">퇴원 ${s.withdrawn_at}</div>`:''}
+        ${s.enrolled_at&&!s._isDeleted&&!s._isTemp?`<div style="font-size:10px;color:#6b7280;margin-top:1px">입학 ${s.enrolled_at}</div>`:''}
       </td>
       <td style="padding:8px 4px;text-align:center">
         <select data-sid="${s.id}" data-field="attendance" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:#fff">
@@ -18941,7 +18958,7 @@ function renderWlStudentTable(students, studentLogs){
           style="width:60px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:center">
       </td>
       <td style="padding:8px 4px">
-        <input type="text" data-sid="${s.id}" data-field="note" value="${sl.note||''}" placeholder="특이사항"
+        <input type="text" data-sid="${s.id}" data-field="note" value="${s._tempLabel ? (sl.note||'').replace(/^\[[^\]]+\]\s*/,'') : (sl.note||'')}" placeholder="특이사항"
           style="width:100%;min-width:80px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
       </td>
     </tr>`;
@@ -19436,7 +19453,7 @@ async function saveWorkLog(){
       if(realSid){
         await db.from('work_log_students').upsert({
           log_id: logId, student_id: realSid,
-          attendance, n_count: n_count || null,
+          attendance, n_count: (n_count !== '' ? n_count : null),
           homework_done, test_score, note: noteValue,
           individual_progress: indivProgress,
           individual_homework: indivHomework
@@ -19447,7 +19464,7 @@ async function saveWorkLog(){
           .ilike('note',`[${tempInfo.name}%`).single();
         if(existing.data){
           await db.from('work_log_students').update({
-            attendance, n_count: n_count || null,
+            attendance, n_count: (n_count !== '' ? n_count : null),
             homework_done, test_score, note: noteValue,
             individual_progress: indivProgress,
             individual_homework: indivHomework
@@ -19455,7 +19472,7 @@ async function saveWorkLog(){
         } else {
           await db.from('work_log_students').insert({
             log_id: logId, student_id: null,
-            attendance, n_count: n_count || null,
+            attendance, n_count: (n_count !== '' ? n_count : null),
             homework_done, test_score, note: noteValue,
             individual_progress: indivProgress,
             individual_homework: indivHomework
