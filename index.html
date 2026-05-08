@@ -25247,7 +25247,7 @@ async function generateTeacherMonthlyReport(){
       .gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
 
     var {data:transfers} = await db.from('transfer_requests')
-      .select('*, student:student_id(id,name,school,grade,naje_steps), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
+      .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
       .eq('status','approved')
       .or('from_teacher_id.eq.'+currentUser.id+',to_teacher_id.eq.'+currentUser.id)
       .gte('responded_at', monthStart+'T00:00:00')
@@ -25284,12 +25284,16 @@ function mrGetTeacherReportFromData(tid, d){
   var myClasses = (d.classes||[]).filter(function(c){ return c.teacher_id===tid; });
   var myClassIds = myClasses.map(function(c){ return c.id; });
 
-  var startStudents = (d.allStudents||[]).filter(function(s){
+  var _myIn  = (d.transfers||[]).filter(function(t){ return t.to_teacher&&t.to_teacher.id===tid; });
+  var _myOut = (d.transfers||[]).filter(function(t){ return t.from_teacher&&t.from_teacher.id===tid; });
+  var _inIds = new Set(_myIn.map(function(t){ return t.student&&t.student.id; }));
+  var _startBase = (d.allStudents||[]).filter(function(s){
     if(s.teacher_id !== tid) return false;
-    var enrolled = s.enrolled_at || '1900-01-01';
-    var withdrawn = s.withdrawn_at || '9999-12-31';
-    return enrolled < d.monthStart && withdrawn >= d.monthStart;
+    var ea=s.enrolled_at||'1900-01-01', wa=s.withdrawn_at||'9999-12-31';
+    return ea<d.monthStart && wa>=d.monthStart && !_inIds.has(s.id);
   });
+  var _startOut = _myOut.filter(function(t){ var s=t.student; if(!s) return false; var ea=s.enrolled_at||'1900-01-01',wa=s.withdrawn_at||'9999-12-31'; return ea<d.monthStart&&wa>=d.monthStart; });
+  var startStudents = _startBase.concat(_startOut.map(function(t){ return t.student; }));
 
   var endStudents = (d.allStudents||[]).filter(function(s){
     if(s.teacher_id !== tid) return false;
@@ -25304,8 +25308,8 @@ function mrGetTeacherReportFromData(tid, d){
     return s.teacher_id===tid && s.status==='inactive' && s.withdrawn_at >= d.monthStart && s.withdrawn_at <= d.monthEnd;
   });
 
-  var myIn = (d.transfers||[]).filter(function(t){ return t.to_teacher && t.to_teacher.id===tid; });
-  var myOut= (d.transfers||[]).filter(function(t){ return t.from_teacher && t.from_teacher.id===tid; });
+  var myIn = _myIn;
+  var myOut= _myOut;
 
   var groupByClass = function(students){
     var map={}, keys=[];
@@ -29699,7 +29703,7 @@ async function generateMonthlyReport(){
     .eq('role','student').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
 
   var {data: transfers} = await db.from('transfer_requests')
-    .select('*, student:student_id(id,name,school,grade,naje_steps), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
+    .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
     .eq('status','approved')
     .gte('responded_at', monthStart+'T00:00:00')
     .lte('responded_at', monthEnd+'T23:59:59');
@@ -29762,11 +29766,14 @@ function mrGetTeacherReport(tid){
   }
 
   var myStudents   = (d.allStudents||[]).filter(function(s){ return s.teacher_id===tid; });
-  var startStudents= myStudents.filter(function(s){ var ea=s.enrolled_at; return !ea||ea<d.monthStart; });
-  var myNew        = (d.newStudents||[]).filter(function(s){ return s.teacher_id===tid; });
-  var myWithdrawn  = myStudents.filter(function(s){ return s.status==='inactive'&&s.withdrawn_at&&s.withdrawn_at>=d.monthStart; });
   var myIn         = (d.transfers||[]).filter(function(t){ return t.to_teacher&&t.to_teacher.id===tid; });
   var myOut        = (d.transfers||[]).filter(function(t){ return t.from_teacher&&t.from_teacher.id===tid; });
+  var inIds        = new Set(myIn.map(function(t){ return t.student&&t.student.id; }));
+  var startBase    = myStudents.filter(function(s){ var ea=s.enrolled_at||'1900-01-01',wa=s.withdrawn_at||'9999-12-31'; return ea<d.monthStart&&wa>=d.monthStart&&!inIds.has(s.id); });
+  var startFromOut = myOut.filter(function(t){ var s=t.student; if(!s) return false; var ea=s.enrolled_at||'1900-01-01',wa=s.withdrawn_at||'9999-12-31'; return ea<d.monthStart&&wa>=d.monthStart; });
+  var startStudents= startBase.concat(startFromOut.map(function(t){ return t.student; }));
+  var myNew        = (d.newStudents||[]).filter(function(s){ return s.teacher_id===tid; });
+  var myWithdrawn  = myStudents.filter(function(s){ return s.status==='inactive'&&s.withdrawn_at&&s.withdrawn_at>=d.monthStart; });
   var endStudents  = myStudents.filter(function(s){ return s.status==='active' && (!s.enrolled_at || s.enrolled_at <= d.monthEnd); });
 
   return { teacher, getBranch, sg, najeLabel, groupByClass,
@@ -29949,7 +29956,7 @@ function mrBuildReportHTML(r, d, branchName, forImage){
   /* \u2500\u2500 인원 요약
      1일 시작 = 말일수강생 + 이달퇴원 + 이달전반OUT (모두 1일에 있었던 인원)  \u2500\u2500 */
   var newCnt=(d.newStudents||[]).filter(function(s){return s.teacher_id===teacher.id;}).length;
-  var startTotal=endStudents.length+r.myWithdrawn.length+r.myOut.length;
+  var startTotal=r.startStudents.length; // 1\uc77c \uc2dc\uc791: enrolled<monthStart && withdrawn>=monthStart \uc9c1\uc811 \uacc4\uc0b0
 
   var summaryItems=[
     {label:'1일 시작',val:startTotal,       c:'#334155'},
