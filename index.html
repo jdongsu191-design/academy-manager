@@ -30925,51 +30925,163 @@ function anrRender(){
 async function anrOpenDetail(setId, studentId){
   if(!_anrData){ alert('\uba3c\uc800 \uc870\ud68c\ud574\uc8fc\uc138\uc694'); return; }
 
-  // _anrData를 _najeResultData 형식으로 임시 매핑
-  // openNajeResultModal이 window._najeResultData를 참조하므로
-  var prevData = window._najeResultData;
-  window._najeResultData = {
-    sets: _anrData.sets,
-    students: _anrData.students,
-    assignmentsByset: _anrData.assignmentsByset,
-    problemsBySet: _anrData.problemsBySet,
-    answeredProblemsByStuSet: _anrData.answeredMap,
-    answersByStuSet: {}
-  };
+  var setInfo = (_anrData.sets||[]).find(function(x){ return x.id===setId; });
+  var stuInfo = (_anrData.students||[]).find(function(x){ return x.id===studentId; });
+  var titleStr = (stuInfo?stuInfo.name:'\ud559\uc0dd') + ' \u00B7 ' + (setInfo?setInfo.title:'N\uc81c');
 
-  await openNajeResultModal(setId, studentId);
+  // 기존 모달 제거
+  var existing = document.getElementById('anr-detail-modal');
+  if(existing) existing.remove();
 
-  // 모달이 닫힐 때 _najeResultData 원복
-  // X 버튼 / backdrop 클릭 모두 처리
-  var modal = document.getElementById('modal-naje-result-detail');
-  if(modal){
-    // 기존 훅 제거
-    if(modal._anrPrevClose) modal.removeEventListener('click', modal._anrPrevClose);
+  // body에 모달 동적 생성 (패널 종속 X)
+  var backdrop = document.createElement('div');
+  backdrop.id = 'anr-detail-modal';
+  backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  backdrop.innerHTML =
+    '<div style="background:#f0f0f0;border-radius:16px;padding:20px;width:95vw;max-width:920px;max-height:92vh;overflow-y:auto;position:relative">'
+    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:10px">'
+    +'<div id="anr-modal-title" style="font-size:16px;font-weight:700;color:#1F3A51;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(titleStr)+'</div>'
+    +'<button id="anr-modal-close" style="border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280;flex-shrink:0">\u2715</button>'
+    +'</div>'
+    +'<div id="anr-modal-summary"></div>'
+    +'<div id="anr-modal-detail"><div class="loading"><div class="spinner"></div>\ubd88\ub7ec\uc624\ub294 \uc911...</div></div>'
+    +'</div>';
+  document.body.appendChild(backdrop);
 
-    function _anrRestoreOnClose(e){
-      // backdrop 클릭 or 모달 닫힌 상태 감지
-      var clickedClose = e.target === modal
-        || (e.target && e.target.getAttribute && e.target.getAttribute('onclick') === "closeModal('naje-result-detail')");
-      if(clickedClose){
-        window._najeResultData = prevData;
-        modal.removeEventListener('click', _anrRestoreOnClose);
-        modal._anrPrevClose = null;
-      }
-    }
-    modal._anrPrevClose = _anrRestoreOnClose;
-    modal.addEventListener('click', _anrRestoreOnClose);
-
-    // X 버튼에도 직접 훅
-    var closeBtn = modal.querySelector('button[onclick*="closeModal"]');
-    if(closeBtn){
-      var origOnclick = closeBtn.onclick;
-      closeBtn.onclick = function(e){
-        window._najeResultData = prevData;
-        if(origOnclick) origOnclick.call(this, e);
-        closeBtn.onclick = origOnclick;
-      };
-    }
+  // 닫기 이벤트
+  function closeAnrModal(){
+    var m = document.getElementById('anr-detail-modal');
+    if(m) m.remove();
   }
+  backdrop.addEventListener('click', function(e){ if(e.target===backdrop) closeAnrModal(); });
+  document.getElementById('anr-modal-close').addEventListener('click', closeAnrModal);
+
+  // 데이터 조회 및 렌더링
+  var assignmentRows = (_anrData.assignmentsByset[setId])||[];
+  var myAssignment = assignmentRows.find(function(a){ return a.student_id===studentId; });
+  var assignedSteps = (myAssignment&&Array.isArray(myAssignment.steps))?myAssignment.steps.slice():[];
+  var excludedArr   = (myAssignment&&Array.isArray(myAssignment.excluded_problems))?myAssignment.excluded_problems:[];
+  var excludedSet   = new Set(excludedArr);
+
+  var stageStartNums=[1,9,17,25,33,41,49,57,65,73,81];
+  var stageEndNums  =[8,16,24,32,40,48,56,64,72,80,999];
+  var stepRangeNumbers=new Set();
+  assignedSteps.forEach(function(sn){
+    var idx=sn-1;
+    if(idx<0||idx>=stageStartNums.length) return;
+    for(var n=stageStartNums[idx];n<=stageEndNums[idx];n++) stepRangeNumbers.add(n);
+  });
+
+  // DB 조회
+  var {data: problems} = await db.from('naje_problems')
+    .select('id,problem_number,correct_answer,image_url')
+    .eq('set_id',setId).order('problem_number');
+  var {data: answers} = await db.from('naje_answers')
+    .select('problem_id,answer,answered_at')
+    .eq('set_id',setId).eq('student_id',studentId);
+  var ansMap={};
+  (answers||[]).forEach(function(a){ ansMap[a.problem_id]=a.answer; });
+
+  var filteredProblems=(problems||[]);
+  if(assignedSteps.length>0){
+    filteredProblems=filteredProblems.filter(function(p){ return stepRangeNumbers.has(p.problem_number); });
+  }
+
+  // 렌더링 (_renderNajeResultModalBody 로직 인라인 - 타겟 el만 anr-modal-* 로 변경)
+  var summaryEl = document.getElementById('anr-modal-summary');
+  var detailEl  = document.getElementById('anr-modal-detail');
+  if(!summaryEl||!detailEl) return;
+
+  if(assignedSteps.length===0){
+    summaryEl.innerHTML='';
+    detailEl.innerHTML='<div style="text-align:center;padding:30px 20px;color:#9ca3af;font-size:13px"><div style="font-size:36px;margin-bottom:10px">\u26A0\uFE0F</div><div>\uc774 \ud559\uc0dd\uc5d0\uac8c \ubd80\uc5ec\ub41c \ub2e8\uacc4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4</div></div>';
+    return;
+  }
+
+  var correct=0,wrong=0,unanswered=0;
+  var assignedProblems=filteredProblems.filter(function(p){ return !excludedSet.has(p.problem_number); });
+  assignedProblems.forEach(function(p){
+    var ans=(ansMap[p.id]||'').toString().trim();
+    if(!ans){unanswered++;return;}
+    if(p.correct_answer&&normalizeAnswer(ans)===normalizeAnswer(p.correct_answer)) correct++;
+    else if(p.correct_answer) wrong++;
+  });
+  var totalScored=assignedProblems.filter(function(p){return p.correct_answer;}).length;
+  var pct=(correct+wrong)>0?Math.round(correct/totalScored*100):null;
+
+  var sortedSteps=assignedSteps.slice().sort(function(a,b){return a-b;});
+  var assignedCount=assignedProblems.length;
+  var excludedCount=filteredProblems.length-assignedCount;
+  var excludedNote=excludedCount>0
+    ?' <span style="color:#92400e;font-weight:700">('+assignedCount+'\ubb38\ud56d \ubd80\uc5ec, '+excludedCount+'\ubb38\ud56d \uc81c\uc678)</span>'
+    :' (\uc804\uccb4 '+assignedCount+'\ubb38\ud56d)';
+
+  summaryEl.innerHTML=
+    '<div style="font-size:12px;color:#6b7280;margin-bottom:10px;padding:8px 10px;background:#eff6ff;border:1px solid #dbeafe;border-radius:8px">'
+    +'\uD83D\uDCC4 <b style="color:#1e40af">\ubd80\uc5ec \ub2e8\uacc4:</b> '+sortedSteps.join(', ')+'\ub2e8\uacc4'+excludedNote
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">'
+    +'<div style="text-align:center;padding:12px;background:#EAF3DE;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#3B6D11">'+correct+'</div><div style="font-size:11px;color:#3B6D11">\uc815\ub2f5</div></div>'
+    +'<div style="text-align:center;padding:12px;background:#FCEBEB;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#E24B4A">'+wrong+'</div><div style="font-size:11px;color:#E24B4A">\uc624\ub2f5</div></div>'
+    +'<div style="text-align:center;padding:12px;background:#f5f6fa;border-radius:10px"><div style="font-size:22px;font-weight:700;color:#6b7280">'+unanswered+'</div><div style="font-size:11px;color:#6b7280">\ubbf8\uc81c\ucd9c</div></div>'
+    +'<div style="text-align:center;padding:12px;background:#E6F1FB;border-radius:10px"><div style="font-size:22px;font-weight:700;color:var(--primary)">'+(pct!==null?pct+'%':'-')+'</div><div style="font-size:11px;color:var(--primary)">\uc815\ub2f5\ub960</div></div>'
+    +'</div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:#6b7280;padding:6px 4px 0;line-height:1.5">'
+    +'<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:#dcfce7;border:1px solid #86efac;border-radius:3px;display:inline-block"></span>\uc815\ub2f5</span>'
+    +'<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:#fee2e2;border:1px solid #fca5a5;border-radius:3px;display:inline-block"></span>\uc624\ub2f5</span>'
+    +'<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:#FEF3C7;border:1px solid #fcd34d;border-radius:3px;display:inline-block"></span>\uc815\ub2f5 \ubbf8\uc785\ub825</span>'
+    +'<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:#f5f6fa;border:1px solid #e5e7eb;border-radius:3px;display:inline-block"></span>\ubbf8\uc81c\ucd9c</span>'
+    +(excludedSet.size>0?'<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:#fafbfc;border:1px dashed #d1d5db;border-radius:3px;display:inline-block"></span>\ubd80\uc5ec \uc81c\uc678</span>':'')
+    +'</div>';
+
+  // 단계별 문제 렌더
+  var groups=najeGroupByStep(filteredProblems.map(function(p){return Object.assign({},p,{number:p.problem_number});}));
+  var html='';
+  groups.forEach(function(g){
+    var stepCorrect=0,stepAnswered=0,stepAssignedTotal=0,stepExcludedCount=0;
+    g.problems.forEach(function(p){
+      if(excludedSet.has(p.problem_number)){stepExcludedCount++;return;}
+      stepAssignedTotal++;
+      var a=(ansMap[p.id]||'').toString().trim();
+      if(a) stepAnswered++;
+      if(a&&p.correct_answer&&normalizeAnswer(a)===normalizeAnswer(p.correct_answer)) stepCorrect++;
+    });
+    var stepLabel=stepAssignedTotal===0?'\u2298 \ubaa8\ub450 \uc81c\uc678\ub428':stepAnswered>0?' '+stepCorrect+'/'+stepAssignedTotal:' \u2B1C \ubbf8\uc2dc\uc791';
+    var partialBadge=stepExcludedCount>0
+      ?'<span style="font-size:10px;font-weight:700;background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:100px;margin-left:6px">\u25D0 '+stepExcludedCount+'\uac1c \uc81c\uc678</span>':''  ;
+
+    html+='<div style="border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:10px;background:#fafbfc">';
+    html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">'
+      +'<div style="display:flex;align-items:center;flex-wrap:wrap">'+najeStageHeaderHTML(g.step,g.name,stepLabel)+partialBadge+'</div>'
+      +'</div>';
+    html+='<div style="display:grid;grid-template-columns:repeat(8,1fr);gap:5px">';
+    g.problems.forEach(function(p){
+      var isExcluded=excludedSet.has(p.problem_number);
+      if(isExcluded){
+        html+='<div style="background:#fafbfc;border:1px dashed #d1d5db;border-radius:7px;padding:6px 4px;text-align:center;line-height:1.2;opacity:0.55">'
+          +'<div style="font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:2px">'+p.problem_number+'\ubc88</div>'
+          +'<div style="font-size:13px;color:#9ca3af;font-weight:700">\u2298</div>'
+          +'<div style="font-size:9px;color:#9ca3af;margin-top:1px;line-height:1">\uc81c\uc678</div>'
+          +'</div>';
+        return;
+      }
+      var myAns=(ansMap[p.id]||'').toString().trim();
+      var hasCorrect=!!p.correct_answer;
+      var bg,fg,border2,mainContent,subContent='';
+      if(!myAns){ bg='#f5f6fa';fg='#9ca3af';border2='#e5e7eb';mainContent='\u2212'; }
+      else if(!hasCorrect){ bg='#FEF3C7';fg='#92400E';border2='#fcd34d';mainContent=myAns; }
+      else if(normalizeAnswer(myAns)===normalizeAnswer(p.correct_answer)){ bg='#dcfce7';fg='#15803d';border2='#86efac';mainContent=myAns+' \u2713'; }
+      else{ bg='#fee2e2';fg='#b91c1c';border2='#fca5a5';mainContent=myAns;
+        subContent='<div style="font-size:10px;color:#7f1d1d;font-weight:500;margin-top:2px;line-height:1">\uc815\ub2f5 '+_esc(p.correct_answer||'')+'</div>'; }
+      html+='<div style="background:'+bg+';border:1px solid '+border2+';border-radius:7px;padding:6px 4px;text-align:center;line-height:1.2">'
+        +'<div style="font-size:10px;color:#6b7280;font-weight:600;margin-bottom:2px">'+p.problem_number+'\ubc88</div>'
+        +'<div style="font-size:14px;color:'+fg+';font-weight:700">'+mainContent+'</div>'
+        +subContent
+        +'</div>';
+    });
+    html+='</div></div>';
+  });
+  detailEl.innerHTML=html;
 }
 
 /* ── 이미지 저장/복사 ── */
