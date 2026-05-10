@@ -7924,8 +7924,24 @@ async function addStudentsBulk(){
       status:'active', teacher_id:currentUser.id,
       student_code:newCode
     }).select('id').single();
-    if(error) fail.push(e.name);
-    else ok++;
+    if(error){ fail.push(e.name); }
+    else {
+      ok++;
+      // 주말프로그램 설정 초기 이력 저장
+      if(inserted && inserted.id){
+        var _enrollDate = e.enrolled || new Date().toISOString().split('T')[0];
+        await db.from('student_settings_history').upsert({
+          student_id: inserted.id,
+          changed_at: _enrollDate,
+          potential_yn: e.potentialYn || false,
+          potential_level: e.potentialLevel || null,
+          potential_attend_time: e.potentialTime || null,
+          bety_yn: false,
+          bety_level: null,
+          bety_attend_time: null
+        }, {onConflict: 'student_id,changed_at'});
+      }
+    }
   }
   btn.textContent='추가 완료';btn.disabled=false;
   if(fail.length) alert(`\u26A0\uFE0F ${ok}명 추가 완료, 실패: ${fail.join(', ')}`);
@@ -8730,6 +8746,18 @@ async function saveEditStudent(){
   const{error} = await db.from('users').update(updatePayload).eq('id',id);
   btn.textContent='저장';btn.disabled=false;
   if(error){alert('오류: '+error.message);return;}
+  // 주말프로그램 설정 변경 이력 저장
+  var _today = new Date().toISOString().split('T')[0];
+  await db.from('student_settings_history').upsert({
+    student_id: id,
+    changed_at: _today,
+    potential_yn: potential_yn,
+    potential_level: potential_level || null,
+    potential_attend_time: potential_attend_time || null,
+    bety_yn: bety_yn,
+    bety_level: bety_level || null,
+    bety_attend_time: bety_attend_time || null
+  }, {onConflict: 'student_id,changed_at'});
   closeModal('editStudent');
   if(_isAdminStudentEditMode){
     _isAdminStudentEditMode = false;
@@ -22356,9 +22384,26 @@ async function ptLoadData(){
     }
   }
 
+  // 날짜 기준 이력에서 potential_yn=true인 학생 ID 수집
+  var {data: _ptHistSnap} = await db.from('student_settings_history')
+    .select('student_id,potential_yn,potential_level,potential_attend_time')
+    .lte('changed_at', date)
+    .order('changed_at', {ascending: false});
+  // 학생별 가장 최신 이력만 남김
+  var _ptHistMap = {};
+  (_ptHistSnap||[]).forEach(function(h){
+    if(!_ptHistMap[h.student_id]) _ptHistMap[h.student_id] = h;
+  });
+  // 이력에서 potential_yn=true인 학생 ID 세트
+  var _ptHistActiveIds = new Set(
+    Object.values(_ptHistMap)
+      .filter(function(h){ return h.potential_yn === true; })
+      .map(function(h){ return h.student_id; })
+  );
+
   var query = db.from('users')
     .select('id,name,school,grade,teacher_id,school_level,potential_yn,potential_level,potential_attend_time')
-    .eq('role','student').eq('status','active').eq('potential_yn', true).lte('enrolled_at', date);
+    .eq('role','student').eq('status','active').lte('enrolled_at', date);
 
   if(selectedIds.length === 1){
     query = query.eq('teacher_id', selectedIds[0]);
@@ -22366,8 +22411,22 @@ async function ptLoadData(){
     query = query.in('teacher_id', selectedIds);
   }
 
-  var {data: students} = await query.order('name');
-  _ptStudents = students || [];
+  var {data: _ptAllStudents} = await query.order('name');
+  // 이력이 없는 학생은 users.potential_yn 사용 (하위호환)
+  _ptStudents = (_ptAllStudents || []).filter(function(s){
+    if(_ptHistMap[s.id]) return _ptHistMap[s.id].potential_yn === true;
+    return s.potential_yn === true;
+  });
+  // 이력에서 설정값 덮어쓰기
+  _ptStudents = _ptStudents.map(function(s){
+    var h = _ptHistMap[s.id];
+    if(!h) return s;
+    return Object.assign({}, s, {
+      potential_yn: h.potential_yn,
+      potential_level: h.potential_level !== undefined ? h.potential_level : s.potential_level,
+      potential_attend_time: h.potential_attend_time !== undefined ? h.potential_attend_time : s.potential_attend_time
+    });
+  });
 
   _ptData = {};
   if(_ptStudents.length){
@@ -25938,10 +25997,32 @@ async function awpLoad(){
   var teacherIds = teachers.map(function(t){ return t.id; });
   if(!teacherIds.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">\uD83D\uDC64</div><p>선생님이 없습니다</p></div>'; return; }
 
-  var {data: students} = await db.from('users')
-    .select('id,name,school,grade,teacher_id,potential_level,potential_attend_time')
-    .eq('role','student').eq('status','active').eq('potential_yn',true).lte('enrolled_at', date)
+  // 날짜 기준 이력에서 potential 설정 수집
+  var {data: _awpHistSnap} = await db.from('student_settings_history')
+    .select('student_id,potential_yn,potential_level,potential_attend_time')
+    .lte('changed_at', date)
+    .order('changed_at', {ascending: false});
+  var _awpHistMap = {};
+  (_awpHistSnap||[]).forEach(function(h){
+    if(!_awpHistMap[h.student_id]) _awpHistMap[h.student_id] = h;
+  });
+
+  var {data: _awpAll} = await db.from('users')
+    .select('id,name,school,grade,teacher_id,potential_level,potential_attend_time,potential_yn')
+    .eq('role','student').eq('status','active').lte('enrolled_at', date)
     .in('teacher_id', teacherIds).order('name');
+  // 이력 기준 필터 + 설정값 덮어쓰기
+  var students = (_awpAll||[]).filter(function(s){
+    if(_awpHistMap[s.id]) return _awpHistMap[s.id].potential_yn === true;
+    return s.potential_yn === true;
+  }).map(function(s){
+    var h = _awpHistMap[s.id];
+    if(!h) return s;
+    return Object.assign({}, s, {
+      potential_level: h.potential_level !== undefined ? h.potential_level : s.potential_level,
+      potential_attend_time: h.potential_attend_time !== undefined ? h.potential_attend_time : s.potential_attend_time
+    });
+  });
   if(!students||!students.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">\uD83C\uDFAF</div><p>포텐셜 참여 학생이 없습니다</p></div>'; return; }
 
   var {data: records} = await db.from('weekend_potential').select('*').eq('session_date',date)
@@ -27955,13 +28036,23 @@ async function bySetupSave(){
   });
 
   var ok=0, fail=0;
+  var _bySaveDate = new Date().toISOString().split('T')[0];
   await Promise.all(updates.map(async function(u){
     var {error} = await db.from('users').update({
       bety_yn: u.bety_yn,
       bety_level: u.bety_level,
       bety_attend_time: u.bety_attend_time
     }).eq('id',u.id);
-    if(error) fail++; else ok++;
+    if(error){ fail++; return; }
+    ok++;
+    // 이력 저장
+    await db.from('student_settings_history').upsert({
+      student_id: u.id,
+      changed_at: _bySaveDate,
+      bety_yn: u.bety_yn,
+      bety_level: u.bety_level || null,
+      bety_attend_time: u.bety_attend_time || null
+    }, {onConflict: 'student_id,changed_at'});
   }));
 
   var saveBtn = document.querySelector('#by-setup-table-wrap button');
@@ -28092,14 +28183,38 @@ async function byLoadData(){
     }
   }
 
+  // 날짜 기준 이력에서 bety_yn 설정 수집
+  var {data: _byHistSnap} = await db.from('student_settings_history')
+    .select('student_id,bety_yn,bety_level,bety_attend_time')
+    .lte('changed_at', date)
+    .order('changed_at', {ascending: false});
+  var _byHistMap = {};
+  (_byHistSnap||[]).forEach(function(h){
+    if(!_byHistMap[h.student_id]) _byHistMap[h.student_id] = h;
+  });
+
   var query = db.from('users')
     .select('id,name,school,grade,teacher_id,school_level,bety_yn,bety_level,bety_attend_time')
-    .eq('role','student').eq('status','active').eq('bety_yn', true).lte('enrolled_at', date);
+    .eq('role','student').eq('status','active').lte('enrolled_at', date);
   if(selectedIds.length===1) query = query.eq('teacher_id', selectedIds[0]);
   else query = query.in('teacher_id', selectedIds);
 
-  var {data: students} = await query.order('name');
-  _byStudents = students || [];
+  var {data: _byAllStudents} = await query.order('name');
+  // 이력이 없는 학생은 users.bety_yn 사용 (하위호환)
+  _byStudents = (_byAllStudents || []).filter(function(s){
+    if(_byHistMap[s.id]) return _byHistMap[s.id].bety_yn === true;
+    return s.bety_yn === true;
+  });
+  // 이력에서 설정값 덮어쓰기
+  _byStudents = _byStudents.map(function(s){
+    var h = _byHistMap[s.id];
+    if(!h) return s;
+    return Object.assign({}, s, {
+      bety_yn: h.bety_yn,
+      bety_level: h.bety_level !== undefined ? h.bety_level : s.bety_level,
+      bety_attend_time: h.bety_attend_time !== undefined ? h.bety_attend_time : s.bety_attend_time
+    });
+  });
 
   _byData = {};
   if(_byStudents.length){
@@ -28986,10 +29101,31 @@ async function awbyLoad(){
   var teacherIds = teachers.map(function(t){ return t.id; });
   if(!teacherIds.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">\uD83D\uDC64</div><p>선생님이 없습니다</p></div>'; return; }
 
-  var {data: students} = await db.from('users')
-    .select('id,name,school,grade,teacher_id,bety_level,bety_attend_time')
-    .eq('role','student').eq('status','active').eq('bety_yn',true).lte('enrolled_at', date)
+  // 날짜 기준 이력에서 bety 설정 수집
+  var {data: _abyHistSnap} = await db.from('student_settings_history')
+    .select('student_id,bety_yn,bety_level,bety_attend_time')
+    .lte('changed_at', date)
+    .order('changed_at', {ascending: false});
+  var _abyHistMap = {};
+  (_abyHistSnap||[]).forEach(function(h){
+    if(!_abyHistMap[h.student_id]) _abyHistMap[h.student_id] = h;
+  });
+
+  var {data: _abyAll} = await db.from('users')
+    .select('id,name,school,grade,teacher_id,bety_level,bety_attend_time,bety_yn')
+    .eq('role','student').eq('status','active').lte('enrolled_at', date)
     .in('teacher_id', teacherIds).order('name');
+  var students = (_abyAll||[]).filter(function(s){
+    if(_abyHistMap[s.id]) return _abyHistMap[s.id].bety_yn === true;
+    return s.bety_yn === true;
+  }).map(function(s){
+    var h = _abyHistMap[s.id];
+    if(!h) return s;
+    return Object.assign({}, s, {
+      bety_level: h.bety_level !== undefined ? h.bety_level : s.bety_level,
+      bety_attend_time: h.bety_attend_time !== undefined ? h.bety_attend_time : s.bety_attend_time
+    });
+  });
   if(!students||!students.length){ wrap.innerHTML='<div class="empty-state"><div class="ei">\uD83D\uDCDD</div><p>베티모의고사 참여 학생이 없습니다</p></div>'; return; }
 
   var {data: records} = await db.from('weekend_bety').select('*').eq('session_date',date)
