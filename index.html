@@ -29835,6 +29835,123 @@ async function loadTransferRequests(){
   renderTransferOutCard();
 }
 
+async function submitTransfer(){
+  var toTeacherId  = document.getElementById('transfer-to-teacher').value;
+  var toClassId    = document.getElementById('transfer-to-class').value;
+  var note         = document.getElementById('transfer-note').value.trim();
+  var transferDate = document.getElementById('transfer-date').value;
+  if(!toTeacherId){  alert('받는 선생님을 선택하세요'); return; }
+  if(!toClassId){    alert('전반할 반을 선택하세요'); return; }
+  if(!transferDate){ alert('전반 시행일을 선택하세요'); return; }
+
+  var isBulk  = document.getElementById('transfer-student-id').value === '__bulk__';
+  var targets = isBulk
+    ? (window._bulkTransferStudents || [])
+    : [{ id: document.getElementById('transfer-student-id').value }];
+  if(!targets.length){ alert('선택된 학생이 없습니다'); return; }
+
+  var btn = document.getElementById('transfer-submit-btn');
+  btn.textContent = '처리 중...'; btn.disabled = true;
+
+  var errors = [], success = 0;
+  var toTeacher = (allUsers||[]).find(function(u){ return u.id===toTeacherId; });
+  var toTeacherName = toTeacher ? toTeacher.name : '';
+
+  for(var i=0; i<targets.length; i++){
+    var sid = targets[i].id;
+    try{
+      // 1) 학생 현재 정보 조회
+      var {data: stuData} = await db.from('users')
+        .select('id,name,teacher_id,class_id').eq('id', sid).single();
+      if(!stuData){ errors.push((targets[i].name||sid)+': 학생 정보 없음'); continue; }
+
+      var fromClassId = stuData.class_id;
+      var {data: fromClass} = fromClassId
+        ? await db.from('classes').select('name').eq('id', fromClassId).single()
+        : {data: null};
+      var {data: toClass} = await db.from('classes').select('name').eq('id', toClassId).single();
+
+      // 2) 즉시 반영
+      var {error: ue} = await db.from('users').update({
+        teacher_id: toTeacherId,
+        class_id:   toClassId,
+        class_id2:  null
+      }).eq('id', sid);
+      if(ue) throw ue;
+
+      // 3) transfer_requests 기록 (status: 'done', notified: false)
+      var {error: te} = await db.from('transfer_requests').insert({
+        student_id:      sid,
+        from_teacher_id: currentUser.id,
+        to_teacher_id:   toTeacherId,
+        to_class_id:     toClassId,
+        note:            note || null,
+        transfer_date:   transferDate,
+        status:          'done',
+        responded_at:    new Date().toISOString(),
+        notified:        false
+      });
+      if(te) throw te;
+
+      // 4) 히스토리 기록
+      await recordStudentClassHistory(
+        sid, stuData.name,
+        currentUser.id, currentUser.name || '',
+        toTeacherId,    toTeacherName,
+        fromClassId,    fromClass ? fromClass.name : '',
+        toClassId,      toClass   ? toClass.name   : '',
+        transferDate,   note || '전반'
+      );
+
+      success++;
+    } catch(e){
+      errors.push((targets[i].name||sid)+': '+(e.message||e));
+    }
+  }
+
+  btn.textContent = '전반 신청'; btn.disabled = false;
+  closeTransferModal();
+  clearStudentSelection();
+  window._bulkTransferStudents = [];
+  await loadTeacherData();
+
+  if(errors.length){
+    alert('⚠️ 완료: '+success+'건\n실패:\n'+errors.join('\n'));
+  } else {
+    alert('✅ 전반 완료! ('+success+'명)\n시행일: '+transferDate);
+  }
+}
+
+function renderTransferOutCard(){
+  var card  = document.getElementById('transfer-out-card');
+  var badge = document.getElementById('transfer-out-badge');
+  var list  = document.getElementById('transfer-out-list');
+  if(!card) return;
+  if(!_transferOutList || !_transferOutList.length){
+    card.style.display = 'none'; return;
+  }
+  card.style.display = 'block';
+  if(badge) badge.textContent = _transferOutList.length;
+  if(!list) return;
+  list.innerHTML = _transferOutList.map(function(req){
+    var s  = req.student    || {};
+    var tt = req.to_teacher || {};
+    var tc = req.to_class   || {};
+    var sg = [s.school, s.grade].filter(Boolean).join(' ');
+    return '<div style="display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid #d1fae5">'
+      +'<div style="flex:1">'
+        +'<div style="font-size:14px;font-weight:700;color:#1e293b">'+s.name+'</div>'
+        +'<div style="font-size:12px;color:#6b7280;margin-top:2px">'+(sg||'')
+          +(tt.name?' \u2192 '+tt.name+' T':'')+(tc.name?' ('+tc.name+')':'')
+        +'</div>'
+        +(req.note?'<div style="font-size:11px;color:#9ca3af;margin-top:2px">사유: '+req.note+'</div>':'')
+        +'<div style="font-size:11px;color:#64748b;margin-top:2px">시행일: '+req.transfer_date+'</div>'
+      +'</div>'
+      +'<span style="padding:4px 10px;border-radius:100px;background:#d1fae5;color:#065f46;font-size:11px;font-weight:700">✅ 완료</span>'
+    +'</div>';
+  }).join('');
+}
+
 /* ── 전반 알림 팝업 (받는 선생님 1회성) ──────────────────── */
 function showTransferNotifyPopup(list){
   var existing = document.getElementById('transfer-notify-popup');
@@ -29892,6 +30009,53 @@ async function closeTransferNotifyPopup(){
   var overlay = document.getElementById('transfer-notify-overlay');
   if(popup) popup.remove();
   if(overlay) overlay.remove();
+}
+
+async function openTransferModal(studentId, studentName){
+  document.getElementById('transfer-student-id').value = studentId;
+  document.getElementById('transfer-student-name-label').textContent = studentName + ' 학생 전반 신청';
+  document.getElementById('transfer-note').value = '';
+  document.getElementById('transfer-to-class').innerHTML = '<option value="">선생님을 먼저 선택하세요</option>';
+  // 전반 시행일 기본값: 오늘
+  document.getElementById('transfer-date').value = new Date().toISOString().slice(0,10);
+
+  var {data: teachers} = await db.from('users')
+    .select('id,name').eq('role','teacher').eq('status','active')
+    .neq('id', currentUser.id).is('deleted_at', null).order('name');
+  _transferTeachers = teachers || [];
+
+  var sel = document.getElementById('transfer-to-teacher');
+  sel.innerHTML = '<option value="">선생님 선택...</option>'
+    + _transferTeachers.map(function(t){
+        return '<option value="'+t.id+'">'+t.name+' T</option>';
+      }).join('');
+
+  var modal = document.getElementById('modal-transfer');
+  modal.style.display = 'flex';
+  modal.onclick = function(e){ if(e.target === modal) closeTransferModal(); };
+}
+
+function closeTransferModal(){
+  document.getElementById('modal-transfer').style.display = 'none';
+}
+
+async function loadTransferClasses(){
+  var teacherId = document.getElementById('transfer-to-teacher').value;
+  var classSel  = document.getElementById('transfer-to-class');
+  if(!teacherId){
+    classSel.innerHTML = '<option value="">선생님을 먼저 선택하세요</option>';
+    return;
+  }
+  classSel.innerHTML = '<option value="">불러오는 중...</option>';
+  var {data: cls} = await db.from('classes')
+    .select('id,name').eq('teacher_id', teacherId).eq('active', true).order('name');
+  var clsList = cls || [];
+  if(!clsList.length){
+    classSel.innerHTML = '<option value="">해당 선생님의 반이 없습니다</option>';
+    return;
+  }
+  classSel.innerHTML = '<option value="">반 선택...</option>'
+    + clsList.map(function(c){ return '<option value="'+c.id+'">'+c.name+'</option>'; }).join('');
 }
 
 async function approveTransfer(requestId){
