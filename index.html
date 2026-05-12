@@ -6429,6 +6429,9 @@ function renderTeacherAccounts(filterBranchId, filterLevel){
         +(isActive
           ?'<button class="btn btn-danger btn-sm" data-id="'+u.id+'" onclick="deactivateUser(this.dataset.id)" style="font-size:11px">비활성</button>'
           :'<button class="btn btn-success btn-sm" data-id="'+u.id+'" onclick="approveUser(this.dataset.id)" style="font-size:11px">활성화</button>')
+        +(!isActive
+          ?'<button class="btn btn-sm" data-id="'+u.id+'" data-name="'+safeName+'" onclick="openTeacherRecordModal(this.dataset.id,this.dataset.name)" style="background:#f0fdf4;border-color:#86efac;color:#16a34a;font-size:11px;grid-column:1/-1">\uD83D\uDCCB 기록보기</button>'
+          :'')
         +'<button class="btn btn-sm" onclick="deleteTeacher(this.dataset.id,this.dataset.name)" data-id="'+u.id+'" data-name="'+safeName+'" style="background:#fff0f0;border-color:#fca5a5;color:#dc2626;font-size:11px;grid-column:1/-1">\uD83D\uDDD1\uFE0F 삭제</button>'
       +'</div>'
     +'</div>';
@@ -6688,7 +6691,203 @@ async function saveEditTeacher(){
   alert('\u2705 선생님 정보가 수정됐습니다!');
 }
 
- async function deleteTeacher(id, name){
+ async function openTeacherRecordModal(teacherId, teacherName){
+  // 모달 기존 제거
+  var existing = document.getElementById('teacher-record-modal');
+  if(existing) existing.remove();
+
+  var modal = document.createElement('div');
+  modal.id = 'teacher-record-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:4000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:16px;width:100%;max-width:780px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden">'
+      // 헤더
+      +'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1.5px solid #e2e8f0;background:#1F3A51;flex-shrink:0">'
+        +'<div>'
+          +'<div style="font-size:16px;font-weight:800;color:#fff">📋 '+teacherName+' 선생님 기록</div>'
+          +'<div style="font-size:11px;color:rgba(255,255,255,0.6);margin-top:2px">재직 기간 전체 기록 조회</div>'
+        +'</div>'
+        +'<button onclick="document.getElementById(\'teacher-record-modal\').remove()" style="background:rgba(255,255,255,0.15);border:none;border-radius:8px;color:#fff;font-size:18px;cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center">✕</button>'
+      +'</div>'
+      // 탭
+      +'<div style="display:flex;border-bottom:1.5px solid #e2e8f0;background:#f8fafc;flex-shrink:0" id="tr-tab-bar">'
+        +'<button class="tr-tab tr-tab-active" data-tab="syllabus" onclick="trSwitchTab(this)" style="flex:1;padding:10px 6px;border:none;background:transparent;font-size:12px;font-weight:700;color:#1F3A51;border-bottom:2.5px solid #1F3A51;cursor:pointer">📋 진도계획서</button>'
+        +'<button class="tr-tab" data-tab="worklog" onclick="trSwitchTab(this)" style="flex:1;padding:10px 6px;border:none;background:transparent;font-size:12px;font-weight:600;color:#64748b;border-bottom:2.5px solid transparent;cursor:pointer">📝 업무일지</button>'
+        +'<button class="tr-tab" data-tab="monthly" onclick="trSwitchTab(this)" style="flex:1;padding:10px 6px;border:none;background:transparent;font-size:12px;font-weight:600;color:#64748b;border-bottom:2.5px solid transparent;cursor:pointer">📊 월별수강인원</button>'
+        +'<button class="tr-tab" data-tab="weekend" onclick="trSwitchTab(this)" style="flex:1;padding:10px 6px;border:none;background:transparent;font-size:12px;font-weight:600;color:#64748b;border-bottom:2.5px solid transparent;cursor:pointer">🏃 주말프로그램</button>'
+      +'</div>'
+      // 콘텐츠
+      +'<div id="tr-content" style="flex:1;overflow-y:auto;padding:16px">'
+        +'<div style="text-align:center;padding:32px;color:#9ca3af"><div style="font-size:24px">⏳</div><div>불러오는 중...</div></div>'
+      +'</div>'
+    +'</div>';
+
+  document.body.appendChild(modal);
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+
+  // 전역에 teacherId 저장 (탭 전환 시 재사용)
+  window._trTeacherId   = teacherId;
+  window._trTeacherName = teacherName;
+
+  // 첫 탭 로드
+  await trLoadTab('syllabus', teacherId);
+}
+
+function trSwitchTab(btn){
+  document.querySelectorAll('.tr-tab').forEach(function(b){
+    b.style.color = '#64748b';
+    b.style.fontWeight = '600';
+    b.style.borderBottom = '2.5px solid transparent';
+  });
+  btn.style.color = '#1F3A51';
+  btn.style.fontWeight = '700';
+  btn.style.borderBottom = '2.5px solid #1F3A51';
+  trLoadTab(btn.dataset.tab, window._trTeacherId);
+}
+
+async function trLoadTab(tab, teacherId){
+  var el = document.getElementById('tr-content');
+  if(!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:32px;color:#9ca3af"><div style="font-size:24px">⏳</div><div>불러오는 중...</div></div>';
+
+  try {
+    if(tab === 'syllabus'){
+      // ── 진도계획서 ──────────────────────────────
+      var {data, error} = await db.from('syllabuses')
+        .select('id,teacher_name,period,branch,updated_at,courses')
+        .eq('teacher_id', teacherId)
+        .order('period', {ascending:false});
+      if(error) throw error;
+      if(!data || !data.length){
+        el.innerHTML = '<div class="empty-state"><p>저장된 진도계획서가 없습니다</p></div>'; return;
+      }
+      el.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px">'
+        + data.map(function(s){
+            var courseCount = Array.isArray(s.courses) ? s.courses.length : 0;
+            var updated = s.updated_at ? s.updated_at.slice(0,10) : '-';
+            return '<div style="border:1.5px solid #e2e8f0;border-radius:10px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">'
+              +'<div>'
+                +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+s.period+'</div>'
+                +'<div style="font-size:11px;color:#64748b;margin-top:2px">강좌 '+courseCount+'개 · 수정일 '+updated+(s.branch?' · '+s.branch:'')+'</div>'
+              +'</div>'
+              +'<span style="font-size:11px;padding:3px 9px;border-radius:100px;background:#e0f2fe;color:#0369a1;font-weight:700">'+s.period+'</span>'
+            +'</div>';
+          }).join('')
+        +'</div>';
+
+    } else if(tab === 'worklog'){
+      // ── 업무일지 ────────────────────────────────
+      var {data, error} = await db.from('work_logs')
+        .select('id,log_date,class_id,progress,homework,memo')
+        .eq('teacher_id', teacherId)
+        .order('log_date', {ascending:false})
+        .limit(100);
+      if(error) throw error;
+      if(!data || !data.length){
+        el.innerHTML = '<div class="empty-state"><p>업무일지 기록이 없습니다</p></div>'; return;
+      }
+      // 날짜별 그룹
+      var byDate = {};
+      data.forEach(function(w){
+        var d = w.log_date || '-';
+        if(!byDate[d]) byDate[d] = [];
+        byDate[d].push(w);
+      });
+      el.innerHTML = '<div style="font-size:11px;color:#64748b;margin-bottom:10px">최근 100건 · 총 '+data.length+'건</div>'
+        +'<div style="display:flex;flex-direction:column;gap:8px">'
+        + Object.keys(byDate).map(function(d){
+            var logs = byDate[d];
+            return '<div style="border:1.5px solid #e2e8f0;border-radius:10px;padding:12px 16px">'
+              +'<div style="font-size:12px;font-weight:700;color:#1F3A51;margin-bottom:6px">📅 '+d+' ('+logs.length+'건)</div>'
+              + logs.map(function(w){
+                  return '<div style="font-size:11px;color:#374151;padding:4px 0;border-top:1px solid #f1f5f9">'
+                    +(w.progress?'<b>진도:</b> '+w.progress.slice(0,40)+'<br>':'')
+                    +(w.homework?'<b>과제:</b> '+w.homework.slice(0,40)+'<br>':'')
+                    +(w.memo?'<b>메모:</b> '+w.memo.slice(0,40):'')
+                  +'</div>';
+                }).join('')
+            +'</div>';
+          }).join('')
+        +'</div>';
+
+    } else if(tab === 'monthly'){
+      // ── 월별수강인원 ─────────────────────────────
+      // 담당 반 → 월별 학생 수 요약
+      var {data: classes, error: ce} = await db.from('classes')
+        .select('id,name,class_days,class_time')
+        .eq('teacher_id', teacherId);
+      if(ce) throw ce;
+
+      var {data: students, error: se} = await db.from('users')
+        .select('id,name,class_id,status,enrolled_at,withdrawn_at')
+        .eq('role','student')
+        .eq('teacher_id', teacherId);
+      if(se) throw se;
+
+      if(!classes || !classes.length){
+        el.innerHTML = '<div class="empty-state"><p>담당 반 기록이 없습니다</p></div>'; return;
+      }
+
+      el.innerHTML = '<div style="font-size:11px;color:#64748b;margin-bottom:10px">담당 반 '+classes.length+'개 · 연관 학생 '+(students||[]).length+'명</div>'
+        +'<div style="display:flex;flex-direction:column;gap:8px">'
+        + classes.map(function(c){
+            var studs = (students||[]).filter(function(s){ return s.class_id===c.id; });
+            var active = studs.filter(function(s){ return s.status==='active'; }).length;
+            var inactive = studs.filter(function(s){ return s.status!=='active'; }).length;
+            return '<div style="border:1.5px solid #e2e8f0;border-radius:10px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">'
+              +'<div>'
+                +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+c.name+'</div>'
+                +'<div style="font-size:11px;color:#64748b;margin-top:2px">'+(c.class_days||'')+(c.class_time?' '+c.class_time:'')+'</div>'
+              +'</div>'
+              +'<div style="text-align:right">'
+                +'<span style="font-size:12px;font-weight:700;color:#16a34a">재원 '+active+'명</span>'
+                +(inactive?'<span style="font-size:11px;color:#9ca3af;margin-left:6px">퇴원 '+inactive+'명</span>':'')
+              +'</div>'
+            +'</div>';
+          }).join('')
+        +'</div>';
+
+    } else if(tab === 'weekend'){
+      // ── 주말프로그램 ─────────────────────────────
+      // 담당 선생님의 주말반 학생 목록
+      var {data: wStudents, error: we} = await db.from('users')
+        .select('id,name,school,grade,status,weekend_level,weekend_attend_time,enrolled_at,withdrawn_at')
+        .eq('role','student')
+        .eq('teacher_id', teacherId)
+        .not('weekend_level', 'is', null)
+        .order('name');
+      if(we) throw we;
+
+      if(!wStudents || !wStudents.length){
+        el.innerHTML = '<div class="empty-state"><p>주말프로그램 학생 기록이 없습니다</p></div>'; return;
+      }
+
+      var active   = wStudents.filter(function(s){ return s.status==='active'; });
+      var inactive = wStudents.filter(function(s){ return s.status!=='active'; });
+
+      function renderWStu(list, label, color){
+        if(!list.length) return '';
+        return '<div style="margin-bottom:12px">'
+          +'<div style="font-size:12px;font-weight:700;color:'+color+';margin-bottom:6px">'+label+' '+list.length+'명</div>'
+          +'<div style="display:flex;flex-direction:column;gap:4px">'
+          + list.map(function(s){
+              return '<div style="font-size:11px;color:#374151;padding:5px 10px;background:#f8fafc;border-radius:7px;display:flex;justify-content:space-between">'
+                +'<span><b>'+s.name+'</b> · '+s.school+' '+s.grade+'</span>'
+                +'<span style="color:#64748b">'+(s.weekend_level||'')+(s.weekend_attend_time?' '+s.weekend_attend_time:'')+'</span>'
+              +'</div>';
+            }).join('')
+          +'</div></div>';
+      }
+
+      el.innerHTML = renderWStu(active,'✅ 재원',  '#16a34a')
+                   + renderWStu(inactive,'⬜ 퇴원','#9ca3af');
+    }
+  } catch(e){
+    el.innerHTML = '<div class="empty-state"><p>❌ 불러오기 실패: '+e.message+'</p></div>';
+  }
+}
+
+async function deleteTeacher(id, name){
   var user = (allUsers||[]).find(function(u){ return u.id === id; });
   var isInactive = user && user.status === 'inactive';
 
