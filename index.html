@@ -7144,6 +7144,13 @@ async function trLoadTab(tab, teacherId){
         .select('id,name,school,grade,status,weekend_level,weekend_attend_time')
         .eq('role','student').eq('teacher_id', teacherId)
         .not('weekend_level','is',null).order('name');
+      // 미래 전반된 학생 제외 (transfer_date가 오늘 이후)
+      var _today = new Date().toISOString().slice(0,10);
+      var {data: _wFutureIn} = await db.from('transfer_requests')
+        .select('student_id').eq('to_teacher_id', teacherId)
+        .eq('status','done').gt('transfer_date', _today);
+      var _wFutureInSet = new Set((_wFutureIn||[]).map(function(r){ return r.student_id; }));
+      curWStudents = (curWStudents||[]).filter(function(s){ return !_wFutureInSet.has(s.id); });
       var histStudentIds = Array.from(new Set((fromHist||[]).map(function(h){ return h.student_id; })));
       var curWIds = (curWStudents||[]).map(function(s){ return s.id; });
       var prevOnlyIds = histStudentIds.filter(function(id){ return curWIds.indexOf(id)<0; });
@@ -7325,7 +7332,47 @@ async function loadTeacherData(){
     db.from('homeworks').select('*').eq('teacher_id',currentUser.id).order('due_date'),
     db.from('submissions').select('*')
   ]);
-  classes=cRes.data||[];students=sRes.data||[];homeworks=hRes.data||[];submissions=subRes.data||[];
+  classes=cRes.data||[];
+  var rawStudents = sRes.data||[];
+  homeworks=hRes.data||[];
+  submissions=subRes.data||[];
+
+  // ── 전반 시행일 보정 ──────────────────────────────────────
+  // 오늘보다 미래 시행일인 전반 학생은 아직 내 반 학생이 아님 → 제외
+  // 반대로 내가 보낸 전반 중 미래 시행일인 학생은 아직 내 명단에 있어야 함
+  var today = new Date().toISOString().slice(0,10);
+
+  // 1) 내가 받은 전반 중 시행일이 미래인 것 → 아직 내 명단에서 제외
+  var {data: incomingFuture} = await db.from('transfer_requests')
+    .select('student_id')
+    .eq('to_teacher_id', currentUser.id)
+    .eq('status', 'done')
+    .gt('transfer_date', today);
+  var futureInIds = new Set((incomingFuture||[]).map(function(r){ return r.student_id; }));
+
+  // 2) 내가 보낸 전반 중 시행일이 미래인 것 → 학생이 아직 내 명단에 있어야 함
+  var {data: outgoingFuture} = await db.from('transfer_requests')
+    .select('student_id, student:student_id(*)')
+    .eq('from_teacher_id', currentUser.id)
+    .eq('status', 'done')
+    .gt('transfer_date', today);
+  var futureOutStudents = (outgoingFuture||[])
+    .filter(function(r){ return r.student; })
+    .map(function(r){ return r.student; });
+
+  // 보정: 미래 전반IN 제외 + 미래 전반OUT 추가
+  students = rawStudents
+    .filter(function(s){ return !futureInIds.has(s.id); })
+    .concat(futureOutStudents.filter(function(s){
+      return !rawStudents.some(function(r){ return r.id === s.id; });
+    }))
+    .sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); });
+
+  // 전역 저장 (업무일지 등 다른 기능에서 참조)
+  window._futureInIds       = futureInIds;
+  window._futureOutStudents = futureOutStudents;
+  // ─────────────────────────────────────────────────────────
+
   renderClassList();renderStudents();
   document.getElementById('st-total').textContent=students.length;
   document.getElementById('st-classes').textContent=classes.length;
@@ -18501,6 +18548,29 @@ async function wnLoadData(){
   }
 
   var {data: students} = await query.order('name');
+
+  // 전반 시행일 보정: 해당 날짜 기준 미래 전반IN 학생 제외 + 미래 전반OUT 학생 포함
+  var {data: _wnFutureIn} = await db.from('transfer_requests')
+    .select('student_id')
+    .in('to_teacher_id', selectedIds)
+    .eq('status', 'done').gt('transfer_date', date);
+  var _wnFutureInSet = new Set((_wnFutureIn||[]).map(function(r){ return r.student_id; }));
+
+  var {data: _wnPastOut} = await db.from('transfer_requests')
+    .select('student_id, student:student_id(id,name,school,grade,teacher_id,weekend_level,weekend_attend_time)')
+    .in('from_teacher_id', selectedIds)
+    .eq('status','done').gt('transfer_date', date);
+  var _wnPastOutStudents = (_wnPastOut||[])
+    .filter(function(r){ return r.student; })
+    .map(function(r){ return r.student; });
+
+  students = (students||[])
+    .filter(function(s){ return !_wnFutureInSet.has(s.id); })
+    .concat(_wnPastOutStudents.filter(function(s){
+      return !(students||[]).some(function(a){ return a.id===s.id; });
+    }))
+    .sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); });
+
   _wnStudents = students || [];
 
   _wnData = {};
@@ -19570,7 +19640,32 @@ async function loadWorkLog(){
     .or(`class_id.eq.${classId},class_id2.eq.${classId}`)
     .lte('enrolled_at', date)   // 작성 날짜 기준 입학일이 도래한 학생만
     .order('name');
-  const activeIds = new Set((activeStuds||[]).map(s=>s.id));
+
+  // 전반 시행일 보정: 해당 날짜 기준으로 아직 전반 안 된 학생 제외
+  var {data: futureTransIn} = await db.from('transfer_requests')
+    .select('student_id')
+    .eq('to_teacher_id', currentUser.id)
+    .eq('status', 'done')
+    .gt('transfer_date', date);  // 날짜 이후 전반 → 아직 이 반 학생 아님
+  var futureInSet = new Set((futureTransIn||[]).map(function(r){ return r.student_id; }));
+
+  // 전반 보낸 학생 중 해당 날짜에 아직 이 반이었던 학생 추가
+  var {data: pastTransOut} = await db.from('transfer_requests')
+    .select('student_id, student:student_id(*)')
+    .eq('from_teacher_id', currentUser.id)
+    .eq('status', 'done')
+    .gt('transfer_date', date);  // 날짜 이후에 전반 → 날짜 당시엔 내 반
+  var pastOutStudents = (pastTransOut||[])
+    .filter(function(r){ return r.student && r.student.class_id === classId; })
+    .map(function(r){ return r.student; });
+
+  var filteredStuds = (activeStuds||[])
+    .filter(function(s){ return !futureInSet.has(s.id); })
+    .concat(pastOutStudents.filter(function(s){
+      return !(activeStuds||[]).some(function(a){ return a.id === s.id; });
+    }));
+
+  const activeIds = new Set(filteredStuds.map(s=>s.id));
 
   // 기록에 있는 학생 중 현재 반에 없는 학생 (퇴원 or 반 이동)
   // 옵션 A: 현재 이 반 소속이 아닌 학생은 표시하지 않음
@@ -19597,7 +19692,7 @@ async function loadWorkLog(){
     };
   });
 
-  wlStudents = [...(activeStuds||[]), ...deletedPlaceholders]
+  wlStudents = [...(filteredStuds||[]), ...deletedPlaceholders]
     .sort((a,b) => a.name.localeCompare(b.name, 'ko'));
 
   // 개별 진도/숙제 복원
@@ -25955,11 +26050,11 @@ async function generateTeacherMonthlyReport(){
       .gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
 
     var {data:transfers} = await db.from('transfer_requests')
-      .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
-      .eq('status','approved')
+      .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
+      .eq('status','done')
       .or('from_teacher_id.eq.'+currentUser.id+',to_teacher_id.eq.'+currentUser.id)
-      .gte('responded_at', monthStart+'T00:00:00')
-      .lte('responded_at', monthEnd+'T23:59:59');
+      .gte('transfer_date', monthStart)
+      .lte('transfer_date', monthEnd);
 
     _tmrData = { year, month, monthStart, monthEnd, teachers, classes, allStudents: allStudents||[], newStudents: newStudents||[], transfers: transfers||[] };
 
@@ -25992,8 +26087,14 @@ function mrGetTeacherReportFromData(tid, d){
   var myClasses = (d.classes||[]).filter(function(c){ return c.teacher_id===tid; });
   var myClassIds = myClasses.map(function(c){ return c.id; });
 
-  var _myIn  = (d.transfers||[]).filter(function(t){ return t.to_teacher&&t.to_teacher.id===tid; });
-  var _myOut = (d.transfers||[]).filter(function(t){ return t.from_teacher&&t.from_teacher.id===tid; });
+  var _myIn  = (d.transfers||[]).filter(function(t){
+    return t.to_teacher && t.to_teacher.id===tid
+      && t.transfer_date >= d.monthStart && t.transfer_date <= d.monthEnd;
+  });
+  var _myOut = (d.transfers||[]).filter(function(t){
+    return t.from_teacher && t.from_teacher.id===tid
+      && t.transfer_date >= d.monthStart && t.transfer_date <= d.monthEnd;
+  });
   var _inIds = new Set(_myIn.map(function(t){ return t.student&&t.student.id; }));
   var _startBase = (d.allStudents||[]).filter(function(s){
     if(s.teacher_id !== tid) return false;
@@ -30589,10 +30690,10 @@ async function generateMonthlyReport(){
     .eq('role','student').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
 
   var {data: transfers} = await db.from('transfer_requests')
-    .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
-    .eq('status','approved')
-    .gte('responded_at', monthStart+'T00:00:00')
-    .lte('responded_at', monthEnd+'T23:59:59');
+    .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
+    .eq('status','done')
+    .gte('transfer_date', monthStart)
+    .lte('transfer_date', monthEnd);
 
   _mrData = { year, month, monthStart, monthEnd, teachers, classes, allStudents, newStudents, transfers };
   _mrCurrentTeacherId = teachers[0].id;
@@ -30653,8 +30754,15 @@ function mrGetTeacherReport(tid){
   }
 
   var myStudents   = (d.allStudents||[]).filter(function(s){ return s.teacher_id===tid; });
-  var myIn         = (d.transfers||[]).filter(function(t){ return t.to_teacher&&t.to_teacher.id===tid; });
-  var myOut        = (d.transfers||[]).filter(function(t){ return t.from_teacher&&t.from_teacher.id===tid; });
+  // transfer_date 기준으로 필터 (responded_at 대신 실제 시행일 기준)
+  var myIn  = (d.transfers||[]).filter(function(t){
+    return t.to_teacher && t.to_teacher.id===tid
+      && t.transfer_date >= d.monthStart && t.transfer_date <= d.monthEnd;
+  });
+  var myOut = (d.transfers||[]).filter(function(t){
+    return t.from_teacher && t.from_teacher.id===tid
+      && t.transfer_date >= d.monthStart && t.transfer_date <= d.monthEnd;
+  });
   var inIds        = new Set(myIn.map(function(t){ return t.student&&t.student.id; }));
   var startBase    = myStudents.filter(function(s){ var ea=s.enrolled_at||'1900-01-01', wa=(s.last_class_date||s.withdrawn_at)||'9999-12-31'; return ea<d.monthStart&&wa>=d.monthStart&&!inIds.has(s.id); });
   var startFromOut = myOut.filter(function(t){ var s=t.student; if(!s) return false; var ea=s.enrolled_at||'1900-01-01', wa=(s.last_class_date||s.withdrawn_at)||'9999-12-31'; return ea<d.monthStart&&wa>=d.monthStart; });
