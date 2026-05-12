@@ -5927,26 +5927,74 @@ function admTTLoad(){
   var wrap=document.getElementById('adm-tt-wrap');
   if(!wrap) return;
   var targetClasses=[], title='';
+
   if(_admTTMode==='branch'){
     var branchId=(document.getElementById('adm-tt-branch-sel')||{}).value||'';
     var bName=branchId?((window._allBranches||[]).find(function(b){return b.id===branchId;})||{}).name||'선택 분원':'전체 분원';
     title='🏢 '+bName+' 시간표';
-    targetClasses=(allClasses||[]).filter(function(c){ return c.active&&c.class_days&&c.class_time&&(!branchId||c.branch_id===branchId); });
+
+    // branch_id는 classes가 아닌 teacher에 있으므로 teacher 기준으로 필터
+    targetClasses=(allClasses||[]).filter(function(c){
+      if(!c.active||!c.class_days||!c.class_time) return false;
+      if(!branchId) return true;
+      var t=(allUsers||[]).find(function(u){return u.id===c.teacher_id;});
+      return t && t.branch_id===branchId;
+    });
+
+    if(!targetClasses.length){
+      wrap.innerHTML='<div style="text-align:center;padding:40px;color:#9ca3af;font-size:14px">시간 정보가 입력된 반이 없습니다</div>'; return;
+    }
+
+    // 전체 분원일 때 → 분원별로 그룹핑해서 한 화면에 표시
+    if(!branchId){
+      // 분원 순서대로 섹션 나누기
+      var branches = (window._allBranches||[]).slice().sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
+      // 분원 없는 반도 처리
+      var noBranchClasses = targetClasses.filter(function(c){
+        var t=(allUsers||[]).find(function(u){return u.id===c.teacher_id;});
+        return !t||!t.branch_id;
+      });
+      var html='<div id="adm-tt-content" style="background:#f0f0f0;padding:4px">';
+      html+='<div style="font-size:15px;font-weight:800;color:#1F3A51;margin-bottom:20px">🏢 전체 분원 시간표</div>';
+      branches.forEach(function(b){
+        var bClasses=targetClasses.filter(function(c){
+          var t=(allUsers||[]).find(function(u){return u.id===c.teacher_id;});
+          return t&&t.branch_id===b.id;
+        });
+        if(!bClasses.length) return;
+        html+='<div style="margin-bottom:28px">';
+        html+='<div style="font-size:13px;font-weight:800;color:#fff;background:#1F3A51;padding:7px 14px;border-radius:8px;margin-bottom:10px;display:inline-block">🏢 '+b.name+'</div>';
+        html+=admTTBuildGrid(bClasses);
+        html+='</div>';
+      });
+      if(noBranchClasses.length){
+        html+='<div style="margin-bottom:28px">';
+        html+='<div style="font-size:13px;font-weight:800;color:#fff;background:#64748b;padding:7px 14px;border-radius:8px;margin-bottom:10px;display:inline-block">📌 분원 미지정</div>';
+        html+=admTTBuildGrid(noBranchClasses);
+        html+='</div>';
+      }
+      html+='</div>';
+      wrap.innerHTML=html; return;
+    }
+
+    // 특정 분원 선택
+    wrap.innerHTML=admTTBuildHTML(targetClasses, title);
+
   } else {
     var teacherId=(document.getElementById('adm-tt-teacher-sel')||{}).value||'';
     if(!teacherId){ wrap.innerHTML='<div style="text-align:center;padding:40px;color:#9ca3af;font-size:14px">선생님을 선택하세요</div>'; return; }
     var teacher=(allUsers||[]).find(function(u){return u.id===teacherId;});
     title='👤 '+(teacher?teacher.name:'')+' 선생님 시간표';
     targetClasses=(allClasses||[]).filter(function(c){ return c.active&&c.class_days&&c.class_time&&c.teacher_id===teacherId; });
+    if(!targetClasses.length){ wrap.innerHTML='<div style="text-align:center;padding:40px;color:#9ca3af;font-size:14px">시간 정보가 입력된 반이 없습니다</div>'; return; }
+    wrap.innerHTML=admTTBuildHTML(targetClasses, title);
   }
-  if(!targetClasses.length){ wrap.innerHTML='<div style="text-align:center;padding:40px;color:#9ca3af;font-size:14px">시간 정보가 입력된 반이 없습니다</div>'; return; }
-  wrap.innerHTML=admTTBuildHTML(targetClasses, title);
 }
 
-function admTTBuildHTML(targetClasses, title){
+function admTTBuildGrid(targetClasses){
   var allSchedules=[];
   targetClasses.forEach(function(cls){ parseClassSchedule(cls).forEach(function(s){ allSchedules.push({cls:cls,day:s.day,start:s.start,end:s.end}); }); });
-  if(!allSchedules.length) return '<div style="text-align:center;padding:40px;color:#9ca3af">시간 정보가 없습니다</div>';
+  if(!allSchedules.length) return '<div style="text-align:center;padding:20px;color:#9ca3af;font-size:13px">시간 정보 없음</div>';
 
   var WEEKDAYS=['월','화','수','목','금'], WEEKENDS=['토','일'];
   var usedWeekdays=WEEKDAYS.filter(function(d){ return allSchedules.some(function(s){return s.day===d;}); });
@@ -5966,8 +6014,8 @@ function admTTBuildHTML(targetClasses, title){
     var minS=Math.floor(Math.min.apply(null,scheds.map(function(s){return tMin(s.start);}))/60)*60;
     var maxE=Math.ceil(Math.max.apply(null,scheds.map(function(s){return tMin(s.end);}))/60)*60;
     var bodyH=Math.round((maxE-minS)/60*CELL_H);
-    var g='<div style="font-size:12px;font-weight:700;color:#64748b;margin-bottom:6px">'+label+'</div>';
-    g+='<div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,0.08);margin-bottom:20px;overflow-x:auto">';
+    var g='<div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:5px">'+label+'</div>';
+    g+='<div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,0.08);margin-bottom:14px;overflow-x:auto">';
     g+='<div style="position:relative;min-width:'+(TIME_W+COL_W*days.length)+'px;font-size:12px">';
     g+='<div style="display:flex;height:'+HEADER_H+'px;background:#f8fafc;border-bottom:2px solid #e2e8f0">';
     g+='<div style="width:'+TIME_W+'px;flex-shrink:0;display:flex;align-items:center;justify-content:center"><span style="font-size:10px;color:#94a3b8;font-weight:700">TIME</span></div>';
@@ -6003,17 +6051,25 @@ function admTTBuildHTML(targetClasses, title){
     return g;
   }
 
-  var html='<div id="adm-tt-content" style="background:#f0f0f0;padding:4px">';
-  html+='<div style="font-size:15px;font-weight:800;color:#1F3A51;margin-bottom:16px">'+title+'</div>';
+  var html='';
   if(usedWeekdays.length) html+=buildGrid(usedWeekdays, allSchedules.filter(function(s){return usedWeekdays.indexOf(s.day)>=0;}), '📅 평일');
   if(usedWeekends.length) html+=buildGrid(usedWeekends, allSchedules.filter(function(s){return usedWeekends.indexOf(s.day)>=0;}), '📅 주말');
-  html+='<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px">';
+  // 범례
+  html+='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;margin-bottom:4px">';
   targetClasses.forEach(function(cls){
     var ci=clsColorMap[cls.id]||0;
-    html+='<div style="display:flex;align-items:center;gap:4px;font-size:11px;color:#374151">'
-      +'<div style="width:12px;height:12px;border-radius:3px;background:'+palette[ci]+';border-left:3px solid '+bPalette[ci]+'"></div>'+cls.name+'</div>';
+    html+='<div style="display:flex;align-items:center;gap:4px;font-size:10px;color:#374151">'
+      +'<div style="width:10px;height:10px;border-radius:2px;background:'+palette[ci]+';border-left:3px solid '+bPalette[ci]+'"></div>'+cls.name+'</div>';
   });
-  html+='</div></div>';
+  html+='</div>';
+  return html;
+}
+
+function admTTBuildHTML(targetClasses, title){
+  var html='<div id="adm-tt-content" style="background:#f0f0f0;padding:4px">';
+  html+='<div style="font-size:15px;font-weight:800;color:#1F3A51;margin-bottom:16px">'+title+'</div>';
+  html+=admTTBuildGrid(targetClasses);
+  html+='</div>';
   return html;
 }
 
