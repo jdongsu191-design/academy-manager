@@ -29806,230 +29806,92 @@ var _transferInList   = [];   // 나에게 들어온 pending 전반 요청
 var _transferOutList  = [];   // 내가 신청한 pending 전반 요청
 
 async function loadTransferRequests(){
+  // 내가 받은 전반 중 미확인(notified=false) 건 조회
   var {data: incoming} = await db.from('transfer_requests')
-    .select('*, student:student_id(id,name,school,grade), from_teacher:from_teacher_id(id,name)')
-    .eq('to_teacher_id', currentUser.id).in('status',['pending','approved_pending'])
-    .order('requested_at', {ascending: false});
-  _transferInList = incoming || [];
+    .select('*, student:student_id(id,name,school,grade), from_teacher:from_teacher_id(id,name), to_class:to_class_id(id,name)')
+    .eq('to_teacher_id', currentUser.id)
+    .eq('status', 'done')
+    .eq('notified', false)
+    .order('transfer_date', {ascending: false});
 
-  // 시행일이 된 approved_pending 건 자동 처리
-  var today = new Date().toISOString().slice(0,10);
-  var toApply = (incoming||[]).filter(function(r){
-    return r.status === 'approved_pending' && r.transfer_date && r.transfer_date <= today;
-  });
-  for(var i=0; i<toApply.length; i++){
-    var r = toApply[i];
-    // 시행일 도래 → 실제 반영
-    await db.from('users').update({
-      teacher_id: currentUser.id,
-      class_id: r.to_class_id,
-      class_id2: null
-    }).eq('id', r.student.id);
-    await db.from('transfer_requests').update({ status: 'approved' }).eq('id', r.id);
-
-    // 히스토리 기록
-    var fromT = r.from_teacher || {};
-    var {data: toC} = await db.from('classes').select('name').eq('id', r.to_class_id).single();
-    await recordStudentClassHistory(
-      r.student.id, r.student.name || '',
-      fromT.id,        fromT.name || '',
-      currentUser.id,  currentUser.name || '',
-      null, '',
-      r.to_class_id,   toC ? toC.name : '',
-      r.transfer_date, r.note || '전반 (시행일 자동처리)'
-    );
-  }
-  if(toApply.length > 0){
-    await loadTeacherData();
-  }
-
+  // 내가 보낸 전반 목록 (최근 30일)
+  var recentDate = new Date();
+  recentDate.setDate(recentDate.getDate() - 30);
   var {data: outgoing} = await db.from('transfer_requests')
     .select('*, student:student_id(id,name,school,grade), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
-    .eq('from_teacher_id', currentUser.id).eq('status','pending')
-    .order('requested_at', {ascending: false});
-  _transferOutList = outgoing || [];
+    .eq('from_teacher_id', currentUser.id)
+    .eq('status', 'done')
+    .gte('transfer_date', recentDate.toISOString().slice(0,10))
+    .order('transfer_date', {ascending: false});
 
-  renderTransferInCard();
+  _transferInList  = incoming  || [];
+  _transferOutList = outgoing  || [];
+
+  // 미확인 전반 알림 팝업
+  if(_transferInList.length > 0){
+    showTransferNotifyPopup(_transferInList);
+  }
+
   renderTransferOutCard();
 }
 
-function renderTransferInCard(){
-  var card = document.getElementById('transfer-in-card');
-  var badge = document.getElementById('transfer-in-badge');
-  var list = document.getElementById('transfer-in-list');
-  if(!card) return;
-  if(!_transferInList.length){
-    card.style.display = 'none';
-    return;
-  }
-  card.style.display = 'block';
-  if(badge) badge.textContent = _transferInList.length;
-  if(!list) return;
-  list.innerHTML = _transferInList.map(function(req){
-    var s = req.student || {};
-    var ft = req.from_teacher || {};
-    var schoolGrade = [s.school, s.grade].filter(Boolean).join(' ');
-    var today = new Date().toISOString().slice(0,10);
-    var tDate = req.transfer_date || today;
-    var isPending = req.status === 'approved_pending';
-    var dateLabel = isPending
-      ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;border-radius:4px;padding:1px 5px;margin-left:4px">📅 '+tDate+' 시행예정</span>'
-      : (tDate !== today ? '<span style="font-size:10px;color:#64748b;margin-left:4px">시행일: '+tDate+'</span>' : '');
-    return '<div style="display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid #dbeafe">'
+/* ── 전반 알림 팝업 (받는 선생님 1회성) ──────────────────── */
+function showTransferNotifyPopup(list){
+  var existing = document.getElementById('transfer-notify-popup');
+  if(existing) existing.remove();
+
+  var rows = list.map(function(r){
+    var s = r.student || {};
+    var ft = r.from_teacher || {};
+    var tc = r.to_class || {};
+    var sg = [s.school, s.grade].filter(Boolean).join(' ');
+    return '<div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:10px">'
+      +'<div style="width:36px;height:36px;border-radius:50%;background:#dbeafe;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">👤</div>'
       +'<div style="flex:1">'
-        +'<div style="font-size:14px;font-weight:700;color:#1e293b">'+s.name+dateLabel+'</div>'
-        +'<div style="font-size:12px;color:#6b7280;margin-top:2px">'+(schoolGrade||'')+(ft.name?' \u00B7 '+ft.name+' T 반에서':'')+'</div>'
-        +(req.note?'<div style="font-size:11px;color:#9ca3af;margin-top:2px">사유: '+req.note+'</div>':'')
-      +'</div>'
-      +'<div style="display:flex;gap:6px;flex-shrink:0">'
-        +(isPending
-          ? '<button onclick="approveTransfer(\''+req.id+'\')" '
-            +'style="padding:6px 12px;border:none;border-radius:8px;background:#1d4ed8;color:#fff;font-size:12px;font-weight:700;cursor:pointer">✅ 승인</button>'
-            +'<button onclick="rejectTransfer(\''+req.id+'\')" '
-            +'style="padding:6px 12px;border:1.5px solid #fca5a5;border-radius:8px;background:#fff;color:#dc2626;font-size:12px;font-weight:700;cursor:pointer">✕ 거절</button>'
-          : '<span style="font-size:11px;color:#92400e;font-weight:700;padding:6px 10px;background:#fef3c7;border-radius:8px">승인됨 · 시행대기</span>'
-            +'<button onclick="rejectTransfer(\''+req.id+'\')" '
-            +'style="padding:6px 12px;border:1.5px solid #fca5a5;border-radius:8px;background:#fff;color:#dc2626;font-size:12px;font-weight:700;cursor:pointer">취소</button>')
+        +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+s.name+'</div>'
+        +'<div style="font-size:11px;color:#64748b;margin-top:2px">'+(sg||'')+' · '+ft.name+' T → '+tc.name+'</div>'
+        +'<div style="font-size:11px;color:#3b82f6;margin-top:1px">📅 시행일: '+r.transfer_date+'</div>'
+        +(r.note?'<div style="font-size:11px;color:#9ca3af;margin-top:1px">사유: '+r.note+'</div>':'')
       +'</div>'
     +'</div>';
   }).join('');
-}
 
-function renderTransferOutCard(){
-  var card = document.getElementById('transfer-out-card');
-  var badge = document.getElementById('transfer-out-badge');
-  var list = document.getElementById('transfer-out-list');
-  if(!card) return;
-  if(!_transferOutList.length){
-    card.style.display = 'none';
-    return;
-  }
-  card.style.display = 'block';
-  if(badge) badge.textContent = _transferOutList.length;
-  if(!list) return;
-  list.innerHTML = _transferOutList.map(function(req){
-    var s = req.student || {};
-    var tt = req.to_teacher || {};
-    var tc = req.to_class || {};
-    var schoolGrade = [s.school, s.grade].filter(Boolean).join(' ');
-    var reqDate = req.requested_at ? req.requested_at.slice(0,10) : '';
-    return '<div style="display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid #d1fae5">'
-      +'<div style="flex:1">'
-        +'<div style="font-size:14px;font-weight:700;color:#1e293b">'+s.name+'</div>'
-        +'<div style="font-size:12px;color:#6b7280;margin-top:2px">'
-          +(schoolGrade||'')
-          +(tt.name?' \u2192 '+tt.name+' T':'')
-          +(tc.name?' ('+tc.name+')':'')
-        +'</div>'
-        +(req.note?'<div style="font-size:11px;color:#9ca3af;margin-top:2px">사유: '+req.note+'</div>':'')
-        +(reqDate?'<div style="font-size:11px;color:#9ca3af;margin-top:2px">신청일: '+reqDate+'</div>':'')
+  var popup = document.createElement('div');
+  popup.id = 'transfer-notify-popup';
+  popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:5000;'
+    +'background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.25);'
+    +'width:95vw;max-width:440px;overflow:hidden;animation:slideIn 0.2s ease';
+  popup.innerHTML =
+    '<div style="background:#1F3A51;padding:16px 20px;display:flex;align-items:center;justify-content:space-between">'
+      +'<div>'
+        +'<div style="font-size:15px;font-weight:800;color:#fff">🔔 전반 알림</div>'
+        +'<div style="font-size:11px;color:rgba(255,255,255,0.6);margin-top:2px">내 반으로 전반된 학생이 있습니다</div>'
       +'</div>'
-      +'<div style="flex-shrink:0">'
-        +'<span style="padding:4px 10px;border-radius:100px;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700">\u23F3 대기중</span>'
-      +'</div>'
+      +'<span style="font-size:20px;font-weight:800;color:#fff;background:rgba(255,255,255,0.2);width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer" onclick="closeTransferNotifyPopup()">'+list.length+'</span>'
+    +'</div>'
+    +'<div style="max-height:50vh;overflow-y:auto">'+rows+'</div>'
+    +'<div style="padding:14px 20px;border-top:1.5px solid #e2e8f0;display:flex;justify-content:flex-end">'
+      +'<button onclick="closeTransferNotifyPopup()" style="padding:9px 24px;border:none;border-radius:10px;background:#1F3A51;color:#fff;font-size:13px;font-weight:700;cursor:pointer">확인</button>'
     +'</div>';
-  }).join('');
+
+  var overlay = document.createElement('div');
+  overlay.id = 'transfer-notify-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:4999';
+  document.body.appendChild(overlay);
+  document.body.appendChild(popup);
 }
 
-async function openTransferModal(studentId, studentName){
-  document.getElementById('transfer-student-id').value = studentId;
-  document.getElementById('transfer-student-name-label').textContent = studentName + ' 학생 전반 신청';
-  document.getElementById('transfer-note').value = '';
-  document.getElementById('transfer-to-class').innerHTML = '<option value="">선생님을 먼저 선택하세요</option>';
-  // 전반 시행일 기본값: 오늘
-  document.getElementById('transfer-date').value = new Date().toISOString().slice(0,10);
-
-  var {data: teachers} = await db.from('users')
-    .select('id,name').eq('role','teacher').eq('status','active')
-    .neq('id', currentUser.id).is('deleted_at', null).order('name');
-  _transferTeachers = teachers || [];
-
-  var sel = document.getElementById('transfer-to-teacher');
-  sel.innerHTML = '<option value="">선생님 선택...</option>'
-    + _transferTeachers.map(function(t){
-      return '<option value="'+t.id+'">'+t.name+' T</option>';
-    }).join('');
-
-  var modal = document.getElementById('modal-transfer');
-  modal.style.display = 'flex';
-  modal.onclick = function(e){ if(e.target === modal) closeTransferModal(); };
-}
-
-function closeTransferModal(){
-  document.getElementById('modal-transfer').style.display = 'none';
-}
-
-async function loadTransferClasses(){
-  var teacherId = document.getElementById('transfer-to-teacher').value;
-  var classSel = document.getElementById('transfer-to-class');
-  if(!teacherId){
-    classSel.innerHTML = '<option value="">선생님을 먼저 선택하세요</option>';
-    return;
+async function closeTransferNotifyPopup(){
+  // notified = true 로 업데이트
+  var ids = (_transferInList||[]).map(function(r){ return r.id; });
+  if(ids.length > 0){
+    await db.from('transfer_requests').update({ notified: true }).in('id', ids);
+    _transferInList = [];
   }
-  classSel.innerHTML = '<option value="">불러오는 중...</option>';
-  var {data: cls} = await db.from('classes')
-    .select('id,name').eq('teacher_id', teacherId).eq('active', true).order('name');
-  var clsList = cls || [];
-  if(!clsList.length){
-    classSel.innerHTML = '<option value="">해당 선생님의 반이 없습니다</option>';
-    return;
-  }
-  classSel.innerHTML = '<option value="">반 선택...</option>'
-    + clsList.map(function(c){ return '<option value="'+c.id+'">'+c.name+'</option>'; }).join('');
-}
-
-async function submitTransfer(){
-  var toTeacherId = document.getElementById('transfer-to-teacher').value;
-  var toClassId = document.getElementById('transfer-to-class').value;
-  var note = document.getElementById('transfer-note').value.trim();
-  var transferDate = document.getElementById('transfer-date').value;
-  if(!toTeacherId){ alert('받는 선생님을 선택하세요'); return; }
-  if(!toClassId){ alert('전반할 반을 선택하세요'); return; }
-  if(!transferDate){ alert('전반 시행일을 선택하세요'); return; }
-
-  var isBulk = document.getElementById('transfer-student-id').value === '__bulk__';
-  var targets = isBulk
-    ? (window._bulkTransferStudents || [])
-    : [{ id: document.getElementById('transfer-student-id').value }];
-
-  if(!targets.length){ alert('선택된 학생이 없습니다'); return; }
-
-  var btn = document.getElementById('transfer-submit-btn');
-  btn.textContent = '신청 중...'; btn.disabled = true;
-
-  var errors = [], success = 0;
-  for(var i=0; i<targets.length; i++){
-    var sid = targets[i].id;
-    var {data: existing} = await db.from('transfer_requests')
-      .select('id').eq('student_id', sid).eq('status','pending');
-    if(existing && existing.length){
-      errors.push((targets[i].name||sid)+': 이미 전반 신청 중');
-      continue;
-    }
-    var {error} = await db.from('transfer_requests').insert({
-      student_id: sid,
-      from_teacher_id: currentUser.id,
-      to_teacher_id: toTeacherId,
-      to_class_id: toClassId,
-      note: note || null,
-      transfer_date: transferDate,
-      status: 'pending'
-    });
-    if(error) errors.push((targets[i].name||sid)+': '+error.message);
-    else success++;
-  }
-
-  btn.textContent = '전반 신청'; btn.disabled = false;
-  closeTransferModal();
-  clearStudentSelection();
-  window._bulkTransferStudents = [];
-
-  if(errors.length){
-    alert('\u26A0\uFE0F 완료: '+success+'건\n실패:\n'+errors.join('\n'));
-  } else {
-    alert('\u2705 전반 신청 완료! ('+success+'명)\n상대 선생님이 승인하면 반 이동이 처리됩니다.');
-  }
-  await loadTransferRequests();
+  var popup = document.getElementById('transfer-notify-popup');
+  var overlay = document.getElementById('transfer-notify-overlay');
+  if(popup) popup.remove();
+  if(overlay) overlay.remove();
 }
 
 async function approveTransfer(requestId){
