@@ -6008,46 +6008,130 @@ function admTTBuildGrid(targetClasses){
   var dayCol={'월':'#1d4ed8','화':'#dc2626','수':'#16a34a','목':'#d97706','금':'#7c3aed','토':'#9d174d','일':'#e11d48'};
   function tMin(t){ if(!t)return 0; var p=t.split(':'); return parseInt(p[0])*60+(parseInt(p[1])||0); }
 
+  // ── 겹침 감지 → 서브컬럼 배치 ──────────────────────────
+  // 반환: 각 스케줄에 {col, totalCols} 배정
+  function assignColumns(scheds){
+    // 시작시간 순 정렬
+    var sorted = scheds.slice().sort(function(a,b){ return tMin(a.start)-tMin(b.start); });
+    // 각 블록에 컬럼 번호 배정
+    var result = {};
+    sorted.forEach(function(s, i){ result[i] = {col:0, total:1}; });
+
+    // 겹치는 그룹 찾기 (interval graph coloring)
+    var cols = []; // cols[i] = 마지막 end
+    sorted.forEach(function(s, i){
+      var sMin = tMin(s.start), eMin = tMin(s.end);
+      // 사용 가능한 컬럼 찾기
+      var assigned = -1;
+      for(var c=0; c<cols.length; c++){
+        if(cols[c] <= sMin){
+          assigned = c;
+          cols[c] = eMin;
+          break;
+        }
+      }
+      if(assigned === -1){
+        assigned = cols.length;
+        cols.push(eMin);
+      }
+      result[i].col = assigned;
+    });
+
+    // 각 블록의 total: 겹치는 블록들 중 최대 컬럼 수
+    sorted.forEach(function(s, i){
+      var sMin = tMin(s.start), eMin = tMin(s.end);
+      var maxCol = result[i].col;
+      sorted.forEach(function(s2, j){
+        if(i===j) return;
+        var s2Min = tMin(s2.start), e2Min = tMin(s2.end);
+        // 겹치는지 확인
+        if(sMin < e2Min && eMin > s2Min){
+          maxCol = Math.max(maxCol, result[j].col);
+        }
+      });
+      result[i].total = maxCol + 1;
+    });
+
+    // sorted 인덱스 → original 스케줄 매핑
+    var map = new Map();
+    sorted.forEach(function(s, i){
+      map.set(s, result[i]);
+    });
+    return map;
+  }
+
   function buildGrid(days, scheds, label){
     if(!days.length) return '';
     var CELL_H=68, HEADER_H=44, TIME_W=52;
-    var COL_W=Math.max(110, Math.floor((820-TIME_W)/days.length));
+    var COL_W=Math.max(130, Math.floor((860-TIME_W)/days.length));
     var minS=Math.floor(Math.min.apply(null,scheds.map(function(s){return tMin(s.start);}))/60)*60;
     var maxE=Math.ceil(Math.max.apply(null,scheds.map(function(s){return tMin(s.end);}))/60)*60;
     var bodyH=Math.round((maxE-minS)/60*CELL_H);
     var g='<div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:5px">'+label+'</div>';
     g+='<div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,0.08);margin-bottom:14px;overflow-x:auto">';
     g+='<div style="position:relative;min-width:'+(TIME_W+COL_W*days.length)+'px;font-size:12px">';
+    // 헤더
     g+='<div style="display:flex;height:'+HEADER_H+'px;background:#f8fafc;border-bottom:2px solid #e2e8f0">';
     g+='<div style="width:'+TIME_W+'px;flex-shrink:0;display:flex;align-items:center;justify-content:center"><span style="font-size:10px;color:#94a3b8;font-weight:700">TIME</span></div>';
     days.forEach(function(d){
       var bg=dayBg[d]||'#f8fafc', col=dayCol[d]||'#374151';
       g+='<div style="flex:0 0 '+COL_W+'px;text-align:center;font-weight:800;font-size:13px;color:'+col+';background:'+bg+';display:flex;align-items:center;justify-content:center;border-left:1px solid #e2e8f0">'+d+'</div>';
     });
-    g+='</div><div style="position:relative;height:'+bodyH+'px">';
+    g+='</div>';
+    // 바디
+    g+='<div style="position:relative;height:'+bodyH+'px">';
+    // 시간 눈금
     for(var m=minS; m<=maxE; m+=60){
       var y=Math.round((m-minS)/60*CELL_H);
       var hStr=(Math.floor(m/60)<10?'0':'')+Math.floor(m/60)+':00';
-      g+='<div style="position:absolute;top:'+y+'px;left:0;width:'+TIME_W+'px;font-size:9px;color:#94a3b8;font-weight:600;text-align:center">'+hStr+'</div>';
+      g+='<div style="position:absolute;top:'+y+'px;left:0;width:'+TIME_W+'px;font-size:9px;color:#94a3b8;font-weight:600;text-align:center;line-height:1">'+hStr+'</div>';
       if(m>minS) g+='<div style="position:absolute;top:'+y+'px;left:'+TIME_W+'px;right:0;height:1px;background:#f1f5f9"></div>';
     }
+    // 열 구분선
     days.forEach(function(d,di){
       var x=TIME_W+di*COL_W;
-      scheds.filter(function(s){return s.day===d;}).forEach(function(s){
+      if(di>0) g+='<div style="position:absolute;top:0;left:'+x+'px;width:1px;height:100%;background:#e2e8f0"></div>';
+    });
+
+    // 요일별 블록 배치 (겹침 처리)
+    days.forEach(function(d,di){
+      var x=TIME_W+di*COL_W;
+      var dayScheds = scheds.filter(function(s){ return s.day===d; });
+      if(!dayScheds.length) return;
+
+      // 컬럼 배정
+      var colMap = assignColumns(dayScheds);
+
+      dayScheds.forEach(function(s){
+        var info = colMap.get(s) || {col:0, total:1};
+        var subW = Math.floor(COL_W / info.total);
+        var subX = x + info.col * subW;
+        // 마지막 컬럼은 남은 너비 다 사용
+        if(info.col === info.total - 1){
+          subW = COL_W - info.col * Math.floor(COL_W / info.total);
+        }
+
         var top=Math.round((tMin(s.start)-minS)/60*CELL_H);
-        var h=Math.max(24,Math.round((tMin(s.end)-tMin(s.start))/60*CELL_H)-3);
+        var h=Math.max(28,Math.round((tMin(s.end)-tMin(s.start))/60*CELL_H)-3);
         var ci=clsColorMap[s.cls.id]||0;
+        var pad = 2;
         var tStr='';
         if(_admTTMode==='branch'){
           var t=(allUsers||[]).find(function(u){return u.id===s.cls.teacher_id;});
-          if(t) tStr='<div style="font-size:8px;color:'+bPalette[ci]+';margin-top:1px">'+t.name+' T</div>';
+          if(t) tStr='<div style="font-size:7px;color:'+bPalette[ci]+';margin-top:1px;font-weight:600">'+t.name+' T</div>';
         }
-        g+='<div style="position:absolute;left:'+(x+2)+'px;top:'+(top+2)+'px;width:'+(COL_W-4)+'px;height:'+h+'px;background:'+palette[ci]+';border-left:3px solid '+bPalette[ci]+';border-radius:6px;padding:4px 5px;overflow:hidden;box-sizing:border-box">'
-          +'<div style="font-size:10px;font-weight:700;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+s.cls.name+'</div>'
-          +'<div style="font-size:9px;color:#64748b;margin-top:1px">'+s.start+'~'+s.end+'</div>'
-          +tStr+'</div>';
+        g+='<div style="position:absolute;left:'+(subX+pad)+'px;top:'+(top+pad)+'px;'
+          +'width:'+(subW-pad*2)+'px;height:'+(h-pad)+'px;'
+          +'background:'+palette[ci]+';border-left:3px solid '+bPalette[ci]+';'
+          +'border-radius:5px;padding:3px 4px;overflow:hidden;box-sizing:border-box;'
+          +'box-shadow:0 1px 3px rgba(0,0,0,0.08)">'
+          +'<div style="font-size:9px;font-weight:700;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3">'+s.cls.name+'</div>'
+          +'<div style="font-size:8px;color:#64748b;margin-top:1px">'+s.start+'~'+s.end+'</div>'
+          +tStr
+          +'</div>';
       });
     });
+
     g+='</div></div></div>';
     return g;
   }
