@@ -6619,8 +6619,14 @@ async function admClassChangeLoadClasses(preSelectClassId){
 async function admClassChangeSave(studentId){
   var teacherId = (document.getElementById('acc-teacher-sel')||{}).value||'';
   var classId   = (document.getElementById('acc-class-sel')||{}).value||'';
-  if(!teacherId){ alert('\uc120\uc0dd\ub2d8\uc744 \uc120\ud0dd\ud558\uc138\uc694'); return; }
-  if(!classId){   alert('\ubc18\uc744 \uc120\ud0dd\ud558\uc138\uc694'); return; }
+  if(!teacherId){ alert('선생님을 선택하세요'); return; }
+  if(!classId){   alert('반을 선택하세요'); return; }
+
+  // 변경 전 학생 정보 조회
+  var {data: prevStu} = await db.from('users')
+    .select('name,teacher_id,class_id').eq('id', studentId).single();
+  var prevTeacherId = prevStu ? prevStu.teacher_id : null;
+  var prevClassId   = prevStu ? prevStu.class_id   : null;
 
   var {error} = await db.from('users').update({
     teacher_id: teacherId,
@@ -6628,7 +6634,24 @@ async function admClassChangeSave(studentId){
     class_id2:  null
   }).eq('id', studentId);
 
-  if(error){ alert('\uc800\uc7a5 \uc2e4\ud328: '+error.message); return; }
+  if(error){ alert('저장 실패: '+error.message); return; }
+
+  // 히스토리 기록
+  if(prevTeacherId !== teacherId || prevClassId !== classId){
+    var today = new Date().toISOString().slice(0,10);
+    var fromTeacher = (allUsers||[]).find(function(u){ return u.id===prevTeacherId; });
+    var toTeacher   = (allUsers||[]).find(function(u){ return u.id===teacherId; });
+    var fromClass   = (allClasses||[]).find(function(c){ return c.id===prevClassId; });
+    var toClass     = (allClasses||[]).find(function(c){ return c.id===classId; });
+    await recordStudentClassHistory(
+      studentId, prevStu ? prevStu.name : '',
+      prevTeacherId,  fromTeacher  ? fromTeacher.name  : '',
+      teacherId,      toTeacher    ? toTeacher.name    : '',
+      prevClassId,    fromClass    ? fromClass.name    : '',
+      classId,        toClass      ? toClass.name      : '',
+      today, '관리자 반 변경'
+    );
+  }
 
   document.getElementById('admin-class-change-modal').remove();
   await loadAdminData();
@@ -6817,76 +6840,94 @@ async function trLoadTab(tab, teacherId){
         +'</div>';
 
     } else if(tab === 'monthly'){
-      // ── 월별수강인원 ─────────────────────────────
-      // 담당 반 → 월별 학생 수 요약
-      var {data: classes, error: ce} = await db.from('classes')
+      // ── 월별수강인원: 히스토리 기반 ─────────────────────
+      var {data: classHist} = await db.from('class_teacher_history')
+        .select('class_id,class_name,from_date,to_date')
+        .eq('teacher_id', teacherId)
+        .order('from_date', {ascending:false});
+      var {data: curClasses} = await db.from('classes')
         .select('id,name,class_days,class_time')
         .eq('teacher_id', teacherId);
-      if(ce) throw ce;
-
-      var {data: students, error: se} = await db.from('users')
-        .select('id,name,class_id,status,enrolled_at,withdrawn_at')
-        .eq('role','student')
-        .eq('teacher_id', teacherId);
-      if(se) throw se;
-
-      if(!classes || !classes.length){
+      var histClassIds = (classHist||[]).map(function(h){ return h.class_id; });
+      var curClassIds  = (curClasses||[]).map(function(c){ return c.id; });
+      var allClassIds  = Array.from(new Set(histClassIds.concat(curClassIds)));
+      if(!allClassIds.length){
         el.innerHTML = '<div class="empty-state"><p>담당 반 기록이 없습니다</p></div>'; return;
       }
-
-      el.innerHTML = '<div style="font-size:11px;color:#64748b;margin-bottom:10px">담당 반 '+classes.length+'개 · 연관 학생 '+(students||[]).length+'명</div>'
+      var {data: students} = await db.from('users')
+        .select('id,class_id,status')
+        .eq('role','student').in('class_id', allClassIds);
+      var rows = [];
+      (curClasses||[]).forEach(function(c){
+        var studs = (students||[]).filter(function(s){ return s.class_id===c.id; });
+        rows.push({name:c.name, days:c.class_days, time:c.class_time,
+          active:studs.filter(function(s){ return s.status==='active'; }).length,
+          inactive:studs.filter(function(s){ return s.status!=='active'; }).length,
+          isCurrent:true, period:'현재 담당'});
+      });
+      (classHist||[]).forEach(function(h){
+        if(curClassIds.indexOf(h.class_id)>=0) return;
+        var studs = (students||[]).filter(function(s){ return s.class_id===h.class_id; });
+        var period = h.from_date+(h.to_date?' ~ '+h.to_date:' ~ 현재');
+        rows.push({name:h.class_name||h.class_id, days:'', time:'',
+          active:studs.filter(function(s){ return s.status==='active'; }).length,
+          inactive:studs.filter(function(s){ return s.status!=='active'; }).length,
+          isCurrent:false, period:period});
+      });
+      el.innerHTML = '<div style="font-size:11px;color:#64748b;margin-bottom:10px">담당 반 이력 총 '+rows.length+'개 (히스토리 포함)</div>'
         +'<div style="display:flex;flex-direction:column;gap:8px">'
-        + classes.map(function(c){
-            var studs = (students||[]).filter(function(s){ return s.class_id===c.id; });
-            var active = studs.filter(function(s){ return s.status==='active'; }).length;
-            var inactive = studs.filter(function(s){ return s.status!=='active'; }).length;
-            return '<div style="border:1.5px solid #e2e8f0;border-radius:10px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">'
-              +'<div>'
-                +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+c.name+'</div>'
-                +'<div style="font-size:11px;color:#64748b;margin-top:2px">'+(c.class_days||'')+(c.class_time?' '+c.class_time:'')+'</div>'
-              +'</div>'
-              +'<div style="text-align:right">'
-                +'<span style="font-size:12px;font-weight:700;color:#16a34a">재원 '+active+'명</span>'
-                +(inactive?'<span style="font-size:11px;color:#9ca3af;margin-left:6px">퇴원 '+inactive+'명</span>':'')
-              +'</div>'
-            +'</div>';
-          }).join('')
-        +'</div>';
+        +rows.map(function(r){
+          return '<div style="border:1.5px solid '+(r.isCurrent?'#bfdbfe':'#e2e8f0')+';border-radius:10px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">'
+            +'<div><div style="display:flex;align-items:center;gap:6px">'
+              +'<span style="font-size:13px;font-weight:700;color:#1e293b">'+r.name+'</span>'
+              +(r.isCurrent?'<span style="font-size:9px;padding:1px 6px;background:#dbeafe;color:#1d4ed8;border-radius:100px;font-weight:700">현재</span>':'')
+            +'</div>'
+            +'<div style="font-size:11px;color:#64748b;margin-top:2px">'+r.period+(r.days?' · '+r.days:'')+(r.time?' '+r.time:'')+'</div></div>'
+            +'<div style="text-align:right">'
+              +'<span style="font-size:12px;font-weight:700;color:#16a34a">재원 '+r.active+'명</span>'
+              +(r.inactive?'<span style="font-size:11px;color:#9ca3af;margin-left:6px">퇴원 '+r.inactive+'명</span>':'')
+            +'</div></div>';
+        }).join('')+'</div>';
 
     } else if(tab === 'weekend'){
-      // ── 주말프로그램 ─────────────────────────────
-      // 담당 선생님의 주말반 학생 목록
-      var {data: wStudents, error: we} = await db.from('users')
-        .select('id,name,school,grade,status,weekend_level,weekend_attend_time,enrolled_at,withdrawn_at')
-        .eq('role','student')
-        .eq('teacher_id', teacherId)
-        .not('weekend_level', 'is', null)
-        .order('name');
-      if(we) throw we;
-
-      if(!wStudents || !wStudents.length){
+      // ── 주말프로그램: 히스토리 기반 ──────────────────────
+      var {data: fromHist} = await db.from('student_class_history')
+        .select('student_id,student_name,changed_date')
+        .eq('from_teacher_id', teacherId)
+        .order('changed_date', {ascending:false});
+      var {data: curWStudents} = await db.from('users')
+        .select('id,name,school,grade,status,weekend_level,weekend_attend_time')
+        .eq('role','student').eq('teacher_id', teacherId)
+        .not('weekend_level','is',null).order('name');
+      var histStudentIds = Array.from(new Set((fromHist||[]).map(function(h){ return h.student_id; })));
+      var curWIds = (curWStudents||[]).map(function(s){ return s.id; });
+      var prevOnlyIds = histStudentIds.filter(function(id){ return curWIds.indexOf(id)<0; });
+      var prevStudents = [];
+      if(prevOnlyIds.length){
+        var {data: prevStuData} = await db.from('users')
+          .select('id,name,school,grade,status,weekend_level,weekend_attend_time')
+          .in('id', prevOnlyIds);
+        prevStudents = (prevStuData||[]).filter(function(s){ return s.weekend_level; });
+      }
+      if(!(curWStudents||[]).length && !prevStudents.length){
         el.innerHTML = '<div class="empty-state"><p>주말프로그램 학생 기록이 없습니다</p></div>'; return;
       }
-
-      var active   = wStudents.filter(function(s){ return s.status==='active'; });
-      var inactive = wStudents.filter(function(s){ return s.status!=='active'; });
-
-      function renderWStu(list, label, color){
-        if(!list.length) return '';
-        return '<div style="margin-bottom:12px">'
-          +'<div style="font-size:12px;font-weight:700;color:'+color+';margin-bottom:6px">'+label+' '+list.length+'명</div>'
-          +'<div style="display:flex;flex-direction:column;gap:4px">'
-          + list.map(function(s){
-              return '<div style="font-size:11px;color:#374151;padding:5px 10px;background:#f8fafc;border-radius:7px;display:flex;justify-content:space-between">'
-                +'<span><b>'+s.name+'</b> · '+s.school+' '+s.grade+'</span>'
-                +'<span style="color:#64748b">'+(s.weekend_level||'')+(s.weekend_attend_time?' '+s.weekend_attend_time:'')+'</span>'
-              +'</div>';
-            }).join('')
-          +'</div></div>';
+      function renderWRow(s, isCurrent){
+        return '<div style="font-size:11px;color:#374151;padding:5px 10px;background:'+(isCurrent?'#f0fdf4':'#f8fafc')+';border-radius:7px;display:flex;justify-content:space-between;align-items:center">'
+          +'<span><b>'+s.name+'</b> · '+(s.school||'')+' '+(s.grade||'')+'</span>'
+          +'<span style="color:#64748b">'+(s.weekend_level||'')+(s.weekend_attend_time?' '+s.weekend_attend_time:'')
+            +(isCurrent?'':'<span style="color:#9ca3af;font-size:10px"> (전반됨)</span>')+'</span>'
+        +'</div>';
       }
-
-      el.innerHTML = renderWStu(active,'✅ 재원',  '#16a34a')
-                   + renderWStu(inactive,'⬜ 퇴원','#9ca3af');
+      el.innerHTML =
+        ((curWStudents||[]).length
+          ?'<div style="margin-bottom:12px"><div style="font-size:12px;font-weight:700;color:#16a34a;margin-bottom:6px">✅ 현재 담당 '+curWStudents.length+'명</div>'
+            +'<div style="display:flex;flex-direction:column;gap:4px">'+curWStudents.map(function(s){ return renderWRow(s,true); }).join('')+'</div></div>'
+          :'')
+        +(prevStudents.length
+          ?'<div><div style="font-size:12px;font-weight:700;color:#9ca3af;margin-bottom:6px">⬜ 이전 담당 (전반됨) '+prevStudents.length+'명</div>'
+            +'<div style="display:flex;flex-direction:column;gap:4px">'+prevStudents.map(function(s){ return renderWRow(s,false); }).join('')+'</div></div>'
+          :'');
     }
   } catch(e){
     el.innerHTML = '<div class="empty-state"><p>❌ 불러오기 실패: '+e.message+'</p></div>';
@@ -29533,12 +29574,25 @@ async function loadTransferRequests(){
   });
   for(var i=0; i<toApply.length; i++){
     var r = toApply[i];
+    // 시행일 도래 → 실제 반영
     await db.from('users').update({
       teacher_id: currentUser.id,
       class_id: r.to_class_id,
       class_id2: null
     }).eq('id', r.student.id);
     await db.from('transfer_requests').update({ status: 'approved' }).eq('id', r.id);
+
+    // 히스토리 기록
+    var fromT = r.from_teacher || {};
+    var {data: toC} = await db.from('classes').select('name').eq('id', r.to_class_id).single();
+    await recordStudentClassHistory(
+      r.student.id, r.student.name || '',
+      fromT.id,        fromT.name || '',
+      currentUser.id,  currentUser.name || '',
+      null, '',
+      r.to_class_id,   toC ? toC.name : '',
+      r.transfer_date, r.note || '전반 (시행일 자동처리)'
+    );
   }
   if(toApply.length > 0){
     await loadTeacherData();
@@ -29743,16 +29797,30 @@ async function approveTransfer(requestId){
   var isImmediate = transferDate <= today;
 
   if(isImmediate){
-    // 시행일이 오늘이거나 과거 → 즉시 반영
     var {error: ue} = await db.from('users').update({
       teacher_id: currentUser.id,
       class_id: req.to_class_id,
       class_id2: null
     }).eq('id', req.student.id);
     if(ue){ alert('학생 이동 오류: '+ue.message); return; }
+
+    // 즉시 반영 시 히스토리 기록
+    var fromTeacher = req.from_teacher || {};
+    var {data: toClass}   = await db.from('classes').select('name').eq('id', req.to_class_id).single();
+    var {data: fromStu}   = await db.from('users').select('class_id').eq('id', req.student.id).single();
+    var fromClassId = fromStu ? fromStu.class_id : null;
+    var {data: fromClass} = fromClassId
+      ? await db.from('classes').select('name').eq('id', fromClassId).single()
+      : {data: null};
+    await recordStudentClassHistory(
+      req.student.id, req.student.name,
+      fromTeacher.id,   fromTeacher.name || '',
+      currentUser.id,   currentUser.name || '',
+      fromClassId,      fromClass  ? fromClass.name  : '',
+      req.to_class_id,  toClass    ? toClass.name    : '',
+      transferDate, req.note || '전반'
+    );
   }
-  // 시행일이 미래 → users는 아직 변경하지 않음 (transfer_date 당일에 반영)
-  // transfer_requests에 승인 상태 + 시행일 기록
 
   await db.from('transfer_requests').update({
     status: isImmediate ? 'approved' : 'approved_pending',
@@ -31984,6 +32052,45 @@ function openAdmEditClassModal(classId){
   openModal('admEditClass');
 }
 
+/* ── 히스토리 기록 헬퍼 ─────────────────────────────────── */
+async function recordClassTeacherHistory(classId, className, newTeacherId, newTeacherName, changeDate){
+  try {
+    // 기존 현재 담당 기록 to_date 마감
+    var today = changeDate || new Date().toISOString().slice(0,10);
+    await db.from('class_teacher_history')
+      .update({ to_date: today })
+      .eq('class_id', classId)
+      .is('to_date', null);
+    // 새 담당 기록 insert
+    await db.from('class_teacher_history').insert({
+      class_id:     classId,
+      class_name:   className,
+      teacher_id:   newTeacherId,
+      teacher_name: newTeacherName,
+      from_date:    today
+    });
+  } catch(e){ console.warn('class_teacher_history 기록 실패:', e); }
+}
+
+async function recordStudentClassHistory(studentId, studentName, fromTeacherId, fromTeacherName, toTeacherId, toTeacherName, fromClassId, fromClassName, toClassId, toClassName, changeDate, reason){
+  try {
+    await db.from('student_class_history').insert({
+      student_id:       studentId,
+      student_name:     studentName,
+      from_teacher_id:  fromTeacherId,
+      from_teacher_name:fromTeacherName,
+      to_teacher_id:    toTeacherId,
+      to_teacher_name:  toTeacherName,
+      from_class_id:    fromClassId,
+      from_class_name:  fromClassName,
+      to_class_id:      toClassId,
+      to_class_name:    toClassName,
+      changed_date:     changeDate || new Date().toISOString().slice(0,10),
+      reason:           reason || null
+    });
+  } catch(e){ console.warn('student_class_history 기록 실패:', e); }
+}
+
 async function admSaveEditClass(){
   var id = document.getElementById('adm-edit-class-id').value;
   var name = document.getElementById('adm-edit-class-name').value.trim();
@@ -31991,11 +32098,23 @@ async function admSaveEditClass(){
   var {days, time} = getDayTimeFromWrap('adm-edit-day-time-wrap');
   if(!name){ alert('반 이름을 입력하세요'); return; }
   if(!teacherId){ alert('담당 선생님을 선택하세요'); return; }
+
+  // 변경 전 기존 담당 선생님 확인
+  var {data: prevClass} = await db.from('classes').select('teacher_id, name').eq('id', id).single();
+  var prevTeacherId = prevClass ? prevClass.teacher_id : null;
+
   var {error} = await db.from('classes').update({
     name, teacher_id: teacherId,
     class_days: days||null, class_time: time||null
   }).eq('id', id);
   if(error){ alert('오류: '+error.message); return; }
+
+  // 담당 선생님이 변경된 경우 히스토리 기록
+  if(prevTeacherId && prevTeacherId !== teacherId){
+    var newTeacher = (allUsers||[]).find(function(u){ return u.id === teacherId; });
+    await recordClassTeacherHistory(id, name, teacherId, newTeacher ? newTeacher.name : '', null);
+  }
+
   closeModal('admEditClass');
   await loadAdminData();
   admRenderClasses();
