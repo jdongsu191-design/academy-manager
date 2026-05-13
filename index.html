@@ -7549,11 +7549,15 @@ async function loadTeacherData(){
     }
   }
 
-  const[cRes,sRes,hRes,subRes]=await Promise.all([
+  var today = new Date().toISOString().slice(0,10);
+
+  const[cRes,sRes,hRes,subRes,incomingFutureRes,outgoingFutureRes]=await Promise.all([
     db.from('classes').select('*').eq('teacher_id',currentUser.id).eq('active',true).order('name'),
     db.from('users').select('*').eq('role','student').eq('status','active').eq('teacher_id',currentUser.id).order('name'),
     db.from('homeworks').select('*').eq('teacher_id',currentUser.id).order('due_date'),
-    db.from('submissions').select('*')
+    db.from('submissions').select('*'),
+    db.from('transfer_requests').select('student_id').eq('to_teacher_id',currentUser.id).eq('status','done').gt('transfer_date',today),
+    db.from('transfer_requests').select('student_id, student:student_id(*)').eq('from_teacher_id',currentUser.id).eq('status','done').gt('transfer_date',today)
   ]);
   classes=cRes.data||[];
   var rawStudents = sRes.data||[];
@@ -7561,25 +7565,11 @@ async function loadTeacherData(){
   submissions=subRes.data||[];
 
   // ── 전반 시행일 보정 ──────────────────────────────────────
-  // 오늘보다 미래 시행일인 전반 학생은 아직 내 반 학생이 아님 → 제외
-  // 반대로 내가 보낸 전반 중 미래 시행일인 학생은 아직 내 명단에 있어야 함
-  var today = new Date().toISOString().slice(0,10);
-
-  // 1) 내가 받은 전반 중 시행일이 미래인 것 → 아직 내 명단에서 제외
-  var {data: incomingFuture} = await db.from('transfer_requests')
-    .select('student_id')
-    .eq('to_teacher_id', currentUser.id)
-    .eq('status', 'done')
-    .gt('transfer_date', today);
-  var futureInIds = new Set((incomingFuture||[]).map(function(r){ return r.student_id; }));
-
-  // 2) 내가 보낸 전반 중 시행일이 미래인 것 → 학생이 아직 내 명단에 있어야 함
-  var {data: outgoingFuture} = await db.from('transfer_requests')
-    .select('student_id, student:student_id(*)')
-    .eq('from_teacher_id', currentUser.id)
-    .eq('status', 'done')
-    .gt('transfer_date', today);
-  var futureOutStudents = (outgoingFuture||[])
+  var futureInIds = new Set((incomingFutureRes.data||[]).map(function(r){ return r.student_id; }));
+  var futureOutStudents = (outgoingFutureRes.data||[])
+    .filter(function(r){ return r.student; })
+    .map(function(r){ return r.student; });
+  var futureOutStudents = (outgoingFutureRes.data||[])
     .filter(function(r){ return r.student; })
     .map(function(r){ return r.student; });
 
@@ -18947,27 +18937,28 @@ async function wnLoadData(){
     query = query.in('teacher_id', selectedIds);
   }
 
-  var {data: students} = await query.order('name');
+  // users + transfer_requests 병렬 조회
+  var [studentsRes, futureInRes, pastOutRes] = await Promise.all([
+    query.order('name'),
+    db.from('transfer_requests')
+      .select('student_id')
+      .in('to_teacher_id', selectedIds)
+      .eq('status', 'done').gt('transfer_date', date),
+    db.from('transfer_requests')
+      .select('student_id, student:student_id(id,name,school,grade,teacher_id,weekend_level,weekend_attend_time)')
+      .in('from_teacher_id', selectedIds)
+      .eq('status','done').gt('transfer_date', date)
+  ]);
 
-  // 전반 시행일 보정: 해당 날짜 기준 미래 전반IN 학생 제외 + 미래 전반OUT 학생 포함
-  var {data: _wnFutureIn} = await db.from('transfer_requests')
-    .select('student_id')
-    .in('to_teacher_id', selectedIds)
-    .eq('status', 'done').gt('transfer_date', date);
-  var _wnFutureInSet = new Set((_wnFutureIn||[]).map(function(r){ return r.student_id; }));
-
-  var {data: _wnPastOut} = await db.from('transfer_requests')
-    .select('student_id, student:student_id(id,name,school,grade,teacher_id,weekend_level,weekend_attend_time)')
-    .in('from_teacher_id', selectedIds)
-    .eq('status','done').gt('transfer_date', date);
-  var _wnPastOutStudents = (_wnPastOut||[])
+  var _wnFutureInSet = new Set((futureInRes.data||[]).map(function(r){ return r.student_id; }));
+  var _wnPastOutStudents = (pastOutRes.data||[])
     .filter(function(r){ return r.student; })
     .map(function(r){ return r.student; });
 
-  students = (students||[])
+  students = (studentsRes.data||[])
     .filter(function(s){ return !_wnFutureInSet.has(s.id); })
     .concat(_wnPastOutStudents.filter(function(s){
-      return !(students||[]).some(function(a){ return a.id===s.id; });
+      return !(studentsRes.data||[]).some(function(a){ return a.id===s.id; });
     }))
     .sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); });
 
@@ -20056,20 +20047,21 @@ async function loadWorkLog(){
     .order('name');
 
   // 전반 시행일 보정: 해당 날짜 기준으로 아직 전반 안 된 학생 제외
-  var {data: futureTransIn} = await db.from('transfer_requests')
-    .select('student_id')
-    .eq('to_teacher_id', currentUser.id)
-    .eq('status', 'done')
-    .gt('transfer_date', date);  // 날짜 이후 전반 → 아직 이 반 학생 아님
-  var futureInSet = new Set((futureTransIn||[]).map(function(r){ return r.student_id; }));
-
-  // 전반 보낸 학생 중 해당 날짜에 아직 이 반이었던 학생 추가
-  var {data: pastTransOut} = await db.from('transfer_requests')
-    .select('student_id, student:student_id(*)')
-    .eq('from_teacher_id', currentUser.id)
-    .eq('status', 'done')
-    .gt('transfer_date', date);  // 날짜 이후에 전반 → 날짜 당시엔 내 반
-  var pastOutStudents = (pastTransOut||[])
+  // 전반 시행일 보정: activeStuds + transfer 병렬 조회
+  var [futureTransInRes, pastTransOutRes] = await Promise.all([
+    db.from('transfer_requests')
+      .select('student_id')
+      .eq('to_teacher_id', currentUser.id)
+      .eq('status', 'done')
+      .gt('transfer_date', date),
+    db.from('transfer_requests')
+      .select('student_id, student:student_id(*)')
+      .eq('from_teacher_id', currentUser.id)
+      .eq('status', 'done')
+      .gt('transfer_date', date)
+  ]);
+  var futureInSet = new Set((futureTransInRes.data||[]).map(function(r){ return r.student_id; }));
+  var pastOutStudents = (pastTransOutRes.data||[])
     .filter(function(r){ return r.student && r.student.class_id === classId; })
     .map(function(r){ return r.student; });
 
