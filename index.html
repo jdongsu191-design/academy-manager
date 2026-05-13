@@ -1578,11 +1578,14 @@
       <!-- 통계 뱃지 -->
       <div id="mnr-stats" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
 
-      <!-- 결과 요약 이미지 -->
+      <!-- 결과 요약 -->
       <div style="margin-bottom:12px">
-        <button onclick="mnrGenerateImage()" class="btn btn-primary" style="width:100%;font-weight:700">
-          📊 주간 결과 이미지 생성
-        </button>
+        <div id="mnr-summary-table" style="margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px">
+          <button onclick="mnrCopyResultImage()" class="btn btn-primary" style="flex:1;font-weight:700">
+            📋 이미지 복사
+          </button>
+        </div>
         <div id="mnr-image-preview" style="margin-top:10px"></div>
       <div id="mnr-image-render" style="position:fixed;left:-9999px;top:0;pointer-events:none"></div>
       </div>
@@ -12909,6 +12912,7 @@ async function mnrLoad(){
     +(scoreCount>0?'<span style="padding:4px 10px;background:#eff6ff;border-radius:100px;font-size:11px;font-weight:700;color:#1d4ed8">\uD83D\uDCCA 평균 '+Math.round(totalScore/scoreCount)+'점</span>':'');
 
   mnrRenderTable(dates);
+  mnrRenderSummaryTable(); // 결과 요약 테이블 자동 갱신
   var prev = document.getElementById('mnr-image-preview');
   if(prev) prev.innerHTML = '';
 }
@@ -12986,36 +12990,38 @@ function mnrRenderTable(dates){
   wrap.innerHTML = html;
 }
 
-async function mnrGenerateImage(){
-  var DAYS7=['일','월','화','수','목','금','토'];
+async function mnrRenderSummaryTable(){
+  // 선생님 담당 학생 결과를 화면에 테이블로 표시
+  var tableWrap = document.getElementById('mnr-summary-table');
+  if(!tableWrap) return;
+  if(!_mnrStudents.length){ tableWrap.innerHTML=''; return; }
+
+  var DAYS=['일','월','화','수','목','금','토'];
   var weekDates=mnrGetWeekDates(_mnrWeekOffset);
   var {sunday, thursday, dates}=weekDates;
-  if(!_mnrStudents.length){ alert('담당 중등 학생이 없습니다'); return; }
-
   var now=new Date();
   var todayStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  var DAYS=['일','월','화','수','목','금','토'];
-  function fmtLabel(dt){ return (dt.getUTCMonth()+1)+'/'+dt.getUTCDate()+'('+DAYS[dt.getUTCDay()]+')'; }
 
-  // 날짜 포맷 (헤더용)
-  function fmtDateHdr(d){
-    var dp=d.split('-');
-    var dt=new Date(Date.UTC(+dp[0],+dp[1]-1,+dp[2]));
-    var isPast=d<=todayStr;
-    return {label:(dt.getUTCMonth()+1)+'/'+(dt.getUTCDate())+'<br><span style="font-size:9px;opacity:0.7">('+DAYS[dt.getUTCDay()]+')</span>', isPast:isPast};
+  function fmtHdr(d){
+    var dp=d.split('-'); var dt=new Date(Date.UTC(+dp[0],+dp[1]-1,+dp[2]));
+    return (dt.getUTCMonth()+1)+'/'+(dt.getUTCDate())+'<br><small style="font-size:10px;opacity:0.7">('+DAYS[dt.getUTCDay()]+')</small>';
   }
 
   // 반별 그룹
   var classMap={};
-  // 전역 classes 변수에서 반 이름 매핑
-  (window.classes||window.allClasses||[]).forEach(function(c){ classMap[c.id]=c.name; });
-  // _mnrStudents에 class_name 있으면 추가
-  (_mnrStudents||[]).forEach(function(s){ if(s.class_id&&s.class_name) classMap[s.class_id]=s.class_name; });
-  var groups={}, groupOrder=[];
-  (_mnrStudents||[]).forEach(function(s){
+  (window._mnrClassMap||{});
+  var stuClassIds=Array.from(new Set(_mnrStudents.filter(function(s){return s.class_id;}).map(function(s){return s.class_id;})));
+  if(stuClassIds.length){
+    var {data:clsData}=await db.from('classes').select('id,name').in('id',stuClassIds);
+    (clsData||[]).forEach(function(c){classMap[c.id]=c.name;});
+  }
+
+  var groups={},groupOrder=[];
+  _mnrStudents.forEach(function(s){
     var k=s.class_id||'__none__';
-    if(!groups[k]){ groups[k]=[]; groupOrder.push(k); }
-    groups[k].push(s);
+    var clsName=classMap[k]||(currentUser.name+'T 반');
+    if(!groups[clsName]){groups[clsName]=[];groupOrder.push(clsName);}
+    groups[clsName].push(s);
   });
 
   var COLORS=[
@@ -13023,147 +13029,215 @@ async function mnrGenerateImage(){
     {hd:'#14532D',lite:'#F0FDF4',border:'#BBF7D0',sub:'#DCFCE7'},
     {hd:'#4C1D95',lite:'#F5F3FF',border:'#DDD6FE',sub:'#EDE9FE'},
     {hd:'#7C2D12',lite:'#FFF7ED',border:'#FED7AA',sub:'#FFEDD5'},
-    {hd:'#134E4A',lite:'#F0FDFA',border:'#99F6E4',sub:'#CCFBF1'},
-    {hd:'#831843',lite:'#FFF1F2',border:'#FECDD3',sub:'#FFE4E6'},
   ];
 
-  // 통계
-  var totalStu=_mnrStudents.length, compA=0, notA=0;
+  var html='';
+  groupOrder.forEach(function(clsName,gi){
+    var stus=groups[clsName];
+    var col=COLORS[gi%COLORS.length];
+    html+='<div style="background:#fff;border-radius:12px;margin-bottom:12px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,0.07)">';
+    html+='<div style="background:'+col.hd+';padding:10px 14px;display:flex;justify-content:space-between;align-items:center">'
+      +'<div style="font-size:14px;font-weight:800;color:#fff">'+clsName+'</div>'
+      +'<div style="font-size:12px;color:rgba(255,255,255,0.75);font-weight:600">'+stus.length+'명</div>'
+    +'</div>';
+    html+='<table style="width:100%;border-collapse:collapse;font-size:13px">';
+    html+='<thead><tr>'
+      +'<th style="background:'+col.sub+';padding:8px 10px;text-align:center;font-size:11px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';width:30px">#</th>'
+      +'<th style="background:'+col.sub+';padding:8px 10px;text-align:left;font-size:11px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+'">학생</th>';
+    dates.forEach(function(d){
+      var isPast=d<=todayStr;
+      var thBg=isPast?col.sub:'#f1f5f9', thColor=isPast?col.hd:'#94a3b8';
+      html+='<th style="background:'+thBg+';padding:8px 8px;text-align:center;font-size:11px;font-weight:700;color:'+thColor+';border-bottom:2px solid '+col.border+';border-left:1px solid '+col.border+';min-width:60px">'+fmtHdr(d)+'</th>';
+    });
+    html+='<th style="background:'+col.sub+';padding:8px 8px;text-align:center;font-size:11px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';border-left:2px solid '+col.hd+';min-width:50px">평균</th>'
+    +'</tr></thead><tbody>';
+
+    stus.forEach(function(s,si){
+      var rowBg=si%2===0?'#fff':col.lite;
+      html+='<tr style="background:'+rowBg+'">'
+        +'<td style="padding:8px 8px;text-align:center;font-size:11px;color:#94a3b8;border-bottom:1px solid #f1f5f9">'+(si+1)+'</td>'
+        +'<td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;font-size:14px;font-weight:700;color:#1e293b">'+s.name+'</td>';
+      var scoreSum=0,scoreCnt=0;
+      dates.forEach(function(d){
+        var isPast=d<=todayStr;
+        var c=_mnrCheckData[s.id]&&_mnrCheckData[s.id][d];
+        var cb,cc,ct;
+        if(!isPast){cb='transparent';cc='#cbd5e1';ct='-';}
+        else if(!c){cb='#fff1f2';cc='#dc2626';ct='미학습';}
+        else if(c.score!=null){
+          var sc=parseInt(c.score);
+          if(sc>=90){cb='#f0fdf4';cc='#15803d';}
+          else if(sc>=70){cb='#fefce8';cc='#a16207';}
+          else{cb='#fff7ed';cc='#c2410c';}
+          ct=sc+'점'; scoreSum+=sc; scoreCnt++;
+        } else if(c.is_completed){cb='#f0fdf4';cc='#15803d';ct='완료';scoreSum+=100;scoreCnt++;}
+        else{cb='#fff1f2';cc='#dc2626';ct='미학습';}
+        html+='<td style="padding:8px 6px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:1px solid #f1f5f9;background:'+cb+'">'
+          +'<span style="font-size:13px;font-weight:700;color:'+cc+'">'+ct+'</span></td>';
+      });
+      var avgText=scoreCnt>0?Math.round(scoreSum/scoreCnt)+'점':'-';
+      var avgColor=scoreCnt===0?'#94a3b8':(scoreSum/scoreCnt>=80?'#15803d':scoreSum/scoreCnt>=60?'#a16207':'#c2410c');
+      html+='<td style="padding:8px 6px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:2px solid '+col.hd+';background:'+col.lite+'">'
+        +'<span style="font-size:13px;font-weight:800;color:'+avgColor+'">'+avgText+'</span></td></tr>';
+    });
+    html+='</tbody></table></div>';
+  });
+  tableWrap.innerHTML=html;
+}
+
+async function mnrCopyResultImage(){
+  if(!_mnrStudents.length){ alert('담당 중등 학생이 없습니다'); return; }
+
+  var DAYS=['일','월','화','수','목','금','토'];
+  var weekDates=mnrGetWeekDates(_mnrWeekOffset);
+  var {sunday, thursday, dates}=weekDates;
+  var now=new Date();
+  var todayStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  var todayFmt=(now.getMonth()+1)+'/'+now.getDate()+'('+DAYS[now.getDay()]+')';
+
+  function fmtTitle(dt){ return (dt.getUTCMonth()+1)+'/'+(dt.getUTCDate())+'('+DAYS[dt.getUTCDay()]+')'; }
+  function fmtDateHdr(d){
+    var dp=d.split('-'); var dt=new Date(Date.UTC(+dp[0],+dp[1]-1,+dp[2]));
+    var isPast=d<=todayStr;
+    return {label:(dt.getUTCMonth()+1)+'/'+(dt.getUTCDate())+'<br><span style="font-size:10px;opacity:0.7">('+DAYS[dt.getUTCDay()]+')</span>', isPast:isPast};
+  }
+
+  // 반별 그룹
+  var classMap={};
+  var stuClassIds=Array.from(new Set(_mnrStudents.filter(function(s){return s.class_id;}).map(function(s){return s.class_id;})));
+  if(stuClassIds.length){
+    var {data:clsData}=await db.from('classes').select('id,name').in('id',stuClassIds);
+    (clsData||[]).forEach(function(c){classMap[c.id]=c.name;});
+  }
+  var groups={},groupOrder=[];
+  _mnrStudents.forEach(function(s){
+    var k=s.class_id||'__none__';
+    var clsName=classMap[k]||(currentUser.name+'T 반');
+    if(!groups[clsName]){groups[clsName]=[];groupOrder.push(clsName);}
+    groups[clsName].push(s);
+  });
+
+  var totalStu=_mnrStudents.length,compA=0,notA=0;
   _mnrStudents.forEach(function(s){
     dates.forEach(function(d){
+      if(d>todayStr) return;
       var c=_mnrCheckData[s.id]&&_mnrCheckData[s.id][d];
-      if(!c) return;
-      if(c.is_completed||c.score!=null){ compA++; } else { notA++; }
+      if(!c) notA++;
+      else if(c.is_completed||c.score!=null) compA++;
+      else notA++;
     });
   });
 
-  var todayD=new Date();
-  var todayFmt=(todayD.getMonth()+1)+'/'+todayD.getDate()+'('+DAYS[todayD.getDay()]+')';
-  var sLabel=fmtLabel(sunday), eLabel=fmtLabel(thursday);
+  var COLORS=[
+    {hd:'#1E3A5F',lite:'#EFF6FF',border:'#BFDBFE',sub:'#DBEAFE'},
+    {hd:'#14532D',lite:'#F0FDF4',border:'#BBF7D0',sub:'#DCFCE7'},
+    {hd:'#4C1D95',lite:'#F5F3FF',border:'#DDD6FE',sub:'#EDE9FE'},
+    {hd:'#7C2D12',lite:'#FFF7ED',border:'#FED7AA',sub:'#FFEDD5'},
+  ];
 
-  var html='<div style="width:1060px;padding:28px 28px 20px;font-family:Apple SD Gothic Neo,Malgun Gothic,sans-serif;background:#f0f4f8;box-sizing:border-box">';
+  var sLabel=fmtTitle(sunday), eLabel=fmtTitle(thursday);
 
-  // 헤더 카드
+  var html='<div style="width:900px;padding:28px 28px 20px;font-family:Apple SD Gothic Neo,Malgun Gothic,sans-serif;background:#f0f4f8;box-sizing:border-box">';
+
+  // 헤더
   html+='<div style="background:#fff;border-radius:14px;padding:20px 24px;margin-bottom:16px;box-shadow:0 2px 10px rgba(0,0,0,0.07)">'
     +'<div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:2.5px;margin-bottom:6px">BESTIAN 수학학원</div>'
     +'<div style="display:flex;align-items:flex-end;justify-content:space-between">'
       +'<div>'
-        +'<div style="font-size:22px;font-weight:900;color:#1e3a5f;margin-bottom:4px">중등 일일N제 주간 학습 결과 (전체)</div>'
-        +'<div style="font-size:12px;color:#64748b">'+sLabel+' ~ '+eLabel+'&nbsp;&nbsp;|&nbsp;&nbsp;기준일 '+todayFmt+'</div>'
-        +'<div style="font-size:10px;color:#94a3b8;margin-top:3px">※ 진행 전 날짜는 회색으로 표시</div>'
+        +'<div style="font-size:22px;font-weight:900;color:#1e3a5f;margin-bottom:4px">'+currentUser.name+' T 반 · 중등 일일N제 주간 학습 결과</div>'
+        +'<div style="font-size:13px;color:#64748b">'+sLabel+' ~ '+eLabel+'&nbsp;&nbsp;|&nbsp;&nbsp;기준일 '+todayFmt+'</div>'
+        +'<div style="font-size:11px;color:#94a3b8;margin-top:3px">※ 진행 전 날짜는 회색으로 표시</div>'
       +'</div>'
       +'<div style="display:flex;gap:10px">'
         +'<div style="text-align:center;padding:8px 16px;background:#f8fafc;border-radius:10px;border:1.5px solid #e2e8f0">'
-          +'<div style="font-size:18px;font-weight:900;color:#1e3a5f">'+totalStu+'</div>'
-          +'<div style="font-size:10px;color:#64748b;margin-top:2px">대상 학생</div>'
+          +'<div style="font-size:20px;font-weight:900;color:#1e3a5f">'+totalStu+'</div>'
+          +'<div style="font-size:11px;color:#64748b;margin-top:2px">대상 학생</div>'
         +'</div>'
         +'<div style="text-align:center;padding:8px 16px;background:#dcfce7;border-radius:10px;border:1.5px solid #bbf7d0">'
-          +'<div style="font-size:18px;font-weight:900;color:#15803d">'+compA+'</div>'
-          +'<div style="font-size:10px;color:#15803d;margin-top:2px">✅ 완료</div>'
+          +'<div style="font-size:20px;font-weight:900;color:#15803d">'+compA+'</div>'
+          +'<div style="font-size:11px;color:#15803d;margin-top:2px">✅ 완료</div>'
         +'</div>'
         +'<div style="text-align:center;padding:8px 16px;background:#fee2e2;border-radius:10px;border:1.5px solid #fecaca">'
-          +'<div style="font-size:18px;font-weight:900;color:#dc2626">'+notA+'</div>'
-          +'<div style="font-size:10px;color:#dc2626;margin-top:2px">미학습</div>'
+          +'<div style="font-size:20px;font-weight:900;color:#dc2626">'+notA+'</div>'
+          +'<div style="font-size:11px;color:#dc2626;margin-top:2px">미학습</div>'
         +'</div>'
       +'</div>'
     +'</div>'
   +'</div>';
 
   // 반별 테이블
-  groupOrder.forEach(function(cid, ci){
-    var stus=groups[cid];
-    var clsName = classMap[cid] || (stus[0] && stus[0].teacher_name ? stus[0].teacher_name+'T 반' : currentUser.name+'T 반');
-    var col=COLORS[ci%COLORS.length];
-
+  groupOrder.forEach(function(clsName,gi){
+    var stus=groups[clsName];
+    var col=COLORS[gi%COLORS.length];
     html+='<div style="background:#fff;border-radius:14px;margin-bottom:14px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06)">';
-    html+='<div style="background:'+col.hd+';padding:11px 18px;display:flex;align-items:center;justify-content:space-between">'
-      +'<div style="font-size:14px;font-weight:800;color:#fff">'+clsName+'</div>'
-      +'<div style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.75)">'+stus.length+'명</div>'
+    html+='<div style="background:'+col.hd+';padding:11px 18px;display:flex;justify-content:space-between;align-items:center">'
+      +'<div style="font-size:15px;font-weight:800;color:#fff">'+clsName+'</div>'
+      +'<div style="font-size:13px;color:rgba(255,255,255,0.75);font-weight:600">'+stus.length+'명</div>'
     +'</div>';
-
     html+='<table style="width:100%;border-collapse:collapse">';
-    // 헤더
     html+='<thead><tr>'
-      +'<th style="background:'+col.sub+';padding:8px 14px;text-align:center;font-size:11px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';width:36px">#</th>'
-      +'<th style="background:'+col.sub+';padding:8px 14px;text-align:left;font-size:11px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';min-width:80px">학생</th>';
+      +'<th style="background:'+col.sub+';padding:9px 12px;text-align:center;font-size:12px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';width:36px">#</th>'
+      +'<th style="background:'+col.sub+';padding:9px 12px;text-align:left;font-size:12px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+'">학생</th>';
     dates.forEach(function(d){
       var dh=fmtDateHdr(d);
       var thBg=dh.isPast?col.sub:'#f1f5f9', thColor=dh.isPast?col.hd:'#94a3b8';
-      html+='<th style="background:'+thBg+';padding:8px 10px;text-align:center;font-size:11px;font-weight:700;color:'+thColor+';border-bottom:2px solid '+col.border+';border-left:1px solid '+col.border+';min-width:80px">'+dh.label+'</th>';
+      html+='<th style="background:'+thBg+';padding:9px 10px;text-align:center;font-size:12px;font-weight:700;color:'+thColor+';border-bottom:2px solid '+col.border+';border-left:1px solid '+col.border+';min-width:72px">'+dh.label+'</th>';
     });
-    html+='<th style="background:'+col.sub+';padding:8px 10px;text-align:center;font-size:11px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';border-left:2px solid '+col.hd+';min-width:60px">평균</th>'
+    html+='<th style="background:'+col.sub+';padding:9px 10px;text-align:center;font-size:12px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';border-left:2px solid '+col.hd+';min-width:56px">평균</th>'
     +'</tr></thead><tbody>';
 
-    // 학생 행
     stus.forEach(function(s,si){
       var rowBg=si%2===0?'#fff':col.lite;
       html+='<tr style="background:'+rowBg+'">'
-        +'<td style="padding:9px 10px;font-size:11px;color:#94a3b8;font-weight:600;border-bottom:1px solid #f1f5f9;text-align:center">'+(si+1)+'</td>'
-        +'<td style="padding:9px 14px;border-bottom:1px solid #f1f5f9"><div style="font-size:13px;font-weight:700;color:#1e293b">'+s.name+'</div></td>';
-
-      var scoreSum=0, scoreCnt=0;
+        +'<td style="padding:10px 10px;text-align:center;font-size:12px;color:#94a3b8;font-weight:600;border-bottom:1px solid #f1f5f9">'+(si+1)+'</td>'
+        +'<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9"><div style="font-size:15px;font-weight:700;color:#1e293b">'+s.name+'</div></td>';
+      var scoreSum=0,scoreCnt=0;
       dates.forEach(function(d){
         var isPast=d<=todayStr;
         var c=_mnrCheckData[s.id]&&_mnrCheckData[s.id][d];
-        var cellBg, cellColor, cellText;
-        if(!isPast){ cellBg='transparent'; cellColor='#cbd5e1'; cellText='-'; }
-        else if(!c){ cellBg='#fff1f2'; cellColor='#dc2626'; cellText='미학습'; }
+        var cb,cc,ct;
+        if(!isPast){cb='transparent';cc='#cbd5e1';ct='-';}
+        else if(!c){cb='#fff1f2';cc='#dc2626';ct='미학습';}
         else if(c.score!=null){
           var sc=parseInt(c.score);
-          if(sc>=90){ cellBg='#f0fdf4'; cellColor='#15803d'; }
-          else if(sc>=70){ cellBg='#fefce8'; cellColor='#a16207'; }
-          else { cellBg='#fff7ed'; cellColor='#c2410c'; }
-          cellText=sc+'점';
-          scoreSum+=sc; scoreCnt++;
-        } else if(c.is_completed){
-          cellBg='#f0fdf4'; cellColor='#15803d'; cellText='완료';
-          scoreSum+=100; scoreCnt++;
-        } else {
-          cellBg='#fff1f2'; cellColor='#dc2626'; cellText='미학습';
-        }
-        html+='<td style="padding:9px 10px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:1px solid #f1f5f9;background:'+cellBg+'">'
-          +'<span style="font-size:12px;font-weight:700;color:'+cellColor+'">'+cellText+'</span>'
-        +'</td>';
+          if(sc>=90){cb='#f0fdf4';cc='#15803d';}
+          else if(sc>=70){cb='#fefce8';cc='#a16207';}
+          else{cb='#fff7ed';cc='#c2410c';}
+          ct=sc+'점'; scoreSum+=sc; scoreCnt++;
+        } else if(c.is_completed){cb='#f0fdf4';cc='#15803d';ct='완료';scoreSum+=100;scoreCnt++;}
+        else{cb='#fff1f2';cc='#dc2626';ct='미학습';}
+        html+='<td style="padding:10px 8px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:1px solid #f1f5f9;background:'+cb+'">'
+          +'<span style="font-size:14px;font-weight:700;color:'+cc+'">'+ct+'</span></td>';
       });
-
       var avgText=scoreCnt>0?Math.round(scoreSum/scoreCnt)+'점':'-';
       var avgColor=scoreCnt===0?'#94a3b8':(scoreSum/scoreCnt>=80?'#15803d':scoreSum/scoreCnt>=60?'#a16207':'#c2410c');
-      html+='<td style="padding:9px 10px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:2px solid '+col.hd+';background:'+col.lite+'">'
-        +'<span style="font-size:12px;font-weight:800;color:'+avgColor+'">'+avgText+'</span>'
-      +'</td></tr>';
+      html+='<td style="padding:10px 8px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:2px solid '+col.hd+';background:'+col.lite+'">'
+        +'<span style="font-size:14px;font-weight:800;color:'+avgColor+'">'+avgText+'</span></td></tr>';
     });
-
     html+='</tbody></table></div>';
   });
 
-  html+='<div style="text-align:center;margin-top:4px;font-size:10px;color:#94a3b8">© BESTIAN 수학학원&nbsp;&nbsp;|&nbsp;&nbsp;기준일 '+todayFmt+'</div>';
+  html+='<div style="text-align:center;margin-top:4px;font-size:11px;color:#94a3b8">© BESTIAN 수학학원&nbsp;&nbsp;|&nbsp;&nbsp;기준일 '+todayFmt+'</div>';
   html+='</div>';
 
   var render=document.getElementById('mnr-image-render');
   render.innerHTML=html;
-  var canvas=await html2canvas(render,{backgroundColor:'#f0f4f8',scale:2,useCORS:true,logging:false,width:1060,height:render.scrollHeight});
+  var canvas=await html2canvas(render,{backgroundColor:'#f0f4f8',scale:2,useCORS:true,logging:false,width:900,height:render.scrollHeight});
   render.innerHTML='';
 
-  // 미리보기 표시
-  var preview=document.getElementById('mnr-image-preview');
-  if(preview){
-    preview.innerHTML='';
-    var img=document.createElement('img');
-    img.src=canvas.toDataURL('image/png');
-    img.style.cssText='width:100%;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.1);margin-top:8px';
-    preview.appendChild(img);
-
-    // 다운로드 버튼
-    var dl=document.createElement('button');
-    dl.textContent='📥 이미지 다운로드';
-    dl.style.cssText='margin-top:8px;padding:8px 18px;border:none;border-radius:8px;background:#1F3A51;color:#fff;font-size:13px;font-weight:700;cursor:pointer';
-    dl.onclick=function(){
-      var a=document.createElement('a');
-      a.href=canvas.toDataURL('image/png');
-      a.download=todayStr+'_중등일일N제_'+sLabel+'~'+eLabel+'.png';
-      a.click();
-    };
-    preview.appendChild(dl);
+  // 클립보드 복사
+  try{
+    canvas.toBlob(async function(blob){
+      await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+      alert('✅ 이미지가 클립보드에 복사됐습니다!\n카카오톡 등에서 붙여넣기 하세요.');
+    },'image/png');
+  } catch(e){
+    // 폴백: 다운로드
+    var a=document.createElement('a');
+    a.href=canvas.toDataURL('image/png');
+    a.download=new Date().toISOString().slice(0,10)+'_중등일일N제_'+currentUser.name+'.png';
+    a.click();
+    alert('클립보드 복사 불가 → 파일로 다운로드됩니다.');
   }
 }
 
