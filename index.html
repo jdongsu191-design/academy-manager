@@ -2443,6 +2443,9 @@
                 <button onclick="setAdmStatusFilter('active')" id="adm-filter-active" class="btn btn-sm">재원</button>
                 <button onclick="setAdmStatusFilter('inactive')" id="adm-filter-inactive" class="btn btn-sm">퇴원</button>
               </div>
+              <select class="filter" id="admBranchFilter" onchange="admOnBranchFilterChange()" style="flex:1;min-width:100px">
+                <option value="">전체 분원</option>
+              </select>
               <select class="filter" id="admTeacherFilter" onchange="renderAdminStudents()" style="flex:1;min-width:100px">
                 <option value="">전체 선생님</option>
               </select>
@@ -6716,6 +6719,14 @@ async function loadAdminData(){
   admRenderTeacherSelect();
   const cf=document.getElementById('admClassFilter');
   const tf=document.getElementById('admTeacherFilter');
+  const bf=document.getElementById('admBranchFilter');
+  // 분원 필터 로드 (관리자만)
+  if(bf && currentUser && currentUser.role === 'admin'){
+    bf.innerHTML='<option value="">전체 분원</option>';
+    (window._allBranches||[]).forEach(function(b){ bf.innerHTML+='<option value="'+b.id+'">'+b.name+'</option>'; });
+  } else if(bf){
+    bf.style.display='none';
+  }
   if(tf){
     let teachers=allUsers.filter(u=>u.role==='teacher'&&u.status==='active'&&!u.deleted_at);
     // \uD83C\uDFAF 데스크: 본인 분원 선생님만
@@ -6951,16 +6962,33 @@ function setAdmStatusFilter(status){
   renderAdminStudents();
 }
 
+function admOnBranchFilterChange(){
+  var branchId = (document.getElementById('admBranchFilter')||{}).value||'';
+  var tf = document.getElementById('admTeacherFilter');
+  if(tf){
+    var teachers = allUsers.filter(function(u){ return u.role==='teacher'&&u.status==='active'&&!u.deleted_at; });
+    if(branchId) teachers = teachers.filter(function(t){ return t.branch_id===branchId; });
+    tf.innerHTML = '<option value="">전체 선생님</option>';
+    teachers.sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); })
+      .forEach(function(t){ tf.innerHTML+='<option value="'+t.id+'">'+t.name+'</option>'; });
+    tf.value = ''; // 선생님 필터 초기화
+  }
+  renderAdminStudents();
+}
+
 function renderAdminStudents(){
   const q=document.getElementById('admStudentSearch').value.toLowerCase();
   const tf=document.getElementById('admTeacherFilter').value;
+  const bf=(document.getElementById('admBranchFilter')||{}).value||'';
   const students=allUsers.filter(u=>u.role==='student');
   // \uD83C\uDFAF 데스크: 본인 분원 학생만 (학생.branch_id 또는 담당 선생님의 branch_id 로 판단)
   const isDeskMode = currentUser && currentUser.role === 'desk';
   const allowedBranchIds = isDeskMode ? getDeskAllowedBranchIds() : [];
   const f=students.filter(u=>{
     if(q && !u.name.toLowerCase().includes(q)) return false;
+  const teacherBranchMap={}; allUsers.filter(u=>u.role==='teacher').forEach(function(t){ teacherBranchMap[t.id]=t.branch_id; });
     if(tf && u.teacher_id!==tf) return false;
+    if(bf){ var tBranch=teacherBranchMap[u.teacher_id]; if(tBranch!==bf) return false; }
     if(_admStatusFilter==='active' && u.status!=='active') return false;
     if(_admStatusFilter==='inactive' && u.status!=='inactive') return false;
     // \uD83C\uDFAF 데스크 분원 필터
