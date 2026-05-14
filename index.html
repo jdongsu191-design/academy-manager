@@ -25954,22 +25954,23 @@ async function sylViewToggleDetail(id){
               +'</thead>'
               +'<tbody>'
               +(function(){
-                var rows=(c.schedule||[]).filter(function(s){ return s.date||s.main; });
+                var allRows=(c.schedule||[]);
                 var schedFs=(c.schedFontSize||12)+'px';
-                // mergeUp 기반 병합: mergeUp=true인 행은 위 행의 main td에 흡수
-                // → mergeUp된 행의 main td를 숨기고, 첫 행의 rowspan을 늘림
-                var skipMain={};
+                // mergeUp 기반 rowspan 계산 (원본 배열 기준)
+                var skipMainIdx=new Set();
                 var rowspanMap={};
-                rows.forEach(function(s,si){
+                allRows.forEach(function(s,si){
                   if(s.mergeUp && si>0){
-                    // 실제 병합 시작 행 찾기
+                    skipMainIdx.add(si);
+                    // 병합 시작 행 찾기 (연속 mergeUp 처리)
                     var startSi=si-1;
-                    while(startSi>0 && rows[startSi].mergeUp) startSi--;
-                    skipMain[si]=true;
+                    while(startSi>0 && allRows[startSi] && allRows[startSi].mergeUp) startSi--;
                     rowspanMap[startSi]=(rowspanMap[startSi]||1)+1;
                   }
                 });
-                return rows.map(function(s,si){
+                var rows=allRows.filter(function(s){ return s.date||s.main; });
+                return rows.map(function(s){
+                var si=allRows.indexOf(s);
                 var bg = s.flag==='H' ? '#fff8ed' : (si%2===1 ? '#f8fafc' : '#fff');
                 var mainColor = s.flag==='H' ? '#b94040' : (s.flag==='S' ? '#7c5a00' : '#1e293b');
                 var badge = s.flag==='S'
@@ -25978,7 +25979,7 @@ async function sylViewToggleDetail(id){
                   ? '<span style="display:inline-block;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-size:8px;font-weight:700;border-radius:3px;padding:0 4px;margin-left:4px">휴강</span>'
                   : '';
                 var rs=rowspanMap[si]||1;
-                var mainTd = skipMain[si] ? ''
+                var mainTd = skipMainIdx.has(si) ? ''
                   : '<td style="padding:6px 8px;vertical-align:top;color:'+mainColor+';line-height:1.6;font-size:'+schedFs+'"'+(rs>1?' rowspan="'+rs+'"':'')+'>'+(s.main||'').replace(/\n/g,'<br>')+'</td>';
                 return '<tr style="border-bottom:1px solid #e2e8f0;background:'+bg+'">'
                   +'<td style="padding:6px 8px;vertical-align:top;border-right:1px solid #e2e8f0;white-space:nowrap;font-size:'+schedFs+'">'
@@ -34693,11 +34694,16 @@ function sylRenderCourseList(){
   var isTeacherPanel = panelSyl && panelSyl.classList.contains('active');
   var el = document.getElementById(isTeacherPanel ? 't-syl-course-list' : 'syl-course-list');
   if(!el) return;
+  // 스크롤 위치 보존
+  var scrollEl = el.closest('.panel') || el.parentElement;
+  var savedScroll = scrollEl ? scrollEl.scrollTop : 0;
   if(!_sylCourses.length){
     el.innerHTML = '<div class="empty-state" style="margin-top:20px"><div class="ei">\uD83D\uDCC4</div><p>강좌를 추가해 주세요</p></div>';
     return;
   }
   el.innerHTML = _sylCourses.map(function(c,ci){ return sylCourseCardHTML(c,ci); }).join('');
+  // 스크롤 복원
+  if(scrollEl) scrollEl.scrollTop = savedScroll;
 }
 
 /* ── 진도계획서 강좌 카드: 전체 V2 적용 ── */
@@ -34863,8 +34869,10 @@ function sylCourseCardHTML_V2(c,ci){
       var selOpts = '<option value=""'+(s.flag===''?' selected':'')+'>-</option>'
         +'<option value="S"'+(s.flag==='S'?' selected':'')+'>특별</option>'
         +'<option value="H"'+(s.flag==='H'?' selected':'')+'>휴강</option>';
-      var row = '<tr style="border-bottom:1px solid #f1f5f9">';
-      row += '<td style="padding:4px 3px;white-space:nowrap"><input type="text" value="'+s.date+'" placeholder="5/5" style="width:38px;padding:4px 5px;border:1px solid #d0dde6;border-radius:4px;font-size:11px;text-align:center" data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" data-field="date" onchange="sylOnDateChange(this)" onkeydown="sylDateKeydown(this,event)"></td>';
+      var isMerged = s.mergeUp === true;
+      var row = '<tr style="border-bottom:1px solid #f1f5f9;'+(isMerged?'background:#f5f0ff;':'')+'">';
+      // 병합된 행은 날짜 셀에 병합 표시
+      row += '<td style="padding:4px 3px;white-space:nowrap;'+(isMerged?'opacity:0.45;':'')+'"><input type="text" value="'+s.date+'" placeholder="5/5" style="width:38px;padding:4px 5px;border:1px solid #d0dde6;border-radius:4px;font-size:11px;text-align:center" data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" data-field="date" onchange="sylOnDateChange(this)" onkeydown="sylDateKeydown(this,event)"></td>';
       row += '<td style="padding:4px 3px;white-space:nowrap"><input type="text" value="'+s.day+'" placeholder="\uc790\ub3d9" class="syl-day-inp" style="width:46px;padding:4px 5px;border:1px solid #d0dde6;border-radius:4px;font-size:11px;background:#f4f7fa;text-align:center;color:#1F3A51;font-weight:600" readonly></td>';
       row += '<td style="padding:4px 3px;white-space:nowrap"><select style="padding:3px 4px;border:1px solid #d0dde6;border-radius:4px;font-size:11px;width:52px" data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" data-field="flag" onchange="sylUpdateSchedule(this.dataset.cid,+this.dataset.si,this.dataset.field,this.value,+this.dataset.pi)">'+selOpts+'</select></td>';
       var _symPalId = 'syl-v2-sym-pal-'+cid+'-'+pi+'-'+si;
@@ -34907,7 +34915,10 @@ function sylCourseCardHTML_V2(c,ci){
         +'<button type="button" data-sym="\u00B2" onclick="sylInsertMathSym(this.dataset.sym,this)" style="padding:2px 5px;border:1px solid #d0dde6;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:inherit;color:#1F3A51">\u00B2</button>'
         +'<button type="button" data-sym="\u00B3" onclick="sylInsertMathSym(this.dataset.sym,this)" style="padding:2px 5px;border:1px solid #d0dde6;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:inherit;color:#1F3A51">\u00B3</button>'
         +'</div></div></td>';
-      row += '<td style="padding:4px 3px;width:100%;vertical-align:middle;background:'+(s.mergeUp?'#f3f0ff':'')+'"><textarea placeholder="\ub2e8\uc6d0 \ubc0f \ub0b4\uc6a9" style="width:100%;min-width:100px;padding:6px 8px;border:1px solid #d0dde6;border-radius:4px;font-size:11px;min-height:48px;resize:none;overflow:hidden;line-height:1.5;font-family:inherit" data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" data-field="main" oninput="this.style.height=\'auto\';this.style.height=this.scrollHeight+\'px\';sylUpdateSchedule(this.dataset.cid,+this.dataset.si,this.dataset.field,this.value,+this.dataset.pi)">'+s.main.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</textarea></td>';
+      row += '<td style="padding:4px 3px;width:100%;vertical-align:middle;background:'+(s.mergeUp?'#ede9fe':'')+'">'
+        +(s.mergeUp?'<div style="font-size:9px;color:#7c3aed;font-weight:600;padding:2px 4px 2px 6px;border-left:3px solid #7c3aed;margin-bottom:3px">↑ 위 행과 병합됨</div>':'')
+        +'<textarea placeholder="단원 및 내용" style="width:100%;min-width:100px;padding:6px 8px;border:1.5px solid '+(s.mergeUp?'#c4b5fd':'#d0dde6')+';border-radius:4px;font-size:11px;min-height:48px;resize:none;overflow:hidden;line-height:1.5;font-family:inherit;background:'+(s.mergeUp?'#ede9fe':'#fff')+'" data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" data-field="main" oninput="this.style.height=\'auto\';this.style.height=this.scrollHeight+\'px\';sylUpdateSchedule(this.dataset.cid,+this.dataset.si,this.dataset.field,this.value,+this.dataset.pi)">'+s.main.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</textarea>'
+        +'</td>';
       row += '<td style="padding:4px 3px;white-space:nowrap;vertical-align:middle">'
         +'<div style="display:flex;flex-direction:column;gap:3px">'
         +'<button data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" onclick="sylInsertScheduleRow(this.dataset.cid,+this.dataset.si,+this.dataset.pi)" style="padding:3px 7px;border:1.5px solid #1d4ed8;border-radius:5px;background:#1d4ed8;color:#fff;font-size:10px;font-weight:700;cursor:pointer;line-height:1.4;white-space:nowrap">\u2191 \uc0bd\uc785</button>'
