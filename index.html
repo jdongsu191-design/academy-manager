@@ -25953,7 +25953,19 @@ async function sylViewToggleDetail(id){
                 +'</tr>'
               +'</thead>'
               +'<tbody>'
-              +(c.schedule||[]).filter(function(s){ return s.date||s.main; }).map(function(s,si){
+              +(function(){
+                var rows=(c.schedule||[]).filter(function(s){ return s.date||s.main; });
+                // rowspan 계산: span>1인 행은 다음 (span-1)개 행의 main td를 숨김
+                var skipMain={};
+                rows.forEach(function(s,si){
+                  var sp=parseInt(s.span)||1;
+                  if(sp>1){
+                    for(var k=1;k<sp;k++){
+                      if(si+k<rows.length) skipMain[si+k]=true;
+                    }
+                  }
+                });
+                return rows.map(function(s,si){
                 var bg = s.flag==='H' ? '#fff8ed' : (si%2===1 ? '#f8fafc' : '#fff');
                 var mainColor = s.flag==='H' ? '#b94040' : (s.flag==='S' ? '#7c5a00' : '#1e293b');
                 var badge = s.flag==='S'
@@ -25961,15 +25973,18 @@ async function sylViewToggleDetail(id){
                   : s.flag==='H'
                   ? '<span style="display:inline-block;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-size:8px;font-weight:700;border-radius:3px;padding:0 4px;margin-left:4px">휴강</span>'
                   : '';
+                var sp=parseInt(s.span)||1;
+                var mainTd = skipMain[si] ? ''
+                  : '<td style="padding:6px 8px;vertical-align:top;color:'+mainColor+';line-height:1.6"'+(sp>1?' rowspan="'+sp+'"':'')+'>'+(s.main||'').replace(/\n/g,'<br>')+'</td>';
                 return '<tr style="border-bottom:1px solid #e2e8f0;background:'+bg+'">'
                   +'<td style="padding:6px 8px;vertical-align:top;border-right:1px solid #e2e8f0;white-space:nowrap">'
                     +'<div style="font-weight:700;color:#1F3A51">'+( s.date||'')+'</div>'
                     +'<div style="font-size:9px;color:#64748b">'+( s.day||'')+'</div>'
                     +badge
                   +'</td>'
-                  +'<td style="padding:6px 8px;vertical-align:top;color:'+mainColor+';line-height:1.6">'+(s.main||'').replace(/\n/g,'<br>')+'</td>'
+                  +mainTd
                 +'</tr>';
-              }).join('')
+              }).join('');})()
               +'</tbody>'
             +'</table>'
             +(weekendRows.length
@@ -34893,6 +34908,14 @@ function sylCourseCardHTML_V2(c,ci){
         +'<div style="display:flex;flex-direction:column;gap:3px">'
         +'<button data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" onclick="sylInsertScheduleRow(this.dataset.cid,+this.dataset.si,+this.dataset.pi)" style="padding:3px 7px;border:1.5px solid #1d4ed8;border-radius:5px;background:#1d4ed8;color:#fff;font-size:10px;font-weight:700;cursor:pointer;line-height:1.4;white-space:nowrap">\u2191 \uc0bd\uc785</button>'
         +'<button data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" onclick="sylDeleteScheduleRow(this.dataset.cid,+this.dataset.si,+this.dataset.pi)" style="padding:3px 7px;border:1.5px solid #dc2626;border-radius:5px;background:#dc2626;color:#fff;font-size:10px;font-weight:700;cursor:pointer;line-height:1.4;white-space:nowrap">\xD7 \uc0ad\uc81c</button>'
+        +'<div style="display:flex;align-items:center;gap:3px;margin-top:3px;padding-top:3px;border-top:1px dashed #e2e8f0">'
+        +'<span style="font-size:9px;color:#6b7280">병합</span>'
+        +'<input type="number" min="1" max="20" value="'+(s.span||1)+'"'
+        +' style="width:36px;padding:2px 4px;border:1px solid #93c5fd;border-radius:4px;font-size:10px;text-align:center;color:#1d4ed8;font-weight:700"'
+        +' data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" data-field="span"'
+        +' onchange="sylUpdateSchedule(this.dataset.cid,+this.dataset.si,\'span\',+this.value,+this.dataset.pi)"'
+        +' title="이 행부터 N행 병합 (1=병합없음)">'
+        +'</div>'
         +'</div>'
       +'</td>';
       row += '</tr>';
@@ -35618,18 +35641,18 @@ function sylAddScheduleRow(id, pi){
   if(!c) return;
   var arr = sylGetSchedArr(c, pi);
   if(!arr) return;
-  arr.push({date:'',day:'',flag:'',main:''});
+  arr.push({date:'',day:'',flag:'',main:'',span:1});
   sylRenderCourseList();
 }
 
-// \uD83C\uDD95 특정 행 위치(si)에 빈 행 삽입 (중간 삽입)
+// 특정 행 위치(si)에 빈 행 삽입 (중간 삽입)
 function sylInsertScheduleRow(id, si, pi){
   var c = _sylCourses.find(function(c){ return c.id===id; });
   if(!c) return;
   var arr = sylGetSchedArr(c, pi);
   if(!arr) return;
   // si 위치에 새 행 삽입 (기존 si 행은 si+1 로 밀림)
-  arr.splice(si, 0, {date:'',day:'',flag:'',main:''});
+  arr.splice(si, 0, {date:'',day:'',flag:'',main:'',span:1});
   sylRenderCourseList();
 }
 
@@ -35728,7 +35751,12 @@ function sylNormalizeCourses(courses){
     if(!c) return c;
     if(!c.extraPages) c.extraPages = [];
     if(!c.weekend) c.weekend = [];
-    if(!c.schedule) c.schedule = [{date:'',day:'',flag:'',main:''}];
+    if(!c.schedule) c.schedule = [{date:'',day:'',flag:'',main:'',span:1}];
+    // 기존 row에 span 필드 없으면 추가
+    if(c.schedule) c.schedule.forEach(function(s){ if(!s.span) s.span=1; });
+    if(c.extraPages) c.extraPages.forEach(function(ep){
+      if(ep.schedule) ep.schedule.forEach(function(s){ if(!s.span) s.span=1; });
+    });
     return c;
   });
 }
