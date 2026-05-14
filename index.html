@@ -38640,7 +38640,23 @@ async function eaExportPdf(){
 </style>
 
 <script>
-var _sle={slides:[],cur:0,selId:null,selCell:null};
+var _sle={slides:[],cur:0,selId:null,selCell:null,history:[],histIdx:-1,pageW:794,pageH:1123};
+
+// 페이지 크기 프리셋
+var _slePageSizes={
+  'a4p':{w:794,h:1123,label:'A4 세로'},
+  'a4l':{w:1123,h:794,label:'A4 가로'},
+  '169':{w:960,h:540,label:'16:9'},
+  '43': {w:960,h:720,label:'4:3'},
+};
+
+function sleSetPageSize(key){
+  var ps=_slePageSizes[key];if(!ps)return;
+  _sle.pageW=ps.w;_sle.pageH=ps.h;
+  var canvas=document.getElementById('sle-canvas');
+  if(canvas){canvas.style.width=ps.w+'px';canvas.style.height=ps.h+'px';}
+  sleSetCanvasSize();
+}
 function _sleId(){return 'el_'+Math.random().toString(36).slice(2,9);}
 function sleInitFromSyllabus(){
   var tn=_sylTeacherName||'선생님',pd=_sylPeriod||sylGetPeriod()||'';
@@ -38749,7 +38765,12 @@ function sleInitFromSyllabus(){
 
 function sylOpenSlideEditor(){
   if(!_sylCourses.length){alert('강좌를 먼저 추가하세요.');return;}
-  sleInitFromSyllabus();_sle.cur=0;_sle.selId=null;_sle.selCell=null;
+  sleInitFromSyllabus();_sle.cur=0;_sle.selId=null;_sle.selCell=null;_sle.history=[];_sle.histIdx=-1;
+  // 기본 페이지 크기: A4 세로
+  _sle.pageW=794;_sle.pageH=1123;
+  var ps=document.getElementById('sle-page-size');if(ps)ps.value='a4p';
+  var canvas=document.getElementById('sle-canvas');
+  if(canvas){canvas.style.width='794px';canvas.style.height='1123px';}
   var modal=document.getElementById('modal-slide-editor');
   modal.style.display='flex';
   setTimeout(sleSetCanvasSize,50);
@@ -38759,13 +38780,14 @@ function closeSyleEditor(){document.getElementById('modal-slide-editor').style.d
 function sleSetCanvasSize(){
   var wrap=document.getElementById('sle-canvas');
   if(!wrap)return;
-  wrap.style.width='960px';
-  wrap.style.height='720px';
+  var pw=_sle.pageW||794,ph=_sle.pageH||1123;
+  wrap.style.width=pw+'px';
+  wrap.style.height=ph+'px';
   var avW=window.innerWidth-160-200-80,avH=window.innerHeight-56-48;
-  var sc=Math.min(avW/960,avH/720,1);
+  var sc=Math.min(avW/pw,avH/ph,1);
   wrap.style.transform='scale('+sc+')';
   wrap.style.transformOrigin='center center';
-  var pw=document.querySelector('#modal-slide-editor > div > div:nth-child(2) > div:nth-child(2)');
+  var pw2=document.querySelector('#modal-slide-editor > div > div:nth-child(2) > div:nth-child(2)');
   if(pw){pw.style.width=(960*sc+48)+'px';}
 }
 window.addEventListener('resize',function(){if(document.getElementById('modal-slide-editor').style.display==='flex')sleSetCanvasSize();});
@@ -38788,12 +38810,38 @@ function sleRenderList(){
 function sleRenderThumbEls(c,els){
   els.slice().sort(function(a,b){return (a.zIndex||0)-(b.zIndex||0);}).forEach(function(el){
     if(el.type==='shape'){var d=document.createElement('div');d.style.cssText='position:absolute;left:'+el.x+'px;top:'+el.y+'px;width:'+el.w+'px;height:'+el.h+'px;background:'+(el.fill||'#eee')+';';c.appendChild(d);}
-    else if(el.type==='image'){var d=document.createElement('img');d.src=el.src||'';d.style.cssText='position:absolute;left:'+el.x+'px;top:'+el.y+'px;width:'+el.w+'px;height:'+el.h+'px;object-fit:contain;';c.appendChild(d);}
+    else if(el.type==='image'){var d=document.createElement('img');d.src=el.src||'';d.style.cssText='position:absolute;left:'+el.x+'px;top:'+el.y+'px;width:'+el.w+'px;height:'+el.h+'px;object-fit:cover;object-position:center top;';c.appendChild(d);}
     else if(el.type==='text'){var d=document.createElement('div');d.style.cssText='position:absolute;left:'+el.x+'px;top:'+el.y+'px;width:'+el.w+'px;height:'+el.h+'px;font-size:'+(el.fontSize||14)+'px;color:'+(el.color||'#000')+';font-weight:'+(el.bold?'bold':'normal')+';white-space:pre-wrap;overflow:hidden;text-align:'+(el.align||'left')+';line-height:1.4;';d.textContent=el.content||'';c.appendChild(d);}
     else if(el.type==='table'){var t=document.createElement('table');t.style.cssText='position:absolute;left:'+el.x+'px;top:'+el.y+'px;width:'+el.w+'px;height:'+el.h+'px;border-collapse:collapse;table-layout:fixed;';(el.rows||[]).forEach(function(row){var tr=document.createElement('tr');row.forEach(function(cell,ci){if(cell._mergedHidden)return;var td=document.createElement('td');td.style.cssText='border:1px solid #CBD5E1;padding:2px 4px;font-size:10px;background:'+(cell.fill||'#fff')+';color:'+(cell.color||'#000')+';text-align:'+(cell.align||'left')+';font-weight:'+(cell.bold?'bold':'normal')+';white-space:pre-wrap;overflow:hidden;';if(cell.colspan>1)td.colSpan=cell.colspan;if(el.colWidths)td.style.width=el.colWidths[ci]+'px';td.textContent=cell.text||'';tr.appendChild(td);});t.appendChild(tr);});c.appendChild(t);}
   });
 }
-function sleSelSlide(i){_sle.cur=i;_sle.selId=null;_sle.selCell=null;sleRenderList();sleRenderCanvas();sleRenderProps();}
+// ── undo 히스토리 ──────────────────────────────────────
+function sleSaveHistory(){
+  // 현재 슬라이드 상태 스냅샷
+  var snapshot=JSON.stringify(_sle.slides[_sle.cur]||{});
+  // 현재 위치 이후 히스토리 제거
+  _sle.history=_sle.history.slice(0,_sle.histIdx+1);
+  _sle.history.push(snapshot);
+  if(_sle.history.length>50) _sle.history.shift();
+  _sle.histIdx=_sle.history.length-1;
+}
+function sleUndo(){
+  if(_sle.histIdx<=0){alert('더 이상 되돌릴 수 없습니다.');return;}
+  _sle.histIdx--;
+  _sle.slides[_sle.cur]=JSON.parse(_sle.history[_sle.histIdx]);
+  _sle.selId=null;_sle.selCell=null;
+  sleRenderCanvas();sleRenderList();sleRenderProps();
+}
+// Ctrl+Z 키보드 단축키
+document.addEventListener('keydown',function(e){
+  if((e.ctrlKey||e.metaKey)&&e.key==='z'){
+    if(document.getElementById('modal-slide-editor').style.display==='flex'){
+      e.preventDefault();sleUndo();
+    }
+  }
+});
+
+
 function sleAddSlide(){_sle.slides.push({id:'s'+_sleId(),elements:[{id:_sleId(),type:'shape',x:0,y:0,w:960,h:80,fill:window._sylBrandColor||'#1F3A51',zIndex:0},{id:_sleId(),type:'text',x:24,y:16,w:700,h:48,content:'새 슬라이드',fontSize:24,bold:true,color:'#fff',align:'left',zIndex:1}]});sleSelSlide(_sle.slides.length-1);}
 function sleRenderCanvas(){
   var canvas=document.getElementById('sle-canvas');if(!canvas)return;
@@ -38806,7 +38854,7 @@ function sleCreateEl(canvas,el){
   wrap.id='slew_'+el.id;wrap.style.cssText='left:'+el.x+'px;top:'+el.y+'px;width:'+el.w+'px;height:'+el.h+'px;z-index:'+(el.zIndex||0)+';';
   var border=document.createElement('div');border.className='sle-border';
   if(el.type==='shape'){var sh=document.createElement('div');sh.style.cssText='width:100%;height:100%;background:'+(el.fill||'#ddd')+';';border.appendChild(sh);}
-  else if(el.type==='image'){var img=document.createElement('img');img.src=el.src||'';img.style.cssText='width:100%;height:100%;object-fit:contain;display:block;';border.appendChild(img);}
+  else if(el.type==='image'){var img=document.createElement('img');img.src=el.src||'';img.style.cssText='width:100%;height:100%;object-fit:cover;object-position:center top;display:block;';border.appendChild(img);}
   else if(el.type==='text'){
     var txt=document.createElement('div');txt.className='sle-text';txt.contentEditable='true';
     txt.style.cssText='font-size:'+(el.fontSize||16)+'px;color:'+(el.color||'#000')+';font-weight:'+(el.bold?'bold':'normal')+';font-style:'+(el.italic?'italic':'normal')+';text-align:'+(el.align||'left')+';';
@@ -38839,8 +38887,8 @@ function sleCreateEl(canvas,el){
 function sleSelEl(id){_sle.selId=id;_sle.selCell=null;document.querySelectorAll('#sle-canvas .sle-el').forEach(function(w){w.classList.remove('sle-selected');});document.querySelectorAll('#sle-canvas .sle-cell-sel').forEach(function(t){t.classList.remove('sle-cell-sel');});var w=document.getElementById('slew_'+id);if(w)w.classList.add('sle-selected');sleRenderProps();sleUpdTb();}
 function sleClearSel(){_sle.selId=null;_sle.selCell=null;document.querySelectorAll('#sle-canvas .sle-el').forEach(function(w){w.classList.remove('sle-selected');});document.querySelectorAll('#sle-canvas .sle-cell-sel').forEach(function(t){t.classList.remove('sle-cell-sel');});sleRenderProps();}
 function sleGetEl(){var sl=_sle.slides[_sle.cur];return sl?sl.elements.find(function(e){return e.id===_sle.selId;}):null;}
-function sleAddEl(type){var sl=_sle.slides[_sle.cur];if(!sl)return;var mz=sl.elements.reduce(function(m,e){return Math.max(m,e.zIndex||0);},0),id=_sleId(),el;if(type==='text')el={id:id,type:'text',x:80,y:140,w:400,h:60,content:'텍스트 입력',fontSize:18,bold:false,color:'#1a1a2e',align:'left',zIndex:mz+1};else if(type==='shape')el={id:id,type:'shape',x:80,y:140,w:240,h:80,fill:window._sylBrandColor||'#1F3A51',zIndex:mz+1};else el={id:id,type:'table',x:40,y:140,w:500,h:110,zIndex:mz+1,rows:[[{text:'항목',fill:'#EFF6FF',bold:true,color:window._sylBrandColor||'#1F3A51',align:'center'},{text:'내용',fill:'#fff',color:'#1E293B',align:'left'}],[{text:'항목2',fill:'#EFF6FF',bold:true,color:window._sylBrandColor||'#1F3A51',align:'center'},{text:'내용2',fill:'#fff',color:'#1E293B',align:'left'}]],colWidths:[160,340]};sl.elements.push(el);sleRenderCanvas();sleRenderList();sleSelEl(id);}
-function sleDeleteEl(){var el=sleGetEl();if(!el)return;var sl=_sle.slides[_sle.cur];sl.elements=sl.elements.filter(function(e){return e.id!==_sle.selId;});_sle.selId=null;sleRenderCanvas();sleRenderList();sleRenderProps();}
+function sleAddEl(type){var sl=_sle.slides[_sle.cur];if(!sl)return;var mz=sl.elements.reduce(function(m,e){return Math.max(m,e.zIndex||0);},0),id=_sleId(),el;if(type==='text')el={id:id,type:'text',x:80,y:140,w:400,h:60,content:'텍스트 입력',fontSize:18,bold:false,color:'#1a1a2e',align:'left',zIndex:mz+1};else if(type==='shape')el={id:id,type:'shape',x:80,y:140,w:240,h:80,fill:window._sylBrandColor||'#1F3A51',zIndex:mz+1};else el={id:id,type:'table',x:40,y:140,w:500,h:110,zIndex:mz+1,rows:[[{text:'항목',fill:'#EFF6FF',bold:true,color:window._sylBrandColor||'#1F3A51',align:'center'},{text:'내용',fill:'#fff',color:'#1E293B',align:'left'}],[{text:'항목2',fill:'#EFF6FF',bold:true,color:window._sylBrandColor||'#1F3A51',align:'center'},{text:'내용2',fill:'#fff',color:'#1E293B',align:'left'}]],colWidths:[160,340]};sl.elements.push(el);sleSaveHistory();sleRenderCanvas();sleRenderList();sleSelEl(id);}
+function sleDeleteEl(){var el=sleGetEl();if(!el)return;var sl=_sle.slides[_sle.cur];sl.elements=sl.elements.filter(function(e){return e.id!==_sle.selId;});sleSaveHistory();_sle.selId=null;sleRenderCanvas();sleRenderList();sleRenderProps();}
 function sleBold(){var el=sleGetEl();if(!el||el.type!=='text')return;el.bold=!el.bold;sleRenderCanvas();sleSelEl(el.id);}
 function sleItalic(){var el=sleGetEl();if(!el||el.type!=='text')return;el.italic=!el.italic;sleRenderCanvas();sleSelEl(el.id);}
 function sleFontSize(v){var el=sleGetEl();if(!el||el.type!=='text')return;el.fontSize=+v;sleRenderCanvas();sleSelEl(el.id);}
@@ -38848,11 +38896,11 @@ function sleAlign(v){var el=sleGetEl();if(!el||el.type!=='text')return;el.align=
 function sleTextColor(v){var el=sleGetEl();if(el&&el.type==='text')el.color=v;if(_sle.selCell){var c=_sle.selCell;c.el.rows[c.ri][c.ci].color=v;}sleRenderCanvas();if(_sle.selId)sleSelEl(_sle.selId);sleUpdThumb();}
 function sleFill(v){var el=sleGetEl();if(el&&el.type==='shape')el.fill=v;if(el&&el.type==='table'&&_sle.selCell){var c=_sle.selCell;c.el.rows[c.ri][c.ci].fill=v;}sleRenderCanvas();if(_sle.selId)sleSelEl(_sle.selId);sleUpdThumb();}
 function sleLayer(d){var el=sleGetEl();if(!el)return;el.zIndex=(el.zIndex||0)+d;sleRenderCanvas();sleSelEl(el.id);}
-function sleMergeCells(){if(!_sle.selCell)return;var c=_sle.selCell,el=c.el,ri=c.ri,ci=c.ci,cell=el.rows[ri][ci];if(ci+1<el.rows[ri].length){var nx=el.rows[ri][ci+1];cell.text=(cell.text||'')+(nx.text?' '+nx.text:'');cell.colspan=(cell.colspan||1)+(nx.colspan||1);nx._mergedHidden=true;if(el.colWidths&&el.colWidths[ci+1]){el.colWidths[ci]+=el.colWidths[ci+1];el.colWidths.splice(ci+1,1);}sleRenderCanvas();sleSelEl(el.id);sleUpdThumb();}else{alert('병합할 오른쪽 셀이 없습니다.');}}
-function sleAddRow(){if(!_sle.selCell)return;var el=_sle.selCell.el,nr=el.rows[0].map(function(){return {text:'',fill:'#fff',color:'#1E293B',align:'left'};});el.rows.push(nr);sleRenderCanvas();sleSelEl(el.id);sleUpdThumb();}
-function sleAddCol(){if(!_sle.selCell)return;var el=_sle.selCell.el;el.rows.forEach(function(row){row.push({text:'',fill:'#fff',color:'#1E293B',align:'left'});});if(el.colWidths)el.colWidths.push(120);sleRenderCanvas();sleSelEl(el.id);sleUpdThumb();}
-function sleStartDrag(e,el){e.preventDefault();e.stopPropagation();sleSelEl(el.id);var sx=e.clientX-el.x,sy=e.clientY-el.y;function mv(ev){el.x=ev.clientX-sx;el.y=ev.clientY-sy;var w=document.getElementById('slew_'+el.id);if(w){w.style.left=el.x+'px';w.style.top=el.y+'px';}}function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);sleUpdThumb();sleRenderProps();}document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);}
-function sleStartResize(e,el,pos){e.preventDefault();e.stopPropagation();var sx=e.clientX,sy=e.clientY,sw=el.w,sh=el.h;function mv(ev){var dx=ev.clientX-sx,dy=ev.clientY-sy;if(pos==='br'||pos==='mr')el.w=Math.max(40,sw+dx);if(pos==='br'||pos==='bm')el.h=Math.max(20,sh+dy);var w=document.getElementById('slew_'+el.id);if(w){w.style.width=el.w+'px';w.style.height=el.h+'px';}}function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);sleUpdThumb();sleRenderProps();}document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);}
+function sleMergeCells(){if(!_sle.selCell)return;var c=_sle.selCell,el=c.el,ri=c.ri,ci=c.ci,cell=el.rows[ri][ci];if(ci+1<el.rows[ri].length){var nx=el.rows[ri][ci+1];cell.text=(cell.text||'')+(nx.text?' '+nx.text:'');cell.colspan=(cell.colspan||1)+(nx.colspan||1);nx._mergedHidden=true;if(el.colWidths&&el.colWidths[ci+1]){el.colWidths[ci]+=el.colWidths[ci+1];el.colWidths.splice(ci+1,1);}sleSaveHistory();sleRenderCanvas();sleSelEl(el.id);sleUpdThumb();}else{alert('병합할 오른쪽 셀이 없습니다.');}}
+function sleAddRow(){if(!_sle.selCell)return;var el=_sle.selCell.el,nr=el.rows[0].map(function(){return {text:'',fill:'#fff',color:'#1E293B',align:'left'};});el.rows.push(nr);sleSaveHistory();sleRenderCanvas();sleSelEl(el.id);sleUpdThumb();}
+function sleAddCol(){if(!_sle.selCell)return;var el=_sle.selCell.el;el.rows.forEach(function(row){row.push({text:'',fill:'#fff',color:'#1E293B',align:'left'});});if(el.colWidths)el.colWidths.push(120);sleSaveHistory();sleRenderCanvas();sleSelEl(el.id);sleUpdThumb();}
+function sleStartDrag(e,el){e.preventDefault();e.stopPropagation();sleSelEl(el.id);var sx=e.clientX-el.x,sy=e.clientY-el.y;function mv(ev){el.x=ev.clientX-sx;el.y=ev.clientY-sy;var w=document.getElementById('slew_'+el.id);if(w){w.style.left=el.x+'px';w.style.top=el.y+'px';}}function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);sleSaveHistory();sleUpdThumb();sleRenderProps();}document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);}
+function sleStartResize(e,el,pos){e.preventDefault();e.stopPropagation();var sx=e.clientX,sy=e.clientY,sw=el.w,sh=el.h;function mv(ev){var dx=ev.clientX-sx,dy=ev.clientY-sy;if(pos==='br'||pos==='mr')el.w=Math.max(40,sw+dx);if(pos==='br'||pos==='bm')el.h=Math.max(20,sh+dy);var w=document.getElementById('slew_'+el.id);if(w){w.style.width=el.w+'px';w.style.height=el.h+'px';}}function up2(){document.removeEventListener('mousemove',mv2);document.removeEventListener('mouseup',up2);sleSaveHistory();sleUpdThumb();sleRenderProps();}document.addEventListener('mousemove',mv2);document.addEventListener('mouseup',up2);}
 function sleUpdThumb(){var list=document.getElementById('sle-slide-list');var thumbs=list.querySelectorAll('.sle-slide-thumb');var sl=_sle.slides[_sle.cur];if(!sl||!thumbs[_sle.cur])return;var inner=thumbs[_sle.cur].querySelector('.sle-slide-thumb-inner');if(inner){inner.innerHTML='';sleRenderThumbEls(inner,sl.elements);}}
 function sleUpdTb(){var el=sleGetEl();document.getElementById('sle-btn-bold').classList.toggle('sle-active',!!(el&&el.bold));document.getElementById('sle-btn-italic').classList.toggle('sle-active',!!(el&&el.italic));if(el&&el.fontSize)document.getElementById('sle-sel-size').value=el.fontSize;}
 function sleRenderProps(){
@@ -38999,10 +39047,22 @@ async function sleExportPdf(){alert('각 슬라이드를 이미지로 캡처 후
     <div id="sle-toolbar" style="background:#1e293b;padding:8px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0">
       <span style="font-size:14px;font-weight:700;color:#fff;margin-right:8px">🖥 슬라이드 편집기</span>
 
+      <!-- 페이지 크기 -->
+      <select id="sle-page-size" class="sle-tb-sel" onchange="sleSetPageSize(this.value)" title="페이지 크기">
+        <option value="a4p">A4 세로</option>
+        <option value="a4l">A4 가로</option>
+        <option value="169">16:9</option>
+        <option value="43">4:3</option>
+      </select>
+
       <!-- 추가 -->
       <button class="sle-tb-btn" onclick="sleAddEl('text')" title="텍스트 추가">T+</button>
       <button class="sle-tb-btn" onclick="sleAddEl('shape')" title="도형 추가">■+</button>
       <button class="sle-tb-btn" onclick="sleAddEl('table')" title="표 추가">⊞+</button>
+      <div style="width:1px;height:22px;background:rgba(255,255,255,0.2)"></div>
+
+      <!-- 되돌리기 -->
+      <button class="sle-tb-btn" onclick="sleUndo()" title="되돌리기 (Ctrl+Z)">↩ 되돌리기</button>
       <div style="width:1px;height:22px;background:rgba(255,255,255,0.2)"></div>
 
       <!-- 텍스트 서식 -->
