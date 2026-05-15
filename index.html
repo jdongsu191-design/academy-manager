@@ -34858,10 +34858,26 @@ function sylCourseCardHTML_V2(c,ci){
         +'<button type="button" data-sym="\u00B3" onclick="sylInsertMathSym(this.dataset.sym,this)" style="padding:2px 5px;border:1px solid #d0dde6;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:inherit;color:#1F3A51">\u00B3</button>'
         +'</div></div></td>';
       row += '<td style="padding:4px 3px;width:100%;vertical-align:middle"><textarea placeholder="\ub2e8\uc6d0 \ubc0f \ub0b4\uc6a9" style="width:100%;min-width:100px;padding:6px 8px;border:1px solid #d0dde6;border-radius:4px;font-size:11px;min-height:48px;resize:none;overflow:hidden;line-height:1.5;font-family:inherit" data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" data-field="main" oninput="this.style.height=\'auto\';this.style.height=this.scrollHeight+\'px\';sylUpdateSchedule(this.dataset.cid,+this.dataset.si,this.dataset.field,this.value,+this.dataset.pi)">'+s.main.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</textarea></td>';
+      var isMerged = !!s.mergeUp;
+      var mergeUpLabel = isMerged ? '\u2195 \ubd84\ub9ac' : '\u2191 \ubcd1\ud569';
+      var mergeUpStyle = isMerged
+        ? 'padding:3px 7px;border:1.5px solid #7c3aed;border-radius:5px;background:#7c3aed;color:#fff;font-size:10px;font-weight:700;cursor:pointer;line-height:1.4;white-space:nowrap'
+        : 'padding:3px 7px;border:1.5px solid #9ca3af;border-radius:5px;background:#f3f4f6;color:#374151;font-size:10px;font-weight:700;cursor:pointer;line-height:1.4;white-space:nowrap';
+      var allMergedBelow = (function(){
+        if(si >= schedArr.length-1) return false;
+        for(var k=si+1;k<schedArr.length;k++){ if(!schedArr[k].mergeUp) return false; }
+        return true;
+      })();
+      var mergeAllLabel = allMergedBelow ? '\u21d5 \uc804\uccb4\ubd84\ub9ac' : '\u21d3 \uc804\uccb4\ubcd1\ud569';
+      var mergeAllStyle = allMergedBelow
+        ? 'padding:3px 7px;border:1.5px solid #7c3aed;border-radius:5px;background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:700;cursor:pointer;line-height:1.4;white-space:nowrap'
+        : 'padding:3px 7px;border:1.5px solid #d1d5db;border-radius:5px;background:#f9fafb;color:#6b7280;font-size:10px;font-weight:700;cursor:pointer;line-height:1.4;white-space:nowrap';
       row += '<td style="padding:4px 3px;white-space:nowrap;vertical-align:middle">'
         +'<div style="display:flex;flex-direction:column;gap:3px">'
         +'<button data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" onclick="sylInsertScheduleRow(this.dataset.cid,+this.dataset.si,+this.dataset.pi)" style="padding:3px 7px;border:1.5px solid #1d4ed8;border-radius:5px;background:#1d4ed8;color:#fff;font-size:10px;font-weight:700;cursor:pointer;line-height:1.4;white-space:nowrap">\u2191 \uc0bd\uc785</button>'
         +'<button data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" onclick="sylDeleteScheduleRow(this.dataset.cid,+this.dataset.si,+this.dataset.pi)" style="padding:3px 7px;border:1.5px solid #dc2626;border-radius:5px;background:#dc2626;color:#fff;font-size:10px;font-weight:700;cursor:pointer;line-height:1.4;white-space:nowrap">\xD7 \uc0ad\uc81c</button>'
+        +(si>0 ? '<button data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" onclick="sylToggleMergeUp(this.dataset.cid,+this.dataset.si,+this.dataset.pi)" style="'+mergeUpStyle+'">'+mergeUpLabel+'</button>' : '')
+        +(si<schedArr.length-1 ? '<button data-cid="'+cid+'" data-pi="'+pi+'" data-si="'+si+'" onclick="sylMergeAllBelow(this.dataset.cid,+this.dataset.si,+this.dataset.pi)" style="'+mergeAllStyle+'">'+mergeAllLabel+'</button>' : '')
         +'</div>'
       +'</td>';
       row += '</tr>';
@@ -35611,6 +35627,30 @@ function sylDeleteScheduleRow(id, si, pi){
   sylRenderCourseList();
 }
 
+function sylToggleMergeUp(id, si, pi){
+  var c = _sylCourses.find(function(c){ return c.id===id; });
+  if(!c) return;
+  var arr = sylGetSchedArr(c, pi);
+  if(!arr || !arr[si]) return;
+  arr[si].mergeUp = !arr[si].mergeUp;
+  sylRenderCourseList();
+}
+
+function sylMergeAllBelow(id, si, pi){
+  var c = _sylCourses.find(function(c){ return c.id===id; });
+  if(!c) return;
+  var arr = sylGetSchedArr(c, pi);
+  if(!arr) return;
+  var allMerged = true;
+  for(var k=si+1; k<arr.length; k++){
+    if(!arr[k].mergeUp){ allMerged = false; break; }
+  }
+  for(var k=si+1; k<arr.length; k++){
+    arr[k].mergeUp = !allMerged;
+  }
+  sylRenderCourseList();
+}
+
 // \u2500\u2500 진도계획 페이지 추가/삭제/토글 \u2500\u2500
 function sylAddExtraPage(id){
   var c = _sylCourses.find(function(c){ return c.id===id; });
@@ -35863,20 +35903,34 @@ function sylGetCoursePagesHTML(c, periodOverride){
 
   // schedule 배열 \u2192 <tr> 문자열로 렌더링
   function renderSchedRows(rows){
+    var skipIdx = new Set();
+    var rowspanMap = {};
+    for(var ri=0; ri<rows.length; ri++){
+      if(rows[ri].mergeUp && ri>0){
+        skipIdx.add(ri);
+        var root = ri-1;
+        while(root>0 && rows[root].mergeUp) root--;
+        rowspanMap[root] = (rowspanMap[root]||1) + 1;
+      }
+    }
     return rows.map(function(s, idx){
       var si = idx;
+      if(skipIdx.has(si)) return '';
+      var rs = rowspanMap[si] || 1;
       var bg = s.flag==='H' ? '#fff8ed' : (si%2===1 ? '#f8fafc' : '#ffffff');
       var mainColor = s.flag==='H' ? '#b94040' : (s.flag==='S' ? '#7c5a00' : '#1e293b');
       var mainText = (s.main||'').replace(/\n/g,'<br>');
       var badge = s.flag==='S'?'<span style="display:inline-block;margin-top:3px;background:#fef3c7;border:1px solid #fbbf24;color:#92400e;font-size:8.5px;font-weight:700;border-radius:3px;padding:1px 5px">특별</span>':
-                  s.flag==='H'?'<span style="display:inline-block;margin-top:3px;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-size:8.5px;font-weight:700;border-radius:3px;padding:1px 5px">휴강</span>':'';
+                  s.flag==='H'?'<span style="display:inline-block;margin-top:3px;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-size:8.5px;font-weight:700;border-radius:3px;padding:1px 5px">휴강</span>':'' ;
       return '<tr>'
         +'<td style="padding:9px 10px;vertical-align:top;background:'+bg+';border-bottom:1px solid #e2e8f0;min-width:75px;max-width:75px;border-right:1px solid #e2e8f0">'
           +'<div style="font-size:13.5px;font-weight:800;color:#1F3A51;white-space:nowrap">'+(s.date||'')+'</div>'
           +'<div style="font-size:10.5px;color:#64748b;margin-top:1px;white-space:nowrap">'+(s.day||'')+'</div>'
           +badge
         +'</td>'
-        +'<td style="padding:9px 11px;vertical-align:top;background:'+bg+';border-bottom:1px solid #e2e8f0">'
+        +(rs>1
+          ? '<td style="padding:9px 11px;vertical-align:middle;background:'+bg+';border-bottom:1px solid #e2e8f0" rowspan="'+rs+'">'
+          : '<td style="padding:9px 11px;vertical-align:top;background:'+bg+';border-bottom:1px solid #e2e8f0">')
           +'<div style="font-size:12.5px;font-weight:700;color:'+mainColor+';line-height:1.7">'+mainText+'</div>'
         +'</td>'
       +'</tr>';
