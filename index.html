@@ -26158,12 +26158,32 @@ async function sylViewPreview(sylId, courseIdx){
   window._sylBrandColor = data.brand_color || '#1F3A51';
   window._sylAccentColor = data.accent_color || '#c8a96e';
   _sylPeriod = data.period || '';
+  // 해당 선생님의 layout_config 로드 (선생님별 레이아웃 적용)
+  var _teacherIdForLayout = data.teacher_id || null;
+  if(_teacherIdForLayout){
+    try {
+      var uLay = await db.from('users').select('layout_config').eq('id', _teacherIdForLayout).single();
+      if(uLay.data?.layout_config && typeof uLay.data.layout_config === 'object'){
+        Object.assign(_sylLayoutConfig, uLay.data.layout_config);
+        if(typeof sylSyncFontSizeFromConfig === 'function') sylSyncFontSizeFromConfig();
+      }
+    } catch(e){}
+  }
   var c = _sylCourses[courseIdx];
   if(c){
-    var html = sylGetCourseHTML(c);
-    var contentEl = document.getElementById('syl-preview-content');
-    if(contentEl) contentEl.innerHTML = html;
-    openModal('syllabusPreview');
+    // 에디터 모달이 있으면 에디터로, 없으면 기본 미리보기
+    var editorModal3 = document.getElementById('modal-t-syllabusPreview');
+    if(editorModal3){
+      openModal('t-syllabusPreview');
+      setTimeout(function(){
+        sylEditorOpen(c.id);
+      }, 80);
+    } else {
+      var html = sylGetCourseHTML(c);
+      var contentEl = document.getElementById('syl-preview-content');
+      if(contentEl) contentEl.innerHTML = html;
+      openModal('syllabusPreview');
+    }
   }
   _sylCourses = prevCourses; _sylTeacherName = prevName; _sylTeacherPhoto = prevPhoto;
   _sylTeacherCurriculum = prevCurr; window._sylBrandColor = prevBrand;
@@ -36733,6 +36753,13 @@ function sylToggleSummaryCard(cardId){
 function syllabusSummaryPreview(){
   if(!_sylCourses.length){ alert('강좌를 먼저 추가하세요'); return; }
   var html = sylGetSummaryHTML();
+  // 에디터 모달이 있으면 요약 탭으로 열기, 없으면 기본 모달
+  var editorModal2 = document.getElementById('modal-t-syllabusPreview');
+  if(editorModal2){
+    openModal('t-syllabusPreview');
+    setTimeout(function(){ sylEditorSwitchTab('summary'); }, 80);
+    return;
+  }
   var panelSyl = document.getElementById('panel-syllabus');
   var isTeacher = panelSyl && panelSyl.classList.contains('active');
   var contentEl = document.getElementById(isTeacher ? 't-syl-summary-content' : 'syl-summary-content');
@@ -36866,10 +36893,10 @@ function sylPreview(id){
   var c = _sylCourses.find(function(c){ return c.id===id; });
   if(!c) return;
   sylSyncInputValues(id);
-  var panelSyl = document.getElementById('panel-syllabus');
-  var isTeacher = panelSyl && panelSyl.classList.contains('active');
-  if(isTeacher){
-    // 에디터 통합 미리보기 열기
+  // 선생님 + 관리자/데스크 모두 에디터 통합 미리보기 사용
+  // 에디터 모달이 있으면 (t-syllabusPreview) 사용, 없으면 기본 모달
+  var editorModal = document.getElementById('modal-t-syllabusPreview');
+  if(editorModal){
     openModal('t-syllabusPreview');
     setTimeout(function(){
       sylEditorOpen(id);
@@ -36888,11 +36915,15 @@ function sylPreview(id){
 // ═══════════════════════════════════════════════════════════
 var _sylEditorZm = 0.72;
 var _sylEditorCurrentId = null;
+var _sylEditorPrevConfig = null; // 관리자가 다른 선생님 볼 때 이전 config 백업
 
 function sylEditorOpen(courseId) {
   _sylEditorCurrentId = courseId;
   // 슬라이더 패널 렌더링
   sylEditorRenderPanel();
+  // 초기 탭은 레이아웃 탭으로
+  if(!window._sylEditorActiveTab) window._sylEditorActiveTab = 'layout';
+  window._sylEditorPreviewMode = 'course';
   // 줌 적용
   sylEditorApplyZoom(_sylEditorZm);
   // 미리보기 갱신
