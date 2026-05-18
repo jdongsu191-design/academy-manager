@@ -34375,19 +34375,43 @@ async function sylLoadSavedList(){
     var filterYear = document.getElementById('syl-filter-year')?.value || '';
     var filterMonth = document.getElementById('syl-filter-month')?.value || '';
 
+    // ── 분원 필터: users.branch_id 기준으로 teacher_id 목록 먼저 조회 ──
+    // syllabuses.branch 컬럼은 데이터 누락이 많아 사용하지 않음
+    var branchTeacherIds = null; // null = 필터 없음
+    if(filterBranch){
+      var {data: branchUsers} = await db.from('users')
+        .select('id')
+        .eq('branch_id', filterBranch)
+        .eq('role', 'teacher');
+      branchTeacherIds = (branchUsers||[]).map(function(u){ return u.id; });
+    }
+
     var query = db.from('syllabuses')
       .select('id, teacher_name, teacher_id, period, branch, brand_color, accent_color, created_at, updated_at')
       .order('teacher_name', {ascending: true})
       .order('period', {ascending: false});
-    if(filterBranch) query = query.eq('branch', filterBranch);
+
+    // 분원 필터: 해당 분원 선생님들의 teacher_id IN (...)
+    if(branchTeacherIds !== null){
+      if(branchTeacherIds.length === 0){
+        // 해당 분원에 선생님이 없으면 결과 없음
+        if(listEl) listEl.innerHTML = '<div style="font-size:12px;color:#9ca3af;padding:4px">해당 분원의 저장된 계획서가 없습니다</div>';
+        if(countEl) countEl.textContent = '0개';
+        if(selectEl) selectEl.innerHTML = '<option value="">-- 선택 --</option>';
+        return;
+      }
+      query = query.in('teacher_id', branchTeacherIds);
+    }
+
+    // 선생님 필터: teacher_id 또는 teacher_name 기준
     if(filterTeacher){
       var isUUID = /^[0-9a-f-]{36}$/.test(filterTeacher);
       if(isUUID) query = query.eq('teacher_id', filterTeacher);
       else query = query.eq('teacher_name', filterTeacher);
     }
-    // 연도 필터: period가 '2026년 6월' 형태이므로 like 검색
+    // 연도 필터
     if(filterYear) query = query.like('period', filterYear + '%');
-    // 월 필터: '6월' 포함 여부
+    // 월 필터
     if(filterMonth) query = query.like('period', '%' + filterMonth);
 
     var {data, error} = await query;
@@ -34407,20 +34431,20 @@ async function sylLoadSavedList(){
       }
       branchSel.value = filterBranch || '';
     }
-    // ── 선생님 필터 채우기 (항상 갱신) ──
+    // ── 선생님 필터 채우기: users 테이블 기준 (분원 필터 연동) ──
     if(teacherSel){
       var savedTeacherVal = teacherSel.value;
-      var {data: allSylData} = await db.from('syllabuses')
-        .select('teacher_name, teacher_id').order('teacher_name', {ascending: true});
-      var seen = {};
+      var teacherQuery = db.from('users')
+        .select('id, name')
+        .eq('role', 'teacher')
+        .eq('status', 'active')
+        .order('name', {ascending: true});
+      // 분원 선택 시 해당 분원 선생님만 표시
+      if(filterBranch) teacherQuery = teacherQuery.eq('branch_id', filterBranch);
+      var {data: teacherUsers} = await teacherQuery;
       teacherSel.innerHTML = '<option value="">전체 선생님</option>';
-      (allSylData||[]).forEach(function(r){
-        var key = r.teacher_id || ('name:'+r.teacher_name);
-        if(!seen[key] && r.teacher_name){
-          seen[key] = true;
-          var val = r.teacher_id || r.teacher_name;
-          teacherSel.innerHTML += '<option value="'+val+'">'+r.teacher_name+'</option>';
-        }
+      (teacherUsers||[]).forEach(function(u){
+        if(u.name) teacherSel.innerHTML += '<option value="'+u.id+'">'+u.name+'</option>';
       });
       teacherSel.value = savedTeacherVal || filterTeacher || '';
     }
