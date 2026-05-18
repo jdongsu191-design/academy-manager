@@ -33483,10 +33483,14 @@ function initTeacherSyllabus(){
   _sylTeacherPhoto = '';
   (async function(){
     try {
-      var uRes = await db.from('users').select('profile_image_url').eq('id', currentUser.id).single();
+      var uRes = await db.from('users').select('profile_image_url,layout_config').eq('id', currentUser.id).single();
       if(uRes.data?.profile_image_url){
         _sylTeacherPhoto = uRes.data.profile_image_url;
         sylRenderTeacherPhotoPreview();
+      }
+      // 선생님별 레이아웃 설정 로드
+      if(uRes.data?.layout_config && typeof uRes.data.layout_config === 'object'){
+        Object.assign(_sylLayoutConfig, uRes.data.layout_config);
       }
     } catch(e){}
   })();
@@ -33953,6 +33957,11 @@ function escHtml(s){
 
 async function sylLoadTeacherRecord(id){
   try {
+    // layout_config는 users 테이블에서 최신값 로드
+    var uLayout = await db.from('users').select('layout_config').eq('id', currentUser.id).single();
+    if(uLayout.data?.layout_config && typeof uLayout.data.layout_config === 'object'){
+      Object.assign(_sylLayoutConfig, uLayout.data.layout_config);
+    }
     var {data, error} = await db.from('syllabuses').select('*').eq('id', id).single();
     if(error) throw error;
     _sylTeacherName = data.teacher_name || currentUser.name || '';
@@ -34494,6 +34503,10 @@ async function syllabusSave(){
       }
     }
     if(res.error) throw res.error;
+    // 선생님 계정에 레이아웃 설정 저장
+    if(isTeacherPanel && currentUser?.id){
+      await db.from('users').update({ layout_config: _sylLayoutConfig }).eq('id', currentUser.id);
+    }
     _sylLastSavedId = recordId || (document.getElementById(isTeacherPanel ? 't-syl-record-id' : 'syl-record-id')?.textContent || '');
     alert('\u2705 저장됐습니다!');
     if(isTeacherPanel){
@@ -36924,8 +36937,9 @@ function sylEditorRenderPanel() {
     + '</div></div>'
 
     + '<div style="padding:10px 14px;display:flex;flex-direction:column;gap:6px">'
-    + '<button onclick="sylEditorCopyJSON()" style="padding:8px;background:#1F3A51;color:#c8a96e;border:1px solid rgba(200,169,110,0.3);border-radius:6px;font-size:10px;font-weight:700;cursor:pointer">📋 JSON 복사</button>'
-    + '<div style="font-size:8.5px;color:#4a5568;text-align:center">슬라이더 조절 시 우측에 즉시 반영됩니다</div>'
+    + '<button onclick="sylEditorSaveLayout()" style="padding:9px;background:#166534;color:#86efac;border:1px solid rgba(134,239,172,0.3);border-radius:6px;font-size:10px;font-weight:700;cursor:pointer">💾 레이아웃 저장 (내 계정에 적용)</button>'
+    + '<button onclick="sylEditorCopyJSON()" style="padding:7px;background:#1F3A51;color:#c8a96e;border:1px solid rgba(200,169,110,0.3);border-radius:6px;font-size:9.5px;font-weight:700;cursor:pointer">📋 JSON 복사</button>'
+    + '<div style="font-size:8.5px;color:#4a5568;text-align:center">슬라이더 조절 → 우측에 즉시 반영 · 저장 버튼으로 내 계정에 적용</div>'
     + '</div>';
 
   panel.innerHTML = html;
@@ -37006,6 +37020,35 @@ function sylEditorApplyZoom(z) {
     wrap.style.height = (1123 * _sylEditorZm) + 'px';
   }
   if (lbl) lbl.textContent = Math.round(_sylEditorZm * 100) + '% (794×1123px)  −  +';
+}
+
+async function sylEditorSaveLayout() {
+  if (!currentUser || !currentUser.id) {
+    alert('로그인 후 저장할 수 있습니다.'); return;
+  }
+  var btn = document.querySelector('#syl-editor-panel button');
+  // 저장 버튼 찾기 (첫 번째 버튼)
+  var saveBtns = document.querySelectorAll('#syl-editor-panel button');
+  var saveBtn = saveBtns[0];
+  if (saveBtn) { saveBtn.textContent = '⏳ 저장 중...'; saveBtn.disabled = true; }
+  try {
+    var {error} = await db.from('users')
+      .update({ layout_config: _sylLayoutConfig })
+      .eq('id', currentUser.id);
+    if (error) throw error;
+    if (saveBtn) {
+      saveBtn.textContent = '✅ 저장됐습니다!';
+      saveBtn.style.background = '#14532d';
+      setTimeout(function() {
+        saveBtn.textContent = '💾 레이아웃 저장 (내 계정에 적용)';
+        saveBtn.style.background = '#166534';
+        saveBtn.disabled = false;
+      }, 2000);
+    }
+  } catch(e) {
+    alert('저장 실패: ' + e.message);
+    if (saveBtn) { saveBtn.textContent = '💾 레이아웃 저장 (내 계정에 적용)'; saveBtn.disabled = false; }
+  }
 }
 
 function sylEditorCopyJSON() {
