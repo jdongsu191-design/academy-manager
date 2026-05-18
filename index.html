@@ -10172,6 +10172,10 @@ function openModal(id){
 function closeModal(id){
   var el = document.getElementById('modal-'+id);
   if(el) el.classList.remove('open');
+  // 관리자가 다른 선생님 진도계획서 조회 후 닫을 때 전역 변수 복원
+  if(id === 't-syllabusPreview' && typeof window._sylViewRestoreFn === 'function'){
+    window._sylViewRestoreFn();
+  }
 }
 
 /* \u2500\u2500 모달 드래그로 닫기 \u2500\u2500 */
@@ -26174,6 +26178,13 @@ async function sylViewPreview(sylId, courseIdx){
     // 에디터 모달이 있으면 에디터로, 없으면 기본 미리보기
     var editorModal3 = document.getElementById('modal-t-syllabusPreview');
     if(editorModal3){
+      // 복원 함수를 미리 저장 → 모달 닫힐 때 호출
+      window._sylViewRestoreFn = function() {
+        _sylCourses = prevCourses; _sylTeacherName = prevName; _sylTeacherPhoto = prevPhoto;
+        _sylTeacherCurriculum = prevCurr; window._sylBrandColor = prevBrand;
+        window._sylAccentColor = prevAccent; _sylPeriod = prevPeriod;
+        window._sylViewRestoreFn = null;
+      };
       openModal('t-syllabusPreview');
       setTimeout(function(){
         sylEditorOpen(c.id);
@@ -26183,11 +26194,17 @@ async function sylViewPreview(sylId, courseIdx){
       var contentEl = document.getElementById('syl-preview-content');
       if(contentEl) contentEl.innerHTML = html;
       openModal('syllabusPreview');
+      // 기본 모달은 즉시 복원
+      _sylCourses = prevCourses; _sylTeacherName = prevName; _sylTeacherPhoto = prevPhoto;
+      _sylTeacherCurriculum = prevCurr; window._sylBrandColor = prevBrand;
+      window._sylAccentColor = prevAccent; _sylPeriod = prevPeriod;
     }
+  } else {
+    // 강좌 없음 - 즉시 복원
+    _sylCourses = prevCourses; _sylTeacherName = prevName; _sylTeacherPhoto = prevPhoto;
+    _sylTeacherCurriculum = prevCurr; window._sylBrandColor = prevBrand;
+    window._sylAccentColor = prevAccent; _sylPeriod = prevPeriod;
   }
-  _sylCourses = prevCourses; _sylTeacherName = prevName; _sylTeacherPhoto = prevPhoto;
-  _sylTeacherCurriculum = prevCurr; window._sylBrandColor = prevBrand;
-  window._sylAccentColor = prevAccent; _sylPeriod = prevPeriod;
 }
 
 function sylViewCloseDetail(){
@@ -34013,6 +34030,7 @@ async function sylLoadTeacherRecord(id){
     var uLayout = await db.from('users').select('layout_config').eq('id', currentUser.id).single();
     if(uLayout.data?.layout_config && typeof uLayout.data.layout_config === 'object'){
       Object.assign(_sylLayoutConfig, uLayout.data.layout_config);
+      if(typeof sylSyncFontSizeFromConfig === 'function') sylSyncFontSizeFromConfig();
     }
     var {data, error} = await db.from('syllabuses').select('*').eq('id', id).single();
     if(error) throw error;
@@ -34555,8 +34573,8 @@ async function syllabusSave(){
       }
     }
     if(res.error) throw res.error;
-    // 선생님 계정에 레이아웃 설정 저장
-    if(isTeacherPanel && currentUser?.id){
+    // 선생님/관리자/데스크 모두 레이아웃 설정 저장 (각 계정별 독립 저장)
+    if(currentUser?.id){
       await db.from('users').update({ layout_config: _sylLayoutConfig }).eq('id', currentUser.id);
     }
     _sylLastSavedId = recordId || (document.getElementById(isTeacherPanel ? 't-syl-record-id' : 'syl-record-id')?.textContent || '');
@@ -37206,8 +37224,8 @@ async function sylEditorSaveLayout() {
   if (!currentUser || !currentUser.id) {
     alert('로그인 후 저장할 수 있습니다.'); return;
   }
-  var btn = document.querySelector('#syl-editor-panel button');
-  // 저장 버튼 찾기 (첫 번째 버튼)
+  // _sylViewRestoreFn이 있으면 관리자가 다른 선생님 계획서를 보는 중
+  // 이 경우 저장하면 관리자 본인 계정에 저장됨 (정상)
   var saveBtns = document.querySelectorAll('#syl-editor-panel button');
   var saveBtn = saveBtns[0];
   if (saveBtn) { saveBtn.textContent = '⏳ 저장 중...'; saveBtn.disabled = true; }
