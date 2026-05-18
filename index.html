@@ -3039,14 +3039,35 @@
 
             <!-- 우: 저장된 진도계획서 select -->
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <div style="display:flex;align-items:center;gap:6px;background:#f8fafc;border:1.5px solid #d0dde6;border-radius:8px;padding:6px 10px">
+              <!-- 저장된 계획서 필터 -->
+              <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%">
                 <span style="font-size:11px;font-weight:700;color:#1F3A51;white-space:nowrap">📁 저장된 계획서</span>
-                <select id="syl-saved-select" onchange="sylAdminLoadFromSelect(this.value)" style="padding:4px 8px;border:1.5px solid #7dd3fc;border-radius:6px;font-size:12px;outline:none;background:#fff;min-width:130px;max-width:170px">
+                <!-- 분원 필터 -->
+                <select id="syl-filter-branch" onchange="sylLoadSavedList()" style="padding:4px 8px;border:1.5px solid #d0dde6;border-radius:6px;font-size:11px;outline:none;background:#fff;max-width:110px">
+                  <option value="">전체 분원</option>
+                </select>
+                <!-- 선생님 필터 -->
+                <select id="syl-filter-teacher" onchange="sylLoadSavedList()" style="padding:4px 8px;border:1.5px solid #d0dde6;border-radius:6px;font-size:11px;outline:none;background:#fff;max-width:110px">
+                  <option value="">전체 선생님</option>
+                </select>
+                <!-- 연도 필터 -->
+                <select id="syl-filter-year" onchange="sylLoadSavedList()" style="padding:4px 8px;border:1.5px solid #d0dde6;border-radius:6px;font-size:11px;outline:none;background:#fff;max-width:90px">
+                  <option value="">전체 연도</option>
+                </select>
+                <!-- 월 필터 -->
+                <select id="syl-filter-month" onchange="sylLoadSavedList()" style="padding:4px 8px;border:1.5px solid #d0dde6;border-radius:6px;font-size:11px;outline:none;background:#fff;max-width:80px">
+                  <option value="">전체 월</option>
+                </select>
+                <span id="syl-saved-count" style="font-size:10px;color:#9ca3af;white-space:nowrap"></span>
+                <button onclick="sylResetFilters()" style="padding:3px 8px;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;border-radius:5px;font-size:10px;cursor:pointer">초기화</button>
+              </div>
+              <!-- 저장된 계획서 드롭다운 (빠른 선택) -->
+              <div style="display:flex;align-items:center;gap:6px">
+                <select id="syl-saved-select" onchange="sylAdminLoadFromSelect(this.value)" style="padding:4px 8px;border:1.5px solid #7dd3fc;border-radius:6px;font-size:12px;outline:none;background:#fff;min-width:180px;max-width:250px">
                   <option value="">-- 선택 --</option>
                 </select>
-                <span id="syl-saved-count" style="font-size:10px;color:#9ca3af"></span>
+                <button onclick="openSylLinkModal()" style="padding:6px 11px;background:#f0fdf4;color:#16a34a;border:1.5px solid #86efac;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">🔗 계획서 연결</button>
               </div>
-              <button onclick="openSylLinkModal()" style="padding:6px 11px;background:#f0fdf4;color:#16a34a;border:1.5px solid #86efac;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">🔗 계획서 연결</button>
             </div>
 
           </div>
@@ -34332,6 +34353,16 @@ async function sylLinkExecute(){
 var _sylExpandedTeachers = {};
 var _sylLastSavedId = null; // 마지막 저장된 레코드 ID
 
+// 필터 초기화
+function sylResetFilters(){
+  var ids = ['syl-filter-branch','syl-filter-teacher','syl-filter-year','syl-filter-month'];
+  ids.forEach(function(id){
+    var el = document.getElementById(id);
+    if(el) el.value = '';
+  });
+  sylLoadSavedList();
+}
+
 async function sylLoadSavedList(){
   var listEl = document.getElementById('syl-saved-list');
   var selectEl = document.getElementById('syl-saved-select');
@@ -34341,6 +34372,8 @@ async function sylLoadSavedList(){
   try {
     var filterBranch = document.getElementById('syl-filter-branch')?.value || '';
     var filterTeacher = document.getElementById('syl-filter-teacher')?.value || '';
+    var filterYear = document.getElementById('syl-filter-year')?.value || '';
+    var filterMonth = document.getElementById('syl-filter-month')?.value || '';
 
     var query = db.from('syllabuses')
       .select('id, teacher_name, teacher_id, period, branch, brand_color, accent_color, created_at, updated_at')
@@ -34352,6 +34385,10 @@ async function sylLoadSavedList(){
       if(isUUID) query = query.eq('teacher_id', filterTeacher);
       else query = query.eq('teacher_name', filterTeacher);
     }
+    // 연도 필터: period가 '2026년 6월' 형태이므로 like 검색
+    if(filterYear) query = query.like('period', filterYear + '%');
+    // 월 필터: '6월' 포함 여부
+    if(filterMonth) query = query.like('period', '%' + filterMonth);
 
     var {data, error} = await query;
     if(error) throw error;
@@ -34368,11 +34405,16 @@ async function sylLoadSavedList(){
         var branches = [...new Set((data||[]).map(function(r){ return r.branch; }).filter(Boolean))].sort();
         branches.forEach(function(b){ branchSel.innerHTML += '<option value="'+b+'">'+b+'</option>'; });
       }
-      branchSel.value = '';
+      branchSel.value = filterBranch || '';
     }
-    if(teacherSel && teacherSel.options.length <= 1){
+    // ── 선생님 필터 채우기 (항상 갱신) ──
+    if(teacherSel){
+      var savedTeacherVal = teacherSel.value;
+      var {data: allSylData} = await db.from('syllabuses')
+        .select('teacher_name, teacher_id').order('teacher_name', {ascending: true});
       var seen = {};
-      (data||[]).forEach(function(r){
+      teacherSel.innerHTML = '<option value="">전체 선생님</option>';
+      (allSylData||[]).forEach(function(r){
         var key = r.teacher_id || ('name:'+r.teacher_name);
         if(!seen[key] && r.teacher_name){
           seen[key] = true;
@@ -34380,7 +34422,27 @@ async function sylLoadSavedList(){
           teacherSel.innerHTML += '<option value="'+val+'">'+r.teacher_name+'</option>';
         }
       });
-      teacherSel.value = '';  // 자동 선택 방지 \u2014 항상 전체로 시작
+      teacherSel.value = savedTeacherVal || filterTeacher || '';
+    }
+    // ── 연도 필터 채우기 ──
+    var yearSel = document.getElementById('syl-filter-year');
+    var monthSelEl = document.getElementById('syl-filter-month');
+    if(yearSel){
+      var {data: allPeriods} = await db.from('syllabuses').select('period').order('period', {ascending:false});
+      var savedYear = yearSel.value;
+      var years = [...new Set((allPeriods||[]).map(function(r){
+        if(!r.period) return null;
+        var m = r.period.match(/(\d{4})년/);
+        return m ? m[1]+'년' : null;
+      }).filter(Boolean))];
+      yearSel.innerHTML = '<option value="">전체 연도</option>';
+      years.forEach(function(y){ yearSel.innerHTML += '<option value="'+y+'">'+y+'</option>'; });
+      yearSel.value = savedYear || filterYear || '';
+    }
+    if(monthSelEl && monthSelEl.options.length <= 1){
+      var months = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+      months.forEach(function(m){ monthSelEl.innerHTML += '<option value="'+m+'">'+m+'</option>'; });
+      monthSelEl.value = filterMonth || '';
     }
 
     if(!data || !data.length){
