@@ -34515,9 +34515,14 @@ async function syllabusSave(){
       }
     }
     if(res.error) throw res.error;
-    // 선생님/관리자/데스크 모두 레이아웃 설정 저장 (각 계정별 독립 저장)
-    if(currentUser?.id){
-      await db.from('users').update({ layout_config: _sylLayoutConfig }).eq('id', currentUser.id);
+    // 레이아웃 설정 저장:
+    // 선생님 → 본인 계정에 저장
+    // 관리자/데스크 → 현재 작업 중인 선생님(_sylTeacherId) 계정에 저장
+    var layoutSaveId = (_sylTeacherId && _sylTeacherId !== currentUser.id)
+      ? _sylTeacherId   // 관리자가 다른 선생님 작업 중
+      : currentUser.id; // 선생님 본인 또는 자기 자신
+    if(layoutSaveId){
+      await db.from('users').update({ layout_config: _sylLayoutConfig }).eq('id', layoutSaveId);
     }
     _sylLastSavedId = recordId || (document.getElementById(isTeacherPanel ? 't-syl-record-id' : 'syl-record-id')?.textContent || '');
     alert('\u2705 저장됐습니다!');
@@ -34672,13 +34677,19 @@ function syllabusOnTeacherChange(){
   if(_sylTeacherId){
     (async function(){
       try {
-        var uRes = await db.from('users').select('profile_image_url').eq('id', _sylTeacherId).single();
+        // 사진 + layout_config 함께 로드
+        var uRes = await db.from('users').select('profile_image_url,layout_config').eq('id', _sylTeacherId).single();
         if(uRes.data?.profile_image_url){
           _sylTeacherPhoto = uRes.data.profile_image_url;
         } else {
           _sylTeacherPhoto = '';
         }
         sylRenderTeacherPhotoPreview();
+        // 해당 선생님의 layout_config 로드 → 미리보기에 반영
+        if(uRes.data?.layout_config && typeof uRes.data.layout_config === 'object'){
+          Object.assign(_sylLayoutConfig, uRes.data.layout_config);
+          if(typeof sylSyncFontSizeFromConfig === 'function') sylSyncFontSizeFromConfig();
+        }
       } catch(e){}
     })();
   } else {
@@ -37172,9 +37183,13 @@ async function sylEditorSaveLayout() {
   var saveBtn = saveBtns[0];
   if (saveBtn) { saveBtn.textContent = '⏳ 저장 중...'; saveBtn.disabled = true; }
   try {
+    // 관리자가 다른 선생님 작업 중이면 해당 선생님 계정에 저장
+    var layoutSaveId2 = (_sylTeacherId && _sylTeacherId !== currentUser.id)
+      ? _sylTeacherId
+      : currentUser.id;
     var {error} = await db.from('users')
       .update({ layout_config: _sylLayoutConfig })
-      .eq('id', currentUser.id);
+      .eq('id', layoutSaveId2);
     if (error) throw error;
     if (saveBtn) {
       saveBtn.textContent = '✅ 저장됐습니다!';
