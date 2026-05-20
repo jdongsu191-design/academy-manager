@@ -1739,6 +1739,7 @@
             <div style="display:flex;gap:8px;flex:1;min-width:220px;align-self:flex-end">
               <button id="wn-save-btn" onclick="wnSaveAll()" class="btn btn-primary" style="flex:1;padding:9px 0;font-weight:700">💾 전체 저장</button>
               <button id="wn-img-btn" onclick="wnGenerateImage()" class="btn" style="flex:1;padding:9px 0;background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;text-align:center">📊 이미지 생성</button>
+              <button onclick="wnLoadData()" class="btn" style="padding:9px 12px;background:#f1f5f9;color:#475569;border-color:#cbd5e1;font-weight:700" title="최신 데이터로 새로고침">🔄</button>
             </div>
           </div>
         </div>
@@ -1794,6 +1795,7 @@
               <button id="pt-score-config-btn" onclick="ptOpenScoreConfig()" style="display:none;flex:1;padding:9px 0;font-weight:700;background:#fff;color:#5B21B6;border:2px solid #7C3AED;border-radius:8px;font-size:13px;cursor:pointer">⚙️ 배점 설정</button>
               <button id="pt-save-btn" onclick="ptSaveAll()" class="btn" style="flex:1;padding:9px 0;font-weight:700;background:#7C3AED;color:#fff;border-color:#7C3AED">💾 전체 저장</button>
               <button id="pt-img-btn" onclick="ptGenerateImage()" class="btn" style="flex:1;padding:9px 0;background:#5B21B6;color:#fff;border-color:#5B21B6;font-weight:700;text-align:center">📊 이미지 생성</button>
+              <button onclick="ptLoadData()" class="btn" style="padding:9px 12px;background:#f1f5f9;color:#475569;border-color:#cbd5e1;font-weight:700" title="최신 데이터로 새로고침">🔄</button>
             </div>
           </div>
         </div>
@@ -1911,6 +1913,7 @@
             </div>
             <div style="display:flex;gap:8px;flex:1;min-width:220px;align-self:flex-end">
               <button id="ns-save-btn" onclick="nsSaveAll()" class="btn" style="flex:1;padding:9px 0;font-weight:700;background:#0f766e;color:#fff;border-color:#0f766e">💾 전체 저장</button>
+              <button onclick="nsLoadData()" class="btn" style="padding:9px 12px;background:#f1f5f9;color:#475569;border-color:#cbd5e1;font-weight:700" title="최신 데이터로 새로고침">🔄</button>
             </div>
           </div>
         </div>
@@ -1987,6 +1990,7 @@
             <div style="display:flex;gap:8px;flex:1;min-width:220px;align-self:flex-end">
               <button id="by-save-btn" onclick="bySaveAll()" class="btn" style="flex:1;padding:9px 0;font-weight:700;background:#d97706;color:#fff;border-color:#d97706">💾 전체 저장</button>
               <button id="by-img-btn" onclick="byGenerateImage()" class="btn" style="flex:1;padding:9px 0;background:#b45309;color:#fff;border-color:#b45309;font-weight:700">📊 이미지 생성</button>
+              <button onclick="byLoadData()" class="btn" style="padding:9px 12px;background:#f1f5f9;color:#475569;border-color:#cbd5e1;font-weight:700" title="최신 데이터로 새로고침">🔄</button>
             </div>
           </div>
         </div>
@@ -5506,8 +5510,7 @@ function showApp(){
 
   // 업데이트 알림 Realtime 구독 시작
   if(typeof initNotifyRealtime === 'function') initNotifyRealtime();
-  // 아래 줄 추가:
-  if(typeof initWeekendRealtime === 'function') initWeekendRealtime();
+  // [주말프로그램 Realtime 제거] 충돌 방지를 위해 Realtime 구독 제거
   // 로그인 시 미확인 알림 표시 (채널 유무와 무관하게 항상 체크)
   if(typeof checkMissedNotifications === 'function') setTimeout(checkMissedNotifications, 500);
 
@@ -5784,7 +5787,7 @@ function logout(){
   currentUser=null;students=[];homeworks=[];submissions=[];allUsers=[];classes=[];allClasses=[];
   // 알림 채널/폴링 초기화 (다른 계정으로 재로그인 시 정상 작동하도록)
   if(_notifyChannel){ try{ _notifyChannel.unsubscribe(); }catch(e){} _notifyChannel = null; }
-  if(typeof _weekendChannel !== 'undefined' && _weekendChannel){ try{ _weekendChannel.unsubscribe(); }catch(e){} _weekendChannel = null; }
+  // [주말프로그램 Realtime 제거] _weekendChannel 해제 불필요
   if(_notifyPollInterval){ clearInterval(_notifyPollInterval); _notifyPollInterval = null; }
   _shownNotifyIds = new Set();
   // 내신 분석표 - 선생님 모드 잔재 정리 (관리자/데스크 \u2192 선생님 \u2192 관리자 전환 대비)
@@ -18906,6 +18909,43 @@ function wnCopyMent(studentId){
 var _wnStudents = [];  // 현재 로드된 학생 목록
 var _wnData     = {};  // {student_id: record}
 var _wnAllTeachers = []; // 선생님 목록 캐시
+var _wnSnapshot = {};  // 로드 시점 스냅샷 {student_id: {field: value}}
+var _wnLoadedAt = {};  // 로드 시점 updated_at {student_id: timestamp}
+
+// ── 주말프로그램 공통 스냅샷 헬퍼 ──────────────────────────────
+// DB 레코드 배열로 스냅샷과 loadedAt 생성
+function _buildSnapshot(records, fields) {
+  var snapshot = {}, loadedAt = {};
+  (records || []).forEach(function(r) {
+    var snap = {};
+    fields.forEach(function(f) {
+      var v = r[f];
+      snap[f] = (v === null || v === undefined) ? '' : String(v);
+    });
+    snapshot[r.student_id] = snap;
+    loadedAt[r.student_id] = r.updated_at || null;
+  });
+  return { snapshot: snapshot, loadedAt: loadedAt };
+}
+
+// 화면 현재값과 스냅샷을 비교해서 변경된 학생만 upsert 목록 반환
+function _getChangedUpserts(students, getRecFn, snapshot, fields) {
+  var changed = [];
+  students.forEach(function(s) {
+    var rec = getRecFn(s);
+    if(!rec) return;
+    var snap = snapshot[s.id] || {};
+    var hasChange = false;
+    fields.forEach(function(f) {
+      var cur = (rec[f] === null || rec[f] === undefined) ? '' : String(rec[f]);
+      var org = snap[f] !== undefined ? snap[f] : '';
+      if(cur !== org) hasChange = true;
+    });
+    if(hasChange) changed.push(rec);
+  });
+  return changed;
+}
+// ───────────────────────────────────────────────────────────────
 
 async function initWeekendNaje(){
   // 선생님/데스크 진입 시 관리자 전용 카드 숨김 (관리자는 유지)
@@ -19103,6 +19143,13 @@ async function wnLoadData(){
   }
 
   wnRenderTable();
+
+  // ── 스냅샷 캡처 (렌더링 완료 후) ──────────────────────────────
+  var _wnFields = ['attendance','homework_done','score_first','score_retry','result','note','attend_time','level'];
+  var built = _buildSnapshot(Object.values(_wnData), _wnFields);
+  _wnSnapshot = built.snapshot;
+  _wnLoadedAt = built.loadedAt;
+  // ──────────────────────────────────────────────────────────────
 }
 
 // 주말프로그램 분원 변경 시 선생님 필터 연동
@@ -19745,30 +19792,38 @@ async function wnSaveAll(){
   var btn = document.getElementById('wn-save-btn');
   btn.textContent = '\u23F3 저장 중...'; btn.disabled = true;
 
-  var rows = document.querySelectorAll('.wn-tbl tbody tr');
-  var upserts = [];
+  var wrap = document.getElementById('wn-table-wrap');
+  var _wnFields = ['attendance','homework_done','score_first','score_retry','result','note','attend_time','level'];
 
-  rows.forEach(function(row){
-    var inputs = row.querySelectorAll('[data-sid]');
-    if(!inputs.length) return;
-    var sid = inputs[0].dataset.sid;
-    var rec = {student_id: sid, session_date: date, created_by: currentUser.id, updated_at: new Date().toISOString()};
-
-    row.querySelectorAll('[data-sid][data-field]').forEach(function(el){
-      var field = el.dataset.field;
+  // ── 변경된 학생만 추출 (스냅샷 비교) ────────────────────────
+  var upserts = _getChangedUpserts(_wnStudents, function(s){
+    function fv(field){
+      var el = wrap ? wrap.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]') : null;
+      return el ? el.value : '';
+    }
+    var rec = {student_id: s.id, session_date: date, created_by: currentUser.id};
+    _wnFields.forEach(function(field){
       if(field === 'homework_done'){
-        rec[field] = el.value === '' ? null : (el.value === 'true');
-      } else rec[field] = el.value.trim() || null;
+        rec[field] = fv(field) === '' ? null : (fv(field) === 'true');
+      } else {
+        rec[field] = fv(field).trim() || null;
+      }
     });
+    return rec;
+  }, _wnSnapshot, _wnFields);
+  // ──────────────────────────────────────────────────────────────
 
-    upserts.push(rec);
-  });
+  if(!upserts.length){
+    btn.textContent = '\uD83D\uDCBE 전체 저장'; btn.disabled = false;
+    alert('변경된 내용이 없습니다.');
+    return;
+  }
 
   var {error} = await db.from('weekend_naje').upsert(upserts, {onConflict:'student_id,session_date'});
   btn.textContent = '\uD83D\uDCBE 전체 저장'; btn.disabled = false;
 
   if(error){ alert('저장 오류: '+error.message); return; }
-  alert('\u2705 저장 완료!');
+  alert('\u2705 저장 완료! ('+upserts.length+'명 반영)');
   await wnLoadData();
 }
 
@@ -22362,11 +22417,13 @@ function editTogglePotential(chk){
 var _ptStudents = [];
 var _ptData     = {};
 var _ptAllTeachers = [];
+var _ptSnapshot = {};  // 로드 시점 스냅샷
+var _ptLoadedAt = {};  // 로드 시점 updated_at
 
 /* ── 업데이트 알림 시스템 ── */
 var _notifyChannel = null;
 var _notifyPollInterval = null;
-var _weekendChannel = null;  // [4-B] 주말프로그램 Realtime 채널
+// [주말프로그램 Realtime 제거] _weekendChannel 및 initWeekendRealtime 제거
 
 async function initNotifyRealtime(){
   if(_notifyChannel) return;
@@ -22396,36 +22453,6 @@ async function initNotifyRealtime(){
         if(!_notifyPollInterval) startNotifyPolling();
       }
     });
-}
-
-// [4-B] 주말프로그램 Realtime 구독 — 데스크/다른 선생님 저장 시 자동 갱신
-function initWeekendRealtime(){
-  if(_weekendChannel) return;
-
-  function makeWeekendHandler(panelId, dateElId, loadFn){
-    return function(payload){
-      var panel = document.getElementById(panelId);
-      if(!panel || !panel.classList.contains('active')) return;
-      var date = (document.getElementById(dateElId) || {}).value || '';
-      if(!date) return;
-      var changedDate = (payload.new && payload.new.session_date) || (payload.old && payload.old.session_date) || '';
-      if(changedDate && changedDate !== date) return;
-      var createdBy = payload.new && payload.new.created_by;
-      if(createdBy && currentUser && createdBy === currentUser.id) return;
-      if(typeof loadFn === 'function') loadFn();
-    };
-  }
-
-  _weekendChannel = db.channel('weekend-all-channel')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'weekend_naje' },
-      makeWeekendHandler('panel-weekend-naje', 'wn-date', function(){ if(typeof wnLoadData==='function') wnLoadData(); }))
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'weekend_potential' },
-      makeWeekendHandler('panel-weekend-potential', 'pt-date', function(){ if(typeof ptLoadData==='function') ptLoadData(); }))
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'weekend_naesin' },
-      makeWeekendHandler('panel-weekend-naesin', 'ns-date', function(){ if(typeof nsLoadData==='function') nsLoadData(); }))
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'weekend_bety' },
-      makeWeekendHandler('panel-weekend-bety', 'by-date', function(){ if(typeof byLoadData==='function') byLoadData(); }))
-    .subscribe();
 }
 
 // localStorage 키: 유저별로 구분
@@ -23762,6 +23789,13 @@ async function ptLoadData(){
   }
 
   ptRenderTable();
+
+  // ── 스냅샷 캡처 ──────────────────────────────────────────────
+  var _ptFields = ['attendance','wrong_done','score','result','note','attend_time','level'];
+  var ptBuilt = _buildSnapshot(Object.values(_ptData), _ptFields);
+  _ptSnapshot = ptBuilt.snapshot;
+  _ptLoadedAt = ptBuilt.loadedAt;
+  // ─────────────────────────────────────────────────────────────
 }
 
 // 포텐셜 일괄 처리 모달
@@ -25223,8 +25257,10 @@ async function ptSaveAll(){
   btn.textContent = '\u23F3 저장 중...'; btn.disabled = true;
 
   var wrap = document.getElementById('pt-table-wrap');
+  var _ptFields = ['attendance','wrong_done','score','result','note','attend_time','level'];
 
-  var upserts = _ptStudents.map(function(s){
+  // ── 변경된 학생만 추출 (스냅샷 비교) ────────────────────────
+  var upserts = _getChangedUpserts(_ptStudents, function(s){
     function fv(field){
       var el = wrap ? wrap.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]') : null;
       return el ? el.value.trim() : '';
@@ -25245,12 +25281,19 @@ async function ptSaveAll(){
       wrong_answers: answers,
       created_by: currentUser.id
     };
-  });
+  }, _ptSnapshot, _ptFields);
+  // ──────────────────────────────────────────────────────────────
+
+  if(!upserts.length){
+    btn.textContent = '\uD83D\uDCBE 전체 저장'; btn.disabled = false;
+    alert('변경된 내용이 없습니다.');
+    return;
+  }
 
   var {error} = await db.from('weekend_potential').upsert(upserts, {onConflict:'student_id,session_date'});
   btn.textContent = '\uD83D\uDCBE 전체 저장'; btn.disabled = false;
   if(error){ alert('저장 오류: '+error.message); return; }
-  alert('\u2705 저장 완료!');
+  alert('\u2705 저장 완료! ('+upserts.length+'명 반영)');
   await ptLoadData();
 }
 
@@ -25440,6 +25483,8 @@ async function ptGenerateImage(){
 var _nsStudents = [];
 var _nsData     = {};
 var _nsAllTeachers = [];
+var _nsSnapshot = {};  // 로드 시점 스냅샷
+var _nsLoadedAt = {};  // 로드 시점 updated_at
 
 async function initNaesin(){
   var dateEl = document.getElementById('ns-date');
@@ -25593,6 +25638,13 @@ async function nsLoadData(){
   }
 
   nsRenderTable();
+
+  // ── 스냅샷 캡처 ──────────────────────────────────────────────
+  var _nsFields = ['attendance','result','note','attend_time'];
+  var nsBuilt = _buildSnapshot(Object.values(_nsData), _nsFields);
+  _nsSnapshot = nsBuilt.snapshot;
+  _nsLoadedAt = nsBuilt.loadedAt;
+  // ─────────────────────────────────────────────────────────────
 }
 
 function nsRenderTable(){
@@ -25711,8 +25763,10 @@ async function nsSaveAll(){
   btn.textContent = '\u23F3 저장 중...'; btn.disabled = true;
 
   var wrap = document.getElementById('ns-table-wrap');
+  var _nsFields = ['attendance','result','note','attend_time'];
 
-  var upserts = _nsStudents.map(function(s){
+  // ── 변경된 학생만 추출 (스냅샷 비교) ────────────────────────
+  var upserts = _getChangedUpserts(_nsStudents, function(s){
     function fv(field){
       var el = wrap ? wrap.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]') : null;
       return el ? el.value.trim() : '';
@@ -25726,12 +25780,19 @@ async function nsSaveAll(){
       note: fv('note') || null,
       created_by: currentUser.id
     };
-  });
+  }, _nsSnapshot, _nsFields);
+  // ──────────────────────────────────────────────────────────────
+
+  if(!upserts.length){
+    btn.textContent = '\uD83D\uDCBE 전체 저장'; btn.disabled = false;
+    alert('변경된 내용이 없습니다.');
+    return;
+  }
 
   var {error} = await db.from('weekend_naesin').upsert(upserts, {onConflict:'student_id,session_date'});
   btn.textContent = '\uD83D\uDCBE 전체 저장'; btn.disabled = false;
   if(error){ alert('저장 오류: '+error.message); return; }
-  alert('\u2705 저장 완료!');
+  alert('\u2705 저장 완료! ('+upserts.length+'명 반영)');
   await nsLoadData();
 }
 
@@ -29344,6 +29405,8 @@ async function arrwDownloadReportImage(){
 var _byStudents = [];
 var _byData     = {};
 var _byAllTeachers = [];
+var _bySnapshot = {};  // 로드 시점 스냅샷
+var _byLoadedAt = {};  // 로드 시점 updated_at
 
 function editToggleBety(chk){
   var detail = document.getElementById('edit-bety-detail');
@@ -29639,6 +29702,13 @@ async function byLoadData(){
     (records||[]).forEach(function(r){ _byData[r.student_id] = r; });
   }
   byRenderTable();
+
+  // ── 스냅샷 캡처 ──────────────────────────────────────────────
+  var _byFields = ['attendance','wrong_done','score','result','note','attend_time','level'];
+  var byBuilt = _buildSnapshot(Object.values(_byData), _byFields);
+  _bySnapshot = byBuilt.snapshot;
+  _byLoadedAt = byBuilt.loadedAt;
+  // ─────────────────────────────────────────────────────────────
 }
 
 // 베티모의고사 일괄 처리 모달
@@ -29802,7 +29872,10 @@ async function bySaveAll(){
   var btn = document.getElementById('by-save-btn');
   btn.textContent = '\u23F3 저장 중...'; btn.disabled = true;
   var wrap = document.getElementById('by-table-wrap');
-  var upserts = _byStudents.map(function(s){
+  var _byFields = ['attendance','wrong_done','score','result','note','attend_time','level'];
+
+  // ── 변경된 학생만 추출 (스냅샷 비교) ────────────────────────
+  var upserts = _getChangedUpserts(_byStudents, function(s){
     function fv(field){ var el = wrap?wrap.querySelector('[data-sid="'+s.id+'"][data-field="'+field+'"]'):null; return el?el.value.trim():''; }
     var wrongVal = fv('wrong_done');
     var scoreVal = fv('score');
@@ -29815,11 +29888,19 @@ async function bySaveAll(){
       result: fv('result')||null, note: fv('note')||null,
       created_by: currentUser.id
     };
-  });
+  }, _bySnapshot, _byFields);
+  // ──────────────────────────────────────────────────────────────
+
+  if(!upserts.length){
+    btn.textContent = '\uD83D\uDCBE 전체 저장'; btn.disabled = false;
+    alert('변경된 내용이 없습니다.');
+    return;
+  }
+
   var {error} = await db.from('weekend_bety').upsert(upserts, {onConflict:'student_id,session_date'});
   btn.textContent = '\uD83D\uDCBE 전체 저장'; btn.disabled = false;
   if(error){ alert('저장 오류: '+error.message); return; }
-  alert('\u2705 저장 완료!');
+  alert('\u2705 저장 완료! ('+upserts.length+'명 반영)');
   await byLoadData();
 }
 
