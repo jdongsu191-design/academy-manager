@@ -20661,27 +20661,22 @@ async function saveWorkLog(){
   btn.textContent = '저장 중...'; btn.disabled = true;
 
   try{
-    const logData = {
-      teacher_id: currentUser.id,
-      class_id: classId,
-      log_date: date,
-      progress: document.getElementById('wl-progress').value,
-      homework: document.getElementById('wl-homework').value,
-      memo: document.getElementById('wl-memo').value,
-      trial_class: document.getElementById('wl-trial').value || null,
-      new_student: document.getElementById('wl-new-student').value || null,
-      dropout: document.getElementById('wl-dropout').value || null,
-      updated_at: new Date().toISOString()
-    };
-
-    let logId = wlCurrentLogId;
-    if(logId){
-      await db.from('work_logs').update(logData).eq('id', logId);
-    } else {
-      const{data} = await db.from('work_logs').insert(logData).select().single();
-      logId = data.id;
-      wlCurrentLogId = logId;
-    }
+    // [3단계 충돌 방어] insert/update 분기 제거 → DB Function(RPC)으로 원자적 처리
+    // 동시에 여러 기기에서 첫 저장을 시도해도 DB가 ON CONFLICT로 중복을 막음
+    const {data: rpcData, error: rpcError} = await db.rpc('upsert_work_log', {
+      p_teacher_id:  currentUser.id,
+      p_class_id:    classId,
+      p_log_date:    date,
+      p_progress:    document.getElementById('wl-progress').value || null,
+      p_homework:    document.getElementById('wl-homework').value || null,
+      p_memo:        document.getElementById('wl-memo').value || null,
+      p_trial_class: document.getElementById('wl-trial').value || null,
+      p_new_student: document.getElementById('wl-new-student').value || null,
+      p_dropout:     document.getElementById('wl-dropout').value || null
+    });
+    if(rpcError) throw new Error(rpcError.message);
+    let logId = rpcData;
+    wlCurrentLogId = logId;
 
     const rows = document.querySelectorAll('#wl-student-tbody tr');
     var indivData = window._wlIndividualData || {};
