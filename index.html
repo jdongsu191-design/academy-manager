@@ -5506,6 +5506,8 @@ function showApp(){
 
   // 업데이트 알림 Realtime 구독 시작
   if(typeof initNotifyRealtime === 'function') initNotifyRealtime();
+  // 아래 줄 추가:
+  if(typeof initWeekendRealtime === 'function') initWeekendRealtime();
   // 로그인 시 미확인 알림 표시 (채널 유무와 무관하게 항상 체크)
   if(typeof checkMissedNotifications === 'function') setTimeout(checkMissedNotifications, 500);
 
@@ -5782,6 +5784,7 @@ function logout(){
   currentUser=null;students=[];homeworks=[];submissions=[];allUsers=[];classes=[];allClasses=[];
   // 알림 채널/폴링 초기화 (다른 계정으로 재로그인 시 정상 작동하도록)
   if(_notifyChannel){ try{ _notifyChannel.unsubscribe(); }catch(e){} _notifyChannel = null; }
+  if(typeof _weekendChannel !== 'undefined' && _weekendChannel){ try{ _weekendChannel.unsubscribe(); }catch(e){} _weekendChannel = null; }
   if(_notifyPollInterval){ clearInterval(_notifyPollInterval); _notifyPollInterval = null; }
   _shownNotifyIds = new Set();
   // 내신 분석표 - 선생님 모드 잔재 정리 (관리자/데스크 \u2192 선생님 \u2192 관리자 전환 대비)
@@ -19068,14 +19071,15 @@ async function wnLoadData(){
     .filter(function(r){ return r.student; })
     .map(function(r){ return r.student; });
 
-  students = (studentsRes.data||[])
+  // [충돌 방어] 전역 students 덮어쓰기 제거 — _wnStudents에만 할당
+  // 이전: students = ... → _wnStudents = students
+  // 문제: loadTeacherData 등 다른 함수의 students 전역 변수를 오염시켜 충돌 유발
+  _wnStudents = (studentsRes.data||[])
     .filter(function(s){ return !_wnFutureInSet.has(s.id); })
     .concat(_wnPastOutStudents.filter(function(s){
       return !(studentsRes.data||[]).some(function(a){ return a.id===s.id; });
     }))
     .sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); });
-
-  _wnStudents = students || [];
 
   _wnData = {};
   if(_wnStudents.length){
@@ -20720,27 +20724,22 @@ async function saveWorkLog(){
   btn.textContent = '저장 중...'; btn.disabled = true;
 
   try{
-    const logData = {
-      teacher_id: currentUser.id,
-      class_id: classId,
-      log_date: date,
-      progress: document.getElementById('wl-progress').value,
-      homework: document.getElementById('wl-homework').value,
-      memo: document.getElementById('wl-memo').value,
-      trial_class: document.getElementById('wl-trial').value || null,
-      new_student: document.getElementById('wl-new-student').value || null,
-      dropout: document.getElementById('wl-dropout').value || null,
-      updated_at: new Date().toISOString()
-    };
-
-    let logId = wlCurrentLogId;
-    if(logId){
-      await db.from('work_logs').update(logData).eq('id', logId);
-    } else {
-      const{data} = await db.from('work_logs').insert(logData).select().single();
-      logId = data.id;
-      wlCurrentLogId = logId;
-    }
+    // [3단계 충돌 방어] insert/update 분기 제거 → DB Function(RPC)으로 원자적 처리
+    // 동시에 여러 기기에서 첫 저장을 시도해도 DB가 ON CONFLICT로 중복을 막음
+    const {data: rpcData, error: rpcError} = await db.rpc('upsert_work_log', {
+      p_teacher_id:  currentUser.id,
+      p_class_id:    classId,
+      p_log_date:    date,
+      p_progress:    document.getElementById('wl-progress').value || null,
+      p_homework:    document.getElementById('wl-homework').value || null,
+      p_memo:        document.getElementById('wl-memo').value || null,
+      p_trial_class: document.getElementById('wl-trial').value || null,
+      p_new_student: document.getElementById('wl-new-student').value || null,
+      p_dropout:     document.getElementById('wl-dropout').value || null
+    });
+    if(rpcError) throw new Error(rpcError.message);
+    let logId = rpcData;
+    wlCurrentLogId = logId;
 
     const rows = document.querySelectorAll('#wl-student-tbody tr');
     var indivData = window._wlIndividualData || {};
@@ -22367,6 +22366,7 @@ var _ptAllTeachers = [];
 /* ── 업데이트 알림 시스템 ── */
 var _notifyChannel = null;
 var _notifyPollInterval = null;
+var _weekendChannel = null;  // [4-B] 주말프로그램 Realtime 채널
 
 async function initNotifyRealtime(){
   if(_notifyChannel) return;
@@ -22396,6 +22396,36 @@ async function initNotifyRealtime(){
         if(!_notifyPollInterval) startNotifyPolling();
       }
     });
+}
+
+// [4-B] 주말프로그램 Realtime 구독 — 데스크/다른 선생님 저장 시 자동 갱신
+function initWeekendRealtime(){
+  if(_weekendChannel) return;
+
+  function makeWeekendHandler(panelId, dateElId, loadFn){
+    return function(payload){
+      var panel = document.getElementById(panelId);
+      if(!panel || !panel.classList.contains('active')) return;
+      var date = (document.getElementById(dateElId) || {}).value || '';
+      if(!date) return;
+      var changedDate = (payload.new && payload.new.session_date) || (payload.old && payload.old.session_date) || '';
+      if(changedDate && changedDate !== date) return;
+      var createdBy = payload.new && payload.new.created_by;
+      if(createdBy && currentUser && createdBy === currentUser.id) return;
+      if(typeof loadFn === 'function') loadFn();
+    };
+  }
+
+  _weekendChannel = db.channel('weekend-all-channel')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'weekend_naje' },
+      makeWeekendHandler('panel-weekend-naje', 'wn-date', function(){ if(typeof wnLoadData==='function') wnLoadData(); }))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'weekend_potential' },
+      makeWeekendHandler('panel-weekend-potential', 'pt-date', function(){ if(typeof ptLoadData==='function') ptLoadData(); }))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'weekend_naesin' },
+      makeWeekendHandler('panel-weekend-naesin', 'ns-date', function(){ if(typeof nsLoadData==='function') nsLoadData(); }))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'weekend_bety' },
+      makeWeekendHandler('panel-weekend-bety', 'by-date', function(){ if(typeof byLoadData==='function') byLoadData(); }))
+    .subscribe();
 }
 
 // localStorage 키: 유저별로 구분
@@ -22449,11 +22479,17 @@ async function checkMissedNotifications(){
       return;
     }
 
-    // 가장 최근 알림 1건만 표시 (여러 개면 최신 것만)
-    var latest = targets_ok[targets_ok.length - 1];
+    // [4-A 충돌 방어] FORCE_RELOAD 메시지는 팝업 대상에서 제외 (새로고침 전용이므로 히스토리에 남으면 안 됨)
+    var notifyOnly = targets_ok.filter(function(n){ return n.message && n.message.indexOf('__FORCE_RELOAD__') !== 0; });
+
     targets_ok.forEach(function(n){ _shownNotifyIds.add(n.id); });
     notifyMarkChecked();
-    showUpdateNotifyPopup(latest.message);
+
+    // 일반 알림만 팝업 표시
+    if(notifyOnly.length){
+      var latest = notifyOnly[notifyOnly.length - 1];
+      showUpdateNotifyPopup(latest.message);
+    }
   } catch(e){}
 }
 
