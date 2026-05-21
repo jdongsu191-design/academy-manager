@@ -37123,63 +37123,34 @@ async function sylCaptureA4(html, quality, orientation){
   var A4H = isLandscape ? 794  : 1123;
 
   var tmp = document.createElement('div');
-  // [여백수정] 화면 밖 절대위치 — opacity 사용 안 함 (html2canvas가 투명 처리)
-  tmp.style.cssText = [
-    'position:absolute',
-    'top:-99999px',
-    'left:0',
-    'width:'+A4W+'px',
-    'min-width:'+A4W+'px',
-    'max-width:'+A4W+'px',
-    'overflow:hidden',
-    'background:#fff',
-    'font-family:\'Noto Sans KR\',\'NotoSansMath\',sans-serif',
-    'box-sizing:border-box'
-  ].join(';');
+  tmp.style.cssText = 'position:absolute;top:-99999px;left:0;width:'+A4W+'px;max-width:'+A4W+'px;overflow:hidden;background:#fff;font-family:Noto Sans KR,NotoSansMath,sans-serif;box-sizing:border-box';
   tmp.innerHTML = html;
 
-  // margin:0 auto 제거 — 중앙정렬로 인한 여백 방지
+  // [여백수정] margin:0 auto 제거
   var summaryPage = tmp.querySelector('#syl-summary-page');
-  if(summaryPage){
-    summaryPage.style.margin = '0';
-    summaryPage.style.width = A4W+'px';
-  }
+  if(summaryPage) summaryPage.style.margin = '0';
 
   document.body.appendChild(tmp);
-  await new Promise(function(r){ setTimeout(r, 800); });
-
-  var fullH = Math.max(tmp.scrollHeight, tmp.offsetHeight, A4H);
-
-  // [핵심수정] windowWidth = 실제 뷰포트 너비
-  // html2canvas가 DOM 렌더링 기준을 실제 뷰포트와 일치시켜야 캡처 정확
-  var vpW = window.innerWidth || document.documentElement.clientWidth || A4W;
+  await new Promise(function(r){ setTimeout(r, 400); });
+  var fullH = tmp.scrollHeight || tmp.offsetHeight || A4H;
 
   var fullCanvas = await html2canvas(tmp, {
-    scale: 2,
-    useCORS: true,
-    allowTaint: true,
-    backgroundColor: '#ffffff',
-    width: A4W,
-    height: fullH,
-    x: 0,
-    y: 0,
-    scrollX: 0,
-    scrollY: -tmp.getBoundingClientRect().top,
-    windowWidth: vpW,
-    windowHeight: fullH,
-    logging: false,
-    imageTimeout: 15000
+    scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff',
+    width: A4W, height: fullH,
+    x: 0, y: 0,
+    scrollX: 0, scrollY: 99999,
+    windowWidth: A4W, windowHeight: fullH,
+    logging: false
   });
   document.body.removeChild(tmp);
 
-  // A4W 기준으로 정확히 크롭 (우측 여백 제거)
   var a4 = document.createElement('canvas');
-  a4.width  = A4W * 2;
-  a4.height = fullH * 2;
+  a4.width  = fullCanvas.width;
+  a4.height = fullCanvas.height;
   var ctx = a4.getContext('2d');
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, a4.width, a4.height);
-  ctx.drawImage(fullCanvas, 0, 0, A4W*2, fullH*2, 0, 0, A4W*2, fullH*2);
+  ctx.drawImage(fullCanvas, 0, 0);
 
   return a4;
 }
@@ -37590,7 +37561,6 @@ async function syllabusExport(type){
 }
 
 async function syllabusExportPDF(){
-  // [SYL-2 수정] html2canvas + jsPDF 로드
   if(typeof html2canvas === 'undefined'){
     await new Promise(function(resolve, reject){
       var s = document.createElement('script');
@@ -37612,31 +37582,36 @@ async function syllabusExportPDF(){
   var pdf = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
   var pW = pdf.internal.pageSize.getWidth();
   var pH = pdf.internal.pageSize.getHeight();
+  // [여백수정] 항상 가로(pW)를 꽉 채우고 세로는 비율에 맞게
+  // 세로가 A4를 초과해도 가로 여백이 생기지 않도록 가로 기준 고정
   function imgSize(canvas){
     var ratio = canvas.width / canvas.height;
-    var fitW = pW, fitH = pW / ratio;
-    if(fitH > pH){ fitH = pH; fitW = pH * ratio; }
+    var fitW = pW;
+    var fitH = pW / ratio;
     return {w: fitW, h: fitH};
   }
 
-  // 모든 페이지 수집 (요약 + 강좌별)
-  var allPages = [];
-  allPages.push({ html: sylGetSummaryHTML(), label: '요약' });
+  var summaryHTML = sylGetSummaryHTML();
+  var summaryCanvas = await sylCaptureA4(summaryHTML, 0.95, 'portrait');
+  var sumPages = sylSliceA4Pages(summaryCanvas);
+  var firstPage = true;
+  sumPages.forEach(function(pg){
+    if(!firstPage) pdf.addPage();
+    var _s=imgSize(pg);pdf.addImage(pg.toDataURL('image/jpeg',0.95),'JPEG',0,0,_s.w,_s.h);
+    firstPage = false;
+  });
+
   for(var i=0; i<_sylCourses.length; i++){
     var c = _sylCourses[i];
     var coursePages = sylGetCoursePagesHTML(c);
     for(var p=0; p<coursePages.length; p++){
-      allPages.push({ html: coursePages[p].html, label: (c.title||('강좌'+(i+1))) });
+      var canvas = await sylCaptureA4(coursePages[p].html, 0.95, 'portrait');
+      var pages = sylSliceA4Pages(canvas);
+      pages.forEach(function(pg){
+        pdf.addPage();
+        var _s=imgSize(pg);pdf.addImage(pg.toDataURL('image/jpeg',0.95),'JPEG',0,0,_s.w,_s.h);
+      });
     }
-  }
-
-  var firstPage = true;
-  for(var pi=0; pi<allPages.length; pi++){
-    var canvas = await sylCaptureA4(allPages[pi].html, 0.95, 'portrait');
-    if(!firstPage) pdf.addPage();
-    var _s = imgSize(canvas);
-    pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, _s.w, _s.h);
-    firstPage = false;
   }
 
   var pdfBlob = pdf.output('blob');
