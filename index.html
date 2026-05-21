@@ -37254,8 +37254,8 @@ function sylEditorRenderPanel() {
   // 섹션별 컨트롤 정의
   var sections = {
     header:    { label: '🖼 헤더 영역',          overlay: 'header' },
-    photo:     { label: '📸 사진',               overlay: 'header' },
-    name:      { label: '✏️ 이름 & 강좌명',      overlay: 'header' },
+    photo:     { label: '📸 사진',               overlay: 'photo' },
+    name:      { label: '✏️ 이름 & 강좌명',      overlay: 'name' },
     feature:   { label: '📝 강의특징',           overlay: 'feature' },
     sched:     { label: '📅 진도 / 주말 비율',   overlay: 'sched' },
     curriculum:{ label: '📚 커리큘럼',           overlay: 'curriculum' },
@@ -37365,39 +37365,75 @@ function sylEditorShowOverlay(zone) {
   var page = content.firstElementChild;
   if (!page) return;
 
-  var children = Array.from(page.children);
-  // DOM 실측 구조: 0=헤더, 1=구분선(3px), 2=강의특징, 3=진도/주말, 4=커리큘럼, 5=푸터
-  var zoneMap = { header:[0], feature:[2], sched:[3], curriculum:[4], footer:[5] };
+  // content 기준 절대좌표 계산 헬퍼
+  // el의 offsetParent 체인을 따라 content 기준 누적 offset 계산
+  function getAbsOffset(el, stopAt) {
+    var top = 0, left = 0, cur = el;
+    while (cur && cur !== stopAt) {
+      top  += cur.offsetTop;
+      left += cur.offsetLeft;
+      cur = cur.offsetParent;
+    }
+    return { top: top, left: left };
+  }
 
-  var targetEls;
-  if (zone === 'summary') {
-    targetEls = [content.querySelector('#syl-summary-page') || content];
-  } else if (zoneMap[zone]) {
-    targetEls = zoneMap[zone].map(function(i){ return children[i]; }).filter(Boolean);
-  } else { return; }
+  var children = Array.from(page.children);
+  var header     = children[0];
+  var feature    = children[2];
+  var sched      = children[3];
+  var curriculum = children[4];
+  var footer     = children[5];
+  var leftDiv    = header && header.children[0];
+
+  // zone별 타겟 요소 반환
+  function getTargetEls(zone) {
+    switch(zone) {
+      case 'header':     return header     ? [header]                          : [];
+      case 'photo':      return leftDiv && leftDiv.children[3] ? [leftDiv.children[3]] : (header ? [header] : []);
+      case 'name':       return leftDiv && leftDiv.children[2] ? [leftDiv.children[2]] : (header ? [header] : []);
+      case 'feature':    return feature    ? [feature]     : [];
+      case 'sched':      return sched      ? [sched]       : [];
+      case 'curriculum': return curriculum ? [curriculum]  : [];
+      case 'footer':     return footer     ? [footer]      : [];
+      case 'summary':    return [content.querySelector('#syl-summary-page') || content];
+      default: return [];
+    }
+  }
+
+  var targetEls = getTargetEls(zone);
   if (!targetEls.length) return;
 
   // content(overflow:visible)를 position:relative로 — 오버레이 기준점
   var origContentPos = content.style.position;
   content.style.position = 'relative';
 
-  // page 기준 offsetTop → content 기준으로 변환
-  var pageOffsetTop = page.offsetTop;
-  var minTop = Infinity, maxBottom = -Infinity;
+  // 각 타겟의 content 기준 절대좌표 계산
+  var minTop = Infinity, maxBottom = -Infinity, minLeft = Infinity, maxRight = -Infinity;
   targetEls.forEach(function(el) {
-    var top = pageOffsetTop + el.offsetTop;
-    var bottom = top + el.offsetHeight;
-    if (top < minTop) minTop = top;
-    if (bottom > maxBottom) maxBottom = bottom;
+    var off = getAbsOffset(el, content);
+    var bottom = off.top  + el.offsetHeight;
+    var right  = off.left + el.offsetWidth;
+    if (off.top  < minTop)    minTop    = off.top;
+    if (bottom   > maxBottom) maxBottom = bottom;
+    if (off.left < minLeft)   minLeft   = off.left;
+    if (right    > maxRight)  maxRight  = right;
   });
+
+  // 전체 영역은 페이지 전폭 사용
+  var fullWidthZones = ['header','feature','sched','curriculum','footer','summary'];
+  if (fullWidthZones.indexOf(zone) !== -1) {
+    var pageOff = getAbsOffset(page, content);
+    minLeft  = pageOff.left;
+    maxRight = pageOff.left + page.offsetWidth;
+  }
 
   var overlay = document.createElement('div');
   overlay.id = 'syl-editor-overlay';
   overlay.style.cssText = [
     'position:absolute',
-    'top:'   + minTop + 'px',
-    'left:'  + page.offsetLeft + 'px',
-    'width:' + page.offsetWidth + 'px',
+    'top:'    + minTop + 'px',
+    'left:'   + minLeft + 'px',
+    'width:'  + (maxRight - minLeft) + 'px',
     'height:' + (maxBottom - minTop) + 'px',
     'background:rgba(59,130,246,0.18)',
     'border:2.5px solid rgba(59,130,246,0.9)',
@@ -37405,7 +37441,7 @@ function sylEditorShowOverlay(zone) {
     'pointer-events:none',
     'z-index:9999',
     'box-sizing:border-box',
-    'transition:top 0.15s ease, height 0.15s ease'
+    'transition:all 0.15s ease'
   ].join(';');
 
   content.appendChild(overlay);
@@ -37513,16 +37549,6 @@ function sylEditorApplyZoom(z) {
     wrap.style.height = (1123 * pageCount * _sylEditorZm) + 'px';
   }
   if (lbl) lbl.textContent = Math.round(_sylEditorZm * 100) + '% (794×1123px)  −  +';
-  // zoom 변경 시 오버레이 갱신
-  var sel = window._sylEditorSection || 'header';
-  var sectionOverlayMap = {
-    header:'header', photo:'header', name:'header',
-    feature:'feature', sched:'sched', curriculum:'curriculum',
-    footer:'footer', font_sched:'sched', font_sum:'summary'
-  };
-  if (typeof sylEditorShowOverlay === 'function') {
-    sylEditorShowOverlay(sectionOverlayMap[sel] || null);
-  }
 }
 
 // ── 에디터 탭 전환 ──
