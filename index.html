@@ -33561,6 +33561,8 @@ var _sylLayoutConfig = {
   featureHeight:   143,
   schedMode:       'grid2col', // 표 형식: 'grid2col'(균등 2열) | 'free1col'(자유 1열)
   schedRowH:       40,   // 균등 2열 모드 기준 행 높이(px) — 회차별 좌열, 주말은 자동 연동
+  free1colRowH:    40,   // 자유 1열 모드 기준 행 높이(px) — 주말 높이 자동 연동
+  courseLayouts:   {},   // 강좌별 오버라이드: { [courseId]: { schedMode, schedRowH, free1colRowH } }
   schedPct:        65,
   schedDatePct:    25,   // 회차별진도 날짜열 너비 비율 (%)
   weekendDatePct:  30,   // 주말학습 날짜열 너비 비율 (%)
@@ -36643,7 +36645,10 @@ function sylGetCoursePagesHTML(c, periodOverride){
   // schedule 배열 → 렌더링 (schedMode 에 따라 분기)
   // grid2col: 2열 float, 행 고정 높이, 좌열 baseH, 우열 = (좌행수×baseH)÷우행수
   // free1col: 1열 float, 행 자유 높이 (기존 방식)
-  var _SCHED_BASE_H = _sylLayoutConfig.schedRowH || 40; // 진도 기준 행 높이(px) — 슬라이더로 조절
+  // 모드별 기준 행 높이: 슬라이더 조절값 반영
+  var _SCHED_BASE_H = (_schedMode === 'grid2col')
+    ? (_sylLayoutConfig.schedRowH || 40)
+    : (_sylLayoutConfig.free1colRowH || 40);
   var _WKND_BASE_H  = Math.round(_SCHED_BASE_H * 1.1);  // 주말 = 진도 × 1.1 자동 연동
   var _schedMode    = _sylLayoutConfig.schedMode || 'grid2col';
 
@@ -37296,6 +37301,8 @@ var _sylEditorPrevConfig = null; // 관리자가 다른 선생님 볼 때 이전
 
 function sylEditorOpen(courseId) {
   _sylEditorCurrentId = courseId;
+  // 강좌별 저장된 레이아웃 적용 (전역값 오버라이드)
+  sylApplyCourseLayout(courseId);
   // 슬라이더 패널 렌더링
   sylEditorRenderPanel();
   // 초기 탭은 레이아웃 탭으로
@@ -37331,6 +37338,9 @@ function sylEditorRenderPanel() {
     .sed-row input[type=number] { width:50px; background:#0f1117; border:1px solid #2a3347; color:#e2e8f0; padding:3px 5px; border-radius:4px; font-size:10px; text-align:right; }
     .sed-select { width:100%; background:#0f1117; border:1px solid #2a3347; color:#e2e8f0; padding:7px 10px; border-radius:6px; font-size:11px; cursor:pointer; }
     .sed-hint { font-size:8.5px; color:#4a5568; padding:6px 14px 2px; }
+    .sed-mode-btn { flex:1; padding:6px 4px; border-radius:5px; font-size:8.5px; font-weight:700; cursor:pointer; line-height:1.3; border:1.5px solid #2a3347; background:#1a2535; color:#64748b; transition:border-color 0.15s,background 0.15s,color 0.15s; }
+    .sed-mode-btn:hover { border-color:#3b82f6; background:#1e3a5f; color:#93c5fd; }
+    .sed-mode-btn.active { border-color:#3b82f6; background:#1e3a5f; color:#93c5fd; }
   `;
 
   function ctrl(label, id, min, max, val, step) {
@@ -37401,11 +37411,24 @@ function sylEditorRenderPanel() {
     var _curMode = L.schedMode || 'grid2col';
     var _is2col  = _curMode === 'grid2col';
     // 모드 선택 버튼
-    var _modeUI = '<div style="margin-bottom:8px;">'      +'<div style="font-size:8px;font-weight:700;color:#64748b;letter-spacing:1px;text-transform:uppercase;margin-bottom:5px;">표 형식 선택</div>'      +'<div style="display:flex;gap:4px;">'      +'<button onclick="sylEditorSetSchedMode(\'grid2col\')" style="flex:1;padding:6px 4px;border-radius:5px;font-size:8.5px;font-weight:700;cursor:pointer;line-height:1.3;border:1.5px solid '+(_is2col?'#3b82f6':'#2a3347')+';background:'+(_is2col?'#1e3a5f':'#1a2535')+';color:'+(_is2col?'#93c5fd':'#64748b')+';">⊞ 균등 2열<br><span style="font-size:7px;font-weight:400;">단차 없음·행 고정</span></button>'      +'<button onclick="sylEditorSetSchedMode(\'free1col\')" style="flex:1;padding:6px 4px;border-radius:5px;font-size:8.5px;font-weight:700;cursor:pointer;line-height:1.3;border:1.5px solid '+(_is2col?'#2a3347':'#3b82f6')+';background:'+(_is2col?'#1a2535':'#1e3a5f')+';color:'+(_is2col?'#64748b':'#93c5fd')+';">☰ 자유 1열<br><span style="font-size:7px;font-weight:400;">내용 자유·좌우배치</span></button>'      +'</div>'      +'</div>';
-    var _rowHVal = L.schedRowH || 40;
-    var _rowHUI = (_curMode === 'grid2col')
-      ? '<div class="sed-ctrl"><label>회차별 행 높이 <em id="sed-l-schedRowH">'+_rowHVal+'px</em> <span style="font-size:7.5px;color:#3b82f6">(주말 자동 연동)</span></label>'        + '<div class="sed-row"><input type=range id="sed-schedRowH" data-key="schedRowH" min=28 max=60 step=1 value='+_rowHVal+'>'        + '<input type=number id="sed-n-schedRowH" data-key="schedRowH" min=28 max=60 value='+_rowHVal+'></div></div>'
-      : '';
+    var _modeUI = '<div style="margin-bottom:8px;">'
+      +'<div style="font-size:8px;font-weight:700;color:#64748b;letter-spacing:1px;text-transform:uppercase;margin-bottom:5px;">표 형식 선택</div>'
+      +'<div style="display:flex;gap:4px;">'
+      +'<button class="sed-mode-btn'+(_is2col?' active':'')+'" onclick="sylEditorSetSchedMode(\'grid2col\')">⊞ 균등 2열<br><span style="font-size:7px;font-weight:400;">단차 없음·행 고정</span></button>'
+      +'<button class="sed-mode-btn'+((!_is2col)?' active':'')+'" onclick="sylEditorSetSchedMode(\'free1col\')">☰ 자유 1열<br><span style="font-size:7px;font-weight:400;">내용 자유·좌우배치</span></button>'
+      +'</div>'
+      +'</div>';
+    // 행 높이 슬라이더 — 모드별 독립, 주말은 × 1.1 자동 연동
+    var _g2rH = L.schedRowH    || 40;
+    var _f1rH = L.free1colRowH || 40;
+    function _rowHCtrl(dataKey, val){
+      var wH = Math.round(val * 1.1);
+      return '<div class="sed-ctrl"><label>회차별 행 높이 <em id="sed-l-'+dataKey+'">'+val+'px</em>'
+        +'<span style="font-size:7.5px;color:#3b82f6;margin-left:4px">주말 자동→'+wH+'px</span></label>'
+        +'<div class="sed-row"><input type=range id="sed-'+dataKey+'" data-key="'+dataKey+'" min=28 max=70 step=1 value='+val+'>'
+        +'<input type=number id="sed-n-'+dataKey+'" data-key="'+dataKey+'" min=28 max=70 step=1 value='+val+'></div></div>';
+    }
+    var _rowHUI = _is2col ? _rowHCtrl('schedRowH', _g2rH) : _rowHCtrl('free1colRowH', _f1rH);
     ctrlHtml = _modeUI
       + _rowHUI
       + fsCtrl('회차별진도 날짜 크기', 'schedDate', 8, 18, 13.5)
@@ -37456,11 +37479,39 @@ function sylEditorRenderPanel() {
   sylEditorShowOverlay(sections[sel] ? sections[sel].overlay : null);
 }
 
+// ── 강좌별 레이아웃 적용 ────────────────────────────────────────
+// courseLayouts[courseId]에 저장된 값을 _sylLayoutConfig 전역값에 오버라이드
+// 강좌 에디터 열릴 때 호출
+function sylApplyCourseLayout(courseId) {
+  if (!courseId || !_sylLayoutConfig) return;
+  _sylLayoutConfig.courseLayouts = _sylLayoutConfig.courseLayouts || {};
+  var cLayout = _sylLayoutConfig.courseLayouts[courseId];
+  if (!cLayout) return; // 강좌별 저장값 없으면 전역값 그대로 유지
+  if (cLayout.schedMode    !== undefined) _sylLayoutConfig.schedMode    = cLayout.schedMode;
+  if (cLayout.schedRowH    !== undefined) _sylLayoutConfig.schedRowH    = cLayout.schedRowH;
+  if (cLayout.free1colRowH !== undefined) _sylLayoutConfig.free1colRowH = cLayout.free1colRowH;
+}
+
+// ── 현재 강좌 레이아웃 설정 저장 ────────────────────────────────
+// 슬라이더/모드 변경 시 courseLayouts에 기록 (DB 저장은 별도 버튼)
+function sylSaveCourseLayoutLocal(courseId) {
+  if (!courseId || !_sylLayoutConfig) return;
+  _sylLayoutConfig.courseLayouts = _sylLayoutConfig.courseLayouts || {};
+  _sylLayoutConfig.courseLayouts[courseId] = {
+    schedMode:    _sylLayoutConfig.schedMode,
+    schedRowH:    _sylLayoutConfig.schedRowH,
+    free1colRowH: _sylLayoutConfig.free1colRowH
+  };
+}
+
+
 // ── 표 형식 모드 전환 ────────────────────────────────────────
 function sylEditorSetSchedMode(mode) {
   // mode: 'grid2col' | 'free1col'
   _sylLayoutConfig.schedMode = mode;
-  // 렌더링 변수 동기화 (sylGetCoursePagesHTML 내부의 _schedMode 갱신을 위해 새로고침)
+  // 현재 강좌별 설정에 모드 기록
+  if(_sylEditorCurrentId) sylSaveCourseLayoutLocal(_sylEditorCurrentId);
+  // 렌더링 변수 동기화
   sylEditorRefreshPreview();
   // 패널 UI 갱신 (버튼 활성화 상태 반영)
   var sel = document.getElementById('syl-editor-section-select');
@@ -37646,12 +37697,19 @@ function sylEditorUpdate(key, val) {
   // 라벨 업데이트
   if (key === 'schedPct') {
     if (lb) lb.textContent = val + '% / ' + (100 - val) + '%';
-  } else if (key === 'schedRowH') {
+  } else if (key === 'schedRowH' || key === 'free1colRowH') {
+    // 행 높이 슬라이더 — 라벨 + 연동 number input + 주말 자동 연동 표시
+    var _wAutoH = Math.round(val * 1.1);
     if (lb) lb.textContent = val + 'px';
-    var nm2 = document.getElementById('sed-n-schedRowH');
+    // 주말 자동 표시 갱신
+    var _wSpan = lb && lb.parentElement && lb.parentElement.querySelector('span[style*="3b82f6"]');
+    if (_wSpan) _wSpan.textContent = '주말 자동→' + _wAutoH + 'px';
+    var nm2 = document.getElementById('sed-n-' + key);
     if (nm2) nm2.value = val;
-    var sl2 = document.getElementById('sed-schedRowH');
+    var sl2 = document.getElementById('sed-' + key);
     if (sl2) sl2.value = val;
+    // 강좌별 설정에 행 높이 기록
+    if (_sylEditorCurrentId) sylSaveCourseLayoutLocal(_sylEditorCurrentId);
   } else if (key === 'headerLeftPct') {
     if (lb) lb.textContent = val + '% / ' + (100 - val) + '%';
   } else if (key.startsWith('fs_')) {
