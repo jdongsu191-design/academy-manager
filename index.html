@@ -33559,6 +33559,7 @@ var _sylLayoutConfig = {
   nameFontSize:    22,
   titleFontSize:   13,
   featureHeight:   143,
+  schedMode:       'grid2col', // 표 형식: 'grid2col'(균등 2열) | 'free1col'(자유 1열)
   schedPct:        65,
   schedDatePct:    25,   // 회차별진도 날짜열 너비 비율 (%)
   weekendDatePct:  30,   // 주말학습 날짜열 너비 비율 (%)
@@ -36638,57 +36639,61 @@ function sylGetCoursePagesHTML(c, periodOverride){
   }
 
   // schedule 배열 → 2열 inline-block 구조로 렌더링
-  function renderSchedRows(rows){
-    var half = Math.ceil(rows.length / 2);
-    var leftRows  = rows.slice(0, half);
-    var rightRows = rows.slice(half);
+  // schedule 배열 → 렌더링 (schedMode 에 따라 분기)
+  // grid2col: 2열 float, 행 고정 높이, 좌열 baseH, 우열 = (좌행수×baseH)÷우행수
+  // free1col: 1열 float, 행 자유 높이 (기존 방식)
+  var _SCHED_BASE_H = 40; // 진도 기준 행 높이(px) — grid2col 좌열 및 free1col 기준
+  var _WKND_BASE_H  = 44; // 주말 기준 행 높이(px) — grid2col 좌열
+  var _schedMode    = _sylLayoutConfig.schedMode || 'grid2col';
 
+  function renderSchedRows(rows){
     var sdPct = _sylLayoutConfig.schedDatePct||25;
 
-    function buildRow(s, idx){
+    // ── 공통: 한 행 HTML 빌더 ──
+    function buildRow(s, idx, rowH){
       var bg = s.flag==='H' ? '#fff8ed' : (idx%2===1 ? '#f8fafc' : '#ffffff');
       var dateColor = s.flag==='H' ? '#b94040' : '#1F3A51';
       var mainColor = s.flag==='H' ? '#b94040' : (s.flag==='S' ? '#7c5a00' : '#1e293b');
-      var mainText = (s.main||'').replace(/\n/g,'<br>');
+      var mainText  = (s.main||'').replace(/\n/g,'<br>');
       var badge = '';
       if(s.flag==='H') badge = '<span style="display:inline-block;margin-left:3px;background:#fee2e2;border:0.5px solid #fca5a5;color:#991b1b;font-size:7.5px;font-weight:700;border-radius:3px;padding:0 3px;vertical-align:middle">\ud734\uac15</span>';
       else if(s.flag==='S') badge = '<span style="display:inline-block;margin-left:3px;background:#fef3c7;border:0.5px solid #fbbf24;color:#92400e;font-size:7.5px;font-weight:700;border-radius:3px;padding:0 3px;vertical-align:middle">\ud2b9\ubcc4</span>';
-      return '<div style="display:flex;background:'+bg+';border-top:0.5px solid #e2e8f0">'
-        +'<div style="width:18px;min-width:18px;flex-shrink:0;background:#f8fafc;border-right:0.5px solid #e2e8f0;display:flex;align-items:flex-start;justify-content:center;padding-top:5px;font-size:9px;font-weight:700;color:'+brandColor+'">'+(idx+1)+'</div>'
-        +'<div style="flex:0 0 '+sdPct+'%;padding:5px 6px;border-right:0.5px solid #e2e8f0">'
-          +'<div style="font-size:'+fsSchedDate+'px;font-weight:800;color:'+dateColor+';white-space:nowrap">'+(s.date||'')+badge+'</div>'
-          +'<div style="font-size:'+(fsSchedDate*0.78).toFixed(1)+'px;color:#64748b;margin-top:1px;white-space:nowrap">'+(s.day||'')+'</div>'
-        +'</div>'
-        +'<div style="flex:1;padding:5px 7px;font-size:'+fsSchedMain+'px;font-weight:700;color:'+mainColor+';line-height:1.65">'+mainText+'</div>'
-        +'</div>';
+      var hStyle = rowH ? 'height:'+rowH+'px;overflow:hidden;' : '';
+      return '<div style="display:flex;background:'+bg+';border-top:0.5px solid #e2e8f0;'+hStyle+'">'        +'<div style="width:18px;min-width:18px;flex-shrink:0;background:#f8fafc;border-right:0.5px solid #e2e8f0;display:flex;align-items:flex-start;justify-content:center;padding-top:5px;font-size:9px;font-weight:700;color:'+brandColor+'">'+(idx+1)+'</div>'        +'<div style="flex:0 0 '+sdPct+'%;padding:5px 6px;border-right:0.5px solid #e2e8f0">'          +'<div style="font-size:'+fsSchedDate+'px;font-weight:800;color:'+dateColor+';white-space:nowrap">'+(s.date||'')+badge+'</div>'          +'<div style="font-size:'+(fsSchedDate*0.78).toFixed(1)+'px;color:#64748b;margin-top:1px;white-space:nowrap">'+(s.day||'')+'</div>'        +'</div>'        +'<div style="flex:1;padding:5px 7px;font-size:'+fsSchedMain+'px;font-weight:700;color:'+mainColor+';line-height:1.65;overflow:hidden;">'+mainText+'</div>'        +'</div>';
     }
 
-    function buildCol(colRows, startIdx){
-      var hdr = '<div style="display:flex;min-height:18px;background:'+brandColor+';border-bottom:0.5px solid rgba(255,255,255,0.2)">'
-        +'<div style="width:18px;min-width:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:'+fsCurr+'px;color:rgba(255,255,255,0.7);border-right:0.5px solid rgba(255,255,255,0.2)">No.</div>'
-        +'<div style="flex:0 0 '+sdPct+'%;padding:3px 5px;border-right:0.5px solid rgba(255,255,255,0.2);font-size:'+fsCurr+'px;font-weight:700;color:rgba(255,255,255,0.9)">\ub0a0\uc9dc</div>'
-        +'<div style="flex:1;padding:3px 5px;font-size:'+fsCurr+'px;font-weight:700;color:rgba(255,255,255,0.9)">\ub2e8\uc6d0 \ubc0f \ub0b4\uc6a9</div>'
-        +'</div>';
+    // ── 공통: 한 열 HTML 빌더 ──
+    function buildCol(colRows, startIdx, rowH){
+      var hdr = '<div style="display:flex;min-height:18px;background:'+brandColor+';border-bottom:0.5px solid rgba(255,255,255,0.2);">'        +'<div style="width:18px;min-width:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:'+fsCurr+'px;color:rgba(255,255,255,0.7);border-right:0.5px solid rgba(255,255,255,0.2);">No.</div>'        +'<div style="flex:0 0 '+sdPct+'%;padding:3px 5px;border-right:0.5px solid rgba(255,255,255,0.2);font-size:'+fsCurr+'px;font-weight:700;color:rgba(255,255,255,0.9);">\ub0a0\uc9dc</div>'        +'<div style="flex:1;padding:3px 5px;font-size:'+fsCurr+'px;font-weight:700;color:rgba(255,255,255,0.9);">\ub2e8\uc6d0 \ubc0f \ub0b4\uc6a9</div>'        +'</div>';
       return hdr
-        +colRows.map(function(s,i){ return buildRow(s, startIdx+i); }).join('');
+        +colRows.map(function(s,i){ return buildRow(s, startIdx+i, rowH); }).join('');
     }
 
-    // float:left 방식 — 각 열이 자기 내용 높이만 차지, 컨테이너는 clearfix로 감쌈
-    // flex/grid는 형제 셀 높이를 공유하므로 행 내용 차이시 단차 발생
-    if(rightRows.length === 0){
-      return '<div style="border:1.5px solid #cbd5e1;border-radius:8px;overflow:hidden">'
-        +buildCol(leftRows, 0)
-        +'</div>';
+    var half      = Math.ceil(rows.length / 2);
+    var leftRows  = rows.slice(0, half);
+    var rightRows = rows.slice(half);
+
+    if(_schedMode === 'grid2col'){
+      // ── grid2col: 2열, 고정 행 높이 ──
+      // 좌열: _SCHED_BASE_H 고정
+      // 우열: (좌행수 × _SCHED_BASE_H) ÷ 우행수 (소수점 반올림)
+      var leftH  = _SCHED_BASE_H;
+      var rightH = rightRows.length > 0
+        ? Math.round(leftRows.length * _SCHED_BASE_H / rightRows.length)
+        : 0;
+
+      if(rightRows.length === 0){
+        // 1회차: 1열 전체
+        return '<div style="border:1.5px solid #cbd5e1;border-radius:8px;overflow:hidden;">'          +buildCol(leftRows, 0, leftH)          +'</div>';
+      }
+      return '<div style="border:1.5px solid #cbd5e1;border-radius:8px;overflow:hidden;">'        +'<div style="float:left;width:50%;border-right:1px solid #e2e8f0;box-sizing:border-box;">'          +buildCol(leftRows,  0,    leftH)        +'</div>'        +'<div style="float:left;width:50%;box-sizing:border-box;">'          +buildCol(rightRows, half, rightH)        +'</div>'        +'<div style="clear:both;"></div>'        +'</div>';
+    } else {
+      // ── free1col: 자유 높이 (높이 고정 없음) ──
+      if(rightRows.length === 0){
+        return '<div style="border:1.5px solid #cbd5e1;border-radius:8px;overflow:hidden;">'          +buildCol(leftRows, 0, 0)          +'</div>';
+      }
+      return '<div style="border:1.5px solid #cbd5e1;border-radius:8px;overflow:hidden;">'        +'<div style="float:left;width:50%;border-right:1px solid #e2e8f0;box-sizing:border-box;">'          +buildCol(leftRows,  0,    0)        +'</div>'        +'<div style="float:left;width:50%;box-sizing:border-box;">'          +buildCol(rightRows, half, 0)        +'</div>'        +'<div style="clear:both;"></div>'        +'</div>';
     }
-    return '<div style="border:1.5px solid #cbd5e1;border-radius:8px;overflow:hidden">'
-      +'<div style="float:left;width:50%;border-right:1px solid #e2e8f0;box-sizing:border-box">'
-        +buildCol(leftRows,  0)
-      +'</div>'
-      +'<div style="float:left;width:50%;box-sizing:border-box">'
-        +buildCol(rightRows, half)
-      +'</div>'
-      +'<div style="clear:both"></div>'
-      +'</div>';
   }
 
   var pages = [];
@@ -36778,58 +36783,62 @@ function sylGetCoursePagesHTML(c, periodOverride){
     var _wItems = (c.weekend||[]).filter(function(w){ return w.text||w.w1; });
     var showWeekend = isFirst && _wItems.length > 0;
 
-    // 주말 2열 빌더
+    // 주말 섹션 빌더 (schedMode에 따라 분기)
     var weekendSectionHTML = '';
     if(showWeekend){
-      var wHalf = Math.ceil(_wItems.length/2);
-      var wLeft  = _wItems.slice(0, wHalf);
-      var wRight = _wItems.slice(wHalf);
-
+      var _wItems_cnt = _wItems.length;
       var wDatePct = _sylLayoutConfig.weekendDatePct||30;
+      var wLabel = c.weekendLabel&&c.weekendLabel.trim() || '\uc8fc\ub9d0 \ud559\uc2b5 \uacc4\ud68d';
 
-      function buildWRow(w, idx, i){
-        var wtext = (w.text||w.w1||'').replace(/\n/g,'<br>');
-        var rowBg = i%2===1 ? '#f8fafc' : '#fff';
-        return '<div style="display:flex;border-top:0.5px solid #dbeafe">'
-          +'<div style="flex:0 0 '+wDatePct+'%;padding:5px 7px;font-size:10.5px;font-weight:700;color:'+brandColor+';background:#eef3f8;border-right:0.5px solid #dbeafe">'+(idx+1)+'\uc8fc</div>'
-          +'<div style="flex:1;padding:5px 8px;font-size:'+fsWeekend+'px;color:#1e293b;line-height:1.5;background:'+rowBg+'">'+wtext+'</div>'
-          +'</div>';
+      // ── 공통: 주말 한 행 HTML ──
+      function buildWRow(w, idx, i, rowH){
+        var wtext  = (w.text||w.w1||'').replace(/\n/g,'<br>');
+        var rowBg  = i%2===1 ? '#f8fafc' : '#fff';
+        var hStyle = rowH ? 'height:'+rowH+'px;overflow:hidden;' : '';
+        return '<div style="display:flex;border-top:0.5px solid #dbeafe;'+hStyle+'">'          +'<div style="flex:0 0 '+wDatePct+'%;padding:5px 7px;font-size:10.5px;font-weight:700;color:'+brandColor+';background:#eef3f8;border-right:0.5px solid #dbeafe;">'+(idx+1)+'\uc8fc</div>'          +'<div style="flex:1;padding:5px 8px;font-size:'+fsWeekend+'px;color:#1e293b;line-height:1.5;background:'+rowBg+';overflow:hidden;">'+wtext+'</div>'          +'</div>';
       }
-      function buildWCol(colItems, startIdx){
-        var hdr = '<div style="display:flex;min-height:16px;background:'+brandColor+';border-bottom:0.5px solid rgba(255,255,255,0.2)">'
-          +'<div style="flex:0 0 '+wDatePct+'%;padding:3px 6px;font-size:8.5px;font-weight:700;color:rgba(255,255,255,0.7);border-right:0.5px solid rgba(255,255,255,0.2)">\uc8fc\ucc28</div>'
-          +'<div style="flex:1;padding:3px 6px;font-size:8.5px;font-weight:700;color:rgba(255,255,255,0.9)">\ub0b4\uc6a9</div>'
-          +'</div>';
+
+      // ── 공통: 주말 한 열 HTML ──
+      function buildWCol(colItems, startIdx, rowH){
+        var hdr = '<div style="display:flex;min-height:16px;background:'+brandColor+';border-bottom:0.5px solid rgba(255,255,255,0.2);">'          +'<div style="flex:0 0 '+wDatePct+'%;padding:3px 6px;font-size:8.5px;font-weight:700;color:rgba(255,255,255,0.7);border-right:0.5px solid rgba(255,255,255,0.2);">\uc8fc\ucc28</div>'          +'<div style="flex:1;padding:3px 6px;font-size:8.5px;font-weight:700;color:rgba(255,255,255,0.9);">\ub0b4\uc6a9</div>'          +'</div>';
         return hdr
-          +colItems.map(function(w,i){ return buildWRow(w, startIdx+i, i); }).join('');
+          +colItems.map(function(w,i){ return buildWRow(w, startIdx+i, i, rowH); }).join('');
       }
-      weekendSectionHTML =
-        '<div style="flex:none;display:flex;flex-direction:column;overflow:hidden">'
-          +'<div style="padding:4px 18px 3px;flex-shrink:0">'
-            +'<div style="font-size:8.5px;font-weight:800;letter-spacing:2px;color:'+brandColor+';display:flex;align-items:center;gap:5px;text-transform:uppercase">'
-              +'<span style="width:2.5px;height:8px;background:#1e40af;border-radius:2px;display:inline-block"></span>'+(c.weekendLabel&&c.weekendLabel.trim()||'\uc8fc\ub9d0 \ud559\uc2b5 \uacc4\ud68d')
-              +'<span style="flex:1;height:1px;background:#bfdbfe;display:inline-block"></span>'
-            +'</div>'
-          +'</div>'
-          +'<div style="overflow:hidden;margin:0 18px 4px">'
-            +(wRight.length === 0
-              ? '<div style="border:1.5px solid #bfdbfe;border-radius:8px;overflow:hidden">'
-                  +buildWCol(wLeft, 0)
-                +'</div>'
-              : '<div style="border:1.5px solid #bfdbfe;border-radius:8px;overflow:hidden">'
-                  +'<div style="float:left;width:50%;border-right:1px solid #bfdbfe;box-sizing:border-box">'
-                    +buildWCol(wLeft,  0)
-                  +'</div>'
-                  +'<div style="float:left;width:50%;box-sizing:border-box">'
-                    +buildWCol(wRight, wHalf)
-                  +'</div>'
-                  +'<div style="clear:both"></div>'
-                +'</div>'
-            )
-          +'</div>'
-        +'</div>';
-    }
 
+      var weekendTableHTML = '';
+
+      if(_schedMode === 'grid2col'){
+        // grid2col: 2열, 좌열 _WKND_BASE_H 고정, 우열 균등 분배
+        var wHalf   = Math.ceil(_wItems_cnt / 2);
+        var wLeft   = _wItems.slice(0, wHalf);
+        var wRight  = _wItems.slice(wHalf);
+        var wLeftH  = _WKND_BASE_H;
+        var wRightH = wRight.length > 0
+          ? Math.round(wLeft.length * _WKND_BASE_H / wRight.length)
+          : 0;
+
+        if(wRight.length === 0){
+          // 1주차: 1열
+          weekendTableHTML = '<div style="border:1.5px solid #bfdbfe;border-radius:8px;overflow:hidden;">'            +buildWCol(wLeft, 0, wLeftH)            +'</div>';
+        } else {
+          weekendTableHTML = '<div style="border:1.5px solid #bfdbfe;border-radius:8px;overflow:hidden;">'            +'<div style="float:left;width:50%;border-right:1px solid #bfdbfe;box-sizing:border-box;">'              +buildWCol(wLeft,  0,      wLeftH)            +'</div>'            +'<div style="float:left;width:50%;box-sizing:border-box;">'              +buildWCol(wRight, wHalf,  wRightH)            +'</div>'            +'<div style="clear:both;"></div>'            +'</div>';
+        }
+
+      } else {
+        // free1col: 1열, 주말 행 높이 = 회차 표 본문 합계 ÷ 주말 주차 수
+        // 회차 행 수 × _SCHED_BASE_H = 회차 표 본문 높이
+        var schedRows_cnt = (grp.rows||[]).filter(function(s){ return s.date||s.main; }).length;
+        var schedTotalH   = schedRows_cnt * _SCHED_BASE_H;
+        var wRowH = _wItems_cnt > 0
+          ? Math.round(schedTotalH / _wItems_cnt)
+          : _WKND_BASE_H;
+
+        weekendTableHTML = '<div style="border:1.5px solid #bfdbfe;border-radius:8px;overflow:hidden;">'          +buildWCol(_wItems, 0, wRowH)          +'</div>';
+      }
+
+      weekendSectionHTML =
+        '<div style="flex:none;display:flex;flex-direction:column;overflow:hidden;">'          +'<div style="padding:4px 18px 3px;flex-shrink:0;">'            +'<div style="font-size:8.5px;font-weight:800;letter-spacing:2px;color:'+brandColor+';display:flex;align-items:center;gap:5px;text-transform:uppercase;">'              +'<span style="width:2.5px;height:8px;background:#1e40af;border-radius:2px;display:inline-block;"></span>'+wLabel              +'<span style="flex:1;height:1px;background:#bfdbfe;display:inline-block;"></span>'            +'</div>'          +'</div>'          +'<div style="overflow:hidden;margin:0 18px 4px;">'            +weekendTableHTML          +'</div>'        +'</div>';
+    }
     var schedSectionHTML = '<div style="display:flex;flex-direction:column;border-top:1px solid #e2e8f0;overflow:hidden;height:100%;justify-content:flex-start">'
       // 상단: 회차별 진도 (2열, 컨텐츠 높이만)
       +'<div style="flex:none;display:flex;flex-direction:column;overflow:hidden;'+(showWeekend?'border-bottom:1px solid #e2e8f0':'')+'">'
@@ -37359,20 +37368,14 @@ function sylEditorRenderPanel() {
     ctrlHtml = ctrl('섹션 높이', 'featureHeight', 0, 200, L.featureHeight||103)
              + fsCtrl('텍스트 크기', 'feature', 8, 18, 12.5);
   } else if (sel === 'sched') {
-    // schedSection 자동 높이 계산 (슬라이더 기본값 표시용)
-    ctrlHtml = '<div class="sed-ctrl"><label>진도 / 주말 비율 <em id="sed-l-schedPct">'+(L.schedPct||65)+'% / '+(100-(L.schedPct||65))+'%</em></label>'
-      + '<div class="sed-row"><input type=range id="sed-schedPct" data-key="schedPct" min=30 max=75 value='+(L.schedPct||65)+'>'
-      + '<input type=number id="sed-n-schedPct" data-key="schedPct" min=30 max=75 value='+(L.schedPct||65)+'></div></div>'
+    var _curMode = L.schedMode || 'grid2col';
+    var _is2col  = _curMode === 'grid2col';
+    // 모드 선택 버튼
+    var _modeUI = '<div style="margin-bottom:8px;">'      +'<div style="font-size:8px;font-weight:700;color:#64748b;letter-spacing:1px;text-transform:uppercase;margin-bottom:5px;">표 형식 선택</div>'      +'<div style="display:flex;gap:4px;">'      +'<button onclick="sylEditorSetSchedMode(\'grid2col\')" style="flex:1;padding:6px 4px;border-radius:5px;font-size:8.5px;font-weight:700;cursor:pointer;line-height:1.3;border:1.5px solid '+(_is2col?'#3b82f6':'#2a3347')+';background:'+(_is2col?'#1e3a5f':'#1a2535')+';color:'+(_is2col?'#93c5fd':'#64748b')+';">⊞ 균등 2열<br><span style="font-size:7px;font-weight:400;">단차 없음·행 고정</span></button>'      +'<button onclick="sylEditorSetSchedMode(\'free1col\')" style="flex:1;padding:6px 4px;border-radius:5px;font-size:8.5px;font-weight:700;cursor:pointer;line-height:1.3;border:1.5px solid '+(_is2col?'#2a3347':'#3b82f6')+';background:'+(_is2col?'#1a2535':'#1e3a5f')+';color:'+(_is2col?'#64748b':'#93c5fd')+';">☰ 자유 1열<br><span style="font-size:7px;font-weight:400;">내용 자유·좌우배치</span></button>'      +'</div>'      +'</div>';
+    ctrlHtml = _modeUI
       + fsCtrl('회차별진도 날짜 크기', 'schedDate', 8, 18, 13.5)
       + fsCtrl('회차별진도 내용 크기', 'schedMain', 8, 18, 12.5)
-      + fsCtrl('주말학습 내용 크기', 'weekend', 7, 16, 11)
-      + '<div style="padding:4px 0 2px;border-top:1px solid #2a3347;margin-top:4px">'
-      + '<div style="font-size:8.5px;color:#64748b;margin-bottom:5px">높이 맞추기</div>'
-      + '<div style="display:flex;gap:5px">'
-      + '<button onclick="sylEditorMatchHeight(\'schedToWeekend\')" style="flex:1;padding:6px 4px;background:#1e3a5f;color:#93c5fd;border:1px solid #2a4a7f;border-radius:5px;font-size:9px;font-weight:700;cursor:pointer;line-height:1.3">⇅ 진도를<br>주말에 맞추기</button>'
-      + '<button onclick="sylEditorMatchHeight(\'weekendToSched\')" style="flex:1;padding:6px 4px;background:#1e3a5f;color:#93c5fd;border:1px solid #2a4a7f;border-radius:5px;font-size:9px;font-weight:700;cursor:pointer;line-height:1.3">⇅ 주말을<br>진도에 맞추기</button>'
-      + '</div>'
-      + '</div>';
+      + fsCtrl('주말학습 내용 크기', 'weekend', 7, 16, 11);
   } else if (sel === 'curriculum') {
     ctrlHtml = ctrl('높이', 'curriculumHeight', 0, 220, L.curriculumHeight||129)
              + fsCtrl('텍스트 크기', 'curr', 7, 14, 10);
@@ -37417,6 +37420,18 @@ function sylEditorRenderPanel() {
   // 오버레이 표시
   sylEditorShowOverlay(sections[sel] ? sections[sel].overlay : null);
 }
+
+// ── 표 형식 모드 전환 ────────────────────────────────────────
+function sylEditorSetSchedMode(mode) {
+  // mode: 'grid2col' | 'free1col'
+  _sylLayoutConfig.schedMode = mode;
+  // 렌더링 변수 동기화 (sylGetCoursePagesHTML 내부의 _schedMode 갱신을 위해 새로고침)
+  sylEditorRefreshPreview();
+  // 패널 UI 갱신 (버튼 활성화 상태 반영)
+  var sel = document.getElementById('syl-editor-section-select');
+  if(sel && sel.value === 'sched') sylEditorRenderPanel();
+}
+
 
 // ── 높이 맞추기 ──────────────────────────────────────────────
 function sylEditorMatchHeight(direction) {
