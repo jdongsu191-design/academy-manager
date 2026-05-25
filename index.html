@@ -1613,6 +1613,44 @@ let _wlLoadedStudents = [];   // 불러오기 모달: 선택한 work_log_student
 // null/undefined가 아닌 값 = 명시적으로 추가된 것
 window._wlIndividualData = {};
 
+// ── 주말 프로그램 4종 상태 ────────────────────────────────────
+// 원칙: 각 전용 배열만 write, 전역 students 절대 불변
+// ① 일일N제 (weekend_naje)
+var _wnStudents    = [];  // 로드된 학생 목록
+var _wnData        = {};  // { student_id: DB 레코드 }
+var _wnSnapshot    = {};  // { student_id: { field: "stringValue" } } — 변경감지용
+var _wnLoadedAt    = {};  // { student_id: updated_at }
+var _wnAllTeachers = [];  // 선생님 필터 캐시
+// 시험명칭: { defaultName, periods:[{id,start,end,name,student_ids}] }
+var _wnTestNameCache           = null;
+var _wnTestNameCacheByTeacher  = {};  // { teacherId: _wnTestNameCache }
+
+// ② 포텐셜 (weekend_potential)
+var _ptStudents    = [];
+var _ptData        = {};
+var _ptSnapshot    = {};
+var _ptLoadedAt    = {};
+var _ptAllTeachers = [];
+var _ptAnswers     = {};  // { student_id: [true/false/null x8] } — 오답 정오답
+
+// ③ 내신대비 (weekend_naesin)
+var _nsStudents    = [];
+var _nsData        = {};
+var _nsSnapshot    = {};
+var _nsLoadedAt    = {};
+var _nsAllTeachers = [];
+// 추가메시지 기간: { periods:[{id,start,end,extra_msg,student_ids}] }
+var _nsExtraMsgCache          = null;
+var _nsExtraMsgCacheByTeacher = {};  // { teacherId: cache }
+var _nsExtraMsgLoaded         = false;
+
+// ④ 베티모의고사 (weekend_bety)
+var _byStudents    = [];
+var _byData        = {};
+var _bySnapshot    = {};
+var _byLoadedAt    = {};
+var _byAllTeachers = [];
+
 /* ============================================================
    [SECTION: AUTH] 로그인 / 로그아웃 / 자동 로그인
 ============================================================ */
@@ -1709,6 +1747,28 @@ function doLogout() {
   wlCurrentLogId = null; _wlStudents = []; _wlStudentLogs = [];
   _wlTempStudents = []; _wlLoadedData = null; _wlLoadedStudents = [];
   window._wlIndividualData = {};
+  // 주말 프로그램 4종 상태 초기화
+  _wnStudents = []; _wnData = {}; _wnSnapshot = {}; _wnLoadedAt = {}; _wnAllTeachers = [];
+  _wnTestNameCache = null; _wnTestNameCacheByTeacher = {};
+  _ptStudents = []; _ptData = {}; _ptSnapshot = {}; _ptLoadedAt = {}; _ptAllTeachers = [];
+  _ptAnswers = {};
+  _nsStudents = []; _nsData = {}; _nsSnapshot = {}; _nsLoadedAt = {}; _nsAllTeachers = [];
+  _nsExtraMsgCache = null; _nsExtraMsgCacheByTeacher = {}; _nsExtraMsgLoaded = false;
+  _byStudents = []; _byData = {}; _bySnapshot = {}; _byLoadedAt = {}; _byAllTeachers = [];
+  // 옵션D DOM 복원: 관리자/데스크가 이동시킨 주말 패널을 mainContent로 되돌림
+  // (이동 안 됐어도 안전 — parentElement 체크 + null 가드 포함)
+  const _mc = document.getElementById('mainContent');
+  if (_mc) {
+    ['panel-weekend-naje','panel-weekend-potential',
+     'panel-weekend-bety','panel-weekend-naesin','panel-weekend-msg'].forEach(pid => {
+      const p = document.getElementById(pid);
+      if (p && p.parentElement !== _mc) {
+        p.classList.remove('active');
+        p.style.display = '';   // initAdminWeekendNaje가 설정한 inline style 초기화
+        _mc.appendChild(p);
+      }
+    });
+  }
   localStorage.removeItem('savedUserId');
   // 모든 화면 숨김
   document.getElementById('appScreen').classList.remove('active');
@@ -1936,7 +1996,11 @@ function toggleAccordion(groupId, btn) {
 function switchPanel(panelId, btn) {
   closeSidebar();
   // 모든 패널 비활성화
-  document.querySelectorAll('#mainContent .panel').forEach(p => p.classList.remove('active'));
+  // style.display='' 도 함께 초기화 (옵션D inline style 잔재 방지)
+  document.querySelectorAll('#mainContent .panel').forEach(p => {
+    p.classList.remove('active');
+    p.style.display = '';
+  });
   // 모든 메뉴 버튼 비활성화
   document.querySelectorAll('#sidebar .menu-item').forEach(b => b.classList.remove('active'));
 
@@ -1945,8 +2009,23 @@ function switchPanel(panelId, btn) {
   if (btn)   btn.classList.add('active');
 
   // 패널별 초기화 훅
+  // ── 기존 ──
   if (panelId === 'worklog')       initWorkLog();
   if (panelId === 'admin-worklog') initAdminWorklog();
+  // ── 주말 프로그램 4종 (선생님) ──
+  // typeof 가드: 각 init 함수는 4단계 Step2~6에서 순차 구현됨
+  // 구현 전 클릭해도 ReferenceError 발생하지 않음
+  if (panelId === 'weekend-naje'      && typeof initWeekendNaje      === 'function') initWeekendNaje();
+  if (panelId === 'weekend-potential' && typeof initPotential         === 'function') initPotential();
+  if (panelId === 'weekend-naesin'    && typeof initNaesin            === 'function') initNaesin();
+  if (panelId === 'weekend-bety'      && typeof initBety              === 'function') initBety();
+  if (panelId === 'weekend-msg'       && typeof initWeekendMsg        === 'function') initWeekendMsg();
+  // ── 주말 프로그램 4종 (관리자/데스크) ──
+  if (panelId === 'admin-weekend-naje'      && typeof initAdminWeekendNaje      === 'function') initAdminWeekendNaje();
+  if (panelId === 'admin-weekend-potential' && typeof initAdminWeekendPotential === 'function') initAdminWeekendPotential();
+  if (panelId === 'admin-weekend-naesin'    && typeof initAdminWeekendNaesin    === 'function') initAdminWeekendNaesin();
+  if (panelId === 'admin-weekend-bety'      && typeof initAdminWeekendBety      === 'function') initAdminWeekendBety();
+  if (panelId === 'admin-weekend-msg'       && typeof initAdminWeekendMsg       === 'function') initAdminWeekendMsg();
 }
 
 function switchPanelAdmin(tabId, btn) {
@@ -4036,6 +4115,82 @@ async function saveWorkLog() {
   } finally {
     if (btn) { btn.textContent = '💾 저장'; btn.disabled = false; }
   }
+}
+
+/* ============================================================
+   [SECTION: WEEKEND HELPERS] 주말 프로그램 공통 헬퍼
+============================================================ */
+
+/**
+ * 클립보드 동기 복사 (navigator.clipboard 비지원 환경 fallback)
+ * wnCopyMent / ptCopyMent / nsCopyMent / byCopyMent 에서 공통 사용
+ */
+function copyTextSync(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;pointer-events:none';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try { document.execCommand('copy'); } catch(e) { console.warn('[copyTextSync]', e); }
+  document.body.removeChild(ta);
+}
+
+/**
+ * DB 레코드 배열 → 스냅샷 빌드
+ * @param {Array} records - student_id 필드를 가진 DB 레코드 배열
+ * @param {Array} fields  - 비교 대상 필드명 배열
+ * @returns {{ snapshot, loadedAt }}
+ *   snapshot:  { [student_id]: { [field]: "stringValue" } }  — 전부 문자열
+ *   loadedAt:  { [student_id]: updated_at | null }
+ *
+ * ※ null/undefined → '' 통일, boolean true/false → 'true'/'false'
+ *    _getChangedUpserts의 DOM 문자열과 타입 일치 보장
+ */
+function _buildSnapshot(records, fields) {
+  var snapshot = {};
+  var loadedAt = {};
+  (records || []).forEach(function(r) {
+    if (!r || !r.student_id) return;
+    var snap = {};
+    fields.forEach(function(f) {
+      snap[f] = (r[f] === null || r[f] === undefined) ? '' : String(r[f]);
+    });
+    snapshot[r.student_id] = snap;
+    loadedAt[r.student_id] = r.updated_at || null;
+  });
+  return { snapshot: snapshot, loadedAt: loadedAt };
+}
+
+/**
+ * DOM 현재값 vs 스냅샷 비교 → 변경된 학생 upsert 배열 반환
+ * @param {Array}    students  - 화면의 학생 배열 (id 필드 필수)
+ * @param {Function} getRecFn - student → upsert 레코드 반환 함수 (null 반환 시 건너뜀)
+ * @param {Object}   snapshot - _buildSnapshot().snapshot
+ * @param {Array}    fields   - 비교 필드명 배열
+ * @returns {Array} 변경된 학생의 upsert 레코드 배열
+ *
+ * ※ 신규 학생(snap 없음): org='' vs DOM='' → 동일 → 미포함 (의도된 설계)
+ *    값을 입력하면 DOM≠'' → hasChange=true → 포함
+ */
+function _getChangedUpserts(students, getRecFn, snapshot, fields) {
+  var changed = [];
+  (students || []).forEach(function(s) {
+    var rec = getRecFn(s);
+    if (!rec) return;
+    var snap = snapshot[s.id] || {};
+    var hasChange = false;
+    fields.forEach(function(f) {
+      var cur = (rec[f] === null || rec[f] === undefined) ? '' : String(rec[f]);
+      var org = snap[f] !== undefined ? snap[f] : '';
+      if (cur !== org) hasChange = true;
+    });
+    if (hasChange) changed.push(rec);
+  });
+  return changed;
 }
 
 /* ============================================================
