@@ -2068,16 +2068,43 @@ async function loadTeacherData() {
   renderStudents();
 }
 
+// ── 1000행 제한 돌파용 페이지네이션 헬퍼 ─────────────────────────
+// Supabase 기본 최대 1000행을 초과하는 테이블을 안전하게 전체 조회.
+// 2페이지 중 실패 시 throw → 호출부 catch에서 명시적으로 처리.
+async function fetchAllRows(query) {
+  const PAGE = 1000;
+  let all  = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await query.range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
+
 async function loadAdminData() {
   // 관리자/데스크: 전체 users + classes + branches
-  const [uRes, cRes, bRes] = await Promise.all([
-    db.from('users').select('*').in('role',['teacher','student']).order('name'),
-    db.from('classes').select('*').eq('active',true).order('name'),
-    db.from('branches').select('*').order('name')
-  ]);
-  allUsers     = uRes.data || [];
-  allClasses   = cRes.data || [];
-  _allBranches = bRes.data || [];
+  // users는 fetchAllRows로 1000행 초과 안전 처리, 나머지는 병렬 유지
+  let rawUsers, cRes, bRes;
+  try {
+    [rawUsers, cRes, bRes] = await Promise.all([
+      fetchAllRows(db.from('users').select('*').in('role',['teacher','student']).order('name')),
+      db.from('classes').select('*').eq('active',true).order('name'),
+      db.from('branches').select('*').order('name')
+    ]);
+  } catch(e) {
+    console.error('[loadAdminData]', e);
+    alert('데이터를 불러오지 못했습니다. 새로고침해주세요.');
+    allUsers = [];
+    return;
+  }
+  allUsers     = rawUsers       || [];
+  allClasses   = cRes.data      || [];
+  _allBranches = bRes.data      || [];
 
   // 데스크: 허용된 분원만 필터
   const isDeskMode = currentUser.role === 'desk';
@@ -2285,20 +2312,28 @@ function openChangePwModal() {
 }
 
 async function submitChangePw() {
-  const curPw  = document.getElementById('inp-cur-pw')?.value || '';
-  const newPw  = document.getElementById('inp-new-pw')?.value || '';
+  const curPw     = document.getElementById('inp-cur-pw')?.value || '';
+  const newPw     = document.getElementById('inp-new-pw')?.value || '';
   const confirmPw = document.getElementById('inp-new-pw-confirm')?.value || '';
   if (!curPw)  { alert('현재 비밀번호를 입력하세요'); return; }
   if (!newPw)  { alert('새 비밀번호를 입력하세요'); return; }
   if (newPw.length < 4) { alert('새 비밀번호는 4자 이상이어야 합니다'); return; }
   if (newPw !== confirmPw) { alert('새 비밀번호가 일치하지 않습니다'); return; }
-  const { data: user, error } = await db.from('users').select('id,password').eq('id', currentUser.id).single();
-  if (error || !user) { alert('오류가 발생했습니다'); return; }
-  if (user.password !== curPw) { alert('현재 비밀번호가 올바르지 않습니다'); return; }
-  const { error: upErr } = await db.from('users').update({ password: newPw }).eq('id', currentUser.id);
-  if (upErr) { alert('오류: ' + upErr.message); return; }
-  closeModal('changePw');
-  alert('✅ 비밀번호가 변경됐습니다!');
+  const btn = document.querySelector('#modal-changePw .btn-primary');
+  if (btn) { btn.textContent = '변경 중...'; btn.disabled = true; }
+  try {
+    const { data: user, error } = await db.from('users').select('id,password').eq('id', currentUser.id).single();
+    if (error || !user) throw new Error('사용자 정보를 불러올 수 없습니다');
+    if (user.password !== curPw) { alert('현재 비밀번호가 올바르지 않습니다'); return; }
+    const { error: upErr } = await db.from('users').update({ password: newPw }).eq('id', currentUser.id);
+    if (upErr) throw upErr;
+    closeModal('changePw');
+    alert('✅ 비밀번호가 변경됐습니다!');
+  } catch(e) {
+    alert('오류: ' + (e.message || e));
+  } finally {
+    if (btn) { btn.textContent = '변경'; btn.disabled = false; }
+  }
 }
 
 /* ============================================================
@@ -2651,23 +2686,28 @@ async function reissueStudentCode(studentId, studentName) {
 }
 
 async function issueCodesForAll() {
-  const { data: noCode, error } = await db.from('users')
-    .select('id,name').eq('role','student').eq('status','active').is('student_code', null);
-  if (error) { alert('조회 실패: ' + error.message); return; }
-  if (!noCode || !noCode.length) { alert('미발급 학생이 없습니다'); return; }
-  if (!confirm(noCode.length + '명에게 코드를 발급할까요?')) return;
-  let ok = 0, fail = 0;
-  for (const s of noCode) {
-    try {
-      const newCode = await generateStudentCode();
-      const { error: e } = await db.from('users').update({ student_code: newCode }).eq('id', s.id);
-      if (!e) ok++; else fail++;
-    } catch(e) { fail++; }
+  try {
+    const { data: noCode, error } = await db.from('users')
+      .select('id,name').eq('role','student').eq('status','active').is('student_code', null);
+    if (error) throw error;
+    if (!noCode || !noCode.length) { alert('미발급 학생이 없습니다'); return; }
+    if (!confirm(noCode.length + '명에게 코드를 발급할까요?')) return;
+    let ok = 0, fail = 0;
+    for (const s of noCode) {
+      try {
+        const newCode = await generateStudentCode();
+        const { error: e } = await db.from('users').update({ student_code: newCode }).eq('id', s.id);
+        if (!e) ok++; else fail++;
+      } catch(e) { fail++; }
+    }
+    if (fail) console.warn('[issueCodesForAll] 실패:', fail + '건');
+    alert('✅ ' + ok + '명 코드 발급 완료!' + (fail ? ` (실패 ${fail}건)` : ''));
+    const isAdmin = currentUser.role === 'admin' || currentUser.role === 'desk';
+    if (isAdmin) await loadAdminData(); else await loadTeacherData();
+  } catch(e) {
+    console.error('[issueCodesForAll]', e);
+    alert('조회 실패: ' + (e.message || '네트워크를 확인하세요'));
   }
-  if (fail) console.warn('[issueCodesForAll] 실패:', fail + '건');
-  alert('✅ ' + ok + '명 코드 발급 완료!');
-  const isAdmin = currentUser.role === 'admin' || currentUser.role === 'desk';
-  if (isAdmin) await loadAdminData(); else await loadTeacherData();
 }
 
 function copyAllStudentCodes() {
@@ -2815,10 +2855,13 @@ async function openTransferModal(studentId, studentName) {
     let teachers = allUsers.filter(u => u.role==='teacher' && u.status==='active' && !u.deleted_at && u.id !== currentUser.id);
     if (!teachers.length) {
       // allUsers가 없으면 DB에서 조회
-      const { data } = await db.from('users').select('id,name').eq('role','teacher').eq('status','active').is('deleted_at',null).order('name');
-      teachers = (data || []).filter(t => t.id !== currentUser.id);
-      // allUsers에 없으면 임시 보관
-      if (!allUsers.length) allUsers = data || [];
+      try {
+        const { data } = await db.from('users').select('id,name').eq('role','teacher').eq('status','active').is('deleted_at',null).order('name');
+        teachers = (data || []).filter(t => t.id !== currentUser.id);
+        if (!allUsers.length) allUsers = data || [];
+      } catch(e) {
+        console.error('[openTransferModal] 선생님 조회 실패', e);
+      }
     }
     toTeacher.innerHTML = '<option value="">선생님 선택</option>'
       + teachers.map(t => `<option value="${t.id}">${t.name}T</option>`).join('');
@@ -3593,6 +3636,7 @@ async function wlLoadDayLogs() {
   const listEl  = document.getElementById('wl-day-logs-list');
   if (!date || !currentUser) { if (section) section.style.display = 'none'; return; }
 
+  try {
   const { data: logs, error } = await db.from('work_logs')
     .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
 
@@ -3628,6 +3672,10 @@ async function wlLoadDayLogs() {
     </div>`;
   }).join('');
   wlUpdateGenBtn();
+  } catch(e) {
+    console.error('[wlLoadDayLogs]', e);
+    if (section) section.style.display = 'none';
+  }
 }
 
 async function loadWorkLog() {
@@ -3639,67 +3687,75 @@ async function loadWorkLog() {
   document.getElementById('wl-empty').style.display = 'none';
   _wlTempStudents = [];  // 날짜/반 변경 시 임시 학생 초기화
 
-  // work_logs 조회
-  const { data: log } = await db.from('work_logs').select('*')
-    .eq('teacher_id', currentUser.id).eq('class_id', classId).eq('log_date', date).single();
+  const tbody = document.getElementById('wl-student-tbody');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:#9ca3af;font-size:13px">불러오는 중...</td></tr>';
 
-  wlCurrentLogId = log?.id || null;
+  try {
+    // work_logs 조회
+    const { data: log } = await db.from('work_logs').select('*')
+      .eq('teacher_id', currentUser.id).eq('class_id', classId).eq('log_date', date).single();
 
-  // 공통 필드 복원
-  document.getElementById('wl-progress').value    = log?.progress    || '';
-  document.getElementById('wl-homework').value    = log?.homework    || '';
-  document.getElementById('wl-memo').value        = log?.memo        || '';
-  document.getElementById('wl-trial').value       = log?.trial_class || '';
-  document.getElementById('wl-new-student').value = log?.new_student || '';
-  document.getElementById('wl-dropout').value     = log?.dropout     || '';
+    wlCurrentLogId = log?.id || null;
 
-  // 학생별 기록 조회
-  let studentLogs = [];
-  if (wlCurrentLogId) {
-    const { data: sl } = await db.from('work_log_students').select('*').eq('log_id', wlCurrentLogId);
-    studentLogs = sl || [];
-  }
+    // 공통 필드 복원
+    document.getElementById('wl-progress').value    = log?.progress    || '';
+    document.getElementById('wl-homework').value    = log?.homework    || '';
+    document.getElementById('wl-memo').value        = log?.memo        || '';
+    document.getElementById('wl-trial').value       = log?.trial_class || '';
+    document.getElementById('wl-new-student').value = log?.new_student || '';
+    document.getElementById('wl-dropout').value     = log?.dropout     || '';
 
-  // 해당 날짜 기준 재원 학생 조회 (class_id 또는 class_id2가 이 반인 학생)
-  const { data: activeStuds } = await db.from('users').select('*')
-    .eq('role', 'student').eq('status', 'active')
-    .or(`class_id.eq.${classId},class_id2.eq.${classId}`)
-    .lte('enrolled_at', date)
-    .order('name');
-
-  // 전반 시행일 보정 (loadTeacherData와 동일 패턴, 날짜 기준)
-  const [futureInRes, futureOutRes] = await Promise.all([
-    db.from('transfer_requests').select('student_id')
-      .eq('to_teacher_id', currentUser.id).eq('status', 'done').gt('transfer_date', date),
-    db.from('transfer_requests').select('student_id, student:student_id(*)')
-      .eq('from_teacher_id', currentUser.id).eq('status', 'done').gt('transfer_date', date)
-  ]);
-  const futureInSet  = new Set((futureInRes.data  || []).map(r => r.student_id));
-  const pastOutStuds = (futureOutRes.data || [])
-    .filter(r => r.student && r.student.class_id === classId)
-    .map(r => r.student);
-
-  let filtered = (activeStuds || [])
-    .filter(s => !futureInSet.has(s.id))
-    .concat(pastOutStuds.filter(s => !(activeStuds || []).some(a => a.id === s.id)));
-
-  // student_id=null인 보강/삭제 레코드 처리
-  const nullLogs = studentLogs.filter(sl => !sl.student_id);
-  const nullPlaceholders = nullLogs.map(sl => {
-    const m = (sl.note || '').match(/^\[([^\]]+)\]/);
-    if (m) {
-      const displayName = m[1].split('·')[0].trim();
-      return { id: `deleted_${sl.id}`, name: displayName, _isTemp: true, _logId: sl.id };
+    // 학생별 기록 조회
+    let studentLogs = [];
+    if (wlCurrentLogId) {
+      const { data: sl } = await db.from('work_log_students').select('*').eq('log_id', wlCurrentLogId);
+      studentLogs = sl || [];
     }
-    return { id: `deleted_${sl.id}`, name: '삭제된 학생', _isDeleted: true, _logId: sl.id };
-  });
 
-  _wlStudents = [...filtered, ...nullPlaceholders]
-    .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
+    // 해당 날짜 기준 재원 학생 조회 (class_id 또는 class_id2가 이 반인 학생)
+    const { data: activeStuds } = await db.from('users').select('*')
+      .eq('role', 'student').eq('status', 'active')
+      .or(`class_id.eq.${classId},class_id2.eq.${classId}`)
+      .lte('enrolled_at', date)
+      .order('name');
 
-  _wlStudentLogs = studentLogs; // refreshWlTable에서 참조
-  renderWlStudentTable(_wlStudents, studentLogs);
-  wlLoadDayLogs();
+    // 전반 시행일 보정 (loadTeacherData와 동일 패턴, 날짜 기준)
+    const [futureInRes, futureOutRes] = await Promise.all([
+      db.from('transfer_requests').select('student_id')
+        .eq('to_teacher_id', currentUser.id).eq('status', 'done').gt('transfer_date', date),
+      db.from('transfer_requests').select('student_id, student:student_id(*)')
+        .eq('from_teacher_id', currentUser.id).eq('status', 'done').gt('transfer_date', date)
+    ]);
+    const futureInSet  = new Set((futureInRes.data  || []).map(r => r.student_id));
+    const pastOutStuds = (futureOutRes.data || [])
+      .filter(r => r.student && r.student.class_id === classId)
+      .map(r => r.student);
+
+    let filtered = (activeStuds || [])
+      .filter(s => !futureInSet.has(s.id))
+      .concat(pastOutStuds.filter(s => !(activeStuds || []).some(a => a.id === s.id)));
+
+    // student_id=null인 보강/삭제 레코드 처리
+    const nullLogs = studentLogs.filter(sl => !sl.student_id);
+    const nullPlaceholders = nullLogs.map(sl => {
+      const m = (sl.note || '').match(/^\[([^\]]+)\]/);
+      if (m) {
+        const displayName = m[1].split('·')[0].trim();
+        return { id: `deleted_${sl.id}`, name: displayName, _isTemp: true, _logId: sl.id };
+      }
+      return { id: `deleted_${sl.id}`, name: '삭제된 학생', _isDeleted: true, _logId: sl.id };
+    });
+
+    _wlStudents = [...filtered, ...nullPlaceholders]
+      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
+
+    _wlStudentLogs = studentLogs;
+    renderWlStudentTable(_wlStudents, studentLogs);
+    wlLoadDayLogs();
+  } catch(e) {
+    console.error('[loadWorkLog]', e);
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:20px;color:#dc2626;font-size:13px">⚠️ 불러오기 실패: ${e.message || '네트워크를 확인하세요'}</td></tr>`;
+  }
 }
 
 function renderWlStudentTable(students, studentLogs) {
@@ -3773,21 +3829,25 @@ function removeWlStudentRow(sid) {
 
 async function wlDeleteLog(logId, clsName) {
   if (!confirm(`[${clsName}] 업무일지를 삭제할까요?\n삭제하면 복구할 수 없습니다.`)) return;
-  await db.from('work_log_students').delete().eq('log_id', logId);
-  const { error } = await db.from('work_logs').delete().eq('id', logId);
-  if (error) { alert('삭제 오류: ' + error.message); return; }
-  if (wlCurrentLogId === logId) {
-    wlCurrentLogId = null;
-    document.getElementById('wl-progress').value    = '';
-    document.getElementById('wl-homework').value    = '';
-    document.getElementById('wl-memo').value        = '';
-    document.getElementById('wl-trial').value       = '';
-    document.getElementById('wl-new-student').value = '';
-    document.getElementById('wl-dropout').value     = '';
-    const tbody = document.getElementById('wl-student-tbody');
-    if (tbody) tbody.innerHTML = '';
+  try {
+    // 순서 중요: work_log_students 먼저, work_logs는 반드시 성공 확인
+    const { error: slErr } = await db.from('work_log_students').delete().eq('log_id', logId);
+    if (slErr) throw slErr;
+    const { error } = await db.from('work_logs').delete().eq('id', logId);
+    if (error) throw error;
+
+    if (wlCurrentLogId === logId) {
+      wlCurrentLogId = null;
+      ['wl-progress','wl-homework','wl-memo','wl-trial','wl-new-student','wl-dropout']
+        .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      const tbody = document.getElementById('wl-student-tbody');
+      if (tbody) tbody.innerHTML = '';
+    }
+    await wlLoadDayLogs();
+  } catch(e) {
+    console.error('[wlDeleteLog]', e);
+    alert('삭제 오류: ' + (e.message || '네트워크를 확인하세요'));
   }
-  await wlLoadDayLogs();
 }
 
 async function wlOpenLogFromList(logId, classId) {
@@ -4117,6 +4177,7 @@ async function wlLoadDateLogs() {
   if (!date) return;
 
   preview.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af">불러오는 중...</div>';
+  try {
   const { data: logs } = await db.from('work_logs')
     .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
 
@@ -4143,6 +4204,10 @@ async function wlLoadDateLogs() {
         ${log.homework ? `<div style="font-size:11px;color:#374151"><b>📝 숙제:</b> ${log.homework.slice(0,60)}${log.homework.length > 60 ? '…' : ''}</div>` : ''}
       </div>`;
     }).join('');
+  } catch(e) {
+    console.error('[wlLoadDateLogs]', e);
+    preview.innerHTML = '<div style="text-align:center;padding:30px;color:#dc2626;font-size:13px">⚠️ 조회 실패: 네트워크를 확인하세요</div>';
+  }
 }
 
 async function wlSelectLogPreview(logId) {
@@ -4161,13 +4226,17 @@ async function wlSelectLogPreview(logId) {
     if (sp) sp.textContent = '✅ 선택됨';
   }
 
-  const { data: log  } = await db.from('work_logs').select('*').eq('id', logId).single();
-  const { data: stus } = await db.from('work_log_students').select('*').eq('log_id', logId);
-  _wlLoadedData     = log  || null;
-  _wlLoadedStudents = stus || [];
-
-  const cfmBtn = document.getElementById('wl-load-confirm-btn');
-  if (cfmBtn) { cfmBtn.disabled = false; cfmBtn.style.background = '#1d4ed8'; cfmBtn.style.cursor = 'pointer'; }
+  try {
+    const { data: log  } = await db.from('work_logs').select('*').eq('id', logId).single();
+    const { data: stus } = await db.from('work_log_students').select('*').eq('log_id', logId);
+    _wlLoadedData     = log  || null;
+    _wlLoadedStudents = stus || [];
+    const cfmBtn = document.getElementById('wl-load-confirm-btn');
+    if (cfmBtn) { cfmBtn.disabled = false; cfmBtn.style.background = '#1d4ed8'; cfmBtn.style.cursor = 'pointer'; }
+  } catch(e) {
+    console.error('[wlSelectLogPreview]', e);
+    alert('불러오기 실패: ' + (e.message || '네트워크를 확인하세요'));
+  }
 }
 
 async function wlApplyLoadedData() {
@@ -4285,10 +4354,16 @@ async function loadTsStudents() {
   const classId = document.getElementById('ts-class-select')?.value || '';
   const listEl  = document.getElementById('ts-student-list');
   if (!classId || !listEl) { if (listEl) listEl.innerHTML = ''; return; }
-  const { data } = await db.from('users').select('*')
-    .eq('role', 'student').eq('class_id', classId).eq('status', 'active').order('name');
-  window._tsAllStudents = data || [];
-  filterTsStudents();
+  listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#9ca3af;font-size:13px">불러오는 중...</div>';
+  try {
+    const { data } = await db.from('users').select('*')
+      .eq('role', 'student').eq('class_id', classId).eq('status', 'active').order('name');
+    window._tsAllStudents = data || [];
+    filterTsStudents();
+  } catch(e) {
+    console.error('[loadTsStudents]', e);
+    listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#dc2626;font-size:13px">⚠️ 조회 실패</div>';
+  }
 }
 
 function filterTsStudents() {
@@ -4544,6 +4619,7 @@ async function awlLoadDayLogs() {
     return;
   }
 
+  try {
   const { data: logs, error } = await db.from('work_logs')
     .select('*').eq('teacher_id', teacherId).eq('log_date', date).order('created_at');
 
@@ -4574,6 +4650,14 @@ async function awlLoadDayLogs() {
       <span style="font-size:12px;color:#6b7280">조회 ›</span>
     </div>`;
   }).join('');
+  } catch(e) {
+    console.error('[awlLoadDayLogs]', e);
+    if (section) section.style.display = 'none';
+    if (detailEl) {
+      detailEl.style.display = 'block';
+      detailEl.innerHTML = `<div style="text-align:center;padding:40px;color:#dc2626;font-size:13px">⚠️ 조회 실패: 네트워크를 확인하세요</div>`;
+    }
+  }
 }
 
 async function awlShowDetail(logId) {
@@ -4582,6 +4666,7 @@ async function awlShowDetail(logId) {
   detailEl.style.display = 'block';
   detailEl.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">불러오는 중...</div>';
 
+  try {
   const { data: log  } = await db.from('work_logs').select('*').eq('id', logId).single();
   const { data: stus } = await db.from('work_log_students')
     .select('*, users(name,school,grade)').eq('log_id', logId);
@@ -4672,6 +4757,10 @@ async function awlShowDetail(logId) {
     </div>`;
 
   detailEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch(e) {
+    console.error('[awlShowDetail]', e);
+    detailEl.innerHTML = `<div style="text-align:center;padding:30px;color:#dc2626;font-size:13px">⚠️ 조회 실패: ${e.message || '네트워크를 확인하세요'}</div>`;
+  }
 }
 
 tryAutoLogin();
