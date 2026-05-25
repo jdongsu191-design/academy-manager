@@ -587,7 +587,7 @@
 
           <!-- 퇴원 학생 안내 -->
           <div id="withdrawn-notice" style="display:none;padding:8px 12px;background:#fef2f2;border-radius:8px;margin-bottom:10px;font-size:12px;color:#dc2626;font-weight:600">
-            \uD83D\uDCCB 퇴원 학생 목록
+            📋 퇴원 학생 목록
           </div>
 
           <!-- 목록 -->
@@ -2149,7 +2149,9 @@ async function submitAddStudent() {
       teacher_id: currentUser.id, enrolled_at: enrolled,
       school_level: level,
       weekend_level: wlevel || null, weekend_attend_time: wtime || null,
-      student_code: newCode
+      student_code: newCode,
+      // 담당 선생님의 branch_id 상속 (관리자 분원 필터 정상 작동을 위해 필수)
+      branch_id: currentUser.branch_id || null
     });
     if (error) throw error;
     closeModal('addStudent');
@@ -2163,13 +2165,10 @@ async function submitAddStudent() {
 }
 
 async function generateStudentCode() {
-  const year = new Date().getFullYear();
-  const { data } = await db.from('users')
-    .select('student_code').like('student_code', year + '%')
-    .not('student_code','is',null).order('student_code',{ascending:false}).limit(1);
-  const last = data && data[0] && data[0].student_code;
-  const next = last ? parseInt(last.slice(4)) + 1 : 1;
-  return year + String(next).padStart(4,'0');
+  // DB 레벨 원자적 처리 — 동시 요청 시 중복 발급 방지 (RPC)
+  const { data, error } = await db.rpc('generate_student_code');
+  if (error) throw new Error('코드 발급 실패: ' + error.message);
+  return data;
 }
 
 /* ============================================================
@@ -2423,7 +2422,9 @@ async function reEnrollStudent(studentId, studentName) {
 ============================================================ */
 function copyStudentCode(code, name) {
   if (!code) { alert(name + ' 학생은 코드가 없습니다'); return; }
-  navigator.clipboard.writeText(code).then(() => alert('✅ ' + name + ' 학생 코드 (' + code + ') 복사됐습니다!'));
+  navigator.clipboard.writeText(code)
+    .then(() => alert('✅ ' + name + ' 학생 코드 (' + code + ') 복사됐습니다!'))
+    .catch(() => alert('코드: ' + code + '\n(클립보드 복사를 지원하지 않는 환경입니다. 위 코드를 직접 복사하세요.)'));
 }
 
 async function reissueStudentCode(studentId, studentName) {
@@ -2444,12 +2445,15 @@ async function issueCodesForAll() {
   if (error) { alert('조회 실패: ' + error.message); return; }
   if (!noCode || !noCode.length) { alert('미발급 학생이 없습니다'); return; }
   if (!confirm(noCode.length + '명에게 코드를 발급할까요?')) return;
-  let ok = 0;
+  let ok = 0, fail = 0;
   for (const s of noCode) {
-    const newCode = await generateStudentCode();
-    const { error: e } = await db.from('users').update({ student_code: newCode }).eq('id', s.id);
-    if (!e) ok++;
+    try {
+      const newCode = await generateStudentCode();
+      const { error: e } = await db.from('users').update({ student_code: newCode }).eq('id', s.id);
+      if (!e) ok++; else fail++;
+    } catch(e) { fail++; }
   }
+  if (fail) console.warn('[issueCodesForAll] 실패:', fail + '건');
   alert('✅ ' + ok + '명 코드 발급 완료!');
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'desk';
   if (isAdmin) await loadAdminData(); else await loadTeacherData();
@@ -2460,7 +2464,9 @@ function copyAllStudentCodes() {
     .filter(s => s.student_code);
   if (!list.length) { alert('코드가 발급된 학생이 없습니다'); return; }
   const text = list.map(s => s.name + ' - ' + s.student_code).join('\n');
-  navigator.clipboard.writeText(text).then(() => alert('✅ ' + list.length + '명 코드 복사 완료!'));
+  navigator.clipboard.writeText(text)
+    .then(() => alert('✅ ' + list.length + '명 코드 복사 완료!'))
+    .catch(() => alert('클립보드 복사를 지원하지 않는 환경입니다.'));
 }
 
 function downloadStudentCodes() {
@@ -2688,6 +2694,11 @@ async function submitTransfer() {
   else alert('✅ 전반 완료! (' + success + '명)\n시행일: ' + transferDate);
 
   await loadTeacherData();
+  // 관리자/데스크 캐시도 갱신 (동일 세션에서 관리자 화면과 상호작용 시 데이터 정합성 유지)
+  if (typeof loadAdminData === 'function' &&
+      (currentUser.role === 'admin' || currentUser.role === 'desk')) {
+    await loadAdminData();
+  }
 }
 
 function showTransferNotifyPopup(list) {
@@ -3029,8 +3040,11 @@ async function admClassChangeSave(studentId) {
   if (!classId)   { alert('반을 선택하세요'); return; }
 
   try {
+    // 새 선생님의 branch_id 조회 후 학생에게도 반영
+    const newTeacher = (allUsers || []).find(u => u.id === teacherId);
+    const newBranchId = newTeacher ? (newTeacher.branch_id || null) : null;
     const { error } = await db.from('users')
-      .update({ teacher_id: teacherId, class_id: classId, class_id2: null })
+      .update({ teacher_id: teacherId, class_id: classId, class_id2: null, branch_id: newBranchId })
       .eq('id', studentId);
     if (error) throw error;
     document.getElementById('admin-class-change-modal')?.remove();
@@ -3264,16 +3278,21 @@ async function copyWithdrawReportImage() {
   if (btn) { btn.textContent = '복사 중...'; btn.disabled = true; }
   try {
     const canvas = await _generateWithdrawReportCanvas();
-    canvas.toBlob(async blob => {
-      try {
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        alert('✅ 퇴원 보고서 이미지가 복사됐습니다!');
-      } catch(e) {
-        // Clipboard API 실패 시 다운로드로 fallback
-        _downloadCanvasAsPng(canvas, `퇴원보고서_${_wdrCurrentSnap.name || 'unknown'}.png`);
-        alert('📋 클립보드 복사가 지원되지 않아 이미지를 저장했습니다.');
-      }
-    }, 'image/png');
+    // toBlob을 Promise로 래핑하여 finally가 완료 후 실행되도록 보장
+    await new Promise((resolve, reject) => {
+      canvas.toBlob(async blob => {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          alert('✅ 퇴원 보고서 이미지가 복사됐습니다!');
+          resolve();
+        } catch(e) {
+          // Clipboard API 실패 시 다운로드로 fallback
+          _downloadCanvasAsPng(canvas, `퇴원보고서_${_wdrCurrentSnap.name || 'unknown'}.png`);
+          alert('📋 클립보드 복사가 지원되지 않아 이미지를 저장했습니다.');
+          resolve();
+        }
+      }, 'image/png');
+    });
   } catch(e) {
     alert('이미지 생성 오류: ' + (e.message || e));
   } finally {
