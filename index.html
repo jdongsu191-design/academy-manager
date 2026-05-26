@@ -1026,10 +1026,62 @@
       </div>
 
       <div class="panel" id="panel-weekend-bety">
-        <div class="panel-placeholder">
-          <div class="panel-placeholder-icon">🎯</div>
-          <div class="panel-placeholder-text">베티모의고사</div>
-          <div class="panel-placeholder-sub">구현 예정</div>
+        <!-- ── 상단 컨트롤 ── -->
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px">
+          <!-- 날짜 -->
+          <div style="flex:0 0 auto">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">날짜</div>
+            <input type="date" id="by-date"
+              onclick="this.showPicker&&this.showPicker()"
+              onchange="byLoad()"
+              style="padding:8px 12px;border:1.5px solid #fde68a;border-radius:8px;font-size:14px;outline:none;background:#fff;cursor:pointer">
+          </div>
+          <!-- 분원 필터 (관리자만) -->
+          <div id="by-branch-wrap" style="display:none;flex:0 0 auto">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">분원</div>
+            <select id="by-branch-select" onchange="byOnBranchChange()"
+              style="padding:8px 12px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff;cursor:pointer">
+              <option value="">전체 분원</option>
+            </select>
+          </div>
+          <!-- 선생님 필터 -->
+          <div style="flex:0 0 auto;position:relative">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">선생님</div>
+            <button id="by-teacher-btn" onclick="byToggleTeacherDropdown(event)"
+              style="padding:8px 14px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;background:#fff;cursor:pointer;display:flex;align-items:center;gap:6px;min-width:110px">
+              📝 <span id="by-teacher-label">전체</span> ▾
+            </button>
+            <div id="by-teacher-dropdown" style="display:none;position:absolute;top:100%;left:0;margin-top:4px;background:#fff;border:1.5px solid #fde68a;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.1);z-index:200;min-width:180px;max-height:280px;overflow-y:auto">
+              <div style="padding:8px 12px;border-bottom:1px solid #fef9c3;display:flex;align-items:center;gap:8px;position:sticky;top:0;background:#fefce8">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:#92400e;cursor:pointer">
+                  <input type="checkbox" id="by-chk-all" onchange="byTeacherAllToggle(this)" style="accent-color:#d97706"> 전체
+                </label>
+              </div>
+              <div id="by-teacher-chk-list"></div>
+            </div>
+          </div>
+          <!-- 버튼 그룹 -->
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-left:auto">
+            <button id="by-save-btn" onclick="bySaveAll()"
+              style="padding:8px 18px;background:#92400e;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">
+              💾 전체 저장
+            </button>
+            <button id="by-img-btn" onclick="byGenerateImage()"
+              style="padding:8px 14px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">
+              🖼️ 이미지
+            </button>
+            <button onclick="weekendPrintAttendance('bety')"
+              style="padding:8px 14px;background:#fefce8;color:#92400e;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">
+              🖨️ 출석부
+            </button>
+          </div>
+        </div>
+        <!-- 학생 입력 테이블 -->
+        <div id="by-table-wrap">
+          <div style="text-align:center;padding:50px 20px;color:#9ca3af">
+            <div style="font-size:36px;margin-bottom:10px">📝</div>
+            <p>날짜를 선택하면 베티모의고사 학생 목록이 표시됩니다</p>
+          </div>
         </div>
       </div>
 
@@ -4295,6 +4347,589 @@ async function initAdminWeekendPotential() {
     await ptLoadFilters();
     await ptLoad();
   } catch(e) { console.error('[initAdminWeekendPotential]', e); }
+}
+
+/* ============================================================
+   [SECTION: WEEKEND BETY] 베티모의고사 (weekend_bety)
+   ─ 테이블: weekend_bety  (onConflict: student_id, session_date)
+   ─ 학생 필터: student_settings_history 날짜 기준 이력 → users.bety_yn fallback
+   ─ 전용 상태: _byStudents, _byData, _bySnapshot, _byLoadedAt, _byAllTeachers
+   ─ Realtime 완전 미사용
+============================================================ */
+
+var _byFields = ['attendance','wrong_done','score','result','note','attend_time','level'];
+
+/* ── 초기화 ─────────────────────────────────────────────── */
+async function initBety() {
+  // 날짜 기본값: 지난 일요일 (today - today.getDay())
+  var dateEl = document.getElementById('by-date');
+  if (dateEl && !dateEl.value) {
+    var today = new Date();
+    var sun   = new Date(today);
+    sun.setDate(today.getDate() - today.getDay()); // 이번 주 일요일
+    // 오늘이 일요일이면 오늘, 아니면 지난 일요일
+    dateEl.value = sun.toISOString().split('T')[0];
+  }
+  try {
+    await byLoadFilters();
+    await byLoadData();
+  } catch(e) { console.error('[initBety]', e); }
+}
+
+async function byLoad() {
+  try { await byLoadData(); } catch(e) { console.error('[byLoad]', e); }
+}
+
+/* ── 선생님 필터 ─────────────────────────────────────────── */
+async function byLoadFilters(branchId) {
+  var role = (currentUser?.role) || 'teacher';
+  try {
+    var q = db.from('users').select('id,name,branch_id')
+      .eq('role','teacher').eq('status','active').order('name');
+    if      (role === 'teacher') { if (currentUser.branch_id) q = q.eq('branch_id', currentUser.branch_id); }
+    else if (role === 'desk')    { var bids = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : []; if (bids.length) q = q.in('branch_id', bids); }
+    else if (role === 'admin' && branchId) { q = q.eq('branch_id', branchId); }
+    var { data: teachers } = await q;
+    _byAllTeachers = teachers || [];
+    if (role === 'teacher' && !_byAllTeachers.find(t => t.id === currentUser.id)) {
+      _byAllTeachers.unshift({ id: currentUser.id, name: currentUser.name, branch_id: currentUser.branch_id || null });
+    }
+    byRenderTeacherCheckboxes();
+    if (branchId !== undefined) await byLoad();
+  } catch(e) { console.error('[byLoadFilters]', e); }
+}
+
+function byRenderTeacherCheckboxes() {
+  var list = document.getElementById('by-teacher-chk-list');
+  if (!list) return;
+  var role = (currentUser?.role) || 'teacher';
+  list.innerHTML = _byAllTeachers.map(t => {
+    var checked = (role === 'teacher' && t.id === currentUser.id) ? ' checked' : '';
+    return `<label style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:13px"
+      onmouseover="this.style.background='#fefce8'" onmouseout="this.style.background=''">
+      <input type="checkbox" class="by-teacher-chk" value="${t.id}"${checked}
+        onchange="byTeacherChkChange()" style="accent-color:#d97706;width:15px;height:15px">
+      <span>${t.name} T</span>
+    </label>`;
+  }).join('');
+  byUpdateTeacherLabel();
+}
+
+function byToggleTeacherDropdown(e) {
+  e.stopPropagation();
+  var dd = document.getElementById('by-teacher-dropdown');
+  if (!dd) return;
+  var isOpen = dd.style.display !== 'none';
+  dd.style.display = isOpen ? 'none' : 'block';
+  if (!isOpen) {
+    setTimeout(() => {
+      document.addEventListener('click', function h(ev) {
+        if (!dd.contains(ev.target) && ev.target.id !== 'by-teacher-btn') dd.style.display = 'none';
+        document.removeEventListener('click', h);
+      });
+    }, 10);
+  }
+}
+
+function byTeacherAllToggle(chkAll) {
+  document.querySelectorAll('.by-teacher-chk').forEach(c => { c.checked = chkAll.checked; });
+  byUpdateTeacherLabel();
+  byLoadData();
+}
+
+function byTeacherChkChange() {
+  var all    = document.querySelectorAll('.by-teacher-chk');
+  var chkAll = document.getElementById('by-chk-all');
+  var checked= Array.from(all).filter(c => c.checked);
+  if (chkAll) chkAll.checked = checked.length === all.length;
+  byUpdateTeacherLabel();
+  byLoadData();
+}
+
+function byUpdateTeacherLabel() {
+  var all    = document.querySelectorAll('.by-teacher-chk');
+  var checked= Array.from(all).filter(c => c.checked);
+  var label  = document.getElementById('by-teacher-label');
+  if (!label) return;
+  if (!checked.length || checked.length === all.length) {
+    label.textContent = '전체';
+  } else if (checked.length === 1) {
+    var t = _byAllTeachers.find(t => t.id === checked[0].value);
+    label.textContent = t ? t.name + ' T' : '1명';
+  } else {
+    label.textContent = checked.length + '명 선택';
+  }
+}
+
+function byGetSelectedTeacherIds() {
+  return Array.from(document.querySelectorAll('.by-teacher-chk:checked')).map(c => c.value);
+}
+
+function byOnBranchChange() {
+  byLoadFilters(document.getElementById('by-branch-select')?.value || '');
+}
+
+/* ── 데이터 로드 ─────────────────────────────────────────── */
+async function byLoadData() {
+  var date = document.getElementById('by-date')?.value || '';
+  var wrap = document.getElementById('by-table-wrap');
+  if (!date) {
+    if (wrap) wrap.innerHTML = '<div style="text-align:center;padding:50px 20px;color:#9ca3af"><div style="font-size:36px;margin-bottom:10px">📝</div><p>날짜를 선택하면 베티모의고사 학생 목록이 표시됩니다</p></div>';
+    return;
+  }
+  if (wrap) wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af"><div class="spinner" style="margin:0 auto 10px;border-top-color:#d97706"></div>불러오는 중...</div>';
+
+  try {
+    var selectedIds = byGetSelectedTeacherIds();
+    if (!selectedIds.length) {
+      selectedIds = _byAllTeachers.map(t => t.id);
+      if (!selectedIds.length && currentUser?.role === 'teacher') selectedIds = [currentUser.id];
+    }
+    if (!selectedIds.length) {
+      if (wrap) wrap.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af"><div style="font-size:32px">👤</div><p>선생님을 선택하세요</p></div>';
+      return;
+    }
+
+    // ── student_settings_history: 날짜 기준 최신 이력 조회 ──────
+    // 이력이 있으면 이력값 우선, 없으면 users.bety_yn fallback
+    var { data: histSnap } = await db.from('student_settings_history')
+      .select('student_id,bety_yn,bety_level,bety_attend_time')
+      .lte('changed_at', date)
+      .order('changed_at', { ascending: false });
+
+    // 학생별 가장 최신 이력만 남김
+    var histMap = {};
+    (histSnap || []).forEach(h => { if (!histMap[h.student_id]) histMap[h.student_id] = h; });
+
+    // users 조회
+    var q = db.from('users')
+      .select('id,name,school,grade,teacher_id,bety_yn,bety_level,bety_attend_time')
+      .eq('role','student').eq('status','active').lte('enrolled_at', date);
+    q = selectedIds.length === 1 ? q.eq('teacher_id', selectedIds[0]) : q.in('teacher_id', selectedIds);
+    var { data: allStudents } = await q.order('name');
+
+    // 이력 기반 필터 + 값 덮어쓰기
+    // 인수인계서 원칙: _byStudents에만 할당, 전역 students 불변
+    _byStudents = (allStudents || [])
+      .filter(s => histMap[s.id] ? histMap[s.id].bety_yn === true : s.bety_yn === true)
+      .map(s => {
+        var h = histMap[s.id];
+        if (!h) return s;
+        return {
+          ...s,
+          bety_yn:          h.bety_yn,
+          bety_level:       h.bety_level       !== undefined ? h.bety_level       : s.bety_level,
+          bety_attend_time: h.bety_attend_time  !== undefined ? h.bety_attend_time : s.bety_attend_time
+        };
+      });
+
+    // weekend_bety 레코드 조회
+    _byData = {};
+    if (_byStudents.length) {
+      var { data: records } = await db.from('weekend_bety')
+        .select('*').eq('session_date', date)
+        .in('student_id', _byStudents.map(s => s.id));
+      (records || []).forEach(r => { _byData[r.student_id] = r; });
+    }
+
+    byRenderTable();
+
+    // 스냅샷 캡처 (렌더링 완료 후)
+    var built   = _buildSnapshot(Object.values(_byData), _byFields);
+    _bySnapshot = built.snapshot;
+    _byLoadedAt = built.loadedAt;
+
+  } catch(e) {
+    console.error('[byLoadData]', e);
+    if (wrap) wrap.innerHTML = `<div style="text-align:center;padding:40px;color:#dc2626">⚠️ 불러오기 실패: ${e.message||'네트워크를 확인하세요'}</div>`;
+  }
+}
+
+/* ── 테이블 렌더링 ───────────────────────────────────────── */
+function byRenderTable() {
+  var wrap = document.getElementById('by-table-wrap');
+  if (!wrap) return;
+  if (!_byStudents.length) {
+    wrap.innerHTML = '<div style="text-align:center;padding:50px;color:#9ca3af"><div style="font-size:36px">📝</div><p>베티모의고사 참여 학생이 없습니다<br><small style="color:#9ca3af">학생 정보 수정에서 베티모의고사 참여를 체크해주세요</small></p></div>';
+    return;
+  }
+
+  var date    = document.getElementById('by-date')?.value || '';
+  var sentSet = new Set();
+  if (date) _byStudents.forEach(s => { if (localStorage.getItem('by_sent_'+date+'_'+s.id)==='1') sentSet.add(s.id); });
+
+  var ATT_OPTS  = [{v:'',l:''},{v:'present',l:'출석'},{v:'late',l:'지각'},{v:'absent',l:'결석'}];
+  var RES_OPTS  = [{v:'',l:''},{v:'A',l:'A'},{v:'C',l:'C'},{v:'F',l:'F'}];
+  var WRG_OPTS  = [{v:'',l:''},{v:'true',l:'완료'},{v:'false',l:'미완료'}];
+  // 베티 전용: 레벨 고정 select
+  var LV_OPTS   = [{v:'',l:''},{v:'실전모고',l:'실전모고'},{v:'준킬러',l:'준킬러'}];
+
+  var html = `<style>
+    .by-tbl{width:100%;border-collapse:collapse;font-size:12px}
+    .by-tbl th{background:#92400e;color:#fef9c3;padding:7px 5px;text-align:center;font-size:11px;font-weight:700;white-space:nowrap}
+    .by-tbl tr:nth-child(even){background:#fefce8} .by-tbl tr:nth-child(odd){background:#fff}
+    .by-tbl td{padding:5px 4px;border-bottom:1px solid #fde68a;vertical-align:middle;text-align:center}
+    .by-inp{width:100%;padding:6px 8px;border:1.5px solid #fde68a;border-radius:5px;font-size:12px;outline:none;background:#fff;box-sizing:border-box;text-align:center}
+    .by-inp:focus{border-color:#d97706;box-shadow:0 0 0 2px rgba(217,119,6,0.15)}
+    .by-sel{width:100%;padding:6px 8px;border:1.5px solid #fde68a;border-radius:5px;font-size:12px;outline:none;background:#fff;cursor:pointer;min-width:60px}
+    .by-sel:focus{border-color:#d97706}
+  </style>
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <div style="font-size:11px;color:#6b7280;margin-bottom:5px">✦ 출결 헤더 클릭 → 일괄 처리</div>
+    <table class="by-tbl" style="min-width:620px"><thead><tr>
+      <th style="text-align:left;padding-left:8px;min-width:60px">학교</th>
+      <th style="min-width:36px">학년</th>
+      <th style="text-align:left;padding-left:6px;min-width:52px">이름</th>
+      <th style="min-width:70px">레벨</th>
+      <th style="min-width:52px">시간</th>
+      <th style="min-width:52px;cursor:pointer;user-select:none" onclick="byBulkModal('attendance')" title="클릭: 일괄처리"><span style="text-decoration:underline dotted 2px #fde68a">출결</span> ✦</th>
+      <th style="min-width:52px;cursor:pointer;user-select:none" onclick="byBulkModal('wrong_done')" title="클릭: 일괄처리"><span style="text-decoration:underline dotted 2px #fde68a">오답</span> ✦</th>
+      <th style="min-width:50px">점수</th>
+      <th style="min-width:40px">결과</th>
+      <th style="text-align:left;padding-left:6px;min-width:80px">비고</th>
+      <th style="min-width:48px">📋멘트</th>
+      <th style="min-width:44px">📬전송</th>
+    </tr></thead><tbody>`;
+
+  _byStudents.forEach(s => {
+    var r       = _byData[s.id] || {};
+    var isSent  = sentSet.has(s.id);
+    var curAtt  = (r.id && r.attendance) ? r.attendance : '';
+    var curRes  = r.result || '';
+    var curWrg  = r.id ? (r.wrong_done===true?'true':r.wrong_done===false?'false':'') : '';
+    // level/attend_time: 당일 DB값 우선, 없으면 이력 적용된 users값
+    var curLv   = (r.id && r.level       != null) ? r.level        : (s.bety_level        || '');
+    var curTime = (r.id && r.attend_time != null) ? r.attend_time  : (s.bety_attend_time  || '');
+    // score: 소수점 2자리 (포텐셜과 달리 2자리)
+    var curScore= (r.score != null && r.score !== '') ? parseFloat(r.score).toFixed(2) : '';
+
+    var attSel  = ATT_OPTS.map(o => `<option value="${o.v}"${curAtt===o.v?' selected':''}>${o.l}</option>`).join('');
+    var resSel  = RES_OPTS.map(o => `<option value="${o.v}"${curRes===o.v?' selected':''}>${o.l}</option>`).join('');
+    var wrgSel  = WRG_OPTS.map(o => `<option value="${o.v}"${curWrg===o.v?' selected':''}>${o.l}</option>`).join('');
+    var lvSel   = LV_OPTS.map(o  => `<option value="${o.v}"${curLv===o.v?' selected':''}>${o.l}</option>`).join('');
+
+    html += `<tr id="by-row-${s.id}"${isSent?' style="background:#dcfce7"':''}>
+      <td style="text-align:left;padding-left:8px;color:#6b7280;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.school||''}</td>
+      <td style="color:#6b7280;white-space:nowrap">${s.grade||''}</td>
+      <td style="text-align:left;padding-left:6px;font-weight:700;color:#1e293b;white-space:nowrap">${s.name}</td>
+      <td><select class="by-sel by-focusable" data-sid="${s.id}" data-field="level">${lvSel}</select></td>
+      <td><input class="by-inp by-focusable" data-sid="${s.id}" data-field="attend_time" value="${curTime}" placeholder="14:00"></td>
+      <td><select class="by-sel by-focusable" data-sid="${s.id}" data-field="attendance">${attSel}</select></td>
+      <td><select class="by-sel by-focusable" data-sid="${s.id}" data-field="wrong_done">${wrgSel}</select></td>
+      <td><input class="by-inp by-focusable" data-sid="${s.id}" data-field="score" value="${curScore}" placeholder="0.00" inputmode="decimal"></td>
+      <td><select class="by-sel by-focusable" data-sid="${s.id}" data-field="result">${resSel}</select></td>
+      <td><input class="by-inp by-focusable" data-sid="${s.id}" data-field="note" value="${(r.note||'').replace(/"/g,'&quot;')}" placeholder="비고" style="text-align:left"></td>
+      <td><button data-sid="${s.id}" onclick="byCopyMent(this.dataset.sid)"
+        style="padding:5px 4px;border:1px solid #fde68a;border-radius:5px;background:#fefce8;color:#92400e;font-size:11px;font-weight:700;cursor:pointer;width:100%">📋</button></td>
+      <td style="text-align:center"><input type="checkbox" data-sid="${s.id}" class="by-sent-chk"
+        ${isSent?' checked':''} onchange="byToggleSent(this)"
+        style="width:18px;height:18px;cursor:pointer;accent-color:#16a34a"></td>
+    </tr>`;
+  });
+
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
+  byInitKeyNav();
+}
+
+/* ── 키보드 네비게이션 ────────────────────────────────────── */
+function byInitKeyNav() {
+  var focusables = Array.from(document.querySelectorAll('.by-focusable'));
+  var cols = 7; // level(sel), attend_time, attendance, wrong_done, score, result, note
+  focusables.forEach((el, idx) => {
+    var colIdx   = idx % cols;
+    var isSelect = el.tagName === 'SELECT';
+    var justChanged = 0;
+    if (isSelect) el.addEventListener('change', () => { justChanged = Date.now(); });
+    el.addEventListener('keydown', e => {
+      var nxt = null;
+      if (e.key === 'Tab') { e.preventDefault(); nxt = e.shiftKey ? focusables[idx-1] : focusables[idx+1]; }
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (isSelect && Date.now() - justChanged < 150) return;
+        nxt = focusables[idx - colIdx + cols + 2];
+      }
+      if (nxt) nxt.focus();
+    });
+  });
+}
+
+/* ── 일괄 처리 ───────────────────────────────────────────── */
+function byBulkModal(field) {
+  document.getElementById('by-bulk-modal')?.remove();
+  var isAtt   = field === 'attendance';
+  var COLOR   = '#92400e';
+  var options = isAtt
+    ? [{v:'present',l:'출석',c:'#16a34a',bg:'#f0fdf4'},{v:'late',l:'지각',c:'#d97706',bg:'#fffbeb'},{v:'absent',l:'결석',c:'#dc2626',bg:'#fef2f2'},{v:'',l:'초기화',c:'#6b7280',bg:'#f5f6fa'}]
+    : [{v:'true',l:'완료',c:'#16a34a',bg:'#f0fdf4'},{v:'false',l:'미완료',c:'#dc2626',bg:'#fef2f2'},{v:'',l:'초기화',c:'#6b7280',bg:'#f5f6fa'}];
+  var optHtml = options.map(o =>
+    `<button onclick="byBulkApply('${field}','${o.v}')"
+      style="padding:14px 20px;border:2px solid ${o.c};border-radius:10px;background:${o.bg};color:${o.c};font-size:15px;font-weight:700;cursor:pointer;min-width:90px">${o.l}</button>`
+  ).join('');
+  var modal = document.createElement('div');
+  modal.id = 'by-bulk-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:28px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div style="font-size:17px;font-weight:800;color:${COLOR}">${isAtt?'📋 출결':'✏️ 오답'} 일괄 처리</div>
+      <button onclick="document.getElementById('by-bulk-modal').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#9ca3af">&times;</button>
+    </div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:20px">현재 표시된 <strong style="color:${COLOR}">${_byStudents.length}명</strong> 전원에게 적용됩니다</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:center">${optHtml}</div>
+    <div style="margin-top:18px;text-align:center">
+      <button onclick="document.getElementById('by-bulk-modal').remove()" style="padding:8px 24px;background:#f5f6fa;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;color:#6b7280;cursor:pointer">취소</button>
+    </div>
+  </div>`;
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+function byBulkApply(field, value) {
+  document.querySelectorAll(`.by-sel[data-field="${field}"],.by-inp[data-field="${field}"]`).forEach(el => {
+    el.value = value;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  var isAtt = field === 'attendance';
+  var label = isAtt
+    ? (value==='present'?'출석':value==='late'?'지각':value==='absent'?'결석':'초기화')
+    : (value==='true'?'완료':value==='false'?'미완료':'초기화');
+  document.getElementById('by-bulk-modal')?.remove();
+  var toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#92400e;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000;box-shadow:0 4px 16px rgba(0,0,0,0.2)';
+  toast.textContent = `✅ ${_byStudents.length}명 ${label} 처리 완료`;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2000);
+}
+
+/* ── 저장 ────────────────────────────────────────────────── */
+async function bySaveAll() {
+  var date = document.getElementById('by-date')?.value || '';
+  if (!date) { alert('날짜를 선택하세요'); return; }
+  if (!_byStudents.length) { alert('학생이 없습니다'); return; }
+  var btn  = document.getElementById('by-save-btn');
+  var wrap = document.getElementById('by-table-wrap');
+  if (btn) { btn.textContent = '⏳ 저장 중...'; btn.disabled = true; }
+  try {
+    var upserts = _getChangedUpserts(_byStudents, s => {
+      var fv = field => {
+        var el = wrap?.querySelector(`[data-sid="${s.id}"][data-field="${field}"]`);
+        return el ? el.value.trim() : '';
+      };
+      var wrongVal = fv('wrong_done');
+      var scoreVal = fv('score');
+      return {
+        student_id:   s.id,
+        session_date: date,
+        level:        fv('level')       || null,
+        attend_time:  fv('attend_time') || null,
+        attendance:   fv('attendance')  || null,
+        wrong_done:   wrongVal === 'true' ? true : wrongVal === 'false' ? false : null,
+        // score: 소수점 2자리 반올림 (포텐셜 1자리와 다름)
+        score:        scoreVal !== '' ? (parseFloat(parseFloat(scoreVal).toFixed(2)) || null) : null,
+        result:       fv('result') || null,
+        note:         fv('note')   || null,
+        created_by:   currentUser.id
+      };
+    }, _bySnapshot, _byFields);
+
+    if (!upserts.length) { alert('변경된 내용이 없습니다.'); return; }
+
+    var { error } = await db.from('weekend_bety').upsert(upserts, { onConflict: 'student_id,session_date' });
+    if (error) throw error;
+    alert(`✅ 저장 완료! (${upserts.length}명 반영)`);
+    await byLoadData();
+  } catch(e) {
+    console.error('[bySaveAll]', e);
+    alert('저장 오류: ' + (e.message || e));
+  } finally {
+    if (btn) { btn.textContent = '💾 전체 저장'; btn.disabled = false; }
+  }
+}
+
+/* ── 전송 상태 ───────────────────────────────────────────── */
+function byToggleSent(chk) {
+  var sid  = chk.dataset.sid;
+  var date = document.getElementById('by-date')?.value || '';
+  if (!date) return;
+  var row  = document.getElementById('by-row-' + sid);
+  var key  = 'by_sent_' + date + '_' + sid;
+  if (chk.checked) {
+    localStorage.setItem(key, '1');
+    if (row) row.style.background = '#dcfce7';
+  } else {
+    localStorage.removeItem(key);
+    if (row) row.style.background = '';
+  }
+}
+
+/* ── 메시지 복사 ─────────────────────────────────────────── */
+function byCopyMent(studentId) {
+  var s = _byStudents.find(st => st.id === studentId);
+  if (!s) { alert('학생 정보를 찾을 수 없습니다'); return; }
+  var wrap = document.getElementById('by-table-wrap');
+  var fv   = field => { var el = wrap?.querySelector(`[data-sid="${studentId}"][data-field="${field}"]`); return el ? el.value.trim() : ''; };
+  var date   = document.getElementById('by-date')?.value || '';
+  var result = fv('result');
+  var score  = fv('score');
+  var wrong  = fv('wrong_done');
+  var level  = fv('level');
+  if (!result) { alert('결과(A/C/F)를 먼저 입력해주세요'); return; }
+
+  var dp        = date.split('-');
+  var dayNames  = ['일','월','화','수','목','금','토'];
+  var d         = new Date(date + 'T00:00:00');
+  var dateLabel = (+dp[1]) + '월 ' + (+dp[2]) + '일(' + dayNames[d.getDay()] + ')';
+  var levelText = level ? ` [${level}]` : '';
+  var resultText= result==='A' ? '통과 & 오답 완료'
+                : result==='C' ? '통과 & 오답 미완료'
+                : result==='F' ? '결석' : result;
+
+  var ment = `안녕하세요. 베스티안 수학학원입니다\n${dateLabel}에 실시된 ${s.name} 학생 베티모의고사${levelText} 결과 안내드립니다.\n▶ 결과: ${resultText}`
+    + (score && result !== 'F' ? `\n▶ 점수: ${score}점` : '')
+    + (wrong && result !== 'F' ? `\n▶ 오답정리: ${wrong==='true'?'완료':'미완료'}` : '');
+
+  copyTextSync(ment);
+  var btn = wrap?.querySelector(`[data-sid="${studentId}"][onclick*="byCopyMent"]`);
+  if (btn) {
+    clearTimeout(btn._rstTimer);
+    btn.style.cssText += ';background:#d97706;color:#fff;border-color:#92400e';
+    btn.innerHTML = '✅ 복사됨';
+    btn._rstTimer = setTimeout(() => {
+      btn.style.background = '#fefce8'; btn.style.color = '#92400e'; btn.style.borderColor = '#fde68a';
+      btn.innerHTML = '📋';
+    }, 2000);
+  }
+  var chk = document.querySelector(`.by-sent-chk[data-sid="${studentId}"]`);
+  if (chk && !chk.checked) { chk.checked = true; byToggleSent(chk); }
+}
+
+/* ── 이미지 생성 ─────────────────────────────────────────── */
+async function byGenerateImage() {
+  var date = document.getElementById('by-date')?.value || '';
+  if (!_byStudents.length) { alert('학생이 없습니다'); return; }
+  var btn  = document.getElementById('by-img-btn');
+  if (btn) { btn.textContent = '⏳ 생성 중...'; btn.disabled = true; }
+  try {
+    var dp       = date.split('-');
+    var dayNames = ['일','월','화','수','목','금','토'];
+    var d        = new Date(date + 'T00:00:00');
+    var dateLabel= dp[0] + '년 ' + (+dp[1]) + '월 ' + (+dp[2]) + '일(' + dayNames[d.getDay()] + ')';
+    var esc      = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    var wrap = document.getElementById('by-table-wrap');
+    var rows = _byStudents.map((s, i) => {
+      var fv  = field => { var el = wrap?.querySelector(`[data-sid="${s.id}"][data-field="${field}"]`); return el ? el.value : ''; };
+      var att = fv('attendance');
+      var attL= att==='present'?'출석':att==='late'?'지각':att==='absent'?'결석':'-';
+      var attC= att==='absent'?'color:#ef4444;font-weight:700':att==='late'?'color:#ea580c;font-weight:600':'color:#92400e;font-weight:600';
+      var wrg = fv('wrong_done');
+      var wrgL= wrg==='true'?'완료':wrg==='false'?'미완료':'-';
+      var wrgC= wrg==='true'?'color:#92400e;font-weight:700':wrg==='false'?'color:#ef4444':'color:#9ca3af';
+      var res = fv('result');
+      var resC= res==='A'?'color:#92400e;font-weight:800':res==='F'?'color:#ef4444;font-weight:700':'color:#1e293b;font-weight:700';
+      var bg  = i%2===0?'#fff':'#fefce8';
+      return `<tr style="background:${bg}">
+        <td style="padding:6px 8px;border:1px solid #fde68a;font-size:12px;color:#6b7280">${esc(s.school)}</td>
+        <td style="padding:6px 8px;border:1px solid #fde68a;font-size:12px;color:#6b7280;text-align:center">${esc(s.grade)}</td>
+        <td style="padding:6px 8px;border:1px solid #fde68a;font-weight:700;color:#1e293b">${esc(s.name)}</td>
+        <td style="padding:6px 8px;border:1px solid #fde68a;text-align:center;font-weight:600;color:#92400e">${esc(fv('level'))}</td>
+        <td style="padding:6px 8px;border:1px solid #fde68a;text-align:center">${esc(fv('attend_time'))}</td>
+        <td style="padding:6px 8px;border:1px solid #fde68a;text-align:center;${attC}">${attL}</td>
+        <td style="padding:6px 8px;border:1px solid #fde68a;text-align:center;${wrgC}">${wrgL}</td>
+        <td style="padding:6px 8px;border:1px solid #fde68a;text-align:center">${esc(fv('score'))}</td>
+        <td style="padding:6px 8px;border:1px solid #fde68a;text-align:center;${resC}">${res}</td>
+        <td style="padding:6px 8px;border:1px solid #fde68a;font-size:12px;color:#6b7280">${esc(fv('note'))}</td>
+      </tr>`;
+    }).join('');
+
+    var imgHtml = `<div style="background:#fff;padding:20px;min-width:700px;font-family:'Pretendard','Noto Sans KR',sans-serif">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #92400e">
+        <div><div style="font-size:20px;font-weight:800;color:#92400e">📝 베티모의고사</div></div>
+        <div style="text-align:right"><div style="font-size:18px;font-weight:700;color:#1a1a2e">${dateLabel}</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px">${_byStudents.length}명</div></div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:#92400e">
+          <th style="padding:7px 8px;color:#fef9c3;text-align:left">학교</th>
+          <th style="padding:7px 8px;color:#fef9c3;text-align:center">학년</th>
+          <th style="padding:7px 8px;color:#fef9c3;text-align:left">이름</th>
+          <th style="padding:7px 8px;color:#fef9c3;text-align:center">레벨</th>
+          <th style="padding:7px 8px;color:#fef9c3;text-align:center">시간</th>
+          <th style="padding:7px 8px;color:#fef9c3;text-align:center">출결</th>
+          <th style="padding:7px 8px;color:#fef9c3;text-align:center">오답</th>
+          <th style="padding:7px 8px;color:#fef9c3;text-align:center">점수</th>
+          <th style="padding:7px 8px;color:#fef9c3;text-align:center">결과</th>
+          <th style="padding:7px 8px;color:#fef9c3;text-align:left">비고</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="margin-top:8px;text-align:right;font-size:10px;color:#9ca3af">BMAPS · ${new Date().toLocaleString('ko-KR')}</div>
+    </div>`;
+
+    var tmpDiv = document.createElement('div');
+    tmpDiv.style.cssText = 'position:absolute;left:-9999px;top:0;background:#fff';
+    tmpDiv.innerHTML = imgHtml;
+    document.body.appendChild(tmpDiv);
+    if (typeof html2canvas === 'undefined') throw new Error('html2canvas 미로드');
+    var canvas = await html2canvas(tmpDiv, { backgroundColor:'#fff', scale:2, useCORS:true, logging:false });
+    document.body.removeChild(tmpDiv);
+
+    await new Promise((res) => {
+      canvas.toBlob(async blob => {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          alert('✅ 이미지가 클립보드에 복사됐습니다!');
+        } catch(e) {
+          var a = document.createElement('a');
+          a.href = canvas.toDataURL('image/png');
+          a.download = `베티모의고사_${date.replace(/-/g,'')}.png`;
+          a.click();
+          alert('📋 클립보드 미지원 환경입니다. 이미지를 저장했습니다.');
+        }
+        res();
+      }, 'image/png');
+    });
+  } catch(e) {
+    console.error('[byGenerateImage]', e);
+    alert('이미지 생성 오류: ' + (e.message || e));
+  } finally {
+    if (btn) { btn.textContent = '🖼️ 이미지'; btn.disabled = false; }
+  }
+}
+
+/* ── 관리자 베티 조회 패널 (옵션D) ──────────────────────── */
+async function initAdminWeekendBety() {
+  // 옵션D: panel-weekend-bety → panel-admin-weekend-bety 이동
+  var srcPanel     = document.getElementById('panel-weekend-bety');
+  var dstContainer = document.getElementById('panel-admin-weekend-bety');
+  if (srcPanel && dstContainer && srcPanel.parentElement !== dstContainer) dstContainer.appendChild(srcPanel);
+  if (srcPanel) { srcPanel.classList.add('active'); srcPanel.style.display = 'block'; }
+
+  // 관리자: 분원 필터 표시
+  if (currentUser?.role === 'admin') {
+    var bw = document.getElementById('by-branch-wrap');
+    if (bw) bw.style.display = '';
+    var bs = document.getElementById('by-branch-select');
+    if (bs && bs.options.length <= 1) {
+      try {
+        var { data: brs } = await db.from('branches').select('id,name').eq('active',true).order('name');
+        (brs||[]).forEach(b => { bs.innerHTML += `<option value="${b.id}">${b.name}</option>`; });
+      } catch(e) { console.error('[initAdminWeekendBety] 분원 로드', e); }
+    }
+  }
+
+  // initBety() 대신 직접 호출 — 베티에는 버튼 상태 충돌 없으나 일관성 유지
+  var dateEl = document.getElementById('by-date');
+  if (dateEl && !dateEl.value) {
+    var today = new Date();
+    var sun   = new Date(today);
+    sun.setDate(today.getDate() - today.getDay());
+    dateEl.value = sun.toISOString().split('T')[0];
+  }
+  try {
+    await byLoadFilters();
+    await byLoad();
+  } catch(e) { console.error('[initAdminWeekendBety]', e); }
 }
 
 /* ============================================================
