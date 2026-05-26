@@ -1076,6 +1076,35 @@
             </button>
           </div>
         </div>
+        <!-- ── 관리자 전용: 레벨/시간 일괄 설정 카드 ── -->
+        <div id="by-setup-card" style="display:none;margin-bottom:14px;border:1.5px solid #fde68a;border-radius:12px;background:#fffbeb;padding:16px">
+          <div style="font-size:14px;font-weight:800;color:#92400e;margin-bottom:12px">⚙️ 베티 레벨/시간 일괄 설정 (관리자)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:flex-end">
+            <!-- 분원 -->
+            <div>
+              <div style="font-size:11px;font-weight:600;color:#92400e;margin-bottom:3px">분원</div>
+              <select id="by-setup-branch" onchange="bySetupLoadTeachers(this.value)"
+                style="padding:7px 10px;border:1.5px solid #fde68a;border-radius:7px;font-size:13px;outline:none;background:#fff">
+                <option value="">전체 분원</option>
+              </select>
+            </div>
+            <!-- 선생님 -->
+            <div>
+              <div style="font-size:11px;font-weight:600;color:#92400e;margin-bottom:3px">선생님</div>
+              <select id="by-setup-teacher"
+                style="padding:7px 10px;border:1.5px solid #fde68a;border-radius:7px;font-size:13px;outline:none;background:#fff;min-width:120px">
+                <option value="">전체 선생님</option>
+              </select>
+            </div>
+            <button onclick="bySetupLoad()"
+              style="padding:7px 16px;background:#d97706;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer">
+              🔍 불러오기
+            </button>
+          </div>
+          <div id="by-setup-table-wrap" style="font-size:13px;color:#9ca3af;padding:10px 0">
+            분원/선생님 선택 후 불러오기 버튼을 누르세요.
+          </div>
+        </div>
         <!-- 학생 입력 테이블 -->
         <div id="by-table-wrap">
           <div style="text-align:center;padding:50px 20px;color:#9ca3af">
@@ -4361,6 +4390,9 @@ var _byFields = ['attendance','wrong_done','score','result','note','attend_time'
 
 /* ── 초기화 ─────────────────────────────────────────────── */
 async function initBety() {
+  // 선생님/데스크 진입 시 관리자 전용 설정 카드 숨김
+  var bySetupCard = document.getElementById('by-setup-card');
+  if (bySetupCard) bySetupCard.style.display = 'none';
   // 날짜 기본값: 지난 일요일 (today - today.getDay())
   var dateEl = document.getElementById('by-date');
   if (dateEl && !dateEl.value) {
@@ -4466,7 +4498,12 @@ function byGetSelectedTeacherIds() {
 }
 
 function byOnBranchChange() {
-  byLoadFilters(document.getElementById('by-branch-select')?.value || '');
+  var branchId = document.getElementById('by-branch-select')?.value || '';
+  byLoadFilters(branchId);
+  // 설정 카드 분원도 동기화
+  var setupBranch = document.getElementById('by-setup-branch');
+  if (setupBranch) setupBranch.value = branchId;
+  if (typeof bySetupLoadTeachers === 'function') bySetupLoadTeachers(branchId);
 }
 
 /* ── 데이터 로드 ─────────────────────────────────────────── */
@@ -4897,6 +4934,170 @@ async function byGenerateImage() {
   }
 }
 
+/* ── 학생 수정 모달 bety_yn 토글 ─────────────────────────── */
+function editToggleBety(chk) {
+  var detail = document.getElementById('edit-bety-detail');
+  if (detail) detail.style.display = chk.checked ? 'grid' : 'none';
+}
+
+/* ── 설정 카드: 선생님 드롭다운 로드 ────────────────────────── */
+async function bySetupLoadTeachers(branchId) {
+  var sel = document.getElementById('by-setup-teacher');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">전체 선생님</option>';
+  try {
+    var q = db.from('users').select('id,name').eq('role','teacher').eq('status','active').is('deleted_at', null);
+    if (branchId) q = q.eq('branch_id', branchId);
+    var { data: ts } = await q.order('name');
+    (ts||[]).forEach(t => { sel.innerHTML += `<option value="${t.id}">${t.name} T</option>`; });
+  } catch(e) { console.error('[bySetupLoadTeachers]', e); }
+}
+
+/* ── 설정 카드: 학생 목록 불러오기 ─────────────────────────── */
+async function bySetupLoad() {
+  var branchId  = document.getElementById('by-setup-branch')?.value  || '';
+  var teacherId = document.getElementById('by-setup-teacher')?.value || '';
+  var wrap = document.getElementById('by-setup-table-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="text-align:center;padding:12px;color:#9ca3af">불러오는 중...</div>';
+  try {
+    var today = new Date().toISOString().split('T')[0];
+    var q = db.from('users').select('id,name,school,grade,teacher_id,bety_level,bety_attend_time')
+      .eq('role','student').eq('status','active').lte('enrolled_at', today);
+    if (teacherId) {
+      q = q.eq('teacher_id', teacherId);
+    } else if (branchId) {
+      var { data: ts } = await db.from('users').select('id').eq('role','teacher').eq('branch_id', branchId);
+      var tids = (ts||[]).map(t => t.id);
+      if (!tids.length) { wrap.innerHTML = '<div style="text-align:center;padding:12px;color:#9ca3af">해당 분원에 학생 없음</div>'; return; }
+      q = q.in('teacher_id', tids);
+    }
+    var { data: sts } = await q.order('name');
+    if (!sts||!sts.length) { wrap.innerHTML = '<div style="text-align:center;padding:12px;color:#9ca3af">베티모의고사 참여 학생이 없습니다</div>'; return; }
+
+    var LV_OPTS = ['','실전모고','준킬러'];
+    var rows = sts.map((s,i) => {
+      var bg = i%2===0?'#fff':'#fffbeb';
+      var lvOpts = LV_OPTS.map(v => `<option value="${v}"${s.bety_level===v?' selected':''}>${v}</option>`).join('');
+      return `<tr style="background:${bg}">
+        <td style="padding:6px 10px;font-size:12px;color:#6b7280;white-space:nowrap">${(s.school||'')} ${(s.grade||'')}</td>
+        <td style="padding:6px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap">${s.name}</td>
+        <td style="padding:5px 6px"><select class="by-setup-level" data-sid="${s.id}"
+          style="width:90px;padding:5px 6px;border:1.5px solid #fde68a;border-radius:6px;font-size:12px;outline:none;background:#fff">${lvOpts}</select></td>
+        <td style="padding:5px 6px"><input type="text" class="by-setup-time" data-sid="${s.id}"
+          value="${s.bety_attend_time||''}" placeholder="10:00"
+          style="width:70px;padding:5px 6px;border:1.5px solid #fde68a;border-radius:6px;font-size:12px;text-align:center;outline:none"></td>
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `<div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:#b45309">
+          <th style="padding:6px 10px;color:#fff;text-align:left;font-size:11px">학교/학년</th>
+          <th style="padding:6px 10px;color:#fff;text-align:left;font-size:11px">이름</th>
+          <th style="padding:6px 10px;color:#fff;text-align:center;font-size:11px">레벨</th>
+          <th style="padding:6px 10px;color:#fff;text-align:center;font-size:11px">시간</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div style="margin-top:12px;border:1.5px solid #fde68a;border-radius:10px;padding:12px;background:#fffbeb">
+        <div style="font-size:12px;font-weight:700;color:#b45309;margin-bottom:6px">📋 붙여넣기 일괄 입력</div>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:6px">형식: 학교+학년 이름 레벨 시간 (탭/공백 구분, 여러 줄 가능)<br>예) 하안중학년 이선예 B1 13:00</div>
+        <textarea id="by-setup-paste" rows="5" placeholder="여기에 붙여넣기 (Ctrl+V)..."
+          style="width:100%;padding:8px;border:1.5px solid #fde68a;border-radius:8px;font-size:12px;box-sizing:border-box;resize:vertical;outline:none;font-family:monospace"></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+          <button onclick="bySetupApplyPaste()"
+            style="padding:7px 16px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">⚡ 적용</button>
+          <span id="by-paste-result" style="font-size:12px;color:#6b7280"></span>
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;justify-content:flex-end">
+        <button onclick="bySetupSave()"
+          style="padding:8px 20px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">💾 일괄 저장</button>
+      </div>`;
+  } catch(e) {
+    console.error('[bySetupLoad]', e);
+    wrap.innerHTML = `<div style="text-align:center;padding:12px;color:#dc2626">⚠️ 불러오기 실패: ${e.message||''}</div>`;
+  }
+}
+
+/* ── 설정 카드: DB 저장 (users.bety_level / bety_attend_time) ── */
+async function bySetupSave() {
+  var levelEls = document.querySelectorAll('.by-setup-level');
+  var timeEls  = document.querySelectorAll('.by-setup-time');
+  if (!levelEls.length) { alert('먼저 학생을 불러오세요'); return; }
+  try {
+    var updates = [];
+    levelEls.forEach(el => {
+      var sid  = el.dataset.sid;
+      var lv   = el.value || null;
+      var tmEl = document.querySelector(`.by-setup-time[data-sid="${sid}"]`);
+      var tm   = (tmEl?.value || '').trim() || null;
+      updates.push({ sid, bety_level: lv, bety_attend_time: tm });
+    });
+    // 순차 업데이트 (각 학생 개별)
+    var errs = 0;
+    for (var u of updates) {
+      var { error } = await db.from('users').update({
+        bety_level: u.bety_level, bety_attend_time: u.bety_attend_time
+      }).eq('id', u.sid);
+      if (error) { errs++; console.error('[bySetupSave]', u.sid, error); }
+    }
+    if (errs) alert(`⚠️ ${errs}건 저장 실패. 나머지 ${updates.length - errs}건은 저장됐습니다.`);
+    else alert(`✅ ${updates.length}명 저장 완료!`);
+  } catch(e) {
+    console.error('[bySetupSave]', e);
+    alert('저장 오류: ' + (e.message || e));
+  }
+}
+
+/* ── 설정 카드: 붙여넣기 파싱 → 레벨/시간 자동 적용 ────────── */
+function bySetupApplyPaste() {
+  var ta     = document.getElementById('by-setup-paste');
+  var result = document.getElementById('by-paste-result');
+  if (!ta || !result) return;
+  var text = ta.value.trim();
+  if (!text) { result.textContent = '내용이 없습니다'; return; }
+
+  // 레벨 옵션
+  var VALID_LEVELS = ['실전모고','준킬러'];
+
+  var lines   = text.split('\n').map(l => l.trim()).filter(Boolean);
+  var matched = 0;
+
+  lines.forEach(line => {
+    var parts = line.split(/[\t ]+/);
+    // 이름 후보: 2~4글자 한글
+    var nameIdx = parts.findIndex(p => /^[가-힣]{2,4}$/.test(p));
+    if (nameIdx < 0) return;
+    var name = parts[nameIdx];
+    // 레벨: 이름 이후에서 찾기
+    var lv   = parts.slice(nameIdx+1).find(p => VALID_LEVELS.includes(p)) || null;
+    // 시간: HH:MM 패턴
+    var tm   = parts.find(p => /^\d{1,2}:\d{2}$/.test(p)) || null;
+
+    // DOM에서 이름으로 학생 행 찾기
+    var allRows = document.querySelectorAll('#by-setup-table-wrap tbody tr');
+    allRows.forEach(row => {
+      var nameCell = row.cells[1]?.textContent?.trim();
+      if (nameCell === name) {
+        if (lv !== null) {
+          var sel = row.querySelector('.by-setup-level');
+          if (sel) sel.value = lv;
+        }
+        if (tm !== null) {
+          var inp = row.querySelector('.by-setup-time');
+          if (inp) inp.value = tm;
+        }
+        matched++;
+      }
+    });
+  });
+  result.textContent = `${matched}명 적용됨`;
+  result.style.color = matched > 0 ? '#16a34a' : '#dc2626';
+  ta.value = '';
+}
+
 /* ── 관리자 베티 조회 패널 (옵션D) ──────────────────────── */
 async function initAdminWeekendBety() {
   // 옵션D: panel-weekend-bety → panel-admin-weekend-bety 이동
@@ -4909,6 +5110,7 @@ async function initAdminWeekendBety() {
   if (currentUser?.role === 'admin') {
     var bw = document.getElementById('by-branch-wrap');
     if (bw) bw.style.display = '';
+    // 조회용 분원 드롭다운
     var bs = document.getElementById('by-branch-select');
     if (bs && bs.options.length <= 1) {
       try {
@@ -4916,9 +5118,20 @@ async function initAdminWeekendBety() {
         (brs||[]).forEach(b => { bs.innerHTML += `<option value="${b.id}">${b.name}</option>`; });
       } catch(e) { console.error('[initAdminWeekendBety] 분원 로드', e); }
     }
+    // 설정 카드 표시 + 설정용 분원 드롭다운 동기화
+    var setupCard = document.getElementById('by-setup-card');
+    if (setupCard) setupCard.style.display = '';
+    var setupBranch = document.getElementById('by-setup-branch');
+    if (setupBranch && setupBranch.options.length <= 1 && bs) {
+      Array.from(bs.options).forEach(opt => {
+        if (opt.value) setupBranch.innerHTML += `<option value="${opt.value}">${opt.text}</option>`;
+      });
+    }
+    // 설정 카드 선생님 드롭다운 초기 로드
+    await bySetupLoadTeachers('');
   }
 
-  // initBety() 대신 직접 호출 — 베티에는 버튼 상태 충돌 없으나 일관성 유지
+  // initBety() 대신 직접 호출 — 버튼 상태 충돌 없이
   var dateEl = document.getElementById('by-date');
   if (dateEl && !dateEl.value) {
     var today = new Date();
