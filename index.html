@@ -23158,6 +23158,25 @@ async function lpExportImage(dateStr, studentName, copyMode){
   try{indivPList=JSON.parse(lp.individual_progress||'[]');}catch(e){}
   try{indivHList=JSON.parse(lp.individual_homework||'[]');}catch(e){}
 
+  // 월 누적 벌점 계산 (이미지용)
+  var _exportMonthlyPenalty = 0;
+  try {
+    var _exportDate = dateStr;
+    var _expDateObj = new Date(_exportDate);
+    var _expMonthStart = _expDateObj.getFullYear()+'-'+String(_expDateObj.getMonth()+1).padStart(2,'0')+'-01';
+    var _expNextM = new Date(_expDateObj.getFullYear(), _expDateObj.getMonth()+1, 1);
+    var _expMonthEnd = _expNextM.getFullYear()+'-'+String(_expNextM.getMonth()+1).padStart(2,'0')+'-01';
+    var {data:_expLps} = await db.from('learning_progress')
+      .select('log_date,penalty')
+      .eq('student_id', st.studentId)
+      .eq('class_id', st.classId)
+      .gte('log_date', _expMonthStart)
+      .lt('log_date', _expMonthEnd);
+    _exportMonthlyPenalty = (_expLps||[]).reduce(function(sum,r){
+      return sum + (parseInt(r.penalty)||0);
+    }, 0);
+  } catch(e){}
+
   var div=document.createElement('div');
   div.style.cssText='position:fixed;left:-9999px;top:0;width:560px;background:#fff;font-family:Apple SD Gothic Neo,Noto Sans KR,sans-serif';
 
@@ -23227,6 +23246,10 @@ async function lpExportImage(dateStr, studentName, copyMode){
           +'<td style="padding:10px 12px;font-size:13px;font-weight:700;color:#1e293b;'+PH+'">'+attendStr+'</td>'
           +'<td style="'+TH+';text-align:center">\ubc8c\uc810</td>'
           +'<td style="padding:10px 12px;font-size:17px;font-weight:900;color:'+(lp.penalty>0?'#dc2626':'#374151')+'">'+(lp.penalty||0)+'\uc810</td>'
+        +'</tr>'
+        +'<tr>'
+          +'<td style="'+TH+'">월 누적<br>벌점</td>'
+          +'<td colspan="3" style="padding:10px 12px;font-size:17px;font-weight:900;color:'+(_exportMonthlyPenalty>0?'#dc2626':'#374151')+'">해당월 총 '+_exportMonthlyPenalty+'점</td>'
         +'</tr>'
         +(lp.note?
           '<tr>'
@@ -23387,7 +23410,10 @@ async function openLpWriteModal(studentId, studentName, classId, className, init
               +'</div>'
             +'</div>'
             +'<div>'
-              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">⚠️ 벌점</div>'
+              +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
+                +'<div style="font-size:12px;font-weight:600;color:#374151">⚠️ 벌점</div>'
+                +'<div style="font-size:11px;color:#9ca3af">이번달 누적: <span id="lp-monthly-penalty" style="font-weight:700;color:#dc2626">-</span>점</div>'
+              +'</div>'
               +'<div style="display:flex;gap:8px;align-items:center">'
                 +'<button onclick="lpPenaltyAdj(-1)" style="width:32px;height:32px;border:1.5px solid #fde68a;border-radius:8px;background:#fff;font-size:16px;font-weight:700;cursor:pointer;color:#b45309">−</button>'
                 +'<input type="number" id="lp-penalty" value="0" min="0" style="flex:1;padding:8px;border:1.5px solid #fde68a;border-radius:8px;font-size:16px;font-weight:700;text-align:center;outline:none">'
@@ -23472,7 +23498,29 @@ async function lpLoadWorkLog(studentId, classId){
     }
   }
 
-  // 6) 기존 학습진행표 데이터 복원
+  // 6) 월 누적 벌점 계산 (작성 날짜 기준 월 전체, 당일 제외)
+  var monthlyPenaltyEl = document.getElementById('lp-monthly-penalty');
+  if(monthlyPenaltyEl){
+    var dateObj = new Date(date);
+    var monthStart = dateObj.getFullYear() + '-' + String(dateObj.getMonth()+1).padStart(2,'0') + '-01';
+    var nextM = new Date(dateObj.getFullYear(), dateObj.getMonth()+1, 1);
+    var monthEnd = nextM.getFullYear() + '-' + String(nextM.getMonth()+1).padStart(2,'0') + '-01';
+    var {data:monthLps} = await db.from('learning_progress')
+      .select('log_date, penalty')
+      .eq('student_id', studentId)
+      .eq('class_id', classId)
+      .gte('log_date', monthStart)
+      .lt('log_date', monthEnd);
+    var monthlyTotal = (monthLps||[]).reduce(function(sum, r){
+      // 당일 날짜는 제외 (현재 입력 중이므로)
+      if(r.log_date === date) return sum;
+      return sum + (parseInt(r.penalty)||0);
+    }, 0);
+    monthlyPenaltyEl.textContent = monthlyTotal;
+    monthlyPenaltyEl.style.color = monthlyTotal > 0 ? '#dc2626' : '#16a34a';
+  }
+
+  // 7) 기존 학습진행표 데이터 복원
   var {data:existing} = await db.from('learning_progress')
     .select('*').eq('student_id', studentId).eq('class_id', classId).eq('log_date', date).maybeSingle();
   if(existing){
