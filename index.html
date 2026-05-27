@@ -8430,6 +8430,98 @@ async function loadNotifyHistory() {
 }
 
 /* ============================================================
+   [SECTION: IMAGE UTILS] 이미지 공통 유틸
+   - isMobileOrTabletDevice: 모바일/태블릿 감지
+   - _convertBlobToPng: blob → PNG 변환
+   - shareOrCopyImage: 모바일=공유, 데스크탑=클립보드, fallback=다운로드
+   - shareOrCopyCanvas: canvas → shareOrCopyImage 래퍼
+============================================================ */
+
+function isMobileOrTabletDevice() {
+  var ua = navigator.userAgent || '';
+  var hasTouch   = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  var isMobileUA = /Mobi|Android|iPhone|iPad|iPod/i.test(ua);
+  var isIpadOS   = /Macintosh/.test(ua) && hasTouch && navigator.maxTouchPoints > 1;
+  var isNarrow   = window.innerWidth <= 900;
+  return isMobileUA || isIpadOS || (hasTouch && isNarrow);
+}
+
+function _convertBlobToPng(blob) {
+  return new Promise(function(resolve, reject) {
+    var img = new Image();
+    var url = URL.createObjectURL(blob);
+    img.onload = function() {
+      try {
+        var cvs = document.createElement('canvas');
+        cvs.width  = img.naturalWidth;
+        cvs.height = img.naturalHeight;
+        cvs.getContext('2d').drawImage(img, 0, 0);
+        cvs.toBlob(function(pngBlob) {
+          URL.revokeObjectURL(url);
+          resolve(pngBlob);
+        }, 'image/png');
+      } catch(e) { URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = function() { URL.revokeObjectURL(url); reject(new Error('이미지 로드 실패')); };
+    img.src = url;
+  });
+}
+
+async function shareOrCopyImage(blob, fileName) {
+  if (!blob) return { success: false, method: 'none', error: 'no blob' };
+  fileName = fileName || 'image.png';
+  var isMobile = isMobileOrTabletDevice();
+
+  // 모바일/태블릿: Web Share API 최우선
+  if (isMobile && navigator.share) {
+    try {
+      var file = new File([blob], fileName, { type: blob.type || 'image/png' });
+      await navigator.share({ files: [file] });
+      return { success: true, method: 'share' };
+    } catch(e) {
+      if (e && e.name === 'AbortError') return { success: true, method: 'cancelled' };
+      console.warn('[shareOrCopyImage] share 실패, fallback:', e && e.message);
+    }
+  }
+
+  // Clipboard API (데스크탑 우선, 모바일 fallback)
+  if (navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+    try {
+      var pngBlob = blob.type === 'image/png' ? blob : await _convertBlobToPng(blob);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+      return { success: true, method: 'clipboard' };
+    } catch(e) {
+      console.warn('[shareOrCopyImage] clipboard 실패, fallback:', e && e.message);
+    }
+  }
+
+  // 최후수단: 다운로드
+  try {
+    var url = URL.createObjectURL(blob);
+    var a   = document.createElement('a');
+    a.href = url; a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function() {
+      URL.revokeObjectURL(url);
+      if (a.parentNode) a.parentNode.removeChild(a);
+    }, 100);
+    return { success: true, method: 'download' };
+  } catch(e) {
+    return { success: false, method: 'error', error: e && e.message };
+  }
+}
+
+async function shareOrCopyCanvas(canvas, fileName, mimeType, quality) {
+  return new Promise(function(resolve) {
+    canvas.toBlob(async function(blob) {
+      var result = await shareOrCopyImage(blob, fileName);
+      resolve(result);
+    }, mimeType || 'image/png', quality || 0.95);
+  });
+}
+
+/* ============================================================
    [SECTION: MONTHLY REPORT] 월별 수강인원 리포트
    - 선생님: 본인 담당 학생 기준 월별 현황 + 이미지 저장
    - 관리자: 전체/분원/선생님 필터 + 선생님별 탭 + 관별 보고서
