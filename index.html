@@ -1422,8 +1422,11 @@
               style="padding:8px 18px;background:#1e293b;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">
               🔍 조회
             </button>
-            <button id="tmr-btn-save" onclick="saveTeacherMonthlyReportImage()" style="display:none;padding:8px 14px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">
-              🖼️ 이미지 저장
+            <button id="tmr-btn-copy" onclick="saveTeacherMonthlyReportImage(true)" style="display:none;padding:8px 14px;background:#1e293b;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">
+              📋 이미지 복사
+            </button>
+            <button id="tmr-btn-save" onclick="saveTeacherMonthlyReportImage(false)" style="display:none;padding:8px 14px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">
+              💾 이미지 저장
             </button>
           </div>
         </div>
@@ -8521,6 +8524,28 @@ async function shareOrCopyCanvas(canvas, fileName, mimeType, quality) {
   });
 }
 
+/* 강제 파일 저장 (저장 경로 선택창 표시) — JPG 기본 */
+function _forceDownloadCanvas(canvas, fileName, mimeType, quality) {
+  return new Promise(function(resolve, reject) {
+    try {
+      canvas.toBlob(function(blob) {
+        if (!blob) { reject(new Error('blob 변환 실패')); return; }
+        var url = URL.createObjectURL(blob);
+        var a   = document.createElement('a');
+        a.href     = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() {
+          URL.revokeObjectURL(url);
+          if (a.parentNode) a.parentNode.removeChild(a);
+          resolve();
+        }, 100);
+      }, mimeType || 'image/jpeg', quality || 0.92);
+    } catch(e) { reject(e); }
+  });
+}
+
 /* ============================================================
    [SECTION: MONTHLY REPORT] 월별 수강인원 리포트
    - 선생님: 본인 담당 학생 기준 월별 현황 + 이미지 저장
@@ -8568,7 +8593,9 @@ async function generateTeacherMonthlyReport() {
   var wrap = document.getElementById('tmr-content-wrap');
   wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">조회 중...</div>';
   var saveBtn = document.getElementById('tmr-btn-save');
+  var copyBtn = document.getElementById('tmr-btn-copy');
   if (saveBtn) saveBtn.style.display = 'none';
+  if (copyBtn) copyBtn.style.display = 'none';
 
   try {
     var { data: teacherRow } = await db.from('users')
@@ -8616,6 +8643,7 @@ async function generateTeacherMonthlyReport() {
     var html = mrBuildReportHTML(r, _tmrData, branchName, false);
     wrap.innerHTML = '<div style="background:#f0f0f0;border-radius:16px;padding:16px">' + html + '</div>';
     if (saveBtn) saveBtn.style.display = '';
+    if (copyBtn) copyBtn.style.display = '';
   } catch(e) {
     wrap.innerHTML = '<div style="color:#dc2626;padding:20px">조회 실패: ' + (e.message || e) + '</div>';
     console.error('[선생님 수강인원]', e);
@@ -8693,17 +8721,19 @@ function mrGetTeacherReportFromData(tid, d) {
   return { teacher, sg, najeLabel, getBranch, groupByClass, startStudents, myNew, myWithdrawn, myIn, myOut, endStudents };
 }
 
-async function saveTeacherMonthlyReportImage() {
+async function saveTeacherMonthlyReportImage(copyMode) {
   if (!_tmrData || !currentUser) return;
-  var btn = document.getElementById('tmr-btn-save');
-  if (btn) { btn.textContent = '⏳ 저장 중...'; btn.disabled = true; }
+  var btn = copyMode
+    ? document.getElementById('tmr-btn-copy')
+    : document.getElementById('tmr-btn-save');
+  if (btn) { btn.textContent = '⏳ 처리 중...'; btn.disabled = true; }
   try {
     var r = mrGetTeacherReportFromData(currentUser.id, _tmrData);
     if (!r) { alert('데이터가 없습니다'); return; }
 
     var branchName = '';
-    if (currentUser.branch_id && window._allBranches) {
-      var br = window._allBranches.find(function(b){ return b.id === currentUser.branch_id; });
+    if (currentUser.branch_id && _allBranches) {
+      var br = _allBranches.find(function(b){ return b.id === currentUser.branch_id; });
       branchName = br ? br.name : '';
     }
 
@@ -8729,15 +8759,23 @@ async function saveTeacherMonthlyReportImage() {
     if (!canvas || canvas.width === 0 || canvas.height === 0)
       throw new Error('캔버스 크기가 0입니다. 다시 시도해주세요.');
 
-    var fileName = _tmrData.year + '년_' + _tmrData.month + '월_수강인원.png';
-    var result = await shareOrCopyCanvas(canvas, fileName);
-    if (result.method === 'clipboard') alert('✅ 이미지가 클립보드에 복사됐습니다!');
-    else if (result.method === 'download') alert('💾 이미지를 저장했습니다.');
+    var fileName = _tmrData.year + '년_' + _tmrData.month + '월_수강인원';
 
-    if (btn) { btn.textContent = '✅ 저장됨'; setTimeout(function(){ btn.textContent = '🖼️ 이미지 저장'; btn.disabled = false; }, 2000); }
+    if (copyMode) {
+      // 클립보드 복사
+      var result = await shareOrCopyCanvas(canvas, fileName + '.png');
+      if (result.method === 'clipboard') alert('✅ 이미지가 클립보드에 복사됐습니다!');
+      else if (result.method === 'share') { /* 모바일 공유 성공 */ }
+      else if (result.method === 'download') alert('💾 이미지를 저장했습니다.');
+    } else {
+      // 파일 저장 (JPG)
+      await _forceDownloadCanvas(canvas, fileName + '.jpg', 'image/jpeg', 0.92);
+    }
+
+    if (btn) { btn.textContent = copyMode ? '📋 이미지 복사' : '💾 이미지 저장'; btn.disabled = false; }
   } catch(e) {
-    alert('저장 실패: ' + (e.message || e));
-    if (btn) { btn.textContent = '🖼️ 이미지 저장'; btn.disabled = false; }
+    alert('실패: ' + (e.message || e));
+    if (btn) { btn.textContent = copyMode ? '📋 이미지 복사' : '💾 이미지 저장'; btn.disabled = false; }
   }
 }
 
@@ -9433,10 +9471,18 @@ async function mrExportImage(copy) {
     });
     wrap.innerHTML = '';
 
-    var fileName = _mrData.year + '년_' + _mrData.month + '월_' + r.teacher.name + '_수강인원.png';
-    var result = await shareOrCopyCanvas(canvas, fileName);
-    if (result.method === 'clipboard') alert('✅ 이미지가 클립보드에 복사됐습니다!');
-    else if (result.method === 'download') alert('💾 이미지를 저장했습니다.');
+    var fileName = _mrData.year + '년_' + _mrData.month + '월_' + r.teacher.name + '_수강인원';
+
+    if (copy) {
+      // 클립보드 복사
+      var result = await shareOrCopyCanvas(canvas, fileName + '.png');
+      if (result.method === 'clipboard') alert('✅ 이미지가 클립보드에 복사됐습니다!');
+      else if (result.method === 'share') { /* 모바일 공유 성공 */ }
+      else if (result.method === 'download') alert('💾 이미지를 저장했습니다.');
+    } else {
+      // 파일 저장 (JPG)
+      await _forceDownloadCanvas(canvas, fileName + '.jpg', 'image/jpeg', 0.92);
+    }
   } catch(e) {
     wrap.innerHTML = '';
     alert('내보내기 실패: ' + (e.message || e));
@@ -9461,10 +9507,18 @@ async function mrBranchExportImage(copy) {
 
     var bSel = document.getElementById('mr-branch');
     var bl   = (bSel && bSel.selectedIndex > 0) ? bSel.options[bSel.selectedIndex].text : '전체';
-    var fn   = _mrData.year + '년_' + _mrData.month + '월_' + bl + '_관별보고서.png';
-    var result = await shareOrCopyCanvas(canvas, fn);
-    if (result.method === 'clipboard') alert('✅ 이미지가 클립보드에 복사됐습니다!');
-    else if (result.method === 'download') alert('💾 이미지를 저장했습니다.');
+    var fn   = _mrData.year + '년_' + _mrData.month + '월_' + bl + '_관별보고서';
+
+    if (copy) {
+      // 클립보드 복사
+      var result = await shareOrCopyCanvas(canvas, fn + '.png');
+      if (result.method === 'clipboard') alert('✅ 이미지가 클립보드에 복사됐습니다!');
+      else if (result.method === 'share') { /* 모바일 공유 성공 */ }
+      else if (result.method === 'download') alert('💾 이미지를 저장했습니다.');
+    } else {
+      // 파일 저장 (JPG)
+      await _forceDownloadCanvas(canvas, fn + '.jpg', 'image/jpeg', 0.92);
+    }
   } catch(e) {
     wrap.innerHTML = '';
     alert('내보내기 실패: ' + (e.message || e));
