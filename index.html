@@ -2742,8 +2742,8 @@ function switchPanel(panelId, btn) {
 
   // 패널별 초기화 훅
   // ── 기존 ──
-  if (panelId === 'worklog')       initWorkLog();
-  if (panelId === 'admin-worklog') initAdminWorklog();
+  if (panelId === 'worklog'       && typeof initWorkLog      === 'function') initWorkLog();
+  if (panelId === 'admin-worklog' && typeof initAdminWorklog === 'function') initAdminWorklog();
   // ── 주말 프로그램 4종 (선생님) ──
   // typeof 가드: 각 init 함수는 4단계 Step2~6에서 순차 구현됨
   // 구현 전 클릭해도 ReferenceError 발생하지 않음
@@ -7124,8 +7124,8 @@ async function initAdminWeekendMsg() {
   if (srcPanel && dstContainer && srcPanel.parentElement !== dstContainer)
     dstContainer.appendChild(srcPanel);
   if (srcPanel) { srcPanel.classList.add('active'); srcPanel.style.display = 'block'; }
-  // initWeekendMsg 직접 호출 — 메시지 전송은 버튼 상태 충돌 없음
-  if (typeof initWeekendMsg === 'function') await initWeekendMsg();
+  // initWeekendMsg 직접 호출 금지 (B-6 원칙) — 직접 로드
+  if (typeof initWeekendMsg === 'function') initWeekendMsg();
 }
 
 /* ============================================================
@@ -8007,23 +8007,30 @@ async function loadTeacherData() {
   // 선생님: 본인 반 + 담당 학생 + 전반 시행일 보정
   const today = new Date().toISOString().slice(0, 10);
 
-  const [cRes, sRes, wRes, futureInRes, futureOutRes] = await Promise.all([
-    db.from('classes').select('*').eq('teacher_id', currentUser.id).eq('active', true).order('name'),
-    db.from('users').select('*').eq('role','student').eq('status','active').eq('teacher_id', currentUser.id).order('name'),
-    db.from('users').select('*').eq('role','student').eq('teacher_id', currentUser.id).neq('status','active').order('withdrawn_at', {ascending:false}),
-    // 미래 전반IN: 내가 받기로 됐지만 시행일 미도래 학생 → 아직 내 목록에 넣지 않음
-    db.from('transfer_requests')
-      .select('student_id')
-      .eq('to_teacher_id', currentUser.id)
-      .eq('status', 'done')
-      .gt('transfer_date', today),
-    // 미래 전반OUT: 내가 보냈지만 시행일 미도래 학생 → 아직 내 목록에서 제거하지 않음
-    db.from('transfer_requests')
-      .select('student_id, student:student_id(*)')
-      .eq('from_teacher_id', currentUser.id)
-      .eq('status', 'done')
-      .gt('transfer_date', today)
-  ]);
+  let cRes, sRes, wRes, futureInRes, futureOutRes;
+  try {
+    [cRes, sRes, wRes, futureInRes, futureOutRes] = await Promise.all([
+      db.from('classes').select('*').eq('teacher_id', currentUser.id).eq('active', true).order('name'),
+      db.from('users').select('*').eq('role','student').eq('status','active').eq('teacher_id', currentUser.id).order('name'),
+      db.from('users').select('*').eq('role','student').eq('teacher_id', currentUser.id).neq('status','active').order('withdrawn_at', {ascending:false}),
+      // 미래 전반IN: 내가 받기로 됐지만 시행일 미도래 학생 → 아직 내 목록에 넣지 않음
+      db.from('transfer_requests')
+        .select('student_id')
+        .eq('to_teacher_id', currentUser.id)
+        .eq('status', 'done')
+        .gt('transfer_date', today),
+      // 미래 전반OUT: 내가 보냈지만 시행일 미도래 학생 → 아직 내 목록에서 제거하지 않음
+      db.from('transfer_requests')
+        .select('student_id, student:student_id(*)')
+        .eq('from_teacher_id', currentUser.id)
+        .eq('status', 'done')
+        .gt('transfer_date', today)
+    ]);
+  } catch(e) {
+    console.error('[loadTeacherData]', e);
+    alert('데이터를 불러오지 못했습니다. 새로고침해주세요.');
+    return;
+  }
 
   classes            = cRes.data || [];
   _withdrawnStudents = wRes.data || [];
