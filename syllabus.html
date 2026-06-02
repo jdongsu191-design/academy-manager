@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.4c-ui-wide]</title>
+<title>BMAPS · 진도계획서 제작 [v0.5-naje-mogi]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -88,6 +88,10 @@
   .fdel { flex: 0 0 auto; width: 26px; height: 30px; border: 1px solid #e2c9d0; background: #fff; color: #b5455f; border-radius: 6px; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; }
   .fdel:hover { background: #fbeef1; }
   .fhint { font-size: 11px; color: #94a3b8; margin: 2px 0 6px; }
+  /* N제/모의 라벨 모드(기본/직접입력) 행 */
+  .lbl-row { display: flex; gap: 6px; }
+  .lbl-mode { flex: 0 0 110px; background: #f8fafc; }
+  .lbl-custom { flex: 1; min-width: 0; }
   /* 연간 커리큘럼 입력 (월 라벨 고정 + 내용 입력) */
   .fcurr-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
   .fcurr-row .fc-mon { flex: 0 0 40px; font-size: 12px; font-weight: 700; color: #6e2b3d; text-align: center; }
@@ -204,7 +208,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.4c-ui-wide</span>
+    <span class="tb-ver" id="syl-ver">v0.5-naje-mogi</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -236,8 +240,26 @@
           <input id="f-bookmain" class="fi" type="text" placeholder="예: 고쟁이 미적분">
           <label class="fl" for="f-booksub">부교재</label>
           <input id="f-booksub" class="fi" type="text" placeholder="예: 수능특강 미적분">
-          <label class="fl" for="f-mock">모의고사</label>
-          <input id="f-mock" class="fi" type="text" placeholder="예: 일요일 지정 [11시 or 2시30분]">
+
+          <label class="fl">N제</label>
+          <div class="lbl-row">
+            <select id="f-naje-mode" class="fi lbl-mode">
+              <option value="default">N제 시간</option>
+              <option value="custom">직접 입력</option>
+            </select>
+            <input id="f-naje-label" class="fi lbl-custom" type="text" placeholder="라벨 직접 입력" style="display:none">
+          </div>
+          <input id="f-naje-time" class="fi" type="text" placeholder="예: 토 13:00~15:00" style="margin-top:5px">
+
+          <label class="fl">모의고사</label>
+          <div class="lbl-row">
+            <select id="f-mock-mode" class="fi lbl-mode">
+              <option value="default">모의고사 시간</option>
+              <option value="custom">직접 입력</option>
+            </select>
+            <input id="f-mock-label" class="fi lbl-custom" type="text" placeholder="라벨 직접 입력" style="display:none">
+          </div>
+          <input id="f-mock-time" class="fi" type="text" placeholder="예: 일요일 지정 [11시 or 2시30분]" style="margin-top:5px">
 
           <div class="fsec">강의 특징 &amp; 관리</div>
           <textarea id="f-feature" class="fi fta" placeholder="줄바꿈은 그대로 반영됩니다."></textarea>
@@ -354,7 +376,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.4c-ui-wide-4654';
+  window.SYLLABUS_VERSION = 'v0.5-naje-mogi-label';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -385,9 +407,12 @@
       teacher: '송현우',
       grade: '고등3',
       time: '화목 7:45~10:00',
-      mock: '일요일 지정 [11시 or 2시30분]',
       bookMain: '고쟁이 미적분',
       bookSub: '수능특강 미적분',
+      najeLabel: 'N제 시간',
+      najeTime: '토 13:00~15:00',
+      mockLabel: '모의고사 시간',
+      mockTime: '일요일 지정 [11시 or 2시30분]',
       photo: null,
       feature: '미적분의 개념으로부터 수능 4점 고난도 문항까지 학습하는 수업입니다.\n'
              + '학교별 출판사에 맞춘 내신대비 학습자료를 제공하고, EBS수능특강 및 모의고사 변형문제가 제공됩니다.\n'
@@ -450,6 +475,12 @@
   function render(){
     if(!state) return;
 
+    // 하위호환: 구버전 단일 mock 문자열 → mockTime으로 이관 (한 번만)
+    if(state.mock !== undefined){
+      if(!state.mockTime && state.mock) state.mockTime = state.mock;
+      delete state.mock;
+    }
+
     // 헤더
     document.getElementById('hd-brand').textContent  = state.brand + ' · ' + state.period + ' 진도계획서';
     document.getElementById('hd-course').textContent = state.course;
@@ -477,15 +508,18 @@
       hdPhoto.innerHTML = PHOTO_PLACEHOLDER;
     }
 
-    // 정보 그리드
+    // 정보 그리드 (값이 있는 항목만 표시; N제·모의는 라벨 커스텀 가능)
+    var najeLabel = (state.najeLabel && String(state.najeLabel).trim()) || 'N제 시간';
+    var mockLabel = (state.mockLabel && String(state.mockLabel).trim()) || '모의고사 시간';
     var info = [
       ['담당 강사', state.teacher],
       ['대상 학년', state.grade],
       ['수업 시간', state.time],
-      ['모의고사', state.mock],
       ['주교재', state.bookMain],
-      ['부교재', state.bookSub]
-    ];
+      ['부교재', state.bookSub],
+      [najeLabel, state.najeTime],
+      [mockLabel, state.mockTime]
+    ].filter(function(it){ return it[1] && String(it[1]).trim(); });
     document.getElementById('info-grid').innerHTML = info.map(function(it){
       return '<div class="info-item"><span class="k">' + esc(it[0]) + '</span>'
            + '<span class="v">' + esc(it[1]) + '</span></div>';
@@ -905,8 +939,9 @@
   // 입력 id -> state 키 매핑 (텍스트 필드)
   var FORM_TEXT_MAP = {
     'f-course':'course', 'f-teacher':'teacher',
-    'f-grade':'grade', 'f-time':'time', 'f-mock':'mock',
-    'f-bookmain':'bookMain', 'f-booksub':'bookSub', 'f-feature':'feature'
+    'f-grade':'grade', 'f-time':'time',
+    'f-bookmain':'bookMain', 'f-booksub':'bookSub', 'f-feature':'feature',
+    'f-naje-time':'najeTime', 'f-mock-time':'mockTime'
   };
 
   function bindForm(){
@@ -947,6 +982,40 @@
         render();
       });
     }
+
+    // ── N제 / 모의고사 라벨 모드(기본/직접입력) ──
+    // cfg: {mode 셀렉트, custom 입력, state 키, 기본 라벨}
+    function bindLabelMode(modeId, customId, stateKey, defaultLabel){
+      var modeEl = document.getElementById(modeId);
+      var customEl = document.getElementById(customId);
+      if(!modeEl || !customEl) return;
+      // 초기 상태: state 값이 기본 라벨과 다르면 custom 모드
+      var cur = (state[stateKey] && String(state[stateKey]).trim()) || '';
+      var isCustom = !!(cur && cur !== defaultLabel);
+      modeEl.value = isCustom ? 'custom' : 'default';
+      customEl.style.display = isCustom ? '' : 'none';
+      customEl.value = isCustom ? cur : '';
+      // 기본 모드면 state는 기본 라벨로 정규화
+      if(!isCustom) state[stateKey] = defaultLabel;
+
+      modeEl.addEventListener('change', function(){
+        if(modeEl.value === 'custom'){
+          customEl.style.display = '';
+          state[stateKey] = customEl.value.trim() || defaultLabel;
+          customEl.focus();
+        } else {
+          customEl.style.display = 'none';
+          state[stateKey] = defaultLabel;
+        }
+        scheduleRender();
+      });
+      customEl.addEventListener('input', function(){
+        state[stateKey] = customEl.value.trim() || defaultLabel;
+        scheduleRender();
+      });
+    }
+    bindLabelMode('f-naje-mode', 'f-naje-label', 'najeLabel', 'N제 시간');
+    bindLabelMode('f-mock-mode', 'f-mock-label', 'mockLabel', '모의고사 시간');
 
     // ── 회차별 진도 (동적 행) ──
     buildSchedForm();
