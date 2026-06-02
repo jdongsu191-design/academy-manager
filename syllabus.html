@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.1b-2a]</title>
+<title>BMAPS · 진도계획서 제작 [v0.2-export]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -41,6 +41,14 @@
   .form-col .ph { font-size: 12.5px; color: #94a3b8; line-height: 1.7; }
   .preview-col { min-width: 0; }
   .preview-note { font-size: 12px; color: #64748b; margin-bottom: 10px; }
+
+  /* 추출 버튼 바 */
+  .export-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .exp-btn { padding: 8px 14px; border: none; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; color: #fff; white-space: nowrap; }
+  .exp-btn:disabled { opacity: 0.6; cursor: default; }
+  .exp-jpg { background: #16a34a; }
+  .exp-pdf { background: #2563eb; }
+  .exp-status { font-size: 12px; color: #64748b; }
 
   /* ===== 입력 폼 (1b) ===== */
   .fnote { font-size: 11.5px; color: #94a3b8; line-height: 1.6; margin-bottom: 12px; }
@@ -170,7 +178,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.1b-2a</span>
+    <span class="tb-ver" id="syl-ver">v0.2-export</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -221,6 +229,11 @@
     </div>
 
     <div class="preview-col">
+      <div class="export-bar">
+        <button id="syl-jpg-btn" class="exp-btn exp-jpg" type="button" onclick="syllabusExport('jpg')">🖼️ JPG 저장</button>
+        <button id="syl-pdf-btn" class="exp-btn exp-pdf" type="button" onclick="syllabusExport('pdf')">📄 PDF 저장</button>
+        <span class="exp-status" id="syl-exp-status"></span>
+      </div>
       <div class="preview-note">미리보기 · 기본정보·특징·사진·진도·주말 입력 연결됨 / 연간·2페이지는 다음 단계 (현재 샘플)</div>
       <div class="a4-wrap">
         <!-- 1페이지 -->
@@ -294,7 +307,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.1b-2a-sched-week';
+  window.SYLLABUS_VERSION = 'v0.2-export-jpg-pdf';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -919,6 +932,170 @@
       });
       list.appendChild(div);
     });
+  }
+
+  /* ============================================================
+     [EXPORT] JPG / PDF 추출
+     · 운영본 검증 패턴 채택: 라이브러리 지연 로드, html2canvas scale:2 +
+       useCORS/allowTaint/흰배경, showSaveFilePicker→a.download 폴백.
+     · 개선: 운영본은 추출용 HTML을 오프스크린에서 재생성했으나,
+       우리는 이미 auto-fit 끝난 "실물 A4 노드(#a4,#a4-p2)"를 직접 캡처
+       → 미리보기 = 추출물 1:1 보장, HTML 재발명/불일치 제거.
+  ============================================================ */
+  var SYL_LIBS = {
+    h2c: 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
+    jspdf: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+    jszip: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
+  };
+  function sylLoadScript(src){
+    return new Promise(function(resolve, reject){
+      // 이미 로드된 동일 src면 재로드 안 함
+      var existing = Array.prototype.slice.call(document.scripts).some(function(s){ return s.src === src; });
+      if(existing){ resolve(); return; }
+      var s = document.createElement('script');
+      s.src = src; s.onload = resolve;
+      s.onerror = function(){ reject(new Error('스크립트 로드 실패: ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // 추출 파일명: 운영본 규칙 (선생님명_진도계획서_O월)
+  function sylExportName(){
+    var t = String(state.teacher || '선생님').replace(/[\/:*?"<>|]/g, '_');
+    var raw = String(state.period || '');
+    var m = raw.match(/(\d{1,2})\s*월/);
+    var month = m ? (m[1] + '월') : raw.replace(/[\/:*?"<>|]/g, '_');
+    return t + '_진도계획서_' + (month || '');
+  }
+
+  // 운영본 sylSaveFile 패턴 (저장위치 선택 → 폴백 다운로드)
+  async function sylSaveFile(blob, suggestedName, mimeType, ext){
+    if(window.showSaveFilePicker){
+      try {
+        var typeMap = {
+          'image/jpeg': [{description:'JPEG 이미지', accept:{'image/jpeg':['.jpg','.jpeg']}}],
+          'application/zip': [{description:'ZIP 파일', accept:{'application/zip':['.zip']}}],
+          'application/pdf': [{description:'PDF 파일', accept:{'application/pdf':['.pdf']}}]
+        };
+        var handle = await window.showSaveFilePicker({
+          suggestedName: suggestedName,
+          types: typeMap[mimeType] || [{description:'파일', accept:{}}],
+          startIn: 'downloads'
+        });
+        var w = await handle.createWritable();
+        await w.write(blob); await w.close();
+        return true;
+      } catch(e){
+        if(e.name === 'AbortError') return false; // 사용자가 취소
+        console.warn('showSaveFilePicker 실패, 폴백:', e);
+      }
+    }
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = suggestedName; a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    return true;
+  }
+
+  // 실물 A4 노드 하나를 캔버스로 (캡처 직전 디버그 배지 숨김)
+  async function sylCaptureNode(node){
+    var badge = node.querySelector('.badge');
+    var prevBadge = badge ? badge.style.display : null;
+    if(badge) badge.style.display = 'none';
+    try {
+      return await html2canvas(node, {
+        scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff',
+        width: 794, height: 1123, windowWidth: 794, windowHeight: 1123, logging: false
+      });
+    } finally {
+      if(badge) badge.style.display = prevBadge; // 항상 원복
+    }
+  }
+
+  // 추출 대상 페이지 노드 목록 (1페이지 + (있으면)2페이지)
+  function sylGetPageNodes(){
+    var nodes = [document.getElementById('a4')];
+    var p2 = document.getElementById('a4-p2');
+    if(p2 && p2.style.display !== 'none') nodes.push(p2);
+    return nodes;
+  }
+
+  function sylExportBusy(on, msg){
+    ['syl-jpg-btn','syl-pdf-btn'].forEach(function(id){
+      var b = document.getElementById(id); if(b) b.disabled = on;
+    });
+    var st = document.getElementById('syl-exp-status');
+    if(st) st.textContent = msg || '';
+  }
+
+  async function syllabusExport(type){
+    if(window._sylExporting) return;       // 중복 클릭 가드
+    if(!state || !(state.sched && state.sched.length)){
+      alert('진도 내용을 먼저 입력하세요.'); return;
+    }
+    window._sylExporting = true;
+    sylExportBusy(true, '⏳ 라이브러리 준비 중…');
+    try {
+      await sylLoadScript(SYL_LIBS.h2c);
+      if(typeof html2canvas === 'undefined') throw new Error('html2canvas 로드 실패');
+
+      var nodes = sylGetPageNodes();
+      sylExportBusy(true, '⏳ 이미지 변환 중…');
+      var canvases = [];
+      for(var i=0;i<nodes.length;i++){ canvases.push(await sylCaptureNode(nodes[i])); }
+
+      if(type === 'jpg'){
+        await sylExportJPG(canvases);
+      } else {
+        await sylExportPDF(canvases);
+      }
+      sylExportBusy(false, '✅ 저장 완료');
+    } catch(e){
+      console.error(e);
+      sylExportBusy(false, '');
+      alert('추출 중 오류가 발생했습니다: ' + (e && e.message ? e.message : e));
+    } finally {
+      window._sylExporting = false;
+      setTimeout(function(){ var st=document.getElementById('syl-exp-status'); if(st && st.textContent==='✅ 저장 완료') st.textContent=''; }, 3000);
+    }
+  }
+
+  function sylCanvasToBlob(canvas, mime, q){
+    return new Promise(function(resolve){ canvas.toBlob(resolve, mime, q); });
+  }
+
+  async function sylExportJPG(canvases){
+    var base = sylExportName();
+    if(canvases.length === 1){
+      var blob = await sylCanvasToBlob(canvases[0], 'image/jpeg', 0.95);
+      await sylSaveFile(blob, base + '.jpg', 'image/jpeg', 'jpg');
+    } else {
+      await sylLoadScript(SYL_LIBS.jszip);
+      if(typeof JSZip === 'undefined') throw new Error('JSZip 로드 실패');
+      var zip = new JSZip();
+      for(var i=0;i<canvases.length;i++){
+        var b = await sylCanvasToBlob(canvases[i], 'image/jpeg', 0.95);
+        zip.file(base + '_' + (i+1) + '.jpg', b);
+      }
+      var zipBlob = await zip.generateAsync({type:'blob'});
+      await sylSaveFile(zipBlob, base + '.zip', 'application/zip', 'zip');
+    }
+  }
+
+  async function sylExportPDF(canvases){
+    await sylLoadScript(SYL_LIBS.jspdf);
+    if(typeof window.jspdf === 'undefined') throw new Error('jsPDF 로드 실패');
+    var jsPDF = window.jspdf.jsPDF;
+    var pdf = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
+    var pW = pdf.internal.pageSize.getWidth();
+    for(var i=0;i<canvases.length;i++){
+      if(i>0) pdf.addPage();
+      var cv = canvases[i];
+      var fitH = pW * (cv.height / cv.width);  // 가로 꽉 채우고 세로 비율
+      pdf.addImage(cv.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pW, fitH);
+    }
+    var pdfBlob = pdf.output('blob');
+    await sylSaveFile(pdfBlob, sylExportName() + '.pdf', 'application/pdf', 'pdf');
   }
 
   window.addEventListener('DOMContentLoaded', syllabusInitAuth);
