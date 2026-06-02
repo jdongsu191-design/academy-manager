@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.1b-1c]</title>
+<title>BMAPS · 진도계획서 제작 [v0.1b-2a]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -52,6 +52,19 @@
   .fta { resize: vertical; line-height: 1.5; min-height: 100px; }
   .fbtn { margin-top: 6px; padding: 6px 10px; border: 1px solid #d1d8e0; border-radius: 7px; background: #fff; font-size: 11.5px; font-weight: 600; color: #475569; cursor: pointer; }
   .fbtn:hover { background: #f8fafc; }
+  /* 동적 행 입력 (진도/주말) */
+  .fck { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: #475569; margin: 4px 0 8px; cursor: pointer; }
+  .fck input { width: 15px; height: 15px; cursor: pointer; }
+  .frow { display: flex; gap: 5px; align-items: flex-start; margin-bottom: 5px; }
+  .frow .fri { padding: 5px 6px; font-size: 12px; }
+  .fr-date { flex: 0 0 52px; }
+  .fr-wd { flex: 0 0 38px; text-align: center; }
+  .fr-content { flex: 1; min-width: 0; }
+  .fr-wlabel { flex: 0 0 52px; }
+  .fr-wbody { flex: 1; min-width: 0; min-height: 46px; resize: vertical; line-height: 1.4; font-family: inherit; }
+  .fdel { flex: 0 0 auto; width: 26px; height: 30px; border: 1px solid #e2c9d0; background: #fff; color: #b5455f; border-radius: 6px; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; }
+  .fdel:hover { background: #fbeef1; }
+  .fhint { font-size: 11px; color: #94a3b8; margin: 2px 0 6px; }
 
   /* ============================================================
      ↓↓↓ 검증된 auto-fit 엔진 (syllabus_fulltest.html에서 그대로 이식) ↓↓↓
@@ -157,7 +170,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.1b-1c</span>
+    <span class="tb-ver" id="syl-ver">v0.1b-2a</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -195,10 +208,20 @@
 
       <div class="fsec">강의 특징 &amp; 관리</div>
       <textarea id="f-feature" class="fi fta" placeholder="줄바꿈은 그대로 반영됩니다."></textarea>
+
+      <div class="fsec">회차별 진도</div>
+      <div class="fhint">진도 7개 이상이면 1열(좌우 배치), 6개 이하면 2열(상하 배치)로 자동 전환됩니다.</div>
+      <div id="f-sched-list"></div>
+      <button id="f-sched-add" class="fbtn" type="button">+ 진도 추가</button>
+
+      <div class="fsec">주말 학습 계획</div>
+      <label class="fck"><input type="checkbox" id="f-week-on"> 주말 계획 포함</label>
+      <div id="f-week-list"></div>
+      <button id="f-week-add" class="fbtn" type="button">+ 주차 추가</button>
     </div>
 
     <div class="preview-col">
-      <div class="preview-note">미리보기 · 기본정보·특징·사진은 입력 연결됨 / 진도·주말·연간은 다음 단계에서 연결 (현재 샘플)</div>
+      <div class="preview-note">미리보기 · 기본정보·특징·사진·진도·주말 입력 연결됨 / 연간·2페이지는 다음 단계 (현재 샘플)</div>
       <div class="a4-wrap">
         <!-- 1페이지 -->
         <div class="a4" id="a4">
@@ -271,7 +294,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.1b-1c-photo-band';
+  window.SYLLABUS_VERSION = 'v0.1b-2a-sched-week';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -795,6 +818,107 @@
         render();
       });
     }
+
+    // ── 회차별 진도 (동적 행) ──
+    buildSchedForm();
+    var schedAdd = document.getElementById('f-sched-add');
+    if(schedAdd){
+      schedAdd.addEventListener('click', function(){
+        if(!Array.isArray(state.sched)) state.sched = [];
+        state.sched.push(['', '', '']);
+        buildSchedForm();
+        scheduleRender();
+      });
+    }
+
+    // ── 주말 학습 계획 (on/off + 동적 행) ──
+    var wkOn = document.getElementById('f-week-on');
+    if(wkOn){
+      wkOn.checked = !!(state.week && state.week.length > 0);
+      wkOn.addEventListener('change', function(){
+        if(wkOn.checked){
+          // 이전 입력 복원, 없으면 빈 한 줄로 시작
+          state.week = (state._weekBackup && state._weekBackup.length) ? state._weekBackup : [['', '']];
+        } else {
+          state._weekBackup = state.week;  // 끄면 백업(실수 토글 보호) 후 비움 → render에서 no-week
+          state.week = [];
+        }
+        buildWeekForm();
+        scheduleRender();
+      });
+    }
+    buildWeekForm();
+    var weekAdd = document.getElementById('f-week-add');
+    if(weekAdd){
+      weekAdd.addEventListener('click', function(){
+        if(!Array.isArray(state.week)) state.week = [];
+        state.week.push(['', '']);
+        // 행을 추가하면 주말 포함 상태로 간주
+        if(wkOn) wkOn.checked = true;
+        buildWeekForm();
+        scheduleRender();
+      });
+    }
+  }
+
+  // 진도 입력 행 빌드. 구조 변경(추가/삭제) 시에만 재빌드 → 입력 중 포커스 유지.
+  function buildSchedForm(){
+    var list = document.getElementById('f-sched-list');
+    if(!list) return;
+    list.innerHTML = '';
+    if(!Array.isArray(state.sched)) state.sched = [];
+    state.sched.forEach(function(row, i){
+      var div = document.createElement('div');
+      div.className = 'frow';
+      div.innerHTML =
+        '<input class="fi fri fr-date" type="text" placeholder="날짜">'
+        + '<input class="fi fri fr-wd" type="text" placeholder="요일">'
+        + '<input class="fi fri fr-content" type="text" placeholder="내용">'
+        + '<button type="button" class="fdel" title="이 행 삭제">×</button>';
+      var d = div.querySelector('.fr-date'), w = div.querySelector('.fr-wd'), c = div.querySelector('.fr-content');
+      d.value = row[0] || ''; w.value = row[1] || ''; c.value = row[2] || '';
+      d.addEventListener('input', function(){ state.sched[i][0] = d.value; scheduleRender(); });
+      w.addEventListener('input', function(){ state.sched[i][1] = w.value; scheduleRender(); });
+      c.addEventListener('input', function(){ state.sched[i][2] = c.value; scheduleRender(); });
+      div.querySelector('.fdel').addEventListener('click', function(){
+        state.sched.splice(i, 1);
+        buildSchedForm();   // 인덱스 재정렬 위해 재빌드
+        scheduleRender();
+      });
+      list.appendChild(div);
+    });
+  }
+
+  // 주말 입력 행 빌드 (체크 해제 시 목록/추가버튼 숨김).
+  function buildWeekForm(){
+    var list = document.getElementById('f-week-list');
+    var addBtn = document.getElementById('f-week-add');
+    var wkOn = document.getElementById('f-week-on');
+    if(!list) return;
+    var on = wkOn ? wkOn.checked : !!(state.week && state.week.length > 0);
+    list.style.display = on ? '' : 'none';
+    if(addBtn) addBtn.style.display = on ? '' : 'none';
+    list.innerHTML = '';
+    if(!on) return;
+    if(!Array.isArray(state.week)) state.week = [];
+    state.week.forEach(function(row, i){
+      var div = document.createElement('div');
+      div.className = 'frow';
+      div.innerHTML =
+        '<input class="fi fri fr-wlabel" type="text" placeholder="주차">'
+        + '<textarea class="fi fr-wbody" placeholder="내용 (줄바꿈 가능)"></textarea>'
+        + '<button type="button" class="fdel" title="이 행 삭제">×</button>';
+      var lb = div.querySelector('.fr-wlabel'), bd = div.querySelector('.fr-wbody');
+      lb.value = row[0] || ''; bd.value = row[1] || '';
+      lb.addEventListener('input', function(){ state.week[i][0] = lb.value; scheduleRender(); });
+      bd.addEventListener('input', function(){ state.week[i][1] = bd.value; scheduleRender(); });
+      div.querySelector('.fdel').addEventListener('click', function(){
+        state.week.splice(i, 1);
+        buildWeekForm();
+        scheduleRender();
+      });
+      list.appendChild(div);
+    });
   }
 
   window.addEventListener('DOMContentLoaded', syllabusInitAuth);
