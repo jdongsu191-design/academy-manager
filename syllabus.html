@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BMAPS · 진도계획서 제작 [v0.1a]</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Pretendard', 'Noto Sans KR', -apple-system, sans-serif; background: #e9edf2; color: #1e293b; }
+
+  /* ===== 페이지 셸 (제작 페이지 전용) ===== */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: linear-gradient(135deg, #4a1d29, #6e2b3d); color: #fff;
+    display: flex; align-items: center; gap: 14px;
+    padding: 11px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  }
+  .topbar .tb-title { font-size: 16px; font-weight: 800; letter-spacing: 0.3px; }
+  .topbar .tb-ver { font-size: 11px; background: rgba(255,255,255,0.18); padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .topbar .tb-spacer { flex: 1; }
+  .topbar .tb-fit { font-size: 11.5px; opacity: 0.9; white-space: nowrap; }
+  .topbar .tb-user { font-size: 12.5px; opacity: 0.92; white-space: nowrap; }
+
+  /* 인증 차단 오버레이 */
+  .blocker {
+    position: fixed; inset: 0; z-index: 200; display: none;
+    background: rgba(241,244,248,0.97); flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center;
+  }
+  .blocker .bk-card { background: #fff; border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,0.12); padding: 28px 32px; max-width: 380px; }
+  .blocker .bk-ico { font-size: 38px; }
+  .blocker .bk-msg { font-size: 14px; color: #475569; margin-top: 10px; line-height: 1.6; }
+  .blocker .bk-status { font-size: 12px; color: #94a3b8; margin-top: 8px; }
+
+  /* 본문 셸: 좌(입력) / 우(미리보기) — 1a에서는 좌측은 플레이스홀더 */
+  .shell { display: none; max-width: 1200px; margin: 0 auto; padding: 20px; gap: 18px; }
+  .shell.ready { display: grid; grid-template-columns: 320px 1fr; }
+  .form-col { background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.07); padding: 18px; align-self: start; }
+  .form-col h2 { font-size: 14px; color: #6e2b3d; margin-bottom: 8px; }
+  .form-col .ph { font-size: 12.5px; color: #94a3b8; line-height: 1.7; }
+  .preview-col { min-width: 0; }
+  .preview-note { font-size: 12px; color: #64748b; margin-bottom: 10px; }
+
+  /* ============================================================
+     ↓↓↓ 검증된 auto-fit 엔진 (syllabus_fulltest.html에서 그대로 이식) ↓↓↓
+     절대 임의 변경 금지 — 데이터 소스만 폼(state)으로 일반화함
+  ============================================================ */
+
+  /* ===== A4 (794 x 1123) ===== */
+  .a4-wrap { max-width: 794px; margin: 0 auto; }
+  .a4 {
+    width: 794px; height: 1123px; background: #fff; position: relative;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15); overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+
+  /* 헤더 (고정) */
+  .hd { background: linear-gradient(135deg, #4a1d29, #6e2b3d); color: #fff; padding: 18px 26px; flex-shrink: 0; display: flex; align-items: stretch; gap: 18px; position: relative; }
+  .hd-text { flex: 1; min-width: 0; align-self: center; }
+  .hd .brand { font-size: 12px; letter-spacing: 2px; opacity: 0.82; }
+  .hd .course { font-size: 21px; font-weight: 800; margin-top: 5px; }
+  .hd .meta { font-size: 12.5px; opacity: 0.9; margin-top: 5px; }
+  .hd-photo { flex: 0 0 auto; align-self: stretch; display: flex; align-items: flex-end; justify-content: flex-end;
+              margin-right: 6px; margin-bottom: var(--photo-drop, -14px); margin-top: var(--photo-headroom, 5px); }
+  .hd-photo svg, .hd-photo img { height: 100%; width: auto; display: block; object-fit: contain; object-position: bottom center; }
+  .hd.no-photo .hd-photo { display: none; }
+  .hd.hd-slim { padding: 14px 26px; }
+  .a4-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 14px 26px; }
+  .a4-footer { flex-shrink: 0; padding: 10px 26px; border-top: 2px solid #4a1d29; display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: #6a5560; }
+  .a4-footer b { color: #4a1d29; }
+
+  /* 정보 + 특징 (반가변) */
+  .midsec { flex-shrink: 0; padding: 14px 26px 0; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; font-size: 11.5px; margin-bottom: 10px; }
+  .info-item { display: flex; gap: 8px; align-items: flex-start; }
+  .info-item .k { color: #94a3b8; min-width: 50px; font-weight: 600; flex-shrink: 0; }
+  .info-item .v { color: #1e293b; font-weight: 700; line-height: 1.4; word-break: keep-all; overflow-wrap: anywhere; }
+  .feat-title { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #6e2b3d; margin-bottom: 5px; }
+  .feat-box { background: #f8f4f5; border-radius: 7px; padding: 9px 12px; font-size: var(--fs-feat, 11px); line-height: 1.5; color: #334155; }
+
+  /* 본문: 진도표 + 주말계획 (가변 - auto-fit 핵심) */
+  .main { flex: 1; min-height: 0; padding: 12px 26px; overflow: hidden; display: flex; gap: 14px; }
+  .main.layout-1col { flex-direction: row; }
+  .main.layout-1col .col-sched { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .main.layout-1col .col-week { flex: 0 0 30%; min-height: 0; display: flex; flex-direction: column; }
+  .main.layout-2col { flex-direction: column; }
+  .main.layout-2col .col-sched { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  .main.layout-2col .col-week { flex: 0 0 var(--week-h, 30%); min-height: 0; display: flex; flex-direction: column; margin-top: 12px; }
+  .main.no-week .col-week { display: none !important; }
+  .main.no-week .col-sched { flex: 1; }
+  .sched-table.two-col { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: var(--row-gap, 6px); align-content: stretch; }
+  .sched-table.two-col .srow { min-height: 0; }
+  .col-sched { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .col-week { min-height: 0; display: flex; flex-direction: column; }
+  .sec-title { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #6e2b3d; margin-bottom: 7px; flex-shrink: 0; display: flex; align-items: center; gap: 5px; }
+  .sec-title::before { content: ''; width: 3px; height: 13px; background: #6e2b3d; border-radius: 2px; }
+
+  .sched-table { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--row-gap, 6px); }
+  .srow { display: flex; align-items: stretch; border: 1.3px solid #e8d5da; border-radius: 7px; overflow: hidden; }
+  .sdate { flex: 0 0 64px; background: #faf3f5; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--cell-pad, 7px) 4px; overflow: hidden; }
+  .sdate .d { font-size: var(--fs-date, 13px); font-weight: 800; color: #6e2b3d; white-space: nowrap; }
+  .sdate .w { font-size: var(--fs-week, 9px); color: #b08; opacity: 0.6; margin-top: 1px; white-space: nowrap; }
+  .scontent { flex: 1; display: flex; align-items: center; padding: var(--cell-pad, 7px) 11px; font-size: var(--fs-main, 12px); font-weight: 700; color: #1e293b; line-height: 1.32; word-break: keep-all; overflow-wrap: anywhere; }
+
+  .week-table { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0; border: 1.3px solid #dbe4f0; border-radius: 7px; overflow: hidden; }
+  .week-table.two-col { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: var(--row-gap, 6px); border: none; border-radius: 0; overflow: hidden; align-content: stretch; }
+  .week-table.two-col .wrow { border: 1.3px solid #dbe4f0; border-radius: 7px; min-height: 0; }
+  .wrow { border-bottom: 1px solid #dbe4f0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; flex: 1 1 0; min-height: 0; }
+  .week-table .wrow:last-child { border-bottom: none; }
+  .whead { background: #eef3fa; padding: 3px 8px; font-size: var(--fs-whead, 10px); font-weight: 800; color: #3b5b82; flex-shrink: 0; }
+  .wbody { padding: 4px 9px; font-size: var(--fs-week-main, 10px); color: #334155; line-height: 1.4; word-break: keep-all; overflow-wrap: anywhere; }
+
+  /* 연간 커리큘럼 (고정) */
+  .curr { flex-shrink: 0; padding: 8px 26px 0; }
+  .a4.no-curr .curr { display: none; }
+  .curr-grid { display: grid; grid-template-columns: repeat(6, 1fr); border: 1.3px solid #cbd5e1; border-radius: 7px; overflow: hidden; font-size: var(--fs-curr, 9px); }
+  .curr-cell { padding: 5px 3px; text-align: center; border-right: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; overflow: hidden; word-break: keep-all; }
+  .curr-cell.mon { background: #4a1d29; color: #fff; font-weight: 800; }
+  .curr-cell.val { color: #475569; font-weight: 600; min-height: 26px; display: flex; align-items: center; justify-content: center; line-height: 1.25; }
+
+  /* 푸터 (고정) */
+  .ft { flex-shrink: 0; padding: 10px 26px; margin-top: 8px; border-top: 2px solid #4a1d29; display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: #6a5560; }
+  .ft b { color: #4a1d29; }
+
+  .badge { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.7); color: #fff; font-size: 9.5px; padding: 3px 7px; border-radius: 5px; z-index: 10; }
+</style>
+</head>
+<body>
+
+  <!-- 인증 차단 오버레이 -->
+  <div class="blocker" id="syl-blocker">
+    <div class="bk-card">
+      <div class="bk-ico">🔒</div>
+      <div class="bk-msg" id="syl-blocker-msg">접근 권한을 확인하는 중입니다…</div>
+      <div class="bk-status" id="syl-auth-status"></div>
+    </div>
+  </div>
+
+  <!-- 상단바 -->
+  <div class="topbar" id="syl-topbar" style="display:none">
+    <span class="tb-title">📑 진도계획서 제작</span>
+    <span class="tb-ver" id="syl-ver">v0.1a</span>
+    <span class="tb-spacer"></span>
+    <span class="tb-fit" id="syl-fit"></span>
+    <span class="tb-user" id="syl-user"></span>
+  </div>
+
+  <!-- 본문 셸 -->
+  <div class="shell" id="syl-shell">
+    <div class="form-col">
+      <h2>입력 폼</h2>
+      <div class="ph">
+        이 영역은 <b>다음 단계(1b)</b>에서 구축됩니다.<br><br>
+        현재 단계(1a)는 검증된 auto-fit 엔진이 새 페이지로 정확히 이식됐는지 확인하기 위해
+        <b>샘플 데이터</b>로 오른쪽 미리보기를 렌더링합니다.<br><br>
+        오른쪽 A4가 한 장 안에 깔끔히 맞고, 잘리는 칸이 없으면 이식 성공입니다.
+      </div>
+    </div>
+
+    <div class="preview-col">
+      <div class="preview-note">미리보기 (샘플 데이터 · 실제 입력은 1b 단계에서 연결)</div>
+      <div class="a4-wrap">
+        <!-- 1페이지 -->
+        <div class="a4" id="a4">
+          <div class="badge" id="badge"></div>
+
+          <div class="hd">
+            <div class="hd-text">
+              <div class="brand" id="hd-brand"></div>
+              <div class="course" id="hd-course"></div>
+              <div class="meta" id="hd-meta"></div>
+            </div>
+            <div class="hd-photo" id="hd-photo"></div>
+          </div>
+
+          <div class="midsec">
+            <div class="info-grid" id="info-grid"></div>
+            <div class="feat-title">강의 특징 &amp; 관리</div>
+            <div class="feat-box" id="feat"></div>
+          </div>
+
+          <div class="main">
+            <div class="col-sched">
+              <div class="sec-title">회차별 진도 계획</div>
+              <div class="sched-table" id="sched"></div>
+            </div>
+            <div class="col-week" id="weekcol">
+              <div class="sec-title">주말 학습 계획</div>
+              <div class="week-table" id="week"></div>
+            </div>
+          </div>
+
+          <div class="curr">
+            <div class="curr-grid" id="curr"></div>
+          </div>
+
+          <div class="ft">
+            <span><b id="ft-brand"></b></span>
+            <span id="ft-right"></span>
+          </div>
+        </div>
+
+        <!-- 2페이지: 간소 헤더 + 진도표만 (다음 달) -->
+        <div class="a4" id="a4-p2" style="display:none;margin-top:24px">
+          <div class="hd hd-slim">
+            <div class="hd-text">
+              <div class="brand" id="p2-brand"></div>
+              <div class="course" id="p2-course"></div>
+            </div>
+          </div>
+          <div class="a4-body">
+            <div class="sec-title" id="p2-sectitle">회차별 진도 계획</div>
+            <div class="sched-table" id="sched2"></div>
+          </div>
+          <div class="a4-footer">
+            <span><b id="p2-ft-brand"></b></span>
+            <span id="p2-ft-right"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  /* ============================================================
+     [CONFIG] Supabase (nje.html / 메인과 동일 — 같은 도메인 localStorage 공유)
+  ============================================================ */
+  const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
+  window.SYLLABUS_VERSION = 'v0.1a-engine';
+  console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
+
+  let currentUser = null;
+
+  /* ============================================================
+     [STATE] 진도계획서 데이터 모델
+     1a에서는 아래 SAMPLE 로 채워 렌더링.
+     1b에서 입력 폼이 이 state 를 구성하게 됨.
+       - sched : [[날짜, 요일, 내용], ...]
+       - week  : [[주차라벨, 내용(\n 허용)], ...]   (빈 배열이면 주말 영역 숨김)
+       - curr  : [[월, 값] x12]  또는 null(연간 커리큘럼 off)
+       - photo : 이미지 dataURL 또는 null(누끼 placeholder)
+       - page2 : { period2, sched2:[[날짜,요일,내용],...] } 또는 null
+  ============================================================ */
+  var state = null;
+
+  function sampleState(){
+    return {
+      brand: '베스티안 수학학원',
+      period: '2026년 6월',
+      course: '[화목2] 미적분 심화',
+      teacher: '송현우',
+      grade: '고등3',
+      time: '화목 7:45~10:00',
+      mock: '일요일 지정 [11시 or 2시30분]',
+      bookMain: '고쟁이 미적분',
+      bookSub: '수능특강 미적분',
+      photo: null,
+      feature: '미적분의 개념으로부터 수능 4점 고난도 문항까지 학습하는 수업입니다.\n'
+             + '학교별 출판사에 맞춘 내신대비 학습자료를 제공하고, EBS수능특강 및 모의고사 변형문제가 제공됩니다.\n'
+             + '모든 수업은 녹화되어 제공되며, 카톡으로 1:1 질문이 가능합니다.',
+      sched: [
+        ['6/2','화','도함수의 활용'], ['6/4','목','여러 가지 적분법'], ['6/9','화','정적분의 활용'],
+        ['6/11','목','학교별 프린트'], ['6/16','화','직전대비 모의'], ['6/18','목','내신 총정리'],
+        ['6/23','화','오답 클리닉'], ['6/25','목','실전 점검']
+      ],
+      week: [
+        ['1주','[현충일 정상수업]\n토 – 수능특강+별별별 N제 1주차\n일 – 내신대비 보충 1주차'],
+        ['2주','토 – 수능특강+별별별 N제 2주차\n일 – 내신대비 보충 2주차'],
+        ['3주','토 – 수능특강+별별별 N제 3주차\n일 – 내신대비 보충 3주차'],
+        ['4주','토 – 학교별 프린트\n일 – 내신대비 보충 4주차'],
+        ['5주','토 – 직전보강주간 내신대비 보충\n일 – 직전보강(해당학교)']
+      ],
+      curr: [
+        ['1월','개념'],['2월','개념'],['3월','중간내신'],['4월','중간내신'],['5월','기말내신'],['6월','기말내신'],
+        ['7월','수1+수2'],['8월','수1+수2'],['9월','실전모의'],['10월','실전모의'],['11월','수능'],['12월','종강']
+      ],
+      maxfs: 15,
+      page2: null
+    };
+  }
+
+  /* 누끼 사진 placeholder (업로드 전 / 사진 없음 표시용) */
+  var PHOTO_PLACEHOLDER =
+    '<svg viewBox="0 0 100 120" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMax meet">'
+    + '<circle cx="50" cy="38" r="20" fill="#ffffff" opacity="0.6"/>'
+    + '<path d="M 22 120 Q 22 78 50 78 Q 78 78 78 120 Z" fill="#ffffff" opacity="0.6"/>'
+    + '<text x="50" y="106" font-size="7" fill="#4a1d29" text-anchor="middle" font-weight="bold">누끼 사진</text>'
+    + '</svg>';
+
+  function esc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  // 기간 문자열에서 짧은 월 라벨 추출 ('2026년 7월' -> '7월'), 실패 시 원문
+  function shortMonth(period){
+    var m = String(period||'').match(/(\d+)\s*월/);
+    return m ? (m[1] + '월') : String(period||'');
+  }
+
+  /* ============================================================
+     [RENDER] state -> A4 DOM (데이터 소스만 폼/state로 일반화, 레이아웃·auto-fit 로직은 fulltest와 동일)
+  ============================================================ */
+  function render(){
+    if(!state) return;
+
+    // 헤더
+    document.getElementById('hd-brand').textContent  = state.brand + ' · ' + state.period + ' 진도계획서';
+    document.getElementById('hd-course').textContent = state.course;
+    document.getElementById('hd-meta').textContent   =
+      [state.grade, state.time, ('담당 ' + state.teacher), ('주교재 ' + state.bookMain)]
+        .filter(function(x){ return x && String(x).trim() && x !== '담당 ' && x !== '주교재 '; })
+        .join(' · ');
+
+    // 강사 사진 (있으면 img, 없으면 placeholder SVG)
+    var hd = document.querySelector('.hd');
+    var hdPhoto = document.getElementById('hd-photo');
+    if(state.photo){
+      hd.classList.remove('no-photo');
+      hdPhoto.innerHTML = '<img src="' + esc(state.photo) + '" alt="강사 사진">';
+    } else {
+      hd.classList.remove('no-photo');         // placeholder도 표시(레이아웃 동일 유지)
+      hdPhoto.innerHTML = PHOTO_PLACEHOLDER;
+    }
+
+    // 정보 그리드
+    var info = [
+      ['담당 강사', state.teacher],
+      ['대상 학년', state.grade],
+      ['수업 시간', state.time],
+      ['모의고사', state.mock],
+      ['주교재', state.bookMain],
+      ['부교재', state.bookSub]
+    ];
+    document.getElementById('info-grid').innerHTML = info.map(function(it){
+      return '<div class="info-item"><span class="k">' + esc(it[0]) + '</span>'
+           + '<span class="v">' + esc(it[1]) + '</span></div>';
+    }).join('');
+
+    // 강의 특징
+    document.getElementById('feat').innerHTML = esc(state.feature).replace(/\n/g, '<br>');
+
+    // ===== 레이아웃 모드: 진도 6개 이하면 2열+상하, 초과면 1열+좌우 =====
+    var main = document.querySelector('.main');
+    var sched = state.sched || [];
+    var weekArr = state.week || [];
+    var weekCount = weekArr.length;
+    var twoCol = (sched.length <= 6);
+    main.classList.toggle('layout-2col', twoCol);
+    main.classList.toggle('layout-1col', !twoCol);
+    main.classList.toggle('no-week', weekCount === 0);
+
+    // 주말 "길게" 여부 추정(2열 높이 배분 휴리스틱용 — fulltest weeklen 대체)
+    state._weekLong = weekArr.some(function(w){
+      var b = String(w[1]||'');
+      return b.length > 50 || (b.match(/\n/g)||[]).length >= 2;
+    });
+
+    // 진도표 렌더
+    var sh = '';
+    for(var i=0;i<sched.length;i++){
+      var r = sched[i];
+      sh += '<div class="srow"><div class="sdate"><div class="d">' + esc(r[0]) + '</div>'
+          + '<div class="w">' + esc(r[1]) + '</div></div>'
+          + '<div class="scontent">' + esc(r[2]) + '</div></div>';
+    }
+    var schedEl = document.getElementById('sched');
+    schedEl.innerHTML = sh;
+    schedEl.classList.toggle('two-col', twoCol);
+
+    // 주말계획 (표시/숨김은 .main.no-week CSS로 제어)
+    if(weekCount > 0){
+      var wh = '';
+      for(var j=0;j<weekArr.length;j++){
+        wh += '<div class="wrow"><div class="whead">' + esc(weekArr[j][0]) + '</div>'
+            + '<div class="wbody">' + esc(weekArr[j][1]).replace(/\n/g,'<br>') + '</div></div>';
+      }
+      var weekEl = document.getElementById('week');
+      weekEl.innerHTML = wh;
+      weekEl.classList.toggle('two-col', twoCol);
+    }
+
+    // 연간 커리큘럼
+    var a4 = document.getElementById('a4');
+    var hasCurr = !!(state.curr && state.curr.length >= 12);
+    a4.classList.toggle('no-curr', !hasCurr);
+    if(hasCurr){
+      var CURR = state.curr;
+      var ch = '';
+      for(var k=0;k<6;k++)  ch += '<div class="curr-cell mon">' + esc(CURR[k][0]) + '</div>';
+      for(var k=0;k<6;k++)  ch += '<div class="curr-cell val">' + esc(CURR[k][1]) + '</div>';
+      for(var k=6;k<12;k++) ch += '<div class="curr-cell mon">' + esc(CURR[k][0]) + '</div>';
+      for(var k=6;k<12;k++) ch += '<div class="curr-cell val">' + esc(CURR[k][1]) + '</div>';
+      document.getElementById('curr').innerHTML = ch;
+    }
+
+    // 푸터
+    document.getElementById('ft-brand').textContent = state.brand;
+    document.getElementById('ft-right').textContent = state.period + ' · 진도계획서 · ' + state.course;
+
+    // ===== 2페이지(다음 달) =====
+    var p2 = document.getElementById('a4-p2');
+    if(state.page2 && state.page2.sched2 && state.page2.sched2.length){
+      p2.style.display = 'flex';
+      var sm = shortMonth(state.page2.period2);
+      document.getElementById('p2-brand').textContent  = state.brand + ' · ' + state.page2.period2 + ' 진도계획서';
+      document.getElementById('p2-course').innerHTML   = esc(state.course) + ' <span style="font-size:13px;opacity:0.8">· ' + esc(sm) + '</span>';
+      document.getElementById('p2-sectitle').innerHTML = '회차별 진도 계획 · <span style="color:#a06">' + esc(sm) + '</span>';
+      document.getElementById('p2-ft-brand').textContent = state.brand;
+      document.getElementById('p2-ft-right').textContent = state.page2.period2 + ' · 진도계획서 · ' + state.course + ' · (2/2)';
+
+      var data2 = state.page2.sched2;
+      var twoCol2 = (data2.length <= 6);
+      var sh2 = '';
+      for(var i2=0;i2<data2.length;i2++){
+        var r2 = data2[i2];
+        sh2 += '<div class="srow"><div class="sdate"><div class="d">' + esc(r2[0]) + '</div>'
+             + '<div class="w">' + esc(r2[1]) + '</div></div>'
+             + '<div class="scontent">' + esc(r2[2]) + '</div></div>';
+      }
+      var sched2El = document.getElementById('sched2');
+      sched2El.innerHTML = sh2;
+      sched2El.classList.toggle('two-col', twoCol2);
+    } else {
+      p2.style.display = 'none';
+    }
+
+    // ★ auto-fit 실행 (레이아웃 안정 후)
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        autoFitAll();
+        if(state.page2 && state.page2.sched2 && state.page2.sched2.length) fitSched2();
+      });
+    });
+  }
+
+  /* ============================================================
+     [AUTO-FIT] syllabus_fulltest.html 검증 로직 — 그대로 이식
+  ============================================================ */
+  function autoFitAll(){
+    fitPhoto();
+    fitFeature();
+    fitCurr();
+    allocate2col();
+    fitSched();
+    fitWeek();
+    report();
+  }
+
+  function allocate2col(){
+    var a4 = document.getElementById('a4');
+    var main = document.querySelector('.main');
+    var twoCol = main.classList.contains('layout-2col');
+    var weekCount = state.week ? state.week.length : 0;
+    if(!twoCol || weekCount === 0){
+      a4.style.removeProperty('--week-h');
+      return;
+    }
+    var mainH = main.clientHeight;
+    var wn = weekCount;
+    var perRow = state._weekLong ? 0.10 : 0.06;
+    var ratio = Math.max(0.25, Math.min(0.45, wn * perRow));
+    var wh = Math.round(mainH * ratio);
+    a4.style.setProperty('--week-h', wh + 'px');
+  }
+
+  function fitCurr(){
+    var a4 = document.getElementById('a4');
+    if(a4.classList.contains('no-curr')) return;
+    var grid = document.getElementById('curr');
+    var lo=7, hi=Math.max(9, state.maxfs*0.72), best=7;
+    for(var i=0;i<14;i++){
+      var mid=(lo+hi)/2;
+      a4.style.setProperty('--fs-curr', mid.toFixed(2)+'px');
+      if(cellsFit(grid, '.curr-cell')){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.15) break;
+    }
+    a4.style.setProperty('--fs-curr', best.toFixed(2)+'px');
+  }
+
+  function fitPhoto(){
+    if(!state.photo){
+      // placeholder도 헤더에 표시되므로 헤드룸은 동일 규칙 적용
+    }
+    var a4 = document.getElementById('a4');
+    var hd = document.querySelector('.hd');
+    var hdH = hd ? hd.offsetHeight : 90;
+    var headroom = Math.min(9, Math.max(4, Math.round(hdH * 0.06)));
+    a4.style.setProperty('--photo-headroom', headroom + 'px');
+  }
+
+  function fitFeature(){
+    var a4 = document.getElementById('a4');
+    var box = document.getElementById('feat');
+    var lo=8.5, hi=Math.max(10, state.maxfs*0.82), best=8.5;
+    for(var i=0;i<14;i++){
+      var mid=(lo+hi)/2;
+      a4.style.setProperty('--fs-feat', mid.toFixed(2)+'px');
+      if(box.scrollHeight <= 96){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.2) break;
+    }
+    a4.style.setProperty('--fs-feat', best.toFixed(2)+'px');
+  }
+
+  var MIN_FS = 9.5;  // 학부모 공지용 최소 가독 폰트
+
+  function fitSched2(){
+    var a4 = document.getElementById('a4-p2');
+    var sched = document.getElementById('sched2');
+    if(!sched) return;
+    var n = sched.children.length;
+    if(n === 0) return;
+    var twoCol = sched.classList.contains('two-col');
+    var visualRows = twoCol ? Math.ceil(n/2) : n;
+    var avail = sched.parentElement.clientHeight - sched.previousElementSibling.offsetHeight - 6;
+    var gap = visualRows>12?3:(visualRows>8?5:7);
+    a4.style.setProperty('--row-gap', gap+'px');
+    var lo=MIN_FS, hi=state.maxfs, best=MIN_FS;
+    for(var it=0;it<22;it++){
+      var mid=(lo+hi)/2;
+      applySched2Fs(a4, mid, visualRows);
+      var ok = (sched.scrollHeight<=avail+1) && cellsFit(sched, '.scontent, .sdate');
+      if(ok){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.15) break;
+    }
+    applySched2Fs(a4, MIN_FS, visualRows);
+    var overflowAtMin = (sched.scrollHeight > avail + 2) || !cellsFit(sched, '.scontent, .sdate');
+    if(!overflowAtMin){
+      applySched2Fs(a4, best, visualRows);
+      if(!twoCol){ fillSched2Padding(a4, sched, avail, visualRows); }
+    }
+    window._sched2Fs = overflowAtMin ? MIN_FS : best;
+  }
+  function applySched2Fs(a4, fs, n){
+    a4.style.setProperty('--fs-main', fs.toFixed(1)+'px');
+    a4.style.setProperty('--fs-date', (fs*1.05).toFixed(1)+'px');
+    a4.style.setProperty('--fs-week', (fs*0.72).toFixed(1)+'px');
+  }
+  function fillSched2Padding(a4, sched, avail, n){
+    a4.style.setProperty('--cell-pad', '4px');
+    var natural = sched.scrollHeight;
+    var slack = avail - natural;
+    if(slack <= 0) return;
+    var extra = Math.min(28, (slack / n) / 2);
+    a4.style.setProperty('--cell-pad', (4+extra).toFixed(1)+'px');
+  }
+
+  function fitSched(){
+    var a4 = document.getElementById('a4');
+    var sched = document.getElementById('sched');
+    var n = sched.children.length;
+    if(n === 0){ window._schedFs = null; window._schedOverflow = false; window._dbg = null; return; }
+    var twoCol = sched.classList.contains('two-col');
+    var visualRows = twoCol ? Math.ceil(n/2) : n;
+    var avail = sched.parentElement.clientHeight - sched.previousElementSibling.offsetHeight - 6;
+
+    var gap = visualRows>12?3:(visualRows>8?5:7);
+    a4.style.setProperty('--row-gap', gap+'px');
+
+    var lo=MIN_FS, hi=state.maxfs, best=MIN_FS;
+    for(var it=0;it<22;it++){
+      var mid=(lo+hi)/2;
+      applySchedFs(a4, mid, visualRows);
+      var ok = (sched.scrollHeight<=avail+1) && cellsFit(sched, '.scontent, .sdate');
+      if(ok){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.15) break;
+    }
+    applySchedFs(a4, MIN_FS, visualRows);
+    var overflowAtMin = (sched.scrollHeight > avail + 2) || !cellsFit(sched, '.scontent, .sdate');
+    if(!overflowAtMin){
+      applySchedFs(a4, best, visualRows);
+      if(!twoCol){ fillSchedPadding(a4, sched, avail, visualRows); }
+    }
+    window._schedFs = overflowAtMin ? MIN_FS : best;
+    window._schedOverflow = overflowAtMin;
+    window._dbg = {avail: Math.round(avail), n: n, mode: twoCol?'2열':'1열', schedH: Math.round(sched.scrollHeight)};
+  }
+  function applySchedFs(a4, fs, n){
+    a4.style.setProperty('--fs-main', fs.toFixed(1)+'px');
+    a4.style.setProperty('--fs-date', (fs*1.05).toFixed(1)+'px');
+    a4.style.setProperty('--fs-week', (fs*0.72).toFixed(1)+'px');
+  }
+  function fillSchedPadding(a4, sched, avail, n){
+    a4.style.setProperty('--cell-pad', '4px');
+    var natural = sched.scrollHeight;
+    var slack = avail - natural;
+    if(slack <= 0){ return; }
+    var extra = Math.min(28, (slack / n) / 2);
+    var pad = 4 + extra;
+    a4.style.setProperty('--cell-pad', pad.toFixed(1)+'px');
+  }
+
+  function fitWeek(){
+    var weekCount = state.week ? state.week.length : 0;
+    if(weekCount === 0){ window._weekFs = null; return; }
+    var a4 = document.getElementById('a4');
+    var week = document.getElementById('week');
+    var lo=8.5, hi=state.maxfs, best=8.5;
+    for(var it=0;it<18;it++){
+      var mid=(lo+hi)/2;
+      a4.style.setProperty('--fs-week-main', mid.toFixed(1)+'px');
+      a4.style.setProperty('--fs-whead', mid.toFixed(1)+'px');
+      if(weekCellsFit(week)){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.15) break;
+    }
+    a4.style.setProperty('--fs-week-main', best.toFixed(1)+'px');
+    a4.style.setProperty('--fs-whead', best.toFixed(1)+'px');
+    window._weekFs = best;
+  }
+  function weekCellsFit(week){
+    for(var i=0;i<week.children.length;i++){
+      var row = week.children[i];
+      if(row.scrollHeight > row.clientHeight + 1) return false;
+      var body = row.querySelector('.wbody');
+      if(body && body.scrollHeight > body.clientHeight + 1) return false;
+    }
+    return true;
+  }
+
+  function cellsFit(container, sel){
+    var cells = container.querySelectorAll(sel);
+    for(var j=0;j<cells.length;j++){
+      if(cells[j].scrollHeight > cells[j].clientHeight + 1) return false;
+    }
+    return true;
+  }
+
+  function report(){
+    var over = window._schedOverflow;
+    var badge = document.getElementById('badge');
+    if(badge){
+      badge.textContent =
+        '진도 ' + (window._schedFs?window._schedFs.toFixed(1):'-') + 'px'
+        + (window._weekFs?(' · 주말 '+window._weekFs.toFixed(1)+'px'):'')
+        + (over?' · ⚠️넘침':'');
+    }
+    var fit = document.getElementById('syl-fit');
+    if(fit){
+      fit.textContent = over
+        ? '⚠️ 최소폰트로도 한 장에 안 들어감 — 내용 축소 또는 2페이지 분할 필요'
+        : ('✅ 한 장 맞음 · 진도 ' + (window._schedFs?window._schedFs.toFixed(1):'-') + 'px'
+           + (window._weekFs?(' · 주말 '+window._weekFs.toFixed(1)+'px'):''));
+    }
+  }
+
+  /* ============================================================
+     [AUTH] localStorage savedUserId -> users -> role (teacher/admin 허용)
+            nje.html 패턴 동일. 같은 도메인이라 메인과 localStorage 공유.
+  ============================================================ */
+  async function syllabusInitAuth(){
+    var statusEl = document.getElementById('syl-auth-status');
+    var msgEl = document.getElementById('syl-blocker-msg');
+    var blocker = document.getElementById('syl-blocker');
+    var topbar = document.getElementById('syl-topbar');
+    var shell = document.getElementById('syl-shell');
+
+    function block(msg, status){
+      msgEl.textContent = msg;
+      statusEl.textContent = status || '';
+      blocker.style.display = 'flex';
+      topbar.style.display = 'none';
+      shell.classList.remove('ready');
+    }
+
+    try{
+      var savedId = localStorage.getItem('savedUserId');
+      if(!savedId){ block('로그인이 필요합니다. BMAPS 메인에서 로그인 후 다시 열어주세요.', '미로그인'); return; }
+
+      var res = await db.from('users').select('*').eq('id', savedId).single();
+      var data = res.data, error = res.error;
+      if(error || !data){ block('계정 조회에 실패했습니다.', '계정 조회 실패'); return; }
+      if(data.role !== 'teacher' && data.role !== 'admin'){
+        block('진도계획서 제작 권한이 없습니다 (선생님/관리자 전용).', data.name + ' (' + data.role + ')');
+        return;
+      }
+
+      currentUser = data;
+      var roleLabel = (data.role === 'admin') ? '관리자' : '선생님';
+      document.getElementById('syl-user').textContent = '✅ ' + data.name + ' (' + roleLabel + ')';
+      blocker.style.display = 'none';
+      topbar.style.display = 'flex';
+      shell.classList.add('ready');
+
+      // 1a: 샘플 데이터로 렌더 (이식 검증)
+      state = sampleState();
+      render();
+    } catch(e){
+      block('인증 처리 중 오류가 발생했습니다.', String(e && e.message ? e.message : e));
+    }
+  }
+
+  window.addEventListener('DOMContentLoaded', syllabusInitAuth);
+</script>
+</body>
+</html>
