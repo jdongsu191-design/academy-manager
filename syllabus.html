@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.2-export]</title>
+<title>BMAPS · 진도계획서 제작 [v0.2b-curr]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -73,6 +73,10 @@
   .fdel { flex: 0 0 auto; width: 26px; height: 30px; border: 1px solid #e2c9d0; background: #fff; color: #b5455f; border-radius: 6px; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; }
   .fdel:hover { background: #fbeef1; }
   .fhint { font-size: 11px; color: #94a3b8; margin: 2px 0 6px; }
+  /* 연간 커리큘럼 입력 (월 라벨 고정 + 내용 입력) */
+  .fcurr-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+  .fcurr-row .fc-mon { flex: 0 0 40px; font-size: 12px; font-weight: 700; color: #6e2b3d; text-align: center; }
+  .fcurr-row .fc-val { flex: 1; min-width: 0; padding: 5px 7px; font-size: 12px; }
 
   /* ============================================================
      ↓↓↓ 검증된 auto-fit 엔진 (syllabus_fulltest.html에서 그대로 이식) ↓↓↓
@@ -178,7 +182,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.2-export</span>
+    <span class="tb-ver" id="syl-ver">v0.2b-curr</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -226,6 +230,11 @@
       <label class="fck"><input type="checkbox" id="f-week-on"> 주말 계획 포함</label>
       <div id="f-week-list"></div>
       <button id="f-week-add" class="fbtn" type="button">+ 주차 추가</button>
+
+      <div class="fsec">연간 커리큘럼</div>
+      <label class="fck"><input type="checkbox" id="f-curr-on"> 연간 커리큘럼 포함 (12개월)</label>
+      <div class="fhint">현재 기간(월)에 해당하는 칸이 미리보기에서 강조됩니다.</div>
+      <div id="f-curr-list"></div>
     </div>
 
     <div class="preview-col">
@@ -234,7 +243,7 @@
         <button id="syl-pdf-btn" class="exp-btn exp-pdf" type="button" onclick="syllabusExport('pdf')">📄 PDF 저장</button>
         <span class="exp-status" id="syl-exp-status"></span>
       </div>
-      <div class="preview-note">미리보기 · 기본정보·특징·사진·진도·주말 입력 연결됨 / 연간·2페이지는 다음 단계 (현재 샘플)</div>
+      <div class="preview-note">미리보기 · 기본정보·특징·사진·진도·주말·연간 입력 연결됨 / 2페이지(다음 달)는 다음 단계 (현재 샘플)</div>
       <div class="a4-wrap">
         <!-- 1페이지 -->
         <div class="a4" id="a4">
@@ -307,7 +316,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.2-export-jpg-pdf';
+  window.SYLLABUS_VERSION = 'v0.2b-curriculum';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -355,9 +364,22 @@
         ['1월','개념'],['2월','개념'],['3월','중간내신'],['4월','중간내신'],['5월','기말내신'],['6월','기말내신'],
         ['7월','수1+수2'],['8월','수1+수2'],['9월','실전모의'],['10월','실전모의'],['11월','수능'],['12월','종강']
       ],
+      currOn: true,
       maxfs: 15,
       page2: null
     };
+  }
+
+  // 연간 커리큘럼 12칸 보장(월 라벨 자동 채움, 기존 내용 유지)
+  function sylNormalizeCurr(arr){
+    var out = [];
+    for(var i=0;i<12;i++){
+      var src = (Array.isArray(arr) && arr[i]) ? arr[i] : [];
+      var label = (src[0] && String(src[0]).trim()) ? src[0] : ((i+1) + '월');
+      var content = src[1] || '';
+      out.push([label, content]);
+    }
+    return out;
   }
 
   /* 누끼 사진 placeholder (업로드 전 / 사진 없음 표시용) */
@@ -468,9 +490,12 @@
       weekEl.classList.toggle('two-col', twoCol);
     }
 
-    // 연간 커리큘럼
+    // 연간 커리큘럼 (on/off는 state.currOn 플래그로 명시 제어)
     var a4 = document.getElementById('a4');
-    var hasCurr = !!(state.curr && state.curr.length >= 12);
+    if(state.currOn && (!Array.isArray(state.curr) || state.curr.length < 12)){
+      state.curr = sylNormalizeCurr(state.curr);  // 12칸 보장
+    }
+    var hasCurr = !!(state.currOn && state.curr && state.curr.length >= 12);
     a4.classList.toggle('no-curr', !hasCurr);
     if(hasCurr){
       var CURR = state.curr;
@@ -872,6 +897,43 @@
         scheduleRender();
       });
     }
+
+    // ── 연간 커리큘럼 (on/off + 12칸) ──
+    var currOn = document.getElementById('f-curr-on');
+    if(currOn){
+      currOn.checked = !!state.currOn;
+      currOn.addEventListener('change', function(){
+        state.currOn = currOn.checked;
+        if(state.currOn) state.curr = sylNormalizeCurr(state.curr); // 12칸 보장
+        buildCurrForm();
+        scheduleRender();
+      });
+    }
+    buildCurrForm();
+  }
+
+  // 연간 커리큘럼 입력 행 빌드 (off면 목록 숨김)
+  function buildCurrForm(){
+    var list = document.getElementById('f-curr-list');
+    var currOn = document.getElementById('f-curr-on');
+    if(!list) return;
+    var on = currOn ? currOn.checked : !!state.currOn;
+    list.style.display = on ? '' : 'none';
+    list.innerHTML = '';
+    if(!on) return;
+    state.curr = sylNormalizeCurr(state.curr);
+    state.curr.forEach(function(row, i){
+      var div = document.createElement('div');
+      div.className = 'fcurr-row';
+      div.innerHTML =
+        '<span class="fc-mon"></span>'
+        + '<input class="fi fc-val" type="text" placeholder="예: 개념 / 내신 / 수능">';
+      div.querySelector('.fc-mon').textContent = row[0];
+      var val = div.querySelector('.fc-val');
+      val.value = row[1] || '';
+      val.addEventListener('input', function(){ state.curr[i][1] = val.value; scheduleRender(); });
+      list.appendChild(div);
+    });
   }
 
   // 진도 입력 행 빌드. 구조 변경(추가/삭제) 시에만 재빌드 → 입력 중 포커스 유지.
