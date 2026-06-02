@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.1b-1]</title>
+<title>BMAPS · 진도계획서 제작 [v0.1b-1b]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -74,7 +74,11 @@
   .hd .meta { font-size: 12.5px; opacity: 0.9; margin-top: 5px; }
   .hd-photo { flex: 0 0 auto; align-self: stretch; display: flex; align-items: flex-end; justify-content: flex-end;
               margin-right: 6px; margin-bottom: var(--photo-drop, -14px); margin-top: var(--photo-headroom, 5px); }
-  .hd-photo svg, .hd-photo img { height: 100%; width: auto; display: block; object-fit: contain; object-position: bottom center; }
+  .hd-photo svg { height: 100%; width: auto; display: block; object-fit: contain; object-position: bottom center; }
+  /* 업로드 이미지: 고유 크기가 헤더를 늘리지 못하도록 높이 상한(cap)을 둠.
+     상한은 JS(fitPhoto)가 헤더 텍스트 높이 기준으로 --photo-max-h 에 지정.
+     기본값(90px)은 JS 적용 전 첫 프레임에서도 폭주를 막기 위한 보수적 fallback. */
+  .hd-photo img { height: auto; width: auto; max-height: var(--photo-max-h, 90px); max-width: var(--photo-max-w, 220px); display: block; object-fit: contain; object-position: bottom center; }
   .hd.no-photo .hd-photo { display: none; }
   .hd.hd-slim { padding: 14px 26px; }
   .a4-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 14px 26px; }
@@ -151,7 +155,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.1b-1</span>
+    <span class="tb-ver" id="syl-ver">v0.1b-1b</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -265,7 +269,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.1b-1-form-basic';
+  window.SYLLABUS_VERSION = 'v0.1b-1b-photofit';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -356,6 +360,14 @@
     if(state.photo){
       hd.classList.remove('no-photo');
       hdPhoto.innerHTML = '<img src="' + esc(state.photo) + '" alt="강사 사진">';
+      // 이미지 디코드는 비동기 — 로드 완료 후 한 번 더 auto-fit (최종 레이아웃 기준 측정)
+      var pimg = hdPhoto.querySelector('img');
+      if(pimg){
+        pimg.onload = function(){
+          autoFitAll();
+          if(state.page2 && state.page2.sched2 && state.page2.sched2.length) fitSched2();
+        };
+      }
     } else {
       hd.classList.remove('no-photo');         // placeholder도 표시(레이아웃 동일 유지)
       hdPhoto.innerHTML = PHOTO_PLACEHOLDER;
@@ -517,14 +529,17 @@
   }
 
   function fitPhoto(){
-    if(!state.photo){
-      // placeholder도 헤더에 표시되므로 헤드룸은 동일 규칙 적용
-    }
     var a4 = document.getElementById('a4');
-    var hd = document.querySelector('.hd');
-    var hdH = hd ? hd.offsetHeight : 90;
-    var headroom = Math.min(9, Math.max(4, Math.round(hdH * 0.06)));
+    var hdText = document.querySelector('.hd-text');
+    // 텍스트 블록 높이는 사진 영향을 받지 않음(align-self:center, 비-stretch).
+    // 이 값 기준으로 계산해야 큰 사진으로 헤더가 늘어난 상태에 휘둘리지 않고 1패스로 수렴.
+    var textH = hdText ? hdText.offsetHeight : 60;
+    var estH = textH + 36;  // .hd 상하 패딩 18px*2
+    var headroom = Math.min(9, Math.max(4, Math.round(estH * 0.06)));
     a4.style.setProperty('--photo-headroom', headroom + 'px');
+    // 사진 높이 상한 = 헤더 텍스트 높이. 큰 이미지는 여기에 맞춰 축소되고
+    // (margin 계산상 max-h<=textH+9 이면 헤더는 텍스트가 결정 → 늘어나지 않음).
+    a4.style.setProperty('--photo-max-h', textH + 'px');
   }
 
   function fitFeature(){
