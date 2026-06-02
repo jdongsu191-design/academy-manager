@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.2b-curr]</title>
+<title>BMAPS · 진도계획서 제작 [v0.2c-curr-fit-hl]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -159,7 +159,10 @@
   .curr-grid { display: grid; grid-template-columns: repeat(6, 1fr); border: 1.3px solid #cbd5e1; border-radius: 7px; overflow: hidden; font-size: var(--fs-curr, 9px); }
   .curr-cell { padding: 5px 3px; text-align: center; border-right: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; overflow: hidden; word-break: keep-all; }
   .curr-cell.mon { background: #4a1d29; color: #fff; font-weight: 800; }
-  .curr-cell.val { color: #475569; font-weight: 600; min-height: 26px; display: flex; align-items: center; justify-content: center; line-height: 1.25; }
+  .curr-cell.val { color: #475569; font-weight: 600; min-height: 26px; display: flex; align-items: center; justify-content: center; line-height: 1.25; overflow-wrap: anywhere; }
+  /* 현재 기간(월) 강조 */
+  .curr-cell.mon.hl { background: #6e2b3d; color: #ffe9d6; box-shadow: inset 0 0 0 2px #ffc89e; }
+  .curr-cell.val.hl { background: #f5e9ec; color: #6e2b3d; font-weight: 800; box-shadow: inset 0 0 0 2px #e8c4ce; }
 
   /* 푸터 (고정) */
   .ft { flex-shrink: 0; padding: 10px 26px; margin-top: 8px; border-top: 2px solid #4a1d29; display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: #6a5560; }
@@ -182,7 +185,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.2b-curr</span>
+    <span class="tb-ver" id="syl-ver">v0.2c-curr-fit-hl</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -316,7 +319,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.2b-curriculum';
+  window.SYLLABUS_VERSION = 'v0.2c-curr-fit-highlight';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -499,11 +502,21 @@
     a4.classList.toggle('no-curr', !hasCurr);
     if(hasCurr){
       var CURR = state.curr;
+      // 강조할 월 인덱스(0-based): 기간 문자열의 'N월' 파싱, 실패 시 강조 없음(-1)
+      var hlIdx = (function(){
+        var mm = String(state.period || '').match(/(\d{1,2})\s*월/);
+        if(mm){ var v = parseInt(mm[1], 10); if(v>=1 && v<=12) return v-1; }
+        return -1;
+      })();
+      function cell(kind, idx, text){
+        var hl = (idx === hlIdx) ? ' hl' : '';
+        return '<div class="curr-cell ' + kind + hl + '">' + esc(text) + '</div>';
+      }
       var ch = '';
-      for(var k=0;k<6;k++)  ch += '<div class="curr-cell mon">' + esc(CURR[k][0]) + '</div>';
-      for(var k=0;k<6;k++)  ch += '<div class="curr-cell val">' + esc(CURR[k][1]) + '</div>';
-      for(var k=6;k<12;k++) ch += '<div class="curr-cell mon">' + esc(CURR[k][0]) + '</div>';
-      for(var k=6;k<12;k++) ch += '<div class="curr-cell val">' + esc(CURR[k][1]) + '</div>';
+      for(var k=0;k<6;k++)  ch += cell('mon', k, CURR[k][0]);
+      for(var k=0;k<6;k++)  ch += cell('val', k, CURR[k][1]);
+      for(var k=6;k<12;k++) ch += cell('mon', k, CURR[k][0]);
+      for(var k=6;k<12;k++) ch += cell('val', k, CURR[k][1]);
       document.getElementById('curr').innerHTML = ch;
     }
 
@@ -581,12 +594,13 @@
     var a4 = document.getElementById('a4');
     if(a4.classList.contains('no-curr')) return;
     var grid = document.getElementById('curr');
-    var lo=7, hi=Math.max(9, state.maxfs*0.72), best=7;
-    for(var i=0;i<14;i++){
+    // 한 칸만 매우 긴 경우에도 칸 안에 들어가도록 하한을 6px까지 허용(고정영역이라 가독 여유 있음)
+    var lo=6, hi=Math.max(9, state.maxfs*0.72), best=6;
+    for(var i=0;i<16;i++){
       var mid=(lo+hi)/2;
       a4.style.setProperty('--fs-curr', mid.toFixed(2)+'px');
-      if(cellsFit(grid, '.curr-cell')){ best=mid; lo=mid; } else { hi=mid; }
-      if(hi-lo<0.15) break;
+      if(currCellsFit(grid)){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.12) break;
     }
     a4.style.setProperty('--fs-curr', best.toFixed(2)+'px');
   }
@@ -732,6 +746,18 @@
     var cells = container.querySelectorAll(sel);
     for(var j=0;j<cells.length;j++){
       if(cells[j].scrollHeight > cells[j].clientHeight + 1) return false;
+    }
+    return true;
+  }
+
+  // 커리큘럼 전용: 세로 + 가로 넘침 모두 검사 (한 칸만 긴 내용일 때 가로 잘림 방지).
+  // 진도/주말이 쓰는 cellsFit은 가로로 길어도 되므로 분리해서 영향 없음.
+  function currCellsFit(grid){
+    var cells = grid.querySelectorAll('.curr-cell');
+    for(var j=0;j<cells.length;j++){
+      var el = cells[j];
+      if(el.scrollHeight > el.clientHeight + 1) return false;
+      if(el.scrollWidth  > el.clientWidth  + 1) return false;
     }
     return true;
   }
