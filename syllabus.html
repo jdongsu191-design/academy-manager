@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v1.0-blank]</title>
+<title>BMAPS · 진도계획서 제작 [v1.1-profile-photo]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -290,7 +290,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v1.0-blank</span>
+    <span class="tb-ver" id="syl-ver">v1.1-profile-photo</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -320,6 +320,7 @@
             <div class="bfull">
               <div class="fsec">강사 사진 <span style="font-weight:500;color:#94a3b8">(누끼 PNG 권장)</span></div>
               <input id="f-photo" class="fi" type="file" accept="image/*">
+              <button id="f-photo-profile" class="fbtn" type="button">👤 프로필 사진 가져오기</button>
               <button id="f-photo-clear" class="fbtn" type="button">사진 제거 (placeholder로)</button>
             </div>
 
@@ -515,7 +516,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v1.0-blank-form';
+  window.SYLLABUS_VERSION = 'v1.1-profile-photo';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -530,6 +531,12 @@
   function sylTargetReady(){
     var t = sylTarget();
     return !!(t && t.id);
+  }
+  // 작업 대상의 프로필 사진 URL (선생님=본인, 관리자=선택 선생님). 없으면 ''
+  function sylTargetPhotoUrl(){
+    var t = sylTarget();
+    if(!t) return '';
+    return t.profile_image_url || t.photoUrl || '';
   }
 
   /* 강좌별 색상 팔레트 (운영본과 동일, index % 8 순환). 포인트는 흰색 고정. */
@@ -608,6 +615,39 @@
   function sylSyncPhotoToAll(photo){
     if(!sylDoc) return;
     sylDoc.courses.forEach(function(c){ c.photo = photo; });
+  }
+
+  // 대상 선생님의 프로필 사진을 가져와 강사 사진(공통)으로 적용.
+  // 안전: URL을 fetch → base64 변환해 저장(추출 시 CORS 안전). 실패 시 원본 유지 + 안내.
+  async function sylUseProfilePhoto(btn){
+    if(currentUser && currentUser.role === 'admin' && !sylTargetReady()){
+      alert('먼저 분원과 선생님을 선택해주세요.'); return;
+    }
+    var url = sylTargetPhotoUrl();
+    if(!url){ alert('등록된 프로필 사진이 없습니다. 선생님이 BMAPS에서 프로필 사진을 먼저 등록해야 합니다.'); return; }
+    var prevText = btn ? btn.textContent : '';
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 가져오는 중…'; }
+    try {
+      var resp = await fetch(url, { mode: 'cors', cache: 'no-store' });
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      var blob = await resp.blob();
+      if(!/^image\//.test(blob.type || '')) throw new Error('이미지가 아닙니다');
+      var dataUrl = await new Promise(function(resolve, reject){
+        var r = new FileReader();
+        r.onload = function(){ resolve(r.result); };
+        r.onerror = function(){ reject(new Error('변환 실패')); };
+        r.readAsDataURL(blob);
+      });
+      state.photo = dataUrl;
+      sylSyncPhotoToAll(dataUrl);     // 공통 사진 → 전 강좌 반영
+      var pf = document.getElementById('f-photo'); if(pf) pf.value = '';
+      render();
+    } catch(e){
+      console.warn('프로필 사진 가져오기 실패:', e);
+      alert('프로필 사진을 가져오지 못했습니다.\n(' + (e && e.message ? e.message : e) + ')\n파일 업로드로 직접 등록해 주세요.');
+    } finally {
+      if(btn){ btn.disabled = false; btn.textContent = prevText || '👤 프로필 사진 가져오기'; }
+    }
   }
 
   // 기간 자동: 제작 시점의 시스템 연/월 ('YYYY년 M월')
@@ -1356,13 +1396,13 @@
     teacherSel.disabled = true;
     if(!branchId) return;
     try {
-      var res = await db.from('users').select('id, name, branch_id, status, deleted_at')
+      var res = await db.from('users').select('id, name, branch_id, status, deleted_at, profile_image_url')
         .eq('role', 'teacher').eq('branch_id', branchId).order('name', { ascending: true });
       if(res.error){ console.warn('선생님 조회 실패:', res.error); return; }
       var rows = (res.data || []).filter(function(u){ return u.status !== 'inactive' && !u.deleted_at; });
       var html = '<option value="">선생님 선택…</option>';
       rows.forEach(function(u){
-        html += '<option value="' + esc(u.id) + '" data-name="' + esc(u.name||'') + '">' + esc(u.name || '(이름없음)') + '</option>';
+        html += '<option value="' + esc(u.id) + '" data-name="' + esc(u.name||'') + '" data-photo="' + esc(u.profile_image_url||'') + '">' + esc(u.name || '(이름없음)') + '</option>';
       });
       teacherSel.innerHTML = html;
       teacherSel.disabled = false;
@@ -1375,7 +1415,8 @@
     sylAdminTarget = {
       id: id,
       name: optEl ? optEl.getAttribute('data-name') : '',
-      branch: branchOptEl ? (branchOptEl.getAttribute('data-name') || '') : ''   // 표시용 분원명
+      branch: branchOptEl ? (branchOptEl.getAttribute('data-name') || '') : '',   // 표시용 분원명
+      photoUrl: optEl ? (optEl.getAttribute('data-photo') || '') : ''             // 프로필 사진 URL
     };
     window._sylCurrentRecordId = null;
     var loadedCourses = await sylLoadCurrentMonthCourses();
@@ -1491,6 +1532,10 @@
         if(pf) pf.value = '';
         render();
       });
+    }
+    var pp = document.getElementById('f-photo-profile');
+    if(pp){
+      pp.addEventListener('click', function(){ sylUseProfilePhoto(pp); });
     }
 
     // ── N제 / 모의고사 라벨 모드(기본/직접입력) ──
