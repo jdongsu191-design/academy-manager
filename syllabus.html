@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.8-multicourse]</title>
+<title>BMAPS · 진도계획서 제작 [v0.8b-export-all]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -249,7 +249,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.8-multicourse</span>
+    <span class="tb-ver" id="syl-ver">v0.8b-export-all</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -450,7 +450,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.8-multicourse-tabs';
+  window.SYLLABUS_VERSION = 'v0.8b-export-all-courses';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1538,10 +1538,12 @@
     });
   }
 
-  // 추출 파일명: 운영본 규칙 (선생님명_진도계획서_O월)
+  // 추출 파일명: 운영본 규칙 (선생님명_진도계획서_O월). 활성 강좌가 바뀌어도 일관되게 문서 기준.
   function sylExportName(){
-    var t = String(state.teacher || '선생님').replace(/[\/:*?"<>|]/g, '_');
-    var raw = String(state.period || '');
+    var base = (sylDoc && sylDoc.courses && sylDoc.courses[0]) ? sylDoc.courses[0] : (state || {});
+    var tName = (currentUser && currentUser.name) ? currentUser.name : (base.teacher || '선생님');
+    var t = String(tName).replace(/[\/:*?"<>|]/g, '_');
+    var raw = String(base.period || (state && state.period) || '');
     var m = raw.match(/(\d{1,2})\s*월/);
     var month = m ? (m[1] + '월') : raw.replace(/[\/:*?"<>|]/g, '_');
     return t + '_진도계획서_' + (month || '');
@@ -1618,26 +1620,48 @@
     if(st) st.textContent = msg || '';
   }
 
+  // 한 강좌를 활성화해 화면에 렌더하고 auto-fit이 안정될 때까지 대기
+  async function sylActivateForCapture(idx){
+    sylSetActive(idx);
+    render();   // 활성 강좌를 #a4/#a4-p2에 렌더 (내부 rAF→autoFitAll)
+    // render 내부의 이중 rAF(autoFit) 이후까지 확실히 대기
+    await new Promise(function(r){
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){ setTimeout(r, 80); }); });
+    });
+  }
+
   async function syllabusExport(type){
     if(window._sylExporting) return;       // 중복 클릭 가드
-    if(!state || !(state.sched && state.sched.length)){
-      alert('진도 내용을 먼저 입력하세요.'); return;
-    }
+    if(!sylDoc || !sylDoc.courses.length){ alert('내보낼 강좌가 없습니다.'); return; }
+    // 진도가 하나라도 있는 강좌만 대상
+    var targets = [];
+    sylDoc.courses.forEach(function(c, i){ if(c.sched && c.sched.length) targets.push(i); });
+    if(!targets.length){ alert('진도 내용을 먼저 입력하세요.'); return; }
+
     window._sylExporting = true;
+    var prevActive = sylDoc.active;        // 작업 후 되돌릴 강좌
     sylExportBusy(true, '⏳ 라이브러리 준비 중…');
     try {
       await sylLoadScript(SYL_LIBS.h2c);
       if(typeof html2canvas === 'undefined') throw new Error('html2canvas 로드 실패');
 
-      var nodes = sylGetPageNodes();
-      sylExportBusy(true, '⏳ 이미지 변환 중…');
-      var canvases = [];
-      for(var i=0;i<nodes.length;i++){ canvases.push(await sylCaptureNode(nodes[i])); }
+      // 강좌별로 전환→캡처. pages = [{canvas, courseIdx, pageNo, courseName}]
+      var pages = [];
+      for(var t=0; t<targets.length; t++){
+        var idx = targets[t];
+        sylExportBusy(true, '⏳ 이미지 변환 중… (' + (t+1) + '/' + targets.length + ')');
+        await sylActivateForCapture(idx);
+        var nodes = sylGetPageNodes();      // 현재 활성 강좌의 1~2페이지
+        for(var p=0; p<nodes.length; p++){
+          var cv = await sylCaptureNode(nodes[p]);
+          pages.push({ canvas: cv, courseIdx: idx, pageNo: p+1, course: sylDoc.courses[idx].course || ('강좌'+(idx+1)) });
+        }
+      }
 
       if(type === 'jpg'){
-        await sylExportJPG(canvases);
+        await sylExportJPG(pages);
       } else {
-        await sylExportPDF(canvases);
+        await sylExportPDF(pages);
       }
       sylExportBusy(false, '✅ 저장 완료');
     } catch(e){
@@ -1645,6 +1669,10 @@
       sylExportBusy(false, '');
       alert('추출 중 오류가 발생했습니다: ' + (e && e.message ? e.message : e));
     } finally {
+      // 원래 보던 강좌로 복원 (화면 일관성)
+      sylSetActive(prevActive);
+      sylRenderTabs();
+      rebindAndRender();
       window._sylExporting = false;
       setTimeout(function(){ var st=document.getElementById('syl-exp-status'); if(st && st.textContent==='✅ 저장 완료') st.textContent=''; }, 3000);
     }
@@ -1654,33 +1682,40 @@
     return new Promise(function(resolve){ canvas.toBlob(resolve, mime, q); });
   }
 
-  async function sylExportJPG(canvases){
+  // 파일 안전 이름 조각
+  function sylSafe(s){ return String(s||'').replace(/[\/:*?"<>|]/g,'_').trim(); }
+
+  async function sylExportJPG(pages){
     var base = sylExportName();
-    if(canvases.length === 1){
-      var blob = await sylCanvasToBlob(canvases[0], 'image/jpeg', 0.95);
+    if(pages.length === 1){
+      var blob = await sylCanvasToBlob(pages[0].canvas, 'image/jpeg', 0.95);
       await sylSaveFile(blob, base + '.jpg', 'image/jpeg', 'jpg');
     } else {
       await sylLoadScript(SYL_LIBS.jszip);
       if(typeof JSZip === 'undefined') throw new Error('JSZip 로드 실패');
       var zip = new JSZip();
-      for(var i=0;i<canvases.length;i++){
-        var b = await sylCanvasToBlob(canvases[i], 'image/jpeg', 0.95);
-        zip.file(base + '_' + (i+1) + '.jpg', b);
+      // 파일명: 01_강좌명(_2페이지) ... 순서 보존 위해 2자리 prefix
+      for(var i=0;i<pages.length;i++){
+        var pg = pages[i];
+        var b = await sylCanvasToBlob(pg.canvas, 'image/jpeg', 0.95);
+        var seq = String(i+1).padStart(2, '0');
+        var pageSuffix = (pg.pageNo > 1) ? ('_' + pg.pageNo + '페이지') : '';
+        zip.file(seq + '_' + sylSafe(pg.course) + pageSuffix + '.jpg', b);
       }
       var zipBlob = await zip.generateAsync({type:'blob'});
       await sylSaveFile(zipBlob, base + '.zip', 'application/zip', 'zip');
     }
   }
 
-  async function sylExportPDF(canvases){
+  async function sylExportPDF(pages){
     await sylLoadScript(SYL_LIBS.jspdf);
     if(typeof window.jspdf === 'undefined') throw new Error('jsPDF 로드 실패');
     var jsPDF = window.jspdf.jsPDF;
     var pdf = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
     var pW = pdf.internal.pageSize.getWidth();
-    for(var i=0;i<canvases.length;i++){
+    for(var i=0;i<pages.length;i++){
       if(i>0) pdf.addPage();
-      var cv = canvases[i];
+      var cv = pages[i].canvas;
       var fitH = pW * (cv.height / cv.width);  // 가로 꽉 채우고 세로 비율
       pdf.addImage(cv.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pW, fitH);
     }
