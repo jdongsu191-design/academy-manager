@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.9j-test4]</title>
+<title>BMAPS · 진도계획서 제작 [v0.10-summary]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -111,6 +111,18 @@
   .exp-jpg { background: #16a34a; }
   .exp-pdf { background: #2563eb; }
   .exp-save { background: #6e2b3d; }
+  .exp-sum { background: #0f766e; }
+  /* 요약 모달 */
+  .sum-modal { position: fixed; inset: 0; z-index: 650; background: rgba(15,23,42,0.5); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .sum-box { background: #f1f5f9; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); width: auto; max-width: 96vw; max-height: 94vh; display: flex; flex-direction: column; overflow: hidden; }
+  .sum-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #fff; border-bottom: 1px solid #e2e8f0; flex-shrink: 0; }
+  .sum-bar .sum-title { font-size: 13px; font-weight: 800; color: #0f766e; margin-right: auto; }
+  .sum-bar button { padding: 7px 13px; border: none; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; color: #fff; }
+  .sum-bar .sb-jpg { background: #16a34a; }
+  .sum-bar .sb-pdf { background: #2563eb; }
+  .sum-bar .sb-close { background: #e2e8f0; color: #475569; }
+  .sum-scroll { overflow: auto; padding: 16px; flex: 1; }
+  .sum-status { font-size: 12px; color: #64748b; }
   .exp-status { font-size: 12px; color: #64748b; }
   /* 저장 목록 바 */
   .saved-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
@@ -278,7 +290,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.9j-test4</span>
+    <span class="tb-ver" id="syl-ver">v0.10-summary</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -417,6 +429,7 @@
         <button id="syl-save-btn" class="exp-btn exp-save" type="button" onclick="syllabusSave()">💾 저장</button>
         <button id="syl-jpg-btn" class="exp-btn exp-jpg" type="button" onclick="syllabusExport('jpg')">🖼️ JPG 저장</button>
         <button id="syl-pdf-btn" class="exp-btn exp-pdf" type="button" onclick="syllabusExport('pdf')">📄 PDF 저장</button>
+        <button id="syl-sum-btn" class="exp-btn exp-sum" type="button" onclick="syllabusSummaryOpen()">📋 요약</button>
         <span class="exp-status" id="syl-exp-status"></span>
       </div>
       <div class="saved-bar">
@@ -502,7 +515,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.9j-test-4courses';
+  window.SYLLABUS_VERSION = 'v0.10-summary-page';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -2369,6 +2382,167 @@
       if(nt) nt.scrollTop = topPos;
       if(nb) nb.scrollTop = botPos;
     }
+  }
+
+  /* ============================================================
+     [SUMMARY] 강좌 요약 페이지 (A4 1장) — 운영본 레이아웃 이식
+     · 강좌수→열: 1=1열,2=2열,3=세로3행,4=2×2,5+=3열
+     · 카드: 강좌명 + 정보표(학년·시간·주교재·부교재). 카드 헤더는 강좌색.
+  ============================================================ */
+  function sylBuildSummaryHTML(){
+    if(!sylDoc || !sylDoc.courses.length) return '';
+    // 진도가 있는(=실제) 강좌만 — 빈 강좌 제외
+    var courses = sylDoc.courses;
+    var teacherName = (sylTarget() && sylTarget().name) || (currentUser && currentUser.name) || (courses[0] && courses[0].teacher) || '선생님';
+    var period = (courses[0] && courses[0].period) || sylCurrentPeriod();
+    var brand = sylCourseColor(0);                 // 헤더는 1번 강좌색 기준
+    var accent = '#ffffff';
+    var photo = courses[0] && courses[0].photo;
+
+    var n = courses.length, cols;
+    if(n <= 1) cols = 1; else if(n === 2) cols = 2; else if(n === 3) cols = 1; else if(n === 4) cols = 2; else cols = 3;
+    var rows = Math.ceil(n / cols);
+    var availableH = 870, gridGapPx = (cols===3?10:14);
+    var cardMinHeight = Math.floor((availableH - gridGapPx*(rows-1)) / rows);
+    if(rows === 3){ cardMinHeight = Math.floor((1123 - 143 - 3 - 36 - 40 - 28) / 3); }
+    else { if(cardMinHeight < 260) cardMinHeight = 260; }
+    if(rows === 1){
+      if(n === 1) cardMinHeight = Math.min(cardMinHeight, 560);
+      else if(n === 2) cardMinHeight = Math.min(cardMinHeight, 500);
+    }
+    // 스케일 3단계
+    var labelSize, valSize, padRow, minLabelW, headerPad, courseLabelSize, titleSize;
+    if(cols === 1 && n === 1){
+      labelSize='13px'; valSize='15.5px'; padRow='13px 18px'; minLabelW='96px'; headerPad='20px 24px'; courseLabelSize='12px'; titleSize='24px';
+    } else if(cols === 2 || (cols === 1 && n === 3)){
+      labelSize='12px'; valSize='14px'; padRow='12px 16px'; minLabelW='84px'; headerPad='18px 22px'; courseLabelSize='11px'; titleSize='21px';
+    } else {
+      labelSize='10px'; valSize='11.5px'; padRow='8px 10px'; minLabelW='66px'; headerPad='12px 14px'; courseLabelSize='9px'; titleSize='16px';
+    }
+
+    var cards = courses.map(function(c, ci){
+      var cColor = sylCourseColor(ci);
+      var rowsData = [
+        {label:'대상 학년', val:c.grade,   icon:'👥'},
+        {label:'수업 시간', val:c.time,    icon:'🕐'},
+        {label:'주교재',   val:c.bookMain, icon:'📖'},
+        {label:'부교재',   val:c.bookSub,  icon:'📄'}
+      ].filter(function(r){ return r.val && String(r.val).trim(); });
+      var infoHTML = rowsData.map(function(r, ri){
+        var bb = ri < rowsData.length-1 ? 'border-bottom:1px solid #eef2f6;' : '';
+        return '<tr style="'+bb+'">'
+          +'<td style="padding:'+padRow+';vertical-align:middle;white-space:nowrap;font-size:'+labelSize+';font-weight:700;color:#64748b;background:#f8fafc;border-right:1px solid #e2e8f0;min-width:'+minLabelW+'">'+r.icon+' '+esc(r.label)+'</td>'
+          +'<td style="padding:'+padRow+';font-size:'+valSize+';font-weight:600;color:#1e293b;line-height:1.5">'+esc(r.val)+'</td></tr>';
+      }).join('');
+      var title = (c.course && String(c.course).trim()) ? c.course : ('강좌 ' + (ci+1));
+      return '<div style="border:2px solid '+cColor+';border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column;min-height:'+cardMinHeight+'px">'
+        +'<div style="background:'+cColor+';padding:'+headerPad+';flex-shrink:0">'
+          +'<div style="font-size:'+courseLabelSize+';font-weight:700;letter-spacing:2px;color:'+accent+';opacity:0.85;text-transform:uppercase;margin-bottom:5px">강좌 '+(ci+1)+'</div>'
+          +'<div style="font-size:'+titleSize+';font-weight:900;color:#fff;line-height:1.2;letter-spacing:-0.3px">'+esc(title)+'</div>'
+        +'</div>'
+        +'<div style="background:#fff;flex:1;display:flex;flex-direction:column">'
+          +'<table style="border-collapse:collapse;width:100%;flex:1;height:100%"><tbody>'+infoHTML+'</tbody></table>'
+        +'</div></div>';
+    }).join('');
+
+    var gridGap = (cols===3?'10px':'14px'), gridPad = (cols===3?'16px 16px':'18px 20px');
+    var photoHTML = photo
+      ? '<div style="align-self:stretch;flex-shrink:0;display:flex;align-items:flex-end"><img src="'+photo+'" style="max-width:140px;max-height:140px;object-fit:contain;display:block"></div>'
+      : '';
+    return '<div id="syl-summary-page" style="width:794px;min-height:1123px;background:#fff;font-family:inherit;margin:0 auto;display:flex;flex-direction:column">'
+      +'<div style="background:'+brand+';padding:0 28px;display:flex;align-items:stretch;justify-content:space-between;gap:16px;min-height:130px">'
+        +'<div style="flex:1;display:flex;flex-direction:column;justify-content:center;padding:22px 0">'
+          +'<div style="font-size:10px;font-weight:700;letter-spacing:3px;color:'+accent+';opacity:0.85;text-transform:uppercase;margin-bottom:8px">베스티안 수학학원 · '+esc(period)+' 강좌 안내</div>'
+          +'<div style="font-size:32px;font-weight:900;color:#fff;line-height:1.1;letter-spacing:-0.5px">'+esc(teacherName)+' <span style="font-size:17px;font-weight:400;color:rgba(255,255,255,0.65)">선생님</span></div>'
+          +'<div style="font-size:12px;color:rgba(255,255,255,0.55);margin-top:6px">총 '+n+'개 강좌 운영</div>'
+        +'</div>'+photoHTML
+      +'</div>'
+      +'<div style="height:3px;background:linear-gradient(90deg,'+brand+' 0%,rgba(0,0,0,0.15) 60%,transparent 100%)"></div>'
+      +'<div style="padding:'+gridPad+';display:grid;grid-template-columns:repeat('+cols+',1fr);gap:'+gridGap+';flex:1">'+cards+'</div>'
+      +'<div style="background:#f4f7fa;border-top:1px solid #e2e8f0;padding:9px 28px;display:flex;align-items:center;justify-content:space-between">'
+        +'<div style="font-size:11px;font-weight:800;color:'+brand+'">베스티안 수학학원</div>'
+        +'<div style="font-size:9.5px;color:#64748b">'+esc(period)+' · 강좌 요약</div>'
+      +'</div></div>';
+  }
+
+  function sylSummaryClose(){
+    var ex = document.getElementById('syl-sum-modal');
+    if(ex && ex.parentNode) ex.parentNode.removeChild(ex);
+  }
+
+  function syllabusSummaryOpen(){
+    if(currentUser && currentUser.role === 'admin' && !sylTargetReady()){
+      alert('먼저 분원과 선생님을 선택해주세요.'); return;
+    }
+    if(!sylDoc || !sylDoc.courses.length){ alert('강좌가 없습니다.'); return; }
+    sylSummaryClose();
+    var html = sylBuildSummaryHTML();
+    var modal = document.createElement('div');
+    modal.id = 'syl-sum-modal';
+    modal.className = 'sum-modal';
+    modal.innerHTML = '<div class="sum-box">'
+      + '<div class="sum-bar">'
+      + '<span class="sum-title">📋 강좌 요약 미리보기 (A4)</span>'
+      + '<span class="sum-status" id="syl-sum-status"></span>'
+      + '<button class="sb-jpg" type="button" onclick="syllabusSummaryExport(\'jpg\')">🖼️ JPG</button>'
+      + '<button class="sb-pdf" type="button" onclick="syllabusSummaryExport(\'pdf\')">📄 PDF</button>'
+      + '<button class="sb-close" type="button" onclick="sylSummaryClose()">닫기</button>'
+      + '</div>'
+      + '<div class="sum-scroll">' + html + '</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('mousedown', function(e){ if(e.target === modal) sylSummaryClose(); });
+  }
+
+  function sylSummaryBusy(msg){ var st=document.getElementById('syl-sum-status'); if(st) st.textContent = msg||''; }
+
+  async function syllabusSummaryExport(type){
+    if(window._sylSumExporting) return;
+    var node = document.getElementById('syl-summary-page');
+    if(!node){ alert('요약 미리보기를 먼저 열어주세요.'); return; }
+    window._sylSumExporting = true;
+    sylSummaryBusy('⏳ 라이브러리 준비 중…');
+    try {
+      await sylLoadScript(SYL_LIBS.h2c);
+      if(typeof html2canvas === 'undefined') throw new Error('html2canvas 로드 실패');
+      sylSummaryBusy('⏳ 이미지 변환 중…');
+      var canvas = await html2canvas(node, {
+        scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff',
+        width: 794, windowWidth: 794, logging: false
+      });
+      var base = sylSummaryName();
+      if(type === 'jpg'){
+        var blob = await sylCanvasToBlob(canvas, 'image/jpeg', 0.95);
+        await sylSaveFile(blob, base + '.jpg', 'image/jpeg', 'jpg');
+      } else {
+        await sylLoadScript(SYL_LIBS.jspdf);
+        if(typeof window.jspdf === 'undefined') throw new Error('jsPDF 로드 실패');
+        var jsPDF = window.jspdf.jsPDF;
+        var pdf = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
+        var pW = pdf.internal.pageSize.getWidth();
+        var fitH = pW * (canvas.height / canvas.width);
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pW, Math.min(fitH, pdf.internal.pageSize.getHeight()));
+        await sylSaveFile(pdf.output('blob'), base + '.pdf', 'application/pdf', 'pdf');
+      }
+      sylSummaryBusy('✅ 저장 완료');
+      setTimeout(function(){ sylSummaryBusy(''); }, 2500);
+    } catch(e){
+      console.error(e); sylSummaryBusy('');
+      alert('요약 추출 오류: ' + (e && e.message ? e.message : e));
+    } finally {
+      window._sylSumExporting = false;
+    }
+  }
+
+  // 요약 파일명: 선생님명_기간_강좌요약
+  function sylSummaryName(){
+    var c0 = (sylDoc && sylDoc.courses && sylDoc.courses[0]) || {};
+    var tName = (sylTarget() && sylTarget().name) || (currentUser && currentUser.name) || c0.teacher || '선생님';
+    var t = String(tName).replace(/[\/:*?"<>|]/g, '_');
+    var raw = String(c0.period || '');
+    var m = raw.match(/(\d{1,2})\s*월/);
+    var month = m ? (m[1] + '월') : raw.replace(/[\/:*?"<>|]/g, '_');
+    return t + '_' + (month || '') + '_강좌요약';
   }
 
   window.addEventListener('DOMContentLoaded', syllabusInitAuth);
