@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.9-perm]</title>
+<title>BMAPS · 진도계획서 제작 [v0.9b-branch-fix]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -260,7 +260,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.9-perm</span>
+    <span class="tb-ver" id="syl-ver">v0.9b-branch-fix</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -474,7 +474,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.9-perm-admin-branch';
+  window.SYLLABUS_VERSION = 'v0.9b-branches-table';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1178,15 +1178,14 @@
     var branchSel = document.getElementById('syl-admin-branch');
     var teacherSel = document.getElementById('syl-admin-teacher');
     if(!branchSel || !teacherSel) return;
-    // 분원 목록 = teacher 들의 branch distinct
+    // 분원 목록 = 운영본 branches 테이블 (value=branch id, label=name)
     try {
-      var res = await db.from('users').select('branch').eq('role', 'teacher');
+      var res = await db.from('branches').select('id, name').order('name', { ascending: true });
       if(res.error){ console.warn('분원 조회 실패:', res.error); }
-      var set = {};
-      (res.data || []).forEach(function(u){ if(u.branch && String(u.branch).trim()) set[u.branch] = true; });
-      var branches = Object.keys(set).sort();
       var html = '<option value="">분원 선택…</option>';
-      branches.forEach(function(b){ html += '<option value="' + esc(b) + '">' + esc(b) + '</option>'; });
+      (res.data || []).forEach(function(b){
+        html += '<option value="' + esc(b.id) + '" data-name="' + esc(b.name||'') + '">' + esc(b.name || '(이름없음)') + '</option>';
+      });
       branchSel.innerHTML = html;
     } catch(e){ console.warn('분원 조회 예외:', e); }
 
@@ -1196,36 +1195,38 @@
       sylApplyLock();
     });
     teacherSel.addEventListener('change', async function(){
-      await sylAdminPickTeacher(teacherSel.value, teacherSel.options[teacherSel.selectedIndex]);
+      await sylAdminPickTeacher(teacherSel.value, teacherSel.options[teacherSel.selectedIndex], branchSel.options[branchSel.selectedIndex]);
     });
   }
 
-  // 선택 분원의 선생님 목록 채우기
-  async function sylAdminLoadTeachers(branch){
+  // 선택 분원(branchId)의 선생님 목록 채우기 (운영본: users.branch_id, status='active')
+  async function sylAdminLoadTeachers(branchId){
     var teacherSel = document.getElementById('syl-admin-teacher');
     if(!teacherSel) return;
     teacherSel.innerHTML = '<option value="">선생님 선택…</option>';
     teacherSel.disabled = true;
-    if(!branch) return;
+    if(!branchId) return;
     try {
-      var res = await db.from('users').select('id, name, branch').eq('role', 'teacher').eq('branch', branch).order('name', { ascending: true });
+      var res = await db.from('users').select('id, name, branch_id, status, deleted_at')
+        .eq('role', 'teacher').eq('branch_id', branchId).order('name', { ascending: true });
       if(res.error){ console.warn('선생님 조회 실패:', res.error); return; }
+      var rows = (res.data || []).filter(function(u){ return u.status !== 'inactive' && !u.deleted_at; });
       var html = '<option value="">선생님 선택…</option>';
-      (res.data || []).forEach(function(u){
-        html += '<option value="' + esc(u.id) + '" data-name="' + esc(u.name||'') + '" data-branch="' + esc(u.branch||'') + '">' + esc(u.name || '(이름없음)') + '</option>';
+      rows.forEach(function(u){
+        html += '<option value="' + esc(u.id) + '" data-name="' + esc(u.name||'') + '">' + esc(u.name || '(이름없음)') + '</option>';
       });
       teacherSel.innerHTML = html;
       teacherSel.disabled = false;
     } catch(e){ console.warn('선생님 조회 예외:', e); }
   }
 
-  // 선생님 확정 → 대상 설정 + 그 선생님 현재월 저장본 로드
-  async function sylAdminPickTeacher(id, optEl){
+  // 선생님 확정 → 대상 설정(+분원명) + 그 선생님 현재월 저장본 로드
+  async function sylAdminPickTeacher(id, optEl, branchOptEl){
     if(!id){ sylAdminTarget = null; sylApplyLock(); return; }
     sylAdminTarget = {
       id: id,
       name: optEl ? optEl.getAttribute('data-name') : '',
-      branch: optEl ? optEl.getAttribute('data-branch') : ''
+      branch: branchOptEl ? (branchOptEl.getAttribute('data-name') || '') : ''   // 표시용 분원명
     };
     window._sylCurrentRecordId = null;
     var loadedCourses = await sylLoadCurrentMonthCourses();
