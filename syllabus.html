@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.9d-import-noscroll]</title>
+<title>BMAPS · 진도계획서 제작 [v0.9e-import-all]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -276,7 +276,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.9d-import-noscroll</span>
+    <span class="tb-ver" id="syl-ver">v0.9e-import-all</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -309,7 +309,9 @@
               <button id="f-photo-clear" class="fbtn" type="button">사진 제거 (placeholder로)</button>
             </div>
 
-            <div class="bfull"><div class="fsec">기본 정보</div></div>
+            <div class="bfull"><div class="fsec fsec-row">기본 정보
+              <button type="button" class="imp-btn" onclick="sylOpenImportPicker('basic', this)">🔄 불러오기</button>
+            </div></div>
 
             <div>
               <label class="fl" for="f-course">강좌명</label>
@@ -370,7 +372,9 @@
 
         <!-- 아래: 진도 + 2페이지 + 주말 + 연간 (전체 폭) -->
         <div class="fcol fcol-bottom">
-          <div class="fsec">회차별 진도</div>
+          <div class="fsec fsec-row">회차별 진도
+            <button type="button" class="imp-btn" onclick="sylOpenImportPicker('sched', this)">🔄 불러오기</button>
+          </div>
           <div class="fhint">진도 7개 이상이면 1열(좌우 배치), 6개 이하면 2열(상하 배치)로 자동 전환됩니다.</div>
           <div id="f-sched-list"></div>
           <button id="f-sched-add" class="fbtn" type="button">+ 진도 추가</button>
@@ -385,12 +389,16 @@
             <button id="f-p2-add" class="fbtn" type="button">+ 진도 추가</button>
           </div>
 
-          <div class="fsec">주말 학습 계획</div>
+          <div class="fsec fsec-row">주말 학습 계획
+            <button type="button" class="imp-btn" onclick="sylOpenImportPicker('week', this)">🔄 불러오기</button>
+          </div>
           <label class="fck"><input type="checkbox" id="f-week-on"> 주말 계획 포함</label>
           <div id="f-week-list"></div>
           <button id="f-week-add" class="fbtn" type="button">+ 주차 추가</button>
 
-          <div class="fsec">연간 커리큘럼</div>
+          <div class="fsec fsec-row">연간 커리큘럼
+            <button type="button" class="imp-btn" onclick="sylOpenImportPicker('curr', this)">🔄 불러오기</button>
+          </div>
           <label class="fck"><input type="checkbox" id="f-curr-on"> 연간 커리큘럼 포함 (12개월)</label>
           <div class="fhint">현재 기간(월)에 해당하는 칸이 미리보기에서 강조됩니다.</div>
           <div id="f-curr-list"></div>
@@ -492,7 +500,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.9d-import-noscroll';
+  window.SYLLABUS_VERSION = 'v0.9e-import-all-items';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1965,16 +1973,66 @@
      [ITEM IMPORT] 항목 단위 불러오기 — 대상 선생님의 저장본에서 특정 항목만 복사
   ============================================================ */
   // 항목 정의: 라벨 + 현재 강좌(state)에 적용하는 함수 + 모드 지원여부
+  function sylDeepCopy(v){ return JSON.parse(JSON.stringify(v == null ? null : v)); }
+
   var SYL_IMPORT_ITEMS = {
+    basic: {
+      label: '기본 정보',
+      apply: function(src){
+        state.course   = src.course || '';
+        state.teacher  = src.teacher || '';
+        state.grade    = src.grade || '';
+        state.time     = src.time || '';
+        state.bookMain = src.bookMain || '';
+        state.bookSub  = src.bookSub || '';
+        state.najeLabel = src.najeLabel || 'N제 시간';
+        state.najeTime  = src.najeTime || '';
+        state.mockLabel = src.mockLabel || '모의고사 시간';
+        state.mockTime  = src.mockTime || '';
+      },
+      refresh: function(){ sylRenderTabs(); rebindAndRender(true); }   // 강좌명 바뀌면 탭도 갱신
+    },
     feature: {
       label: '강의 특징 & 관리',
-      apply: function(srcCourse){ state.feature = srcCourse.feature || ''; },
+      apply: function(src){ state.feature = src.feature || ''; },
       // 폼 전체 재구성 없이 해당 입력칸만 갱신 → 스크롤 위치 보존
       refresh: function(){
         var el = document.getElementById('f-feature');
         if(el) el.value = state.feature || '';
         render();
       }
+    },
+    sched: {
+      label: '회차별 진도',
+      modes: [ {key:'all',label:'모두'}, {key:'date',label:'날짜만'}, {key:'content',label:'내용만'} ],
+      apply: function(src, mode){
+        var rows = Array.isArray(src.sched) ? src.sched : [];
+        if(mode === 'date'){
+          state.sched = rows.map(function(r){ return [ r[0]||'', r[1]||'', '', '' ]; });        // 날짜·요일만, 내용 빈칸
+        } else if(mode === 'content'){
+          state.sched = rows.map(function(r){ return [ '', '', r[2]||'', r[3]||'' ]; });          // 내용·구분만, 날짜 빈칸
+        } else {
+          state.sched = rows.map(function(r){ return [ r[0]||'', r[1]||'', r[2]||'', r[3]||'' ]; }); // 모두
+        }
+        if(!state.sched.length) state.sched = [['', '', '', '']];   // 최소 1행
+      },
+      refresh: function(){ rebindAndRender(true); }
+    },
+    week: {
+      label: '주말 학습 계획',
+      apply: function(src){
+        state.week = Array.isArray(src.week) ? src.week.map(function(w){ return [ w[0]||'', w[1]||'' ]; }) : [];
+        state._weekBackup = null;
+      },
+      refresh: function(){ rebindAndRender(true); }
+    },
+    curr: {
+      label: '연간 커리큘럼',
+      apply: function(src){
+        state.curr = Array.isArray(src.curr) ? sylDeepCopy(src.curr) : null;
+        state.currOn = !!src.currOn;
+      },
+      refresh: function(){ rebindAndRender(true); }
     }
   };
 
@@ -2039,23 +2097,40 @@
         body.innerHTML = '<div class="ip-empty">불러올 저장본이 없습니다.</div>';
         return;
       }
-      // 항목 옵션(회차별 진도 등 모드 지원 시) — feature는 모드 없음
+      // 모드 지원 항목(회차별 진도)이면 모드 버튼 표시
+      var curMode = (def.modes && def.modes.length) ? def.modes[0].key : null;
+      var modeHtml = '';
+      if(def.modes && def.modes.length){
+        modeHtml = '<div class="ip-mode">' + def.modes.map(function(m, mi){
+          return '<button type="button" data-mode="' + esc(m.key) + '"' + (mi===0?' class="on"':'') + '>' + esc(m.label) + '</button>';
+        }).join('') + '</div>';
+      }
       var listHtml = '';
       entries.forEach(function(en, i){
         listHtml += '<div class="ip-item" data-idx="' + i + '">'
           + '<div>' + esc(en.courseName) + '</div>'
           + '<div class="ip-when">' + esc(en.period || '') + '</div></div>';
       });
-      body.innerHTML = listHtml;
+      body.innerHTML = modeHtml + listHtml;
+      // 모드 버튼 토글
+      if(def.modes && def.modes.length){
+        Array.prototype.forEach.call(body.querySelectorAll('.ip-mode button'), function(mb){
+          mb.addEventListener('click', function(){
+            curMode = mb.getAttribute('data-mode');
+            Array.prototype.forEach.call(body.querySelectorAll('.ip-mode button'), function(x){ x.classList.remove('on'); });
+            mb.classList.add('on');
+          });
+        });
+      }
       // 클릭 → 적용
       Array.prototype.forEach.call(body.querySelectorAll('.ip-item'), function(el){
         el.addEventListener('click', function(){
           var en = entries[parseInt(el.getAttribute('data-idx'),10)];
           if(!en) return;
-          def.apply(en.course);
+          def.apply(en.course, curMode);
           sylCloseImportPop();
           if(typeof def.refresh === 'function') def.refresh();   // 부분 갱신(스크롤 보존)
-          else rebindAndRender();                                // 폴백
+          else rebindAndRender(true);                            // 폴백(스크롤 보존)
           var st = document.getElementById('syl-exp-status');
           if(st){ st.textContent = '✅ ' + def.label + ' 불러옴'; setTimeout(function(){ if(st.textContent.indexOf('불러옴')>=0) st.textContent=''; }, 3000); }
         });
@@ -2176,7 +2251,14 @@
   }
 
   // state 교체 후: 폼을 비우고 다시 바인딩 + 렌더 (리스너 중복 방지 위해 노드 교체)
-  function rebindAndRender(){
+  function rebindAndRender(preserveScroll){
+    // 스크롤 보존이 필요하면(예: 항목 단위 불러오기) 현재 스크롤 위치 기억
+    var topPos = 0, botPos = 0;
+    if(preserveScroll){
+      var pt = document.querySelector('.fcol-top'), pb = document.querySelector('.fcol-bottom');
+      if(pt) topPos = pt.scrollTop;
+      if(pb) botPos = pb.scrollTop;
+    }
     // 폼 입력 영역(form-grid)을 복제 교체하면 기존 리스너가 깨끗이 제거됨
     var grid = document.querySelector('.form-grid');
     if(grid){
@@ -2185,6 +2267,11 @@
     }
     bindForm();
     render();
+    if(preserveScroll){
+      var nt = document.querySelector('.fcol-top'), nb = document.querySelector('.fcol-bottom');
+      if(nt) nt.scrollTop = topPos;
+      if(nb) nb.scrollTop = botPos;
+    }
   }
 
   window.addEventListener('DOMContentLoaded', syllabusInitAuth);
