@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.7-save]</title>
+<title>BMAPS · 진도계획서 제작 [v0.7b-load]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -230,7 +230,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.7-save</span>
+    <span class="tb-ver" id="syl-ver">v0.7b-load</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -421,7 +421,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.7-save-supabase';
+  window.SYLLABUS_VERSION = 'v0.7b-load-currentmonth';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1033,12 +1033,41 @@
       topbar.style.display = 'flex';
       shell.classList.add('ready');
 
-      // 샘플 데이터로 초기화 (입력 폼은 이 값에서 시작 — 템플릿)
-      state = sampleState();
+      // 현재월 저장본이 있으면 복원, 없으면 샘플로 시작 (bindForm은 1회만 호출 → 리스너 중복 방지)
+      state = await sylLoadCurrentMonth() || sampleState();
       bindForm();
       render();
     } catch(e){
       block('인증 처리 중 오류가 발생했습니다.', String(e && e.message ? e.message : e));
+    }
+  }
+
+  /* 현재 로그인 계정의 현재월 저장본 조회 → state 반환(없으면 null) */
+  async function sylLoadCurrentMonth(){
+    try {
+      if(!currentUser || !currentUser.id) return null;
+      var period = sylCurrentPeriod();
+      var res = await db.from('bmaps_syllabuses')
+        .select('*')
+        .eq('teacher_id', currentUser.id)
+        .eq('period', period)
+        .maybeSingle();
+      if(res.error){ console.warn('저장본 조회 실패:', res.error); return null; }
+      var rec = res.data;
+      if(!rec || !Array.isArray(rec.courses) || !rec.courses.length) return null;
+      window._sylCurrentRecordId = rec.id;
+      var loaded = rec.courses[0];
+      // 안전 정규화: 누락 필드 보정 (구조 변화 대비)
+      if(loaded){
+        if(loaded.period == null) loaded.period = period;
+        if(loaded.brand == null) loaded.brand = '베스티안 수학학원';
+        if(!Array.isArray(loaded.sched)) loaded.sched = [];
+        if(!Array.isArray(loaded.week)) loaded.week = [];
+      }
+      return loaded;
+    } catch(e){
+      console.warn('저장본 조회 예외:', e);
+      return null;
     }
   }
 
