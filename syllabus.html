@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.7c-loadlist]</title>
+<title>BMAPS · 진도계획서 제작 [v0.8-multicourse]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -63,6 +63,17 @@
   }
 
 
+
+  /* 강좌 탭 */
+  .course-tabs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #f0e6ea; }
+  .ctab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid #d9c2c9; background: #fff; color: #6e2b3d; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; max-width: 240px; }
+  .ctab .ct-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ctab.active { background: #6e2b3d; color: #fff; border-color: #6e2b3d; }
+  .ctab .ct-del { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 0 0 2px; opacity: 0.7; }
+  .ctab .ct-del:hover { opacity: 1; }
+  .ctab-add { padding: 6px 12px; border: 1px dashed #b9c4d0; background: #fff; color: #2563eb; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .ctab-add:hover { background: #eff6ff; }
+  .ctab-count { font-size: 11px; color: #94a3b8; margin-left: auto; }
 
   /* 추출 버튼 바 */
   .export-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
@@ -238,7 +249,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.7c-loadlist</span>
+    <span class="tb-ver" id="syl-ver">v0.8-multicourse</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -248,7 +259,9 @@
   <div class="shell" id="syl-shell">
     <div class="form-col">
       <h2>📝 진도계획서 입력</h2>
-      <div class="fnote">위쪽에 기본 정보·강사 사진을, 아래쪽에 강의 진도·주말·연간·2페이지를 입력하면 미리보기에 바로 반영됩니다. (학원명·기간은 자동 설정)</div>
+      <div class="fnote">위쪽에 기본 정보·강사 사진을, 아래쪽에 강의 진도·주말·연간·2페이지를 입력하면 미리보기에 바로 반영됩니다. (학원명·기간은 자동 / 강사 사진은 모든 강좌 공통)</div>
+
+      <div class="course-tabs" id="syl-course-tabs"></div>
 
       <div class="form-grid">
         <!-- 위: 강사사진 + 기본정보 + 강의특징 -->
@@ -437,7 +450,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.7c-loadlist-delete';
+  window.SYLLABUS_VERSION = 'v0.8-multicourse-tabs';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -452,7 +465,42 @@
        - photo : 이미지 dataURL 또는 null(누끼 placeholder)
        - page2 : { period2, sched2:[[날짜,요일,내용],...] } 또는 null
   ============================================================ */
-  var state = null;
+  var state = null;     // 현재 활성 강좌 객체 (sylDoc.courses[sylDoc.active])
+  var sylDoc = null;    // 진도계획서 문서: { courses:[course,...], active:int }
+
+  // 빈 강좌 1개 (실사용 시작용). period/brand/photo는 공통값으로 채워 넣음.
+  function sylBlankCourse(){
+    return {
+      brand: '베스티안 수학학원',
+      period: sylCurrentPeriod(),
+      course: '', teacher: '', grade: '', time: '',
+      bookMain: '', bookSub: '',
+      najeLabel: 'N제 시간', najeTime: '',
+      mockLabel: '모의고사 시간', mockTime: '',
+      photo: null,
+      feature: '',
+      sched: [['', '', '', '']],
+      week: [],
+      curr: null, currOn: false,
+      maxfs: 15,
+      page2: null
+    };
+  }
+
+  // 현재 활성 강좌로 state 포인터 설정
+  function sylSetActive(idx){
+    if(!sylDoc || !sylDoc.courses.length) return;
+    if(idx < 0) idx = 0;
+    if(idx > sylDoc.courses.length - 1) idx = sylDoc.courses.length - 1;
+    sylDoc.active = idx;
+    state = sylDoc.courses[idx];
+  }
+
+  // 공통 사진을 모든 강좌에 동기화
+  function sylSyncPhotoToAll(photo){
+    if(!sylDoc) return;
+    sylDoc.courses.forEach(function(c){ c.photo = photo; });
+  }
 
   // 기간 자동: 제작 시점의 시스템 연/월 ('YYYY년 M월')
   function sylCurrentPeriod(){
@@ -1049,8 +1097,11 @@
       topbar.style.display = 'flex';
       shell.classList.add('ready');
 
-      // 현재월 저장본이 있으면 복원, 없으면 샘플로 시작 (bindForm은 1회만 호출 → 리스너 중복 방지)
-      state = await sylLoadCurrentMonth() || sampleState();
+      // 현재월 저장본이 있으면 복원(여러 강좌 포함), 없으면 샘플 1강좌로 시작
+      var loadedCourses = await sylLoadCurrentMonthCourses();
+      sylDoc = { courses: (loadedCourses && loadedCourses.length) ? loadedCourses : [sampleState()], active: 0 };
+      sylSetActive(0);
+      sylRenderTabs();
       bindForm();
       render();
       syllabusRefreshSavedList();   // 저장 목록 채우기
@@ -1069,8 +1120,23 @@
     return loaded;
   }
 
-  /* 현재 로그인 계정의 현재월 저장본 조회 → state 반환(없으면 null) */
-  async function sylLoadCurrentMonth(){
+  /* 저장본 courses 배열 정규화 + 공통 사진 일관화(첫 강좌 사진을 공통으로) */
+  function sylNormalizeCourses(courses, period){
+    if(!Array.isArray(courses)) return [];
+    var out = [];
+    courses.forEach(function(c){
+      var n = sylNormalizeLoaded(c, period);
+      if(n) out.push(n);
+    });
+    if(out.length){
+      var commonPhoto = out[0].photo || null;   // 사진은 공통 → 첫 강좌 기준으로 통일
+      out.forEach(function(c){ c.photo = commonPhoto; });
+    }
+    return out;
+  }
+
+  /* 현재 로그인 계정의 현재월 저장본 → 정규화된 courses 배열(없으면 null) */
+  async function sylLoadCurrentMonthCourses(){
     try {
       if(!currentUser || !currentUser.id) return null;
       var period = sylCurrentPeriod();
@@ -1083,7 +1149,7 @@
       var rec = res.data;
       if(!rec || !Array.isArray(rec.courses) || !rec.courses.length) return null;
       window._sylCurrentRecordId = rec.id;
-      return sylNormalizeLoaded(rec.courses[0], period);
+      return sylNormalizeCourses(rec.courses, period);
     } catch(e){
       console.warn('저장본 조회 예외:', e);
       return null;
@@ -1117,6 +1183,7 @@
       el.value = (state[key] == null) ? '' : state[key];
       el.addEventListener('input', function(){
         state[key] = el.value;
+        if(key === 'course') sylRenderTabs();   // 탭 라벨 실시간 갱신
         scheduleRender();
       });
     });
@@ -1133,7 +1200,7 @@
           return;
         }
         var reader = new FileReader();
-        reader.onload = function(){ state.photo = reader.result; render(); };
+        reader.onload = function(){ state.photo = reader.result; sylSyncPhotoToAll(reader.result); render(); };
         reader.onerror = function(){ alert('이미지를 읽지 못했습니다. 다시 시도해주세요.'); };
         reader.readAsDataURL(file);
       });
@@ -1142,6 +1209,7 @@
     if(pc){
       pc.addEventListener('click', function(){
         state.photo = null;
+        sylSyncPhotoToAll(null);
         if(pf) pf.value = '';
         render();
       });
@@ -1635,22 +1703,28 @@
   async function syllabusSave(){
     if(window._sylSaving) return;             // 중복 클릭 가드
     if(!currentUser || !currentUser.id){ alert('로그인 정보가 없습니다. 다시 로그인 후 시도해주세요.'); return; }
-    if(!state){ alert('저장할 내용이 없습니다.'); return; }
-    if(!state.course || !String(state.course).trim()){ alert('강좌명을 입력한 뒤 저장해주세요.'); return; }
+    if(!sylDoc || !sylDoc.courses.length){ alert('저장할 내용이 없습니다.'); return; }
+    // 강좌명이 하나도 없으면 차단
+    var named = sylDoc.courses.filter(function(c){ return c.course && String(c.course).trim(); });
+    if(!named.length){ alert('강좌명을 입력한 뒤 저장해주세요.'); return; }
 
     window._sylSaving = true;
     sylSaveBusy(true, '⏳ 저장 중…');
     try {
-      // 저장 직전 파생/임시 필드 제거(깨끗한 state만 저장)
-      var clean = JSON.parse(JSON.stringify(state));
-      delete clean._weekLong; delete clean._weekBackup;
+      // 모든 강좌를 깨끗하게(파생/임시 필드 제거) 직렬화
+      var cleanCourses = sylDoc.courses.map(function(c){
+        var cc = JSON.parse(JSON.stringify(c));
+        delete cc._weekLong; delete cc._weekBackup;
+        return cc;
+      });
+      var period = (sylDoc.courses[0] && sylDoc.courses[0].period) || sylCurrentPeriod();
 
       var payload = {
         teacher_id:   currentUser.id,
         teacher_name: currentUser.name || null,
         branch:       currentUser.branch || null,
-        period:       state.period,
-        courses:      [clean],            // 현재 단일 강좌
+        period:       period,
+        courses:      cleanCourses,       // 전체 강좌
         updated_at:   new Date().toISOString()
       };
 
@@ -1712,10 +1786,12 @@
       if(!rec || !Array.isArray(rec.courses) || !rec.courses.length){
         alert('불러올 내용이 없습니다.'); return;
       }
-      var loaded = sylNormalizeLoaded(rec.courses[0], rec.period);
-      if(!loaded){ alert('데이터 형식이 올바르지 않습니다.'); return; }
+      var courses = sylNormalizeCourses(rec.courses, rec.period);
+      if(!courses.length){ alert('데이터 형식이 올바르지 않습니다.'); return; }
       window._sylCurrentRecordId = rec.id;
-      state = loaded;
+      sylDoc = { courses: courses, active: 0 };
+      sylSetActive(0);
+      sylRenderTabs();
       rebindAndRender();   // 폼 재구성 + 렌더 (리스너 중복 없이)
       var st = document.getElementById('syl-exp-status');
       if(st) st.textContent = '✅ 불러옴 (' + (rec.period || '') + ')';
@@ -1750,15 +1826,62 @@
   function syllabusNewCurrentMonth(){
     if(!confirm('현재 입력 내용을 두고, 이번 달 빈 진도계획서로 새로 시작할까요?\n(저장하지 않은 변경은 사라집니다)')) return;
     window._sylCurrentRecordId = null;
-    state = sampleState();
-    // 새로 시작은 빈 양식이 자연스러우므로 핵심 입력만 비움(학원명/기간/커리큘럼 기본은 유지)
-    state.course=''; state.teacher=''; state.grade=''; state.time='';
-    state.bookMain=''; state.bookSub=''; state.najeTime=''; state.mockTime='';
-    state.feature=''; state.photo=null;
-    state.sched=[['', '', '', '']];
-    state.week=[]; state._weekBackup=null;
-    state.page2=null;
+    sylDoc = { courses: [sylBlankCourse()], active: 0 };
+    sylSetActive(0);
+    sylRenderTabs();
     var sel = document.getElementById('syl-saved-list'); if(sel) sel.value='';
+    rebindAndRender();
+  }
+
+  /* ============================================================
+     [COURSE TABS] 강좌 전환 / 추가 / 삭제
+  ============================================================ */
+  function sylRenderTabs(){
+    var box = document.getElementById('syl-course-tabs');
+    if(!box || !sylDoc) return;
+    var html = '';
+    sylDoc.courses.forEach(function(c, i){
+      var name = (c.course && String(c.course).trim()) ? c.course : ('강좌 ' + (i+1));
+      var active = (i === sylDoc.active) ? ' active' : '';
+      var delBtn = (sylDoc.courses.length > 1)
+        ? '<button class="ct-del" type="button" title="이 강좌 삭제" onclick="event.stopPropagation(); sylDeleteCourse(' + i + ')">×</button>'
+        : '';
+      html += '<div class="ctab' + active + '" onclick="sylSwitchCourse(' + i + ')">'
+            + '<span class="ct-name">' + esc(name) + '</span>' + delBtn + '</div>';
+    });
+    html += '<button class="ctab-add" type="button" onclick="sylAddCourse()">+ 강좌 추가</button>';
+    html += '<span class="ctab-count">강좌 ' + sylDoc.courses.length + '개</span>';
+    box.innerHTML = html;
+  }
+
+  function sylSwitchCourse(idx){
+    if(!sylDoc || idx === sylDoc.active) { return; }
+    sylSetActive(idx);
+    sylRenderTabs();
+    rebindAndRender();
+  }
+
+  function sylAddCourse(){
+    if(!sylDoc) return;
+    var c = sylBlankCourse();
+    c.photo = (sylDoc.courses[0] && sylDoc.courses[0].photo) || null;  // 공통 사진 상속
+    c.period = (sylDoc.courses[0] && sylDoc.courses[0].period) || sylCurrentPeriod();
+    sylDoc.courses.push(c);
+    sylSetActive(sylDoc.courses.length - 1);   // 새 강좌로 전환
+    sylRenderTabs();
+    rebindAndRender();
+  }
+
+  function sylDeleteCourse(idx){
+    if(!sylDoc || sylDoc.courses.length <= 1) return;   // 최소 1개 유지
+    var c = sylDoc.courses[idx];
+    var name = (c && c.course && String(c.course).trim()) ? c.course : ('강좌 ' + (idx+1));
+    if(!confirm('"' + name + '" 강좌를 삭제할까요?\n(저장 전이면 되돌릴 수 없습니다)')) return;
+    sylDoc.courses.splice(idx, 1);
+    if(sylDoc.active >= sylDoc.courses.length) sylDoc.active = sylDoc.courses.length - 1;
+    else if(sylDoc.active > idx) sylDoc.active -= 1;
+    sylSetActive(sylDoc.active);
+    sylRenderTabs();
     rebindAndRender();
   }
 
