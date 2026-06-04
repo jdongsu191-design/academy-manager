@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.6b-stack]</title>
+<title>BMAPS · 진도계획서 제작 [v0.7-save]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -70,6 +70,7 @@
   .exp-btn:disabled { opacity: 0.6; cursor: default; }
   .exp-jpg { background: #16a34a; }
   .exp-pdf { background: #2563eb; }
+  .exp-save { background: #6e2b3d; }
   .exp-status { font-size: 12px; color: #64748b; }
 
   /* ===== 입력 폼 (1b) ===== */
@@ -229,7 +230,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.6b-stack</span>
+    <span class="tb-ver" id="syl-ver">v0.7-save</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -340,6 +341,7 @@
 
     <div class="preview-col">
       <div class="export-bar">
+        <button id="syl-save-btn" class="exp-btn exp-save" type="button" onclick="syllabusSave()">💾 저장</button>
         <button id="syl-jpg-btn" class="exp-btn exp-jpg" type="button" onclick="syllabusExport('jpg')">🖼️ JPG 저장</button>
         <button id="syl-pdf-btn" class="exp-btn exp-pdf" type="button" onclick="syllabusExport('pdf')">📄 PDF 저장</button>
         <span class="exp-status" id="syl-exp-status"></span>
@@ -419,7 +421,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.6b-stack-updown';
+  window.SYLLABUS_VERSION = 'v0.7-save-supabase';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1568,6 +1570,61 @@
     }
     var pdfBlob = pdf.output('blob');
     await sylSaveFile(pdfBlob, sylExportName() + '.pdf', 'application/pdf', 'pdf');
+  }
+
+  /* ============================================================
+     [SAVE] Supabase 저장 — bmaps_syllabuses (운영본과 분리된 전용 테이블)
+     · 식별: (teacher_id, period) 유니크 → 있으면 수정, 없으면 새로 (upsert)
+     · courses: 현재 강좌 state 배열 [state] (추후 여러 강좌로 확장)
+  ============================================================ */
+  function sylSaveBusy(on, msg){
+    var b = document.getElementById('syl-save-btn');
+    if(b) b.disabled = on;
+    var st = document.getElementById('syl-exp-status');
+    if(st) st.textContent = msg || '';
+  }
+
+  async function syllabusSave(){
+    if(window._sylSaving) return;             // 중복 클릭 가드
+    if(!currentUser || !currentUser.id){ alert('로그인 정보가 없습니다. 다시 로그인 후 시도해주세요.'); return; }
+    if(!state){ alert('저장할 내용이 없습니다.'); return; }
+    if(!state.course || !String(state.course).trim()){ alert('강좌명을 입력한 뒤 저장해주세요.'); return; }
+
+    window._sylSaving = true;
+    sylSaveBusy(true, '⏳ 저장 중…');
+    try {
+      // 저장 직전 파생/임시 필드 제거(깨끗한 state만 저장)
+      var clean = JSON.parse(JSON.stringify(state));
+      delete clean._weekLong; delete clean._weekBackup;
+
+      var payload = {
+        teacher_id:   currentUser.id,
+        teacher_name: currentUser.name || null,
+        branch:       currentUser.branch || null,
+        period:       state.period,
+        courses:      [clean],            // 현재 단일 강좌
+        updated_at:   new Date().toISOString()
+      };
+
+      // (teacher_id, period) 기준 upsert — 유니크 인덱스가 충돌 시 갱신 처리
+      var res = await db.from('bmaps_syllabuses')
+        .upsert(payload, { onConflict: 'teacher_id,period' })
+        .select().single();
+      if(res.error) throw res.error;
+
+      window._sylCurrentRecordId = res.data && res.data.id;   // 이후 불러오기/갱신용
+      sylSaveBusy(false, '✅ 저장 완료 (' + state.period + ')');
+    } catch(e){
+      console.error(e);
+      sylSaveBusy(false, '');
+      alert('저장 실패: ' + (e && e.message ? e.message : e));
+    } finally {
+      window._sylSaving = false;
+      setTimeout(function(){
+        var st=document.getElementById('syl-exp-status');
+        if(st && st.textContent.indexOf('저장 완료')>=0) st.textContent='';
+      }, 3500);
+    }
   }
 
   window.addEventListener('DOMContentLoaded', syllabusInitAuth);
