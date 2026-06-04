@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v1.1-profile-photo]</title>
+<title>BMAPS · 진도계획서 제작 [v1.2-auto-photo]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -290,7 +290,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v1.1-profile-photo</span>
+    <span class="tb-ver" id="syl-ver">v1.2-auto-photo</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -516,7 +516,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v1.1-profile-photo';
+  window.SYLLABUS_VERSION = 'v1.2-auto-profile-photo';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -647,6 +647,40 @@
       alert('프로필 사진을 가져오지 못했습니다.\n(' + (e && e.message ? e.message : e) + ')\n파일 업로드로 직접 등록해 주세요.');
     } finally {
       if(btn){ btn.disabled = false; btn.textContent = prevText || '👤 프로필 사진 가져오기'; }
+    }
+  }
+
+  // [자동·조용] 빈 강좌로 시작할 때만 프로필 사진을 1회 자동 적용. 실패는 조용히 무시(빈 상태 유지).
+  // guardDoc: 호출 시점의 sylDoc 참조 — 비동기 도중 문서가 바뀌면(다른 선생님 선택/불러오기) 적용 취소.
+  async function sylAutoApplyProfilePhoto(){
+    try {
+      var url = sylTargetPhotoUrl();
+      if(!url) return;                                  // 프로필 없음 → 그대로 빈 상태
+      if(!sylDoc || !sylDoc.courses.length) return;
+      // 이미 사진이 있으면(불러온 저장본 등) 자동 적용 안 함
+      if(sylDoc.courses.some(function(c){ return !!c.photo; })) return;
+      var guardDoc = sylDoc;
+      var guardActiveCourse = sylDoc.courses[sylDoc.active];
+      var resp = await fetch(url, { mode: 'cors', cache: 'no-store' });
+      if(!resp.ok) return;
+      var blob = await resp.blob();
+      if(!/^image\//.test(blob.type || '')) return;
+      var dataUrl = await new Promise(function(resolve, reject){
+        var r = new FileReader();
+        r.onload = function(){ resolve(r.result); };
+        r.onerror = function(){ reject(new Error('read fail')); };
+        r.readAsDataURL(blob);
+      });
+      // 비동기 도중 문서/선생님이 바뀌었으면 취소 (오적용 방지)
+      if(sylDoc !== guardDoc) return;
+      // 그 사이 사용자가 사진을 넣었으면 덮어쓰지 않음
+      if(sylDoc.courses.some(function(c){ return !!c.photo; })) return;
+      sylSyncPhotoToAll(dataUrl);
+      if(state) state.photo = dataUrl;
+      render();
+    } catch(e){
+      // 자동 적용 실패는 조용히 무시 (사용자에겐 빈 상태로 보임)
+      console.warn('프로필 사진 자동 적용 생략:', e && e.message ? e.message : e);
     }
   }
 
@@ -1335,12 +1369,14 @@
       } else {
         // 선생님: 본인 현재월 저장본 복원(여러 강좌), 없으면 빈 강좌 1개로 시작
         var loadedCourses = await sylLoadCurrentMonthCourses();
-        sylDoc = { courses: (loadedCourses && loadedCourses.length) ? loadedCourses : [sylBlankCourse()], active: 0 };
+        var startedBlank = !(loadedCourses && loadedCourses.length);
+        sylDoc = { courses: startedBlank ? [sylBlankCourse()] : loadedCourses, active: 0 };
         sylSetActive(0);
         sylRenderTabs();
         bindForm();
         render();
         syllabusRefreshSavedList();
+        if(startedBlank) sylAutoApplyProfilePhoto();   // 빈 시작일 때만 프로필 사진 자동(논블로킹)
       }
     } catch(e){
       block('인증 처리 중 오류가 발생했습니다.', String(e && e.message ? e.message : e));
@@ -1420,12 +1456,14 @@
     };
     window._sylCurrentRecordId = null;
     var loadedCourses = await sylLoadCurrentMonthCourses();
-    sylDoc = { courses: (loadedCourses && loadedCourses.length) ? loadedCourses : [sylBlankCourse()], active: 0 };
+    var startedBlank = !(loadedCourses && loadedCourses.length);
+    sylDoc = { courses: startedBlank ? [sylBlankCourse()] : loadedCourses, active: 0 };
     sylSetActive(0);
     sylRenderTabs();
     rebindAndRender();
     sylApplyLock();
     syllabusRefreshSavedList();
+    if(startedBlank) sylAutoApplyProfilePhoto();   // 빈 시작일 때만 선택 선생님 프로필 사진 자동
   }
 
   /* 저장본 course 객체 → 안전 정규화 (누락 필드 보정, 구조 변화 대비) */
