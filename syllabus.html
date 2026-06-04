@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v0.7b-load]</title>
+<title>BMAPS · 진도계획서 제작 [v0.7c-loadlist]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -72,6 +72,14 @@
   .exp-pdf { background: #2563eb; }
   .exp-save { background: #6e2b3d; }
   .exp-status { font-size: 12px; color: #64748b; }
+  /* 저장 목록 바 */
+  .saved-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .saved-bar .sb-label { font-size: 11px; font-weight: 700; color: #94a3b8; }
+  .saved-bar .sb-select { flex: 1; min-width: 160px; padding: 6px 9px; border: 1px solid #d1d8e0; border-radius: 7px; font-size: 12.5px; background: #fff; }
+  .saved-bar .sb-del { padding: 6px 10px; border: 1px solid #e2c9d0; background: #fff; color: #b5455f; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .saved-bar .sb-del:hover { background: #fbeef1; }
+  .saved-bar .sb-new { padding: 6px 10px; border: 1px solid #c9d8e2; background: #fff; color: #2563eb; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .saved-bar .sb-new:hover { background: #eff6ff; }
 
   /* ===== 입력 폼 (1b) ===== */
   .fnote { font-size: 11.5px; color: #94a3b8; line-height: 1.6; margin-bottom: 12px; }
@@ -230,7 +238,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v0.7b-load</span>
+    <span class="tb-ver" id="syl-ver">v0.7c-loadlist</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -346,6 +354,14 @@
         <button id="syl-pdf-btn" class="exp-btn exp-pdf" type="button" onclick="syllabusExport('pdf')">📄 PDF 저장</button>
         <span class="exp-status" id="syl-exp-status"></span>
       </div>
+      <div class="saved-bar">
+        <label class="sb-label">저장 목록</label>
+        <select id="syl-saved-list" class="sb-select" onchange="syllabusLoadSelected(this.value)">
+          <option value="">불러올 진도계획서 선택…</option>
+        </select>
+        <button id="syl-del-btn" class="sb-del" type="button" onclick="syllabusDeleteSelected()" title="선택한 진도계획서 삭제">🗑️ 삭제</button>
+        <button id="syl-new-btn" class="sb-new" type="button" onclick="syllabusNewCurrentMonth()" title="현재월 빈 진도계획서로 새로 시작">+ 새로 (이번 달)</button>
+      </div>
       <div class="preview-note">미리보기 · 모든 입력(기본·특징·사진·진도·주말·연간·2페이지)이 연결되었습니다</div>
       <div class="a4-scaler" id="a4-scaler">
       <div class="a4-wrap">
@@ -421,7 +437,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v0.7b-load-currentmonth';
+  window.SYLLABUS_VERSION = 'v0.7c-loadlist-delete';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1037,9 +1053,20 @@
       state = await sylLoadCurrentMonth() || sampleState();
       bindForm();
       render();
+      syllabusRefreshSavedList();   // 저장 목록 채우기
     } catch(e){
       block('인증 처리 중 오류가 발생했습니다.', String(e && e.message ? e.message : e));
     }
+  }
+
+  /* 저장본 course 객체 → 안전 정규화 (누락 필드 보정, 구조 변화 대비) */
+  function sylNormalizeLoaded(loaded, period){
+    if(!loaded || typeof loaded !== 'object') return null;
+    if(loaded.period == null) loaded.period = period || sylCurrentPeriod();
+    if(loaded.brand == null) loaded.brand = '베스티안 수학학원';
+    if(!Array.isArray(loaded.sched)) loaded.sched = [];
+    if(!Array.isArray(loaded.week)) loaded.week = [];
+    return loaded;
   }
 
   /* 현재 로그인 계정의 현재월 저장본 조회 → state 반환(없으면 null) */
@@ -1056,15 +1083,7 @@
       var rec = res.data;
       if(!rec || !Array.isArray(rec.courses) || !rec.courses.length) return null;
       window._sylCurrentRecordId = rec.id;
-      var loaded = rec.courses[0];
-      // 안전 정규화: 누락 필드 보정 (구조 변화 대비)
-      if(loaded){
-        if(loaded.period == null) loaded.period = period;
-        if(loaded.brand == null) loaded.brand = '베스티안 수학학원';
-        if(!Array.isArray(loaded.sched)) loaded.sched = [];
-        if(!Array.isArray(loaded.week)) loaded.week = [];
-      }
-      return loaded;
+      return sylNormalizeLoaded(rec.courses[0], period);
     } catch(e){
       console.warn('저장본 조회 예외:', e);
       return null;
@@ -1643,6 +1662,7 @@
 
       window._sylCurrentRecordId = res.data && res.data.id;   // 이후 불러오기/갱신용
       sylSaveBusy(false, '✅ 저장 완료 (' + state.period + ')');
+      syllabusRefreshSavedList();   // 목록 갱신(새 달이면 항목 추가)
     } catch(e){
       console.error(e);
       sylSaveBusy(false, '');
@@ -1654,6 +1674,104 @@
         if(st && st.textContent.indexOf('저장 완료')>=0) st.textContent='';
       }, 3500);
     }
+  }
+
+  /* ============================================================
+     [SAVED LIST] 저장 목록 조회 / 선택 불러오기 / 삭제 / 새로 시작
+  ============================================================ */
+  // 내 계정의 저장본 목록을 드롭다운에 채움 (최신순). 현재 레코드를 기본 선택.
+  async function syllabusRefreshSavedList(){
+    var sel = document.getElementById('syl-saved-list');
+    if(!sel || !currentUser || !currentUser.id) return;
+    try {
+      var res = await db.from('bmaps_syllabuses')
+        .select('id, period, courses, updated_at')
+        .eq('teacher_id', currentUser.id)
+        .order('updated_at', { ascending: false });
+      if(res.error){ console.warn('목록 조회 실패:', res.error); return; }
+      var rows = res.data || [];
+      var html = '<option value="">불러올 진도계획서 선택…</option>';
+      rows.forEach(function(r){
+        var first = (Array.isArray(r.courses) && r.courses[0]) ? r.courses[0] : null;
+        var courseName = (first && first.course) ? String(first.course) : '(강좌명 없음)';
+        var label = (r.period || '') + ' · ' + courseName;
+        html += '<option value="' + esc(r.id) + '">' + esc(label) + '</option>';
+      });
+      sel.innerHTML = html;
+      if(window._sylCurrentRecordId) sel.value = window._sylCurrentRecordId;
+    } catch(e){ console.warn('목록 조회 예외:', e); }
+  }
+
+  // 선택한 레코드를 불러와 state 복원
+  async function syllabusLoadSelected(id){
+    if(!id) return;
+    try {
+      var res = await db.from('bmaps_syllabuses').select('*').eq('id', id).maybeSingle();
+      if(res.error) throw res.error;
+      var rec = res.data;
+      if(!rec || !Array.isArray(rec.courses) || !rec.courses.length){
+        alert('불러올 내용이 없습니다.'); return;
+      }
+      var loaded = sylNormalizeLoaded(rec.courses[0], rec.period);
+      if(!loaded){ alert('데이터 형식이 올바르지 않습니다.'); return; }
+      window._sylCurrentRecordId = rec.id;
+      state = loaded;
+      rebindAndRender();   // 폼 재구성 + 렌더 (리스너 중복 없이)
+      var st = document.getElementById('syl-exp-status');
+      if(st) st.textContent = '✅ 불러옴 (' + (rec.period || '') + ')';
+      setTimeout(function(){ if(st && st.textContent.indexOf('불러옴')>=0) st.textContent=''; }, 3000);
+    } catch(e){
+      console.error(e);
+      alert('불러오기 실패: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  // 선택한 레코드 삭제
+  async function syllabusDeleteSelected(){
+    var sel = document.getElementById('syl-saved-list');
+    var id = sel ? sel.value : '';
+    if(!id){ alert('삭제할 진도계획서를 목록에서 먼저 선택하세요.'); return; }
+    var label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '';
+    if(!confirm('이 진도계획서를 삭제할까요?\n\n' + label + '\n\n삭제하면 되돌릴 수 없습니다.')) return;
+    try {
+      var res = await db.from('bmaps_syllabuses').delete().eq('id', id);
+      if(res.error) throw res.error;
+      if(window._sylCurrentRecordId === id) window._sylCurrentRecordId = null;
+      await syllabusRefreshSavedList();
+      var st = document.getElementById('syl-exp-status');
+      if(st){ st.textContent = '🗑️ 삭제됨'; setTimeout(function(){ if(st.textContent==='🗑️ 삭제됨') st.textContent=''; }, 3000); }
+    } catch(e){
+      console.error(e);
+      alert('삭제 실패: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  // 현재월 빈 진도계획서로 새로 시작 (불러온 다른 달 편집에서 빠져나올 때)
+  function syllabusNewCurrentMonth(){
+    if(!confirm('현재 입력 내용을 두고, 이번 달 빈 진도계획서로 새로 시작할까요?\n(저장하지 않은 변경은 사라집니다)')) return;
+    window._sylCurrentRecordId = null;
+    state = sampleState();
+    // 새로 시작은 빈 양식이 자연스러우므로 핵심 입력만 비움(학원명/기간/커리큘럼 기본은 유지)
+    state.course=''; state.teacher=''; state.grade=''; state.time='';
+    state.bookMain=''; state.bookSub=''; state.najeTime=''; state.mockTime='';
+    state.feature=''; state.photo=null;
+    state.sched=[['', '', '', '']];
+    state.week=[]; state._weekBackup=null;
+    state.page2=null;
+    var sel = document.getElementById('syl-saved-list'); if(sel) sel.value='';
+    rebindAndRender();
+  }
+
+  // state 교체 후: 폼을 비우고 다시 바인딩 + 렌더 (리스너 중복 방지 위해 노드 교체)
+  function rebindAndRender(){
+    // 폼 입력 영역(form-grid)을 복제 교체하면 기존 리스너가 깨끗이 제거됨
+    var grid = document.querySelector('.form-grid');
+    if(grid){
+      var clone = grid.cloneNode(true);
+      grid.parentNode.replaceChild(clone, grid);
+    }
+    bindForm();
+    render();
   }
 
   window.addEventListener('DOMContentLoaded', syllabusInitAuth);
