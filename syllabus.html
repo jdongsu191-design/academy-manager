@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v1.3-next-month]</title>
+<title>BMAPS · 진도계획서 제작 [v1.4-import-ops]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -94,6 +94,7 @@
   .imp-pop .ip-item { padding: 9px 11px; border: 1px solid #eef1f4; border-radius: 7px; margin-bottom: 6px; cursor: pointer; font-size: 12.5px; }
   .imp-pop .ip-item:hover { background: #f5e9ec; border-color: #d9c2c9; }
   .imp-pop .ip-item .ip-when { color: #94a3b8; font-size: 11px; margin-top: 2px; }
+  .imp-pop .ip-src { display:inline-block; margin-left:6px; padding:1px 6px; background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; border-radius:5px; font-size:10px; font-weight:700; vertical-align:middle; }
   .imp-pop .ip-empty { color: #94a3b8; font-size: 12.5px; padding: 18px 8px; text-align: center; }
   .ctab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid #d9c2c9; background: #fff; color: #6e2b3d; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; max-width: 240px; }
   .ctab .ct-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -290,7 +291,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v1.3-next-month</span>
+    <span class="tb-ver" id="syl-ver">v1.4-import-ops</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -516,7 +517,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v1.3-next-month-default';
+  window.SYLLABUS_VERSION = 'v1.4-import-ops-source';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -2198,6 +2199,40 @@
   // 항목 정의: 라벨 + 현재 강좌(state)에 적용하는 함수 + 모드 지원여부
   function sylDeepCopy(v){ return JSON.parse(JSON.stringify(v == null ? null : v)); }
 
+  // 운영본(syllabuses) course → 리빌딩(bmaps) course 구조로 변환 (MCP 검증된 매핑)
+  // rec: 운영 레코드(period, teacher_name) — course엔 없는 공통값을 주입
+  function sylConvertOpsCourse(c, rec){
+    function flagConv(f){ return (f === 'H') ? 'H' : (f === 'S') ? 'S' : ''; }
+    function convSched(arr){
+      return (Array.isArray(arr) ? arr : []).map(function(r){
+        return [ r.date || '', r.day || '', flagConv(r.flag), r.main || '' ];
+      });
+    }
+    var sched = convSched(c.schedule); if(!sched.length) sched = [['', '', '', '']];
+    var week = (Array.isArray(c.weekend) ? c.weekend : [])
+      .filter(function(w){ return w && (w.text || '').trim(); })
+      .map(function(w, i){ return [ (c.weekendLabel && c.weekendLabel.trim()) ? c.weekendLabel : (i+1)+'주', w.text || '' ]; });
+    var curr = (Array.isArray(c.curriculum) ? c.curriculum : []).map(function(cu){ return [ cu.period || '', cu.content || '' ]; });
+    var currOn = curr.some(function(x){ return (x[1] || '').trim(); });
+    var page2 = null;
+    if(Array.isArray(c.extraPages) && c.extraPages[0] && Array.isArray(c.extraPages[0].schedule) && c.extraPages[0].schedule.length){
+      page2 = { on: true, period2: (c.extraPages[0].period2 || c.extraPages[0].period || ''), sched2: convSched(c.extraPages[0].schedule) };
+    }
+    return {
+      brand: '베스티안 수학학원',
+      period: (rec && rec.period) || '',
+      course: c.title || '',
+      teacher: (rec && rec.teacher_name) || '',
+      grade: c.grade || '', time: c.time || '',
+      bookMain: c.mainBook || '', bookSub: c.subBook || '',
+      najeLabel: c.najeLabel || 'N제 시간', najeTime: c.najeTime || '',
+      mockLabel: c.mogiLabel || '모의고사 시간', mockTime: c.mogiTime || '',
+      photo: null, feature: c.feature || '',
+      sched: sched, week: week, curr: currOn ? curr : null, currOn: currOn,
+      maxfs: 15, page2: page2
+    };
+  }
+
   var SYL_IMPORT_ITEMS = {
     basic: {
       label: '기본 정보',
@@ -2287,22 +2322,40 @@
     // 배경(딤) 클릭 시 닫기 — 모달 박스 클릭은 유지
     pop.addEventListener('mousedown', function(e){ if(e.target === pop) sylCloseImportPop(); });
 
-    // 대상 선생님의 저장본들 조회 → 강좌 단위로 펼침
+    // 대상 선생님의 저장본들 조회 → 강좌 단위로 펼침 (새 진도계획서 + 운영본 둘 다)
     var tgt = sylTarget();
     var body = pop.querySelector('.ip-body');
     try {
+      var entries = [];   // {period, courseName, course, srcLabel}
+
+      // (1) 새 진도계획서(bmaps_syllabuses)
       var res = await db.from('bmaps_syllabuses')
         .select('id, period, courses, updated_at')
         .eq('teacher_id', tgt.id)
         .order('updated_at', { ascending: false });
       if(res.error) throw res.error;
-      var rows = res.data || [];
-      var entries = [];   // {period, courseName, course}
-      rows.forEach(function(r){
+      (res.data || []).forEach(function(r){
         (Array.isArray(r.courses) ? r.courses : []).forEach(function(c){
-          entries.push({ period: r.period, courseName: (c.course && String(c.course).trim()) ? c.course : '(강좌명 없음)', course: c });
+          entries.push({ period: r.period, courseName: (c.course && String(c.course).trim()) ? c.course : '(강좌명 없음)', course: c, srcLabel: '' });
         });
       });
+
+      // (2) 운영본(syllabuses) — 읽기 전용. 변환해서 합침. 실패해도 (1)은 유지.
+      try {
+        var resOps = await db.from('syllabuses')
+          .select('id, teacher_name, period, courses, updated_at')
+          .eq('teacher_id', tgt.id)
+          .order('period', { ascending: false });
+        if(!resOps.error && Array.isArray(resOps.data)){
+          resOps.data.forEach(function(r){
+            (Array.isArray(r.courses) ? r.courses : []).forEach(function(c){
+              var conv = sylConvertOpsCourse(c, r);
+              entries.push({ period: r.period, courseName: (conv.course && conv.course.trim()) ? conv.course : '(강좌명 없음)', course: conv, srcLabel: '운영' });
+            });
+          });
+        }
+      } catch(opsErr){ console.warn('운영본 불러오기 생략:', opsErr && opsErr.message ? opsErr.message : opsErr); }
+
       if(!entries.length){
         body.innerHTML = '<div class="ip-empty">불러올 저장본이 없습니다.</div>';
         return;
@@ -2317,8 +2370,9 @@
       }
       var listHtml = '';
       entries.forEach(function(en, i){
+        var badge = en.srcLabel ? ('<span class="ip-src">' + esc(en.srcLabel) + '</span>') : '';
         listHtml += '<div class="ip-item" data-idx="' + i + '">'
-          + '<div>' + esc(en.courseName) + '</div>'
+          + '<div>' + esc(en.courseName) + badge + '</div>'
           + '<div class="ip-when">' + esc(en.period || '') + '</div></div>';
       });
       body.innerHTML = modeHtml + listHtml;
