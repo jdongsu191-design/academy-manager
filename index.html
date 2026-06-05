@@ -9514,7 +9514,7 @@ async function generateTeacherMonthlyReport() {
         .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
         .eq('status','done')
         .or('from_teacher_id.eq.'+currentUser.id+',to_teacher_id.eq.'+currentUser.id)
-        .gte('transfer_date', monthStart).lte('transfer_date', monthEnd)
+        .gte('transfer_date', monthStart)   // 상한 제거: 조회월 이후 전반까지 로드(과거 시점 소속 복원용)
     ]);
 
     _tmrData = {
@@ -9588,8 +9588,32 @@ function mrGetTeacherReportFromData(tid, d) {
   });
   var inIds = new Set(myIn.map(function(t){ return t.student && t.student.id; }));
 
+  // [전반 시점 보정] 조회월 이후(transfer_date > monthEnd)에 일어난 전반 처리:
+  //  - from===tid(나중에 나간 학생): 조회월엔 본인 소속이었으므로 명단에 복원
+  //  - to===tid(나중에 받은 학생): 조회월엔 본인 소속이 아니었으므로 제외
+  var afterOut = (d.transfers || []).filter(function(t){
+    return t.from_teacher && t.from_teacher.id === tid && t.transfer_date > d.monthEnd;
+  });
+  var afterInIds = new Set((d.transfers || []).filter(function(t){
+    return t.to_teacher && t.to_teacher.id === tid && t.transfer_date > d.monthEnd;
+  }).map(function(t){ return t.student && t.student.id; }));
+  var activeAtStart = function(s){
+    var ea = s.enrolled_at || '1900-01-01';
+    if(!(ea < d.monthStart)) return false;
+    var wa = (s.last_class_date || s.withdrawn_at) || '9999-12-31';
+    return wa >= d.monthStart;
+  };
+  var activeAtEnd = function(s){
+    var ea = s.enrolled_at || '1900-01-01';
+    if(ea > d.monthEnd) return false;
+    if(s.status === 'active') return true;
+    var wa = s.last_class_date || s.withdrawn_at;
+    return !!(wa && wa > d.monthEnd);
+  };
+
   var startBase = (d.allStudents || []).filter(function(s) {
     if (s.teacher_id !== tid) return false;
+    if (afterInIds.has(s.id)) return false;   // 조회월 이후 전입 → 조회월엔 본인 소속 아님
     var ea = s.enrolled_at || '1900-01-01';
     var wa = (s.last_class_date || s.withdrawn_at) || '9999-12-31';
     return ea < d.monthStart && wa >= d.monthStart && !inIds.has(s.id);
@@ -9604,16 +9628,26 @@ function mrGetTeacherReportFromData(tid, d) {
 
   var endStudents = (d.allStudents || []).filter(function(s) {
     if (s.teacher_id !== tid) return false;
+    if (afterInIds.has(s.id)) return false;   // 조회월 이후 전입 → 제외
     if (s.status === 'active' && (!s.enrolled_at || s.enrolled_at <= d.monthEnd)) return true;
     if (s.status === 'inactive' && (s.last_class_date || s.withdrawn_at) &&
         (s.last_class_date || s.withdrawn_at) > d.monthEnd) return true;
     return false;
   });
 
-  var myNew = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid; });
+  var myNew = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid && !afterInIds.has(s.id); });
   var myWithdrawn = (d.allStudents || []).filter(function(s) {
     var lc = s.last_class_date || s.withdrawn_at;
-    return s.teacher_id === tid && s.status === 'inactive' && lc && lc >= d.monthStart && lc <= d.monthEnd;
+    return s.teacher_id === tid && !afterInIds.has(s.id) && s.status === 'inactive' && lc && lc >= d.monthStart && lc <= d.monthEnd;
+  });
+
+  // 조회월 이후 나간 학생(afterOut) → 조회월 시점엔 본인 소속이므로 명단에 복원 (과거 반은 미지정 처리)
+  afterOut.forEach(function(t){
+    var s = t.student; if(!s) return;
+    var sc = Object.assign({}, s, { class_id: null });
+    if(activeAtStart(s)) startStudents.push(sc);
+    if(activeAtEnd(s)) endStudents.push(sc);
+    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) myNew.push(sc);
   });
 
   return { teacher, sg, najeLabel, getBranch, groupByClass, startStudents, myNew, myWithdrawn, myIn, myOut, endStudents };
@@ -9743,7 +9777,7 @@ async function generateMonthlyReport() {
       db.from('transfer_requests')
         .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
         .eq('status','done')
-        .gte('transfer_date', monthStart).lte('transfer_date', monthEnd)
+        .gte('transfer_date', monthStart)   // 상한 제거: 조회월 이후 전반까지 로드(과거 시점 소속 복원용)
     ]);
 
     _mrData = {
@@ -9834,7 +9868,29 @@ function mrGetTeacherReport(tid) {
   });
   var inIds = new Set(myIn.map(function(t){ return t.student && t.student.id; }));
 
+  // [전반 시점 보정] 조회월 이후 전반: from===tid 복원 / to===tid 제외
+  var afterOut = (d.transfers || []).filter(function(t){
+    return t.from_teacher && t.from_teacher.id === tid && t.transfer_date > d.monthEnd;
+  });
+  var afterInIds = new Set((d.transfers || []).filter(function(t){
+    return t.to_teacher && t.to_teacher.id === tid && t.transfer_date > d.monthEnd;
+  }).map(function(t){ return t.student && t.student.id; }));
+  var _activeAtStart = function(s){
+    var ea = s.enrolled_at || '1900-01-01';
+    if(!(ea < d.monthStart)) return false;
+    var wa = (s.last_class_date || s.withdrawn_at) || '9999-12-31';
+    return wa >= d.monthStart;
+  };
+  var _activeAtEnd = function(s){
+    var ea = s.enrolled_at || '1900-01-01';
+    if(ea > d.monthEnd) return false;
+    if(s.status === 'active') return true;
+    var wa = s.last_class_date || s.withdrawn_at;
+    return !!(wa && wa > d.monthEnd);
+  };
+
   var startBase    = myStudents.filter(function(s){
+    if (afterInIds.has(s.id)) return false;
     var ea = s.enrolled_at || '1900-01-01';
     var wa = (s.last_class_date || s.withdrawn_at) || '9999-12-31';
     return ea < d.monthStart && wa >= d.monthStart && !inIds.has(s.id);
@@ -9847,13 +9903,23 @@ function mrGetTeacherReport(tid) {
   });
   var startStudents = startBase.concat(startFromOut.map(function(t){ return t.student; }));
 
-  var myNew = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid; });
+  var myNew = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid && !afterInIds.has(s.id); });
   var myWithdrawn = myStudents.filter(function(s){
     var lc = s.last_class_date || s.withdrawn_at;
-    return s.status === 'inactive' && lc && lc >= d.monthStart && lc <= d.monthEnd;
+    return !afterInIds.has(s.id) && s.status === 'inactive' && lc && lc >= d.monthStart && lc <= d.monthEnd;
   });
   var endStudents = myStudents.filter(function(s){
+    if (afterInIds.has(s.id)) return false;
     return s.status === 'active' && s.enrolled_at && s.enrolled_at <= d.monthEnd;
+  });
+
+  // 조회월 이후 나간 학생 복원 (과거 반 미지정)
+  afterOut.forEach(function(t){
+    var s = t.student; if(!s) return;
+    var sc = Object.assign({}, s, { class_id: null });
+    if(_activeAtStart(s)) startStudents.push(sc);
+    if(_activeAtEnd(s)) endStudents.push(sc);
+    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) myNew.push(sc);
   });
 
   return { teacher, getBranch: _getBranch, sg: _sg, najeLabel: _najeLabel, groupByClass: _groupByClass, startStudents, myNew, myWithdrawn, myIn, myOut, endStudents };
