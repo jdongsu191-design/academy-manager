@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v1.5-month-picker]</title>
+<title>BMAPS · 진도계획서 제작 [v1.6-login]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -285,16 +285,35 @@
       <div class="bk-ico">🔒</div>
       <div class="bk-msg" id="syl-blocker-msg">접근 권한을 확인하는 중입니다…</div>
       <div class="bk-status" id="syl-auth-status"></div>
+      <!-- 로그인 폼 (미로그인 시 표시) -->
+      <div id="syl-login-form" style="display:none;margin-top:16px;text-align:left">
+        <div style="margin-bottom:8px">
+          <label style="display:block;font-size:12px;font-weight:700;color:#64748b;margin-bottom:3px">아이디</label>
+          <input id="syl-login-id" type="text" placeholder="아이디 입력" autocomplete="username"
+            style="width:100%;padding:9px 11px;border:1.5px solid #d1d8e0;border-radius:8px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="display:block;font-size:12px;font-weight:700;color:#64748b;margin-bottom:3px">비밀번호</label>
+          <input id="syl-login-pw" type="password" placeholder="비밀번호 입력" autocomplete="current-password"
+            style="width:100%;padding:9px 11px;border:1.5px solid #d1d8e0;border-radius:8px;font-size:13px;box-sizing:border-box"
+            onkeydown="if(event.key==='Enter')sylDoLogin()">
+        </div>
+        <button type="button" onclick="sylDoLogin()" id="syl-login-btn"
+          style="width:100%;padding:10px;background:#6e2b3d;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">로그인</button>
+        <div id="syl-login-err" style="margin-top:8px;font-size:12px;color:#dc2626;text-align:center;min-height:16px"></div>
+      </div>
     </div>
   </div>
 
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v1.5-month-picker</span>
+    <span class="tb-ver" id="syl-ver">v1.6-login</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
+    <button type="button" id="syl-logout-btn" onclick="sylLogout()"
+      style="margin-left:10px;padding:5px 12px;border:1px solid #d1d8e0;background:#fff;color:#64748b;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">로그아웃</button>
   </div>
 
   <!-- 본문 셸 -->
@@ -521,7 +540,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v1.5-month-picker';
+  window.SYLLABUS_VERSION = 'v1.6-self-login';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1386,6 +1405,43 @@
      [AUTH] localStorage savedUserId -> users -> role (teacher/admin 허용)
             nje.html 패턴 동일. 같은 도메인이라 메인과 localStorage 공유.
   ============================================================ */
+  // 자체 로그인 (메인과 동일 방식: username+password로 users 조회). 성공 시 savedUserId 저장 후 리로드.
+  async function sylDoLogin(){
+    var idEl = document.getElementById('syl-login-id');
+    var pwEl = document.getElementById('syl-login-pw');
+    var errEl = document.getElementById('syl-login-err');
+    var btn = document.getElementById('syl-login-btn');
+    var username = (idEl && idEl.value || '').trim();
+    var password = (pwEl && pwEl.value || '').trim();
+    if(errEl) errEl.textContent = '';
+    if(!username || !password){ if(errEl) errEl.textContent = '아이디와 비밀번호를 입력하세요.'; return; }
+    if(btn){ btn.disabled = true; btn.textContent = '로그인 중…'; }
+    try{
+      var res = await db.from('users').select('*').eq('username', username).eq('password', password).maybeSingle();
+      var data = res.data;
+      if(res.error || !data){ if(errEl) errEl.textContent = '아이디 또는 비밀번호가 올바르지 않습니다.'; return; }
+      if(data.role !== 'teacher' && data.role !== 'admin'){ if(errEl) errEl.textContent = '진도계획서 권한이 없는 계정입니다 (선생님/관리자 전용).'; return; }
+      if(data.status === 'pending'){ if(errEl) errEl.textContent = '관리자 승인 대기 중인 계정입니다.'; return; }
+      if(data.status === 'inactive' || data.deleted_at){ if(errEl) errEl.textContent = '비활성화된 계정입니다.'; return; }
+      // 성공 → 메인과 동일하게 저장 후 리로드(기존 인증·초기화 흐름 재사용)
+      localStorage.setItem('savedUserId', data.id);
+      localStorage.setItem('savedUserRole', data.role);
+      location.reload();
+    } catch(e){
+      if(errEl) errEl.textContent = '로그인 처리 중 오류가 발생했습니다.';
+      console.warn('sylDoLogin:', e && e.message ? e.message : e);
+    } finally {
+      if(btn){ btn.disabled = false; btn.textContent = '로그인'; }
+    }
+  }
+
+  // 로그아웃: 저장된 로그인 정보 제거 후 리로드 (로그인 폼으로 복귀)
+  function sylLogout(){
+    if(!confirm('로그아웃할까요?\n저장하지 않은 변경 내용은 사라집니다.')) return;
+    try { localStorage.removeItem('savedUserId'); localStorage.removeItem('savedUserRole'); } catch(e){}
+    location.reload();
+  }
+
   async function syllabusInitAuth(){
     var statusEl = document.getElementById('syl-auth-status');
     var msgEl = document.getElementById('syl-blocker-msg');
@@ -1393,23 +1449,33 @@
     var topbar = document.getElementById('syl-topbar');
     var shell = document.getElementById('syl-shell');
 
-    function block(msg, status){
+    function block(msg, status, showLogin){
       msgEl.textContent = msg;
       statusEl.textContent = status || '';
       blocker.style.display = 'flex';
       topbar.style.display = 'none';
       shell.classList.remove('ready');
+      var lf = document.getElementById('syl-login-form');
+      if(lf) lf.style.display = showLogin ? 'block' : 'none';
+      if(showLogin){
+        var idEl = document.getElementById('syl-login-id');
+        if(idEl) setTimeout(function(){ idEl.focus(); }, 50);
+      }
     }
 
     try{
       var savedId = localStorage.getItem('savedUserId');
-      if(!savedId){ block('로그인이 필요합니다. BMAPS 메인에서 로그인 후 다시 열어주세요.', '미로그인'); return; }
+      if(!savedId){ block('진도계획서를 작성하려면 로그인하세요.', '', true); return; }
 
       var res = await db.from('users').select('*').eq('id', savedId).single();
       var data = res.data, error = res.error;
-      if(error || !data){ block('계정 조회에 실패했습니다.', '계정 조회 실패'); return; }
+      if(error || !data){ block('계정 조회에 실패했습니다. 다시 로그인해 주세요.', '계정 조회 실패', true); return; }
       if(data.role !== 'teacher' && data.role !== 'admin'){
-        block('진도계획서 제작 권한이 없습니다 (선생님/관리자 전용).', data.name + ' (' + data.role + ')');
+        block('진도계획서 제작 권한이 없습니다 (선생님/관리자 전용). 다른 계정으로 로그인하세요.', data.name + ' (' + data.role + ')', true);
+        return;
+      }
+      if(data.status === 'inactive' || data.deleted_at){
+        block('비활성화된 계정입니다. 다른 계정으로 로그인하세요.', data.name || '', true);
         return;
       }
 
