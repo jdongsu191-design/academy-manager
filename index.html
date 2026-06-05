@@ -9499,7 +9499,7 @@ async function generateTeacherMonthlyReport() {
     var { data: teacherRow } = await db.from('users')
       .select('id,name,branch_id').eq('id', currentUser.id).single();
 
-    var [classRes, studentRes, newStudentRes, transferRes] = await Promise.all([
+    var [classRes, studentRes, newStudentRes, transferRes, histRes] = await Promise.all([
       db.from('classes').select('id,name,teacher_id')
         .eq('teacher_id', currentUser.id).eq('active', true),
       db.from('users')
@@ -9514,7 +9514,10 @@ async function generateTeacherMonthlyReport() {
         .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
         .eq('status','done')
         .or('from_teacher_id.eq.'+currentUser.id+',to_teacher_id.eq.'+currentUser.id)
-        .gte('transfer_date', monthStart)   // 상한 제거: 조회월 이후 전반까지 로드(과거 시점 소속 복원용)
+        .gte('transfer_date', monthStart),   // 상한 제거: 조회월 이후 전반까지 로드(과거 시점 소속 복원용)
+      db.from('student_class_history')
+        .select('student_id, from_teacher_id, from_class_name, changed_date')
+        .eq('from_teacher_id', currentUser.id)
     ]);
 
     _tmrData = {
@@ -9523,7 +9526,8 @@ async function generateTeacherMonthlyReport() {
       classes:     classRes.data     || [],
       allStudents: studentRes.data   || [],
       newStudents: newStudentRes.data || [],
-      transfers:   transferRes.data  || []
+      transfers:   transferRes.data  || [],
+      history:     histRes.data      || []
     };
 
     var r = mrGetTeacherReportFromData(teacherRow.id, _tmrData);
@@ -9641,10 +9645,18 @@ function mrGetTeacherReportFromData(tid, d) {
     return s.teacher_id === tid && !afterInIds.has(s.id) && s.status === 'inactive' && lc && lc >= d.monthStart && lc <= d.monthEnd;
   });
 
-  // 조회월 이후 나간 학생(afterOut) → 조회월 시점엔 본인 소속이므로 명단에 복원 (과거 반은 미지정 처리)
+  // 조회월 이후 나간 학생(afterOut) → 조회월 시점엔 본인 소속이므로 명단에 복원
+  // 과거 반 이름은 student_class_history(from_class_name)에서 복원 (없으면 미지정)
+  var pastClassOf = function(studentId){
+    var recs = (d.history || []).filter(function(h){
+      return h.student_id === studentId && h.from_teacher_id === tid
+        && h.changed_date && h.changed_date > d.monthEnd && h.from_class_name;
+    }).sort(function(a,b){ return a.changed_date < b.changed_date ? -1 : 1; });
+    return recs.length ? recs[0].from_class_name : '';
+  };
   afterOut.forEach(function(t){
     var s = t.student; if(!s) return;
-    var sc = Object.assign({}, s, { class_id: null });
+    var sc = Object.assign({}, s, { class_id: null, _pastClassName: pastClassOf(s.id) });
     if(activeAtStart(s)) startStudents.push(sc);
     if(activeAtEnd(s)) endStudents.push(sc);
     if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) myNew.push(sc);
@@ -9765,7 +9777,7 @@ async function generateMonthlyReport() {
     var { data: teachers } = await tQuery;
     if (!teachers || !teachers.length) { alert('선생님이 없습니다'); return; }
 
-    var [classRes, studentRes, newStudentRes, transferRes] = await Promise.all([
+    var [classRes, studentRes, newStudentRes, transferRes, histRes] = await Promise.all([
       db.from('classes').select('id,name,teacher_id').eq('active', true),
       db.from('users')
         .select('id,name,school,grade,teacher_id,class_id,status,enrolled_at,withdrawn_at,last_class_date,naje_steps,withdraw_reason')
@@ -9777,7 +9789,9 @@ async function generateMonthlyReport() {
       db.from('transfer_requests')
         .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
         .eq('status','done')
-        .gte('transfer_date', monthStart)   // 상한 제거: 조회월 이후 전반까지 로드(과거 시점 소속 복원용)
+        .gte('transfer_date', monthStart),   // 상한 제거: 조회월 이후 전반까지 로드(과거 시점 소속 복원용)
+      db.from('student_class_history')
+        .select('student_id, from_teacher_id, from_class_name, changed_date')
     ]);
 
     _mrData = {
@@ -9786,7 +9800,8 @@ async function generateMonthlyReport() {
       classes:     classRes.data     || [],
       allStudents: studentRes.data   || [],
       newStudents: newStudentRes.data || [],
-      transfers:   transferRes.data  || []
+      transfers:   transferRes.data  || [],
+      history:     histRes.data      || []
     };
     _mrCurrentTeacherId = teachers[0].id;
 
@@ -9913,10 +9928,17 @@ function mrGetTeacherReport(tid) {
     return s.status === 'active' && s.enrolled_at && s.enrolled_at <= d.monthEnd;
   });
 
-  // 조회월 이후 나간 학생 복원 (과거 반 미지정)
+  // 조회월 이후 나간 학생 복원 (과거 반은 student_class_history에서)
+  var _pastClassOf = function(studentId){
+    var recs = (d.history || []).filter(function(h){
+      return h.student_id === studentId && h.from_teacher_id === tid
+        && h.changed_date && h.changed_date > d.monthEnd && h.from_class_name;
+    }).sort(function(a,b){ return a.changed_date < b.changed_date ? -1 : 1; });
+    return recs.length ? recs[0].from_class_name : '';
+  };
   afterOut.forEach(function(t){
     var s = t.student; if(!s) return;
-    var sc = Object.assign({}, s, { class_id: null });
+    var sc = Object.assign({}, s, { class_id: null, _pastClassName: _pastClassOf(s.id) });
     if(_activeAtStart(s)) startStudents.push(sc);
     if(_activeAtEnd(s)) endStudents.push(sc);
     if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) myNew.push(sc);
@@ -9965,6 +9987,7 @@ function mrBuildReportHTML(r, d, branchName, forImage) {
   if (d.classes) d.classes.forEach(function(c){ classMap[c.id] = c; });
   // 반 이름은 '해당 선생님 소속 반'일 때만 사용 (전반 등으로 class_id가 타 선생님 반이면 미지정)
   var getClassName = function(s) {
+    if (s._pastClassName) return s._pastClassName;   // 복원 학생: 과거 반 이름(이력)
     var c = classMap[s.class_id];
     return (c && c.teacher_id === teacher.id) ? c.name : '반 미지정';
   };
