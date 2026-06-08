@@ -3057,10 +3057,39 @@
       <div id="myQuestionList"><div style="text-align:center;padding:30px;color:#9ca3af;font-size:13px">불러오는 중...</div></div>
     </div>
     <div id="spanel-naje" class="spanel" style="display:none;padding:20px;">
-      <div class="panel-placeholder">
-        <div class="panel-placeholder-icon">📐</div>
-        <div class="panel-placeholder-text">N제</div>
-        <div class="panel-placeholder-sub">구현 예정</div>
+      <!-- 목록 화면 -->
+      <div id="student-naje-list">
+        <div style="font-size:20px;font-weight:700;margin-bottom:4px;color:#1a1a2e">📐 N제</div>
+        <div style="font-size:13px;color:#6b7280;margin-bottom:16px">풀고 싶은 N제를 선택하세요</div>
+        <div id="student-naje-cards"></div>
+      </div>
+
+      <!-- 단계 선택 화면 (3-b) -->
+      <div id="student-naje-step-select" style="display:none">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+          <button onclick="closeStudentNajeStepSelect()" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-sub)">← 목록</button>
+          <div id="student-naje-step-title" style="font-size:15px;font-weight:700;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1a1a2e"></div>
+        </div>
+        <div id="student-naje-step-grid" style="display:grid;gap:10px"></div>
+      </div>
+
+      <!-- 문제 풀이 화면 (3-c) -->
+      <div id="student-naje-viewer" style="display:none">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+          <button onclick="backToStepSelect()" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-sub)">← 단계</button>
+          <div id="student-naje-viewer-title" style="font-size:14px;font-weight:700;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1a1a2e"></div>
+        </div>
+        <div id="naje-problem-nav" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px"></div>
+        <div id="naje-problem-body"></div>
+      </div>
+
+      <!-- 결과 화면 (3-d) -->
+      <div id="student-naje-result" style="display:none">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+          <button onclick="closeStudentNajeViewer()" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-sub)">← 단계</button>
+          <div id="naje-result-title" style="font-size:14px;font-weight:700;flex:1;min-width:0;color:#1a1a2e"></div>
+        </div>
+        <div id="naje-result-body"></div>
       </div>
     </div>
   </div>
@@ -4029,6 +4058,144 @@ async function deleteMyQuestion(id, title) {
     .eq('id', id).eq('student_id', currentUser.id);
   if (error) { alert('삭제 중 오류가 발생했습니다: ' + error.message); return; }
   loadMyQuestions();
+}
+
+/* ============================================================
+   [SECTION: STUDENT - NAJE] 학생 N제 (목록/단계선택/풀이/결과)
+   8문제 = 1단계. assignments.steps(부여 단계) + excluded_problems(부분 제외).
+   채점: naje_problems.correct_answer ↔ naje_answers.answer (normalizeAnswer).
+============================================================ */
+// 8문제 단위 단계 번호 범위 (NAJE_STAGES와 동일 기준, 1~10단계 + 11=킬러)
+var NAJE_STAGE_START = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
+var NAJE_STAGE_END   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
+
+// 학생 N제 전역 상태
+var _studentNajeAssignments = [];
+var _studentNajeSets = [];
+var _najeAllProblems = [];
+var _najeCurrentSetTitle = '';
+var _najeCurrentStep = null;
+var _najeAssignedSteps = [];
+var _najeExcludedProblems = new Set();
+var _najeNavOpen = -1;
+var studentNajeSetId = null;
+var studentNajeAnswers = {};
+var studentNajeProblems = [];
+var studentNajeCurrentIdx = 0;
+
+async function loadStudentNaje() {
+  var listEl = document.getElementById('student-naje-list');
+  var cardsEl = document.getElementById('student-naje-cards');
+  if (!cardsEl) return;
+  // 화면 초기화: 목록만 표시
+  listEl.style.display = 'block';
+  document.getElementById('student-naje-step-select').style.display = 'none';
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'none';
+  cardsEl.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af;font-size:13px">불러오는 중...</div>';
+
+  try {
+    // 1) 부여된 N제 (assignments)
+    var { data: assignments } = await db.from('naje_assignments')
+      .select('set_id,steps,excluded_problems').eq('student_id', currentUser.id);
+    _studentNajeAssignments = assignments || [];
+    var assignedSetIds = (assignments || []).map(function(a){ return a.set_id; });
+
+    if (!assignedSetIds.length) {
+      cardsEl.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#9ca3af;font-size:13px"><div style="font-size:40px;margin-bottom:10px">📭</div><div>선생님이 아직 N제를 부여하지 않았어요</div></div>';
+      return;
+    }
+
+    // 2) N제 정보 (등록일 내림차순)
+    var { data: setsData } = await db.from('naje_sets')
+      .select('*').in('id', assignedSetIds).order('created_at', { ascending: false });
+    var sets = setsData || [];
+    _studentNajeSets = sets;
+    if (!sets.length) {
+      cardsEl.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#9ca3af;font-size:13px">N제 정보를 불러올 수 없어요</div>';
+      return;
+    }
+
+    // 3) 전체 문항 + 학생 답안 → 진행률 계산
+    var { data: allProblems } = await db.from('naje_problems')
+      .select('id,set_id,problem_number').in('set_id', assignedSetIds);
+    var { data: allAnswers } = await db.from('naje_answers')
+      .select('problem_id,answer,set_id').eq('student_id', currentUser.id).in('set_id', assignedSetIds);
+
+    var answeredSet = new Set();
+    (allAnswers || []).forEach(function(a){
+      if (a.answer && String(a.answer).trim() !== '') answeredSet.add(a.problem_id);
+    });
+    var problemsBySet = {};
+    (allProblems || []).forEach(function(p){
+      if (!problemsBySet[p.set_id]) problemsBySet[p.set_id] = [];
+      problemsBySet[p.set_id].push(p);
+    });
+
+    // 4) 카드 생성
+    cardsEl.innerHTML = sets.map(function(s){
+      var assignment = (assignments || []).find(function(a){ return a.set_id === s.id; });
+      var assignedSteps = (assignment && Array.isArray(assignment.steps)) ? assignment.steps.slice() : [];
+      assignedSteps.sort(function(a,b){ return a-b; });
+
+      // 부여 단계의 문제 번호 집합
+      var assignedNumbers = new Set();
+      assignedSteps.forEach(function(stepNum){
+        var idx = stepNum - 1;
+        if (idx < 0 || idx >= NAJE_STAGE_START.length) return;
+        for (var n = NAJE_STAGE_START[idx]; n <= NAJE_STAGE_END[idx]; n++) assignedNumbers.add(n);
+      });
+      // 부분 부여: excluded 제거
+      var excluded = (assignment && Array.isArray(assignment.excluded_problems)) ? assignment.excluded_problems : [];
+      excluded.forEach(function(n){ assignedNumbers.delete(n); });
+
+      var setProblems = problemsBySet[s.id] || [];
+      var targetProblems = setProblems.filter(function(p){ return assignedNumbers.has(p.problem_number); });
+      var totalCnt = targetProblems.length;
+      var doneCnt = targetProblems.filter(function(p){ return answeredSet.has(p.id); }).length;
+      var pct = totalCnt > 0 ? Math.round(doneCnt / totalCnt * 100) : 0;
+
+      var statusLabel, statusColor, statusBg, barColor, cardBorderColor;
+      if (totalCnt === 0) {
+        statusLabel = '⚠️ 문제 없음'; statusColor = '#9ca3af'; statusBg = '#f3f4f6'; barColor = '#9ca3af'; cardBorderColor = '#e5e7eb';
+      } else if (doneCnt === 0) {
+        statusLabel = '⭕ 시작 전'; statusColor = '#6b7280'; statusBg = '#f3f4f6'; barColor = '#9ca3af'; cardBorderColor = '#e5e7eb';
+      } else if (doneCnt === totalCnt) {
+        statusLabel = '✅ 완료'; statusColor = '#15803d'; statusBg = '#dcfce7'; barColor = '#22c55e'; cardBorderColor = '#bbf7d0';
+      } else {
+        statusLabel = '🔵 진행 중'; statusColor = '#1d4ed8'; statusBg = '#dbeafe'; barColor = '#3b82f6'; cardBorderColor = '#bfdbfe';
+      }
+
+      var stagesText = assignedSteps.length > 0 ? (assignedSteps.join(', ') + '단계') : '단계 없음';
+
+      return '<div onclick="onStudentNajeCardClick(\'' + s.id + '\')" '
+        + 'style="background:#fff;border:1.5px solid ' + cardBorderColor + ';border-radius:14px;padding:14px 16px;margin-bottom:12px;cursor:pointer;user-select:none">'
+        + '<div style="font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:8px;line-height:1.4">' + _esc(s.title) + '</div>'
+        + '<div style="font-size:12px;color:#6b7280;margin-bottom:10px">📄 부여 단계: <b style="color:#1d4ed8">' + _esc(stagesText) + '</b></div>'
+        + '<div style="height:8px;background:#f1f5f9;border-radius:100px;overflow:hidden;margin-bottom:6px">'
+        +   '<div style="height:100%;width:' + pct + '%;background:' + barColor + ';border-radius:100px;transition:width 0.3s"></div>'
+        + '</div>'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px">'
+        +   '<span style="color:#6b7280;font-weight:600">' + doneCnt + '/' + totalCnt + ' 문항 (' + pct + '%)</span>'
+        +   '<span style="padding:3px 10px;border-radius:12px;background:' + statusBg + ';color:' + statusColor + ';font-weight:700;font-size:11px">' + statusLabel + '</span>'
+        + '</div>'
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    console.error('[loadStudentNaje]', e);
+    cardsEl.innerHTML = '<div style="text-align:center;padding:30px;color:#dc2626;font-size:13px">N제를 불러오지 못했습니다</div>';
+  }
+}
+
+// 카드 클릭 → 단계 선택 화면 (3-b에서 구현)
+function onStudentNajeCardClick(setId) {
+  var s = (_studentNajeSets || []).find(function(x){ return x.id === setId; });
+  if (!s) return;
+  if (typeof openStudentNajeViewer === 'function') {
+    openStudentNajeViewer(setId, s.title);
+  } else {
+    alert('단계 선택 화면은 다음 단계에서 구현됩니다.');
+  }
 }
 
 /* ============================================================
