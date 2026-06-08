@@ -3133,7 +3133,7 @@
           <button onclick="closeStudentNajeViewer()" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-sub)">← 단계</button>
           <div id="naje-result-title" style="font-size:14px;font-weight:700;flex:1;min-width:0;color:#1a1a2e"></div>
         </div>
-        <div id="naje-result-body"></div>
+        <div id="naje-result-list"></div>
       </div>
     </div>
   </div>
@@ -4508,7 +4508,101 @@ function backToStepSelect() {
 
 // [임시 stub] 3-d(결과)에서 실제 구현으로 교체
 function viewNajeStepResult(stepNum) {
-  alert('결과 화면은 다음 단계(3-d)에서 구현됩니다. (단계 ' + stepNum + ')');
+  _najeCurrentStep = stepNum;
+  var stageInfo = najeStageInfoByStep(stepNum);
+  if (!stageInfo) return;
+  studentNajeProblems = _najeAllProblems.filter(function(p){
+    if (p.problem_number < stageInfo.from || p.problem_number > stageInfo.to) return false;
+    if (_najeExcludedProblems && _najeExcludedProblems.has(p.problem_number)) return false;
+    return true;
+  });
+  studentNajeCurrentIdx = 0;
+
+  var stepLabel = stepNum <= 10 ? (stepNum + '단계 · ' + stageInfo.name) : ('🔥 킬러 · ' + stageInfo.name);
+  document.getElementById('naje-result-title').textContent = _najeCurrentSetTitle + ' · ' + stepLabel;
+
+  document.getElementById('student-naje-list').style.display = 'none';
+  document.getElementById('student-naje-step-select').style.display = 'none';
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-result').style.display = 'block';
+
+  najeRenderStepResult(stageInfo);
+}
+
+// 결과 렌더 (정답 미노출 — 운영본 정책 동일: 정오/내답/해설QR만)
+function najeRenderStepResult(stageInfo) {
+  var list = document.getElementById('naje-result-list');
+  if (!list) return;
+  var problems = studentNajeProblems;
+  var total = problems.length;
+  var correct = 0, wrong = 0, noAnswer = 0;
+  problems.forEach(function(p){
+    var my = (studentNajeAnswers[p.id] || '').trim();
+    if (!my) { noAnswer++; wrong++; return; }       // 미제출 → 틀린 문항 집계
+    if (!p.correct_answer) return;                   // 정답 없으면 집계 제외
+    if (normalizeAnswer(my) === normalizeAnswer(p.correct_answer)) correct++;
+    else wrong++;
+  });
+
+  var html = ''
+    + '<div style="background:linear-gradient(135deg,#1a1a2e,#2d3561);border-radius:16px;padding:20px;margin-bottom:16px;color:#fff">'
+    +   '<div style="font-size:11px;opacity:0.6;margin-bottom:6px;letter-spacing:0.5px">' + (stageInfo.step <= 10 ? stageInfo.step + '단계 · ' : '🔥 킬러 · ') + _esc(stageInfo.name) + '</div>'
+    +   '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap">'
+    +     '<div><div style="font-size:38px;font-weight:800;line-height:1;color:#86efac">' + correct + '<span style="font-size:18px;font-weight:500;opacity:0.6;color:#fff">/' + total + '</span></div>'
+    +     '<div style="font-size:12px;opacity:0.7;margin-top:4px">맞은 문항 / 전체</div></div>'
+    +     '<div style="display:flex;gap:16px;text-align:center">'
+    +       '<div><div style="font-size:22px;font-weight:800;color:#86efac">' + correct + '</div><div style="font-size:11px;opacity:0.6">정답</div></div>'
+    +       '<div><div style="font-size:22px;font-weight:800;color:#fca5a5">' + (wrong - noAnswer) + '</div><div style="font-size:11px;opacity:0.6">오답</div></div>'
+    +       (noAnswer > 0 ? '<div><div style="font-size:22px;font-weight:800;opacity:0.4">' + noAnswer + '</div><div style="font-size:11px;opacity:0.4">미제출</div></div>' : '')
+    +     '</div>'
+    +   '</div>'
+    + '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+  problems.forEach(function(p){
+    var my = (studentNajeAnswers[p.id] || '').trim();
+    var hasQr = p.qr_url && String(p.qr_url).startsWith('http');
+    var submitted = !!my;
+    var hasCorrect = !!p.correct_answer;
+    var isCorrect = submitted && hasCorrect && normalizeAnswer(my) === normalizeAnswer(p.correct_answer);
+    var isWrong = submitted && hasCorrect && !isCorrect;
+    var borderColor = isCorrect ? '#86efac' : isWrong ? '#fca5a5' : submitted ? '#93c5fd' : '#e5e7eb';
+    var headerBg = isCorrect ? '#EAF3DE' : isWrong ? '#FCEBEB' : submitted ? '#f0f7ff' : '#f9fafb';
+    var statusDot = isCorrect ? '<span style="font-size:13px;font-weight:800;color:#3B6D11">✅</span>'
+      : isWrong ? '<span style="font-size:13px;font-weight:800;color:#E24B4A">❌</span>'
+      : submitted ? '<span style="width:7px;height:7px;border-radius:50%;background:#178EF5;display:inline-block"></span>'
+      : '<span style="width:7px;height:7px;border-radius:50%;background:#d1d5db;display:inline-block"></span>';
+    var statusText = isCorrect ? '정답' : isWrong ? '오답' : submitted ? '제출' : '미제출';
+    var statusColor = isCorrect ? '#3B6D11' : isWrong ? '#E24B4A' : submitted ? '#178EF5' : '#9ca3af';
+
+    html += '<div style="border:1.5px solid ' + borderColor + ';border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column">'
+      + '<div style="background:' + headerBg + ';padding:7px 10px;display:flex;align-items:center;justify-content:space-between">'
+      +   '<span style="font-size:12px;font-weight:800;color:#1a1a2e">' + p.problem_number + '번</span>'
+      +   '<div style="display:flex;align-items:center;gap:4px">' + statusDot + '<span style="font-size:10px;font-weight:600;color:' + statusColor + '">' + statusText + '</span></div>'
+      + '</div>'
+      + '<div style="flex:1;padding:6px;background:#fafafa">'
+      +   '<img src="' + (p.image_url || '') + '" style="width:100%;border-radius:6px;cursor:zoom-in;display:block" onclick="openImgViewer(this.getAttribute(\'data-src\'))" data-src="' + (p.image_url || '') + '">'
+      + '</div>'
+      + '<div style="padding:8px 10px;border-top:1px solid #f0f0f0">'
+      +   (my ? '<div style="display:flex;align-items:center;gap:6px"><span style="font-size:10px;color:#6b7280;font-weight:600">내 답</span><span style="font-size:15px;font-weight:800;color:#1a1a2e">' + _esc(my) + '</span></div>'
+            : '<span style="font-size:10px;color:#9ca3af">미제출</span>')
+      + '</div>'
+      + (hasQr
+        ? '<a href="' + p.qr_url + '" target="_blank" rel="noopener noreferrer" style="display:flex;align-items:center;justify-content:center;gap:5px;padding:8px;background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;text-decoration:none;font-size:11px;font-weight:700">▶ 해설 강의</a>'
+        : '<div style="padding:7px;background:#f5f6fa;text-align:center;font-size:10px;color:#9ca3af">해설 없음</div>')
+      + '</div>';
+  });
+  html += '</div>';
+  list.innerHTML = html;
+}
+
+// 결과 화면 "← 단계" → 단계 선택 복귀 (진행률 갱신)
+function closeStudentNajeViewer() {
+  document.getElementById('student-naje-result').style.display = 'none';
+  document.getElementById('student-naje-viewer').style.display = 'none';
+  document.getElementById('student-naje-list').style.display = 'none';
+  document.getElementById('student-naje-step-select').style.display = 'block';
+  renderStepSelectGrid(_najeAssignedSteps, _najeExcludedProblems);
 }
 
 async function najeSubmitAll() {
@@ -4539,9 +4633,13 @@ async function najeSubmitAll() {
       var { error } = await db.from('naje_answers').upsert(upserts, { onConflict: 'student_id,problem_id' });
       if (error) throw error;
     }
-    // [임시] 3-d 결과화면 구현 전: 제출 완료 안내 후 단계 선택 복귀(진행률 갱신)
-    alert('✅ 제출 완료! (' + upserts.length + '문항)');
-    backToStepSelect();
+    // 제출 완료 → 결과 화면으로 전환
+    var stageInfo = najeStageInfoByStep(_najeCurrentStep);
+    var stepLabel = (_najeCurrentStep <= 10) ? (_najeCurrentStep + '단계 · ' + (stageInfo ? stageInfo.name : '')) : ('🔥 킬러 · ' + (stageInfo ? stageInfo.name : ''));
+    document.getElementById('naje-result-title').textContent = _najeCurrentSetTitle + ' · ' + stepLabel;
+    document.getElementById('student-naje-viewer').style.display = 'none';
+    document.getElementById('student-naje-result').style.display = 'block';
+    if (stageInfo) najeRenderStepResult(stageInfo);
   } catch(err) {
     alert('제출 오류: ' + (err.message || err));
   } finally {
