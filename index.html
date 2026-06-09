@@ -17808,8 +17808,8 @@ async function openClassStudentModal(classId, className){
 }
 
 function csmSwitchTab(tab){
-  var panels = {current:'csm-panel-current', add:'csm-panel-add'};
-  var tabs   = {current:'csm-tab-current',   add:'csm-tab-add'};
+  var panels = {current:'csm-panel-current', add:'csm-panel-add', xlsx:'csm-panel-xlsx'};
+  var tabs   = {current:'csm-tab-current',   add:'csm-tab-add',   xlsx:'csm-tab-xlsx'};
   Object.keys(panels).forEach(function(k){
     var panel = document.getElementById(panels[k]);
     var btn   = document.getElementById(tabs[k]);
@@ -17820,7 +17820,8 @@ function csmSwitchTab(tab){
     btn.style.color      = active ? '#fff' : '#6b7280';
     btn.style.fontWeight = active ? '700' : '500';
   });
-  if(tab === 'add') csmLoadAddList();
+  if(tab === 'add')  csmLoadAddList();
+  if(tab === 'xlsx') csmXlsxReset();
 }
 
 async function csmLoadCurrentStudents(){
@@ -17934,6 +17935,169 @@ async function csmAddSelected(){
   else alert('✅ '+ok+'명이 ['+_csmClassName+']에 추가됐습니다!');
   csmSwitchTab('current');
   await csmLoadCurrentStudents();
+}
+
+/* ── 내 반 관리: 명단 붙여넣기 일괄등록 탭 (A안 3-b단계) ──────────
+   운영본 파싱 충실 포팅. ★신규 학생 insert는 리빌딩 규약 적응:
+   student_code(RPC 발급)·branch_id(선생님 분원 상속) 추가 — 안 하면
+   로그인 불가/분원필터 누락 계정이 생기므로 필수. */
+var _csmXlsxData = [];
+
+function csmXlsxReset(){
+  _csmXlsxData = [];
+  var preview   = document.getElementById('csm-xlsx-preview');
+  var uploadBtn = document.getElementById('csm-xlsx-upload-btn');
+  var area      = document.getElementById('csm-paste-area');
+  if(preview)   preview.innerHTML = '';
+  if(uploadBtn) uploadBtn.style.display = 'none';
+  if(area)      area.value = '';
+}
+
+function csmNormalizeDate(s){
+  if(!s) return null;
+  s = String(s).trim();
+  if(!s) return null;
+  if(/^\d{4,6}$/.test(s) && parseInt(s) > 30000){
+    var serial = parseInt(s);
+    var msPerDay = 86400000;
+    var excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    var d0 = new Date(excelEpoch.getTime() + serial * msPerDay);
+    if(!isNaN(d0.getTime())) return d0.toISOString().slice(0, 10);
+  }
+  var m = s.match(/^(\d{4})[\-\/\.\s](\d{1,2})[\-\/\.\s](\d{1,2})$/);
+  if(m) return m[1] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[3]).slice(-2);
+  m = s.match(/^(\d{2})[\-\/\.](\d{1,2})[\-\/\.](\d{1,2})$/);
+  if(m) return '20'+m[1] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[3]).slice(-2);
+  m = s.match(/^(\d{1,2})[\-\/\.](\d{1,2})[\-\/\.](\d{4})$/);
+  if(m) return m[3] + '-' + ('0'+m[1]).slice(-2) + '-' + ('0'+m[2]).slice(-2);
+  m = s.match(/^(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일?$/);
+  if(m) return m[1] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[3]).slice(-2);
+  var parsed = new Date(s);
+  if(!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return null;
+}
+
+function csmIsHeaderRow(cols){
+  var headerKeywords = ['학교','학교명','이름','성명','학년','입학일','입학','등록일','date'];
+  var matchCount = 0;
+  cols.forEach(function(c){
+    var lc = (c||'').trim().toLowerCase();
+    headerKeywords.forEach(function(k){ if(lc.indexOf(k.toLowerCase()) !== -1) matchCount++; });
+  });
+  return matchCount >= 2;
+}
+
+function csmParsePaste(){
+  var area = document.getElementById('csm-paste-area');
+  var text = area ? area.value : '';
+  var preview   = document.getElementById('csm-xlsx-preview');
+  var uploadBtn = document.getElementById('csm-xlsx-upload-btn');
+  if(!text.trim()){
+    preview.innerHTML = ''; uploadBtn.style.display = 'none'; _csmXlsxData = []; return;
+  }
+  var lines = text.trim().split(/\r?\n/);
+  var parsed = [];
+  var skippedHeader = false;
+  lines.forEach(function(line){
+    if(!line.trim()) return;
+    var cols = line.split('\t').map(function(c){ return c.trim(); });
+    if(csmIsHeaderRow(cols)){ skippedHeader = true; return; }
+    var school = cols[0] || '';
+    var gradeRaw = cols[1] || '';
+    var name = cols[2] || '';
+    var enrolledRaw = cols[3] || '';
+    var gradeNum = gradeRaw.replace(/[^0-9]/g, '');
+    var enrolledAt = csmNormalizeDate(enrolledRaw);
+    if(name){
+      parsed.push({ school: school, grade: gradeNum, name: name, enrolled_at: enrolledAt, enrolled_raw: enrolledRaw });
+    }
+  });
+  _csmXlsxData = parsed;
+  if(!parsed.length){
+    preview.innerHTML = '<div style="color:#dc2626;font-size:13px;padding:10px">❌ 인식된 학생이 없습니다.<br>A열(학교) · B열(학년) · C열(이름) · D열(입학일) 순서로 셀을 복사해주세요.</div>';
+    uploadBtn.style.display = 'none'; return;
+  }
+  var tableRows = parsed.map(function(d, i){
+    var dateDisplay = d.enrolled_at ? d.enrolled_at
+      : (d.enrolled_raw ? '<span style="color:#dc2626" title="날짜 형식을 인식할 수 없습니다">⚠️ '+d.enrolled_raw+'</span>' : '<span style="color:#9ca3af">-</span>');
+    return '<tr style="background:'+(i%2===0?'#fff':'#f8fafc')+'">'
+      +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:12px;color:#9ca3af">'+(i+1)+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280">'+d.school+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:12px;text-align:center">'+d.grade+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:13px;font-weight:700;color:#1e293b">'+d.name+'</td>'
+      +'<td style="padding:5px 8px;border:1px solid #e5e7eb;font-size:12px;text-align:center">'+dateDisplay+'</td>'
+    +'</tr>';
+  }).join('');
+  var headerNote = skippedHeader ? '<div style="font-size:11px;color:#6b7280;margin-bottom:4px">ℹ️ 제목 행을 자동으로 제외했습니다</div>' : '';
+  preview.innerHTML = headerNote
+    +'<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:6px">✅ 인식된 학생 '+parsed.length+'명</div>'
+    +'<div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">'
+    +'<table style="width:100%;border-collapse:collapse">'
+    +'<thead><tr style="background:#1e293b">'
+    +'<th style="padding:5px 8px;color:#e2e8f0;font-size:11px;text-align:center">#</th>'
+    +'<th style="padding:5px 8px;color:#e2e8f0;font-size:11px;text-align:left">학교</th>'
+    +'<th style="padding:5px 8px;color:#e2e8f0;font-size:11px;text-align:center">학년</th>'
+    +'<th style="padding:5px 8px;color:#e2e8f0;font-size:11px;text-align:left">이름</th>'
+    +'<th style="padding:5px 8px;color:#e2e8f0;font-size:11px;text-align:center">입학일</th>'
+    +'</tr></thead><tbody>'+tableRows+'</tbody></table></div>';
+  uploadBtn.style.display = 'block';
+  uploadBtn.textContent = '✅ '+parsed.length+'명 일괄 등록';
+}
+
+async function csmUploadXlsx(){
+  if(!_csmXlsxData.length){ alert('명단을 먼저 붙여넣으세요'); return; }
+  if(!confirm(_csmXlsxData.length+'명을 ['+_csmClassName+']에 등록할까요?\n이미 존재하는 학생은 반 배정만 업데이트됩니다.')) return;
+  var btn = document.getElementById('csm-xlsx-upload-btn');
+  if(btn){ btn.textContent = '⏳ 등록 중...'; btn.disabled = true; }
+  var ok=0, fail=[], skip=0;
+  for(var i=0; i<_csmXlsxData.length; i++){
+    var d = _csmXlsxData[i];
+    try{
+      var {data: existing} = await db.from('users')
+        .select('id,class_id,class_id2')
+        .eq('role','student').eq('name',d.name)
+        .eq('teacher_id',currentUser.id).eq('status','active');
+      if(existing && existing.length > 0){
+        var s = existing[0];
+        if(s.class_id === _csmClassId || s.class_id2 === _csmClassId){ skip++; continue; }
+        var updateObj = {};
+        if(!s.class_id) updateObj.class_id = _csmClassId;
+        else updateObj.class_id2 = _csmClassId;
+        if(d.school){ updateObj.school = d.school; updateObj.grade = d.grade ? (d.grade+'학년') : null; }
+        if(d.enrolled_at) updateObj.enrolled_at = d.enrolled_at;
+        updateObj.school_level = _csmClassLevel;
+        var {error: uerr} = await db.from('users').update(updateObj).eq('id',s.id);
+        if(uerr) fail.push(d.name); else ok++;
+      } else {
+        // 신규 학생: 리빌딩 규약 — student_code(RPC) + branch_id(선생님 분원) 필수
+        var newCode = await generateStudentCode();
+        var insertObj = {
+          name: d.name,
+          school: d.school||null,
+          grade: d.grade ? (d.grade+'학년') : null,
+          class_id: _csmClassId,
+          role: 'student',
+          status: 'active',
+          teacher_id: currentUser.id,
+          school_level: _csmClassLevel,
+          student_code: newCode,
+          branch_id: currentUser.branch_id || null
+        };
+        if(d.enrolled_at) insertObj.enrolled_at = d.enrolled_at;
+        var {error: ierr} = await db.from('users').insert(insertObj);
+        if(ierr) fail.push(d.name); else ok++;
+      }
+    }catch(e){ fail.push(d.name); }
+  }
+  if(btn){ btn.disabled = false; }
+  await loadTeacherData();
+  var msg = '✅ '+ok+'명 등록 완료';
+  if(skip)  msg += '\n⏭️ '+skip+'명 이미 이 반 소속 (건너뜀)';
+  if(fail.length) msg += '\n❌ 실패: '+fail.join(', ');
+  alert(msg);
+  csmSwitchTab('current');
+  await csmLoadCurrentStudents();
+  csmXlsxReset();
 }
 
 // ── 1000행 제한 돌파용 페이지네이션 헬퍼 ─────────────────────────
@@ -21247,6 +21411,8 @@ tryAutoLogin();
         style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--primary);color:#fff">📋 현재 학생</button>
       <button id="csm-tab-add" onclick="csmSwitchTab('add')"
         style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:#6b7280">➕ 학생 추가</button>
+      <button id="csm-tab-xlsx" onclick="csmSwitchTab('xlsx')"
+        style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:#6b7280">📥 명단 등록</button>
     </div>
     <!-- 현재 학생 목록 -->
     <div id="csm-panel-current">
@@ -21261,6 +21427,21 @@ tryAutoLogin();
       <div id="csm-add-list" style="display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:6px"></div>
       <button onclick="csmAddSelected()" id="csm-add-btn"
         style="width:100%;margin-top:10px;padding:11px;background:var(--primary);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;display:none">✅ 선택한 학생 추가</button>
+    </div>
+    <!-- 명단 붙여넣기 등록 패널 -->
+    <div id="csm-panel-xlsx" style="display:none">
+      <div style="background:#f0f4f8;border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;color:#4b5563;line-height:1.8">
+        📋 <strong>엑셀에서 복사 후 붙여넣기</strong><br>
+        A열(학교명) · B열(학년) · C열(이름) · D열(입학일)<br>
+        <span style="color:#9ca3af">제목 행(학교명/학년/이름/입학일)을 포함해도 자동 인식돼요</span>
+      </div>
+      <textarea id="csm-paste-area"
+        placeholder="엑셀에서 복사한 내용을 여기에 붙여넣으세요 (Ctrl+V)&#10;예) 한서고  3  김민서  2024-04-15"
+        oninput="csmParsePaste()"
+        style="width:100%;height:110px;padding:10px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:13px;outline:none;resize:vertical;box-sizing:border-box;font-family:inherit"></textarea>
+      <div id="csm-xlsx-preview" style="margin-top:10px"></div>
+      <button onclick="csmUploadXlsx()" id="csm-xlsx-upload-btn"
+        style="display:none;width:100%;margin-top:10px;padding:11px;background:#16a34a;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">✅ 학생 일괄 등록</button>
     </div>
     <button class="btn btn-full" onclick="closeModal('classStudents')" style="margin-top:14px">닫기</button>
   </div>
