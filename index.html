@@ -803,7 +803,7 @@
             <div style="font-size:15px;font-weight:700;color:var(--navy)">📋 내 반 관리</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
               <button class="btn btn-sm btn-outline" onclick="alert('준비 중입니다')">📅 시간표 보기</button>
-              <button class="btn btn-sm btn-primary" onclick="alert('준비 중입니다')">+ 반 추가</button>
+              <button class="btn btn-sm btn-primary" onclick="openAddClassModal()">+ 반 추가</button>
             </div>
           </div>
           <div id="classList"><div style="padding:16px;text-align:center;color:#9ca3af;font-size:13px">불러오는 중...</div></div>
@@ -17545,7 +17545,7 @@ function renderClassList(){
         <button onclick="alert('학습진행표는 준비 중입니다')"
           style="flex:1;background:transparent;border:none;border-right:1px solid #f1f5f9;padding:9px 4px;color:#7c3aed;font-size:12px;font-weight:600;cursor:pointer;transition:background 0.1s"
           onmouseover="this.style.background='#f5f3ff'" onmouseout="this.style.background='transparent'">📊 학습진행표</button>
-        <button onclick="alert('준비 중입니다')"
+        <button onclick="openEditClassModal('${c.id}')"
           style="flex:1;background:transparent;border:none;border-right:1px solid #f1f5f9;padding:9px 4px;color:#3b82f6;font-size:12px;font-weight:600;cursor:pointer;transition:background 0.1s"
           onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='transparent'">✏️ 수정</button>
         <button onclick="tcDeleteClass('${c.id}','${nameEsc}')"
@@ -17567,6 +17567,228 @@ async function tcDeleteClass(id, name){
     if (error) throw error;
     await loadTeacherData();   // 끝에서 renderStudents + renderClassList 재호출
   } catch(e){ alert('오류: ' + (e.message||e)); }
+}
+
+/* ── 내 반 관리: 요일/시간 위젯 + 반 추가/수정 (A안 2단계) ─────────
+   운영본 위젯 충실 포팅. class_days는 '·'(\u00B7) 구분, class_time은
+   공통 's~e' 또는 요일별 's~e|s~e' 포맷 — 기존 데이터/카드표시와 동일. */
+var _DAY_IDS = ['mon','tue','wed','thu','fri','sat','sun'];
+var _DAY_KR  = ['월','화','수','목','금','토','일'];
+
+function classLevelSelect(mode, level){
+  var prefix = mode === 'add' ? 'inp-class-level' : 'edit-class-level';
+  var valId  = mode === 'add' ? 'inp-class-level-val' : 'edit-class-level-val';
+  ['high','middle','both'].forEach(function(l){
+    var btn = document.getElementById(prefix+'-'+l);
+    if(!btn) return;
+    var active = l === level;
+    btn.style.borderColor = active ? '#2563eb' : '#d1d5db';
+    btn.style.background  = active ? '#eff6ff' : '#f9fafb';
+    btn.style.color       = active ? '#1d4ed8' : '#6b7280';
+  });
+  var v = document.getElementById(valId);
+  if(v) v.value = level;
+}
+
+function renderDayTimeWrap(wrapId, daysStr, timesStr){
+  var wrap = document.getElementById(wrapId);
+  if(!wrap) return;
+  var checkedDays = daysStr ? daysStr.split('\u00B7').map(function(d){ return d.trim(); }).filter(Boolean) : [];
+  var times = timesStr ? timesStr.split('|') : [];
+  var hasIndividual = timesStr && timesStr.includes('|');
+  var commonTime = (!hasIndividual && times.length) ? times[0] : (times[0]||'');
+  var commonParts = commonTime.split('~');
+  var commonS = commonParts[0] ? commonParts[0].trim() : '';
+  var commonE = commonParts[1] ? commonParts[1].trim() : '';
+  var indivMap = {};
+  if(hasIndividual){
+    checkedDays.forEach(function(kr, i){
+      var t = times[i] || times[0] || '';
+      var p = t.split('~');
+      indivMap[kr] = {s: p[0]?p[0].trim():'', e: p[1]?p[1].trim():''};
+    });
+  }
+  var html = '';
+  html += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:10px">';
+  _DAY_KR.forEach(function(kr, i){
+    var id = wrapId+'-cb-'+_DAY_IDS[i];
+    var checked = checkedDays.includes(kr) ? 'checked' : '';
+    html += '<label style="display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;padding:6px 0;border:1.5px solid '+(checkedDays.includes(kr)?'#2563eb':'#e5e7eb')+';border-radius:8px;background:'+(checkedDays.includes(kr)?'#eff6ff':'#fafafa')+'" id="'+wrapId+'-lbl-'+_DAY_IDS[i]+'">'
+      + '<input type="checkbox" id="'+id+'" value="'+kr+'" '+checked
+      + ' style="width:16px;height:16px;accent-color:#2563eb" onchange="onDayCheck(\''+wrapId+'\')">'
+      + '<span style="font-size:12px;font-weight:700;color:'+(checkedDays.includes(kr)?'#1d4ed8':'#6b7280')+'">'+kr+'</span>'
+      + '</label>';
+  });
+  html += '</div>';
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+    + '<span style="font-size:12px;font-weight:600;color:#6b7280;white-space:nowrap">수업 시간</span>'
+    + '<input type="text" id="'+wrapId+'-common-s" value="'+commonS+'" placeholder="16:30" maxlength="5" oninput="autoColonTime(this)"'
+    + ' style="flex:1;padding:7px 8px;border:1.5px solid #dbeafe;border-radius:8px;font-size:13px;outline:none;text-align:center">'
+    + '<span style="font-size:12px;color:#9ca3af;flex-shrink:0">~</span>'
+    + '<input type="text" id="'+wrapId+'-common-e" value="'+commonE+'" placeholder="18:30" maxlength="5" oninput="autoColonTime(this)"'
+    + ' style="flex:1;padding:7px 8px;border:1.5px solid #dbeafe;border-radius:8px;font-size:13px;outline:none;text-align:center">'
+    + '</div>';
+  html += '<div style="font-size:11px;color:#9ca3af;margin-bottom:8px">⏱ 24시간제 입력 (예: 16:30)</div>';
+  var indivChecked = hasIndividual ? 'checked' : '';
+  html += '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;font-size:12px;color:#374151;font-weight:600">'
+    + '<input type="checkbox" id="'+wrapId+'-indiv" '+indivChecked
+    + ' style="width:15px;height:15px;accent-color:#2563eb" onchange="onIndivToggle(\''+wrapId+'\')">'
+    + '요일별로 다른 시간 설정</label>';
+  var indivDisplay = hasIndividual ? 'block' : 'none';
+  html += '<div id="'+wrapId+'-indiv-rows" style="display:'+indivDisplay+';padding-left:6px;border-left:2px solid #dbeafe">';
+  checkedDays.forEach(function(kr){
+    var iv = indivMap[kr] || {s:commonS, e:commonE};
+    html += buildIndivRow(wrapId, kr, iv.s, iv.e);
+  });
+  html += '</div>';
+  wrap.innerHTML = html;
+}
+
+function buildIndivRow(wrapId, dayKr, startVal, endVal){
+  return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">'
+    + '<span style="width:18px;font-size:12px;font-weight:700;color:#2563eb;flex-shrink:0;text-align:center">'+dayKr+'</span>'
+    + '<input type="text" id="'+wrapId+'-s-'+dayKr+'" value="'+startVal+'" placeholder="16:30" maxlength="5" oninput="autoColonTime(this)"'
+    + ' style="flex:1;padding:6px 8px;border:1.5px solid #dbeafe;border-radius:7px;font-size:12px;outline:none;text-align:center">'
+    + '<span style="font-size:11px;color:#9ca3af;flex-shrink:0">~</span>'
+    + '<input type="text" id="'+wrapId+'-e-'+dayKr+'" value="'+endVal+'" placeholder="18:30" maxlength="5" oninput="autoColonTime(this)"'
+    + ' style="flex:1;padding:6px 8px;border:1.5px solid #dbeafe;border-radius:7px;font-size:12px;outline:none;text-align:center">'
+    + '</div>';
+}
+
+function onDayCheck(wrapId){
+  var checked = _DAY_KR.filter(function(kr, i){
+    var cb = document.getElementById(wrapId+'-cb-'+_DAY_IDS[i]);
+    return cb && cb.checked;
+  });
+  _DAY_KR.forEach(function(kr, i){
+    var lbl = document.getElementById(wrapId+'-lbl-'+_DAY_IDS[i]);
+    if(!lbl) return;
+    var isChecked = checked.includes(kr);
+    lbl.style.border = '1.5px solid ' + (isChecked ? '#2563eb' : '#e5e7eb');
+    lbl.style.background = isChecked ? '#eff6ff' : '#fafafa';
+    var span = lbl.querySelector('span');
+    if(span) span.style.color = isChecked ? '#1d4ed8' : '#6b7280';
+  });
+  var rowsEl = document.getElementById(wrapId+'-indiv-rows');
+  if(!rowsEl) return;
+  var existing = {};
+  _DAY_KR.forEach(function(kr){
+    var s = document.getElementById(wrapId+'-s-'+kr);
+    var e = document.getElementById(wrapId+'-e-'+kr);
+    if(s||e) existing[kr] = {s:s?s.value:'', e:e?e.value:''};
+  });
+  var commonS = (document.getElementById(wrapId+'-common-s')||{}).value||'';
+  var commonE = (document.getElementById(wrapId+'-common-e')||{}).value||'';
+  var html = '';
+  checked.forEach(function(kr){
+    var prev = existing[kr] || {s:commonS, e:commonE};
+    html += buildIndivRow(wrapId, kr, prev.s, prev.e);
+  });
+  rowsEl.innerHTML = html;
+}
+
+function onIndivToggle(wrapId){
+  var cb = document.getElementById(wrapId+'-indiv');
+  var rowsEl = document.getElementById(wrapId+'-indiv-rows');
+  if(!rowsEl || !cb) return;
+  if(cb.checked){
+    var commonS = (document.getElementById(wrapId+'-common-s')||{}).value||'';
+    var commonE = (document.getElementById(wrapId+'-common-e')||{}).value||'';
+    var checked = _DAY_KR.filter(function(kr, i){
+      var c = document.getElementById(wrapId+'-cb-'+_DAY_IDS[i]);
+      return c && c.checked;
+    });
+    var html = '';
+    checked.forEach(function(kr){
+      var s = document.getElementById(wrapId+'-s-'+kr);
+      var e = document.getElementById(wrapId+'-e-'+kr);
+      html += buildIndivRow(wrapId, kr, s?s.value:commonS, e?e.value:commonE);
+    });
+    rowsEl.innerHTML = html;
+    rowsEl.style.display = 'block';
+  } else {
+    rowsEl.style.display = 'none';
+  }
+}
+
+function getDayTimeFromWrap(wrapId){
+  var checked = _DAY_KR.filter(function(kr, i){
+    var cb = document.getElementById(wrapId+'-cb-'+_DAY_IDS[i]);
+    return cb && cb.checked;
+  });
+  if(!checked.length) return {days: null, time: null};
+  var indivCb = document.getElementById(wrapId+'-indiv');
+  var isIndiv = indivCb && indivCb.checked;
+  if(isIndiv){
+    var times = checked.map(function(kr){
+      var s = (document.getElementById(wrapId+'-s-'+kr)||{}).value||'';
+      var e = (document.getElementById(wrapId+'-e-'+kr)||{}).value||'';
+      return (s&&e) ? s+'~'+e : '';
+    });
+    var allSame = times.every(function(t){ return t===times[0]; });
+    return {days: checked.join('\u00B7'), time: allSame?(times[0]||null):(times.join('|')||null)};
+  } else {
+    var cs = (document.getElementById(wrapId+'-common-s')||{}).value||'';
+    var ce = (document.getElementById(wrapId+'-common-e')||{}).value||'';
+    return {days: checked.join('\u00B7'), time: (cs&&ce)?cs+'~'+ce:(cs||ce||null)};
+  }
+}
+
+function resetDayTimeWrap(wrapId){ renderDayTimeWrap(wrapId, '', ''); }
+
+function autoColonTime(input){
+  var v = input.value.replace(/[^0-9:]/g,'');
+  if(v.length===4 && v.indexOf(':')<0){ v = v.slice(0,2)+':'+v.slice(2); }
+  input.value = v;
+}
+
+// 반 추가 모달 열기 (위젯 초기 렌더 후 open — 견고)
+function openAddClassModal(){
+  document.getElementById('inp-className').value = '';
+  renderDayTimeWrap('inp-day-time-wrap', '', '');
+  classLevelSelect('add', 'high');
+  openModal('addClass');
+}
+
+async function addClass(){
+  const name = document.getElementById('inp-className').value.trim();
+  if(!name){ alert('반 이름을 입력하세요'); return; }
+  const {days: class_days, time: class_time} = getDayTimeFromWrap('inp-day-time-wrap');
+  const school_level = document.getElementById('inp-class-level-val').value || 'high';
+  const {error} = await db.from('classes').insert({
+    name, teacher_id: currentUser.id, active: true,
+    class_days: class_days||null, class_time: class_time||null, school_level
+  });
+  if(error){ alert('오류: '+error.message); return; }
+  closeModal('addClass');
+  await loadTeacherData();   // 선생님 화면만 갱신 (loadAdminData 미호출 — 전역 클로버링 방지)
+}
+
+function openEditClassModal(id){
+  const c = classes.find(function(x){ return x.id===id; });
+  if(!c) return;
+  document.getElementById('edit-class-id').value = c.id;
+  document.getElementById('edit-class-name').value = c.name||'';
+  renderDayTimeWrap('edit-day-time-wrap', c.class_days||'', c.class_time||'');
+  classLevelSelect('edit', c.school_level||'high');
+  openModal('editClass');
+}
+
+async function saveEditClass(){
+  const id = document.getElementById('edit-class-id').value;
+  const name = document.getElementById('edit-class-name').value.trim();
+  const {days: class_days, time: class_time} = getDayTimeFromWrap('edit-day-time-wrap');
+  if(!name){ alert('반 이름을 입력하세요'); return; }
+  const btn = document.querySelector('#modal-editClass .btn-primary');
+  if(btn){ btn.textContent='저장 중...'; btn.disabled=true; }
+  const school_level = document.getElementById('edit-class-level-val').value||'high';
+  const {error} = await db.from('classes').update({
+    name, class_days:class_days||null, class_time:class_time||null, school_level
+  }).eq('id',id);
+  if(btn){ btn.textContent='저장'; btn.disabled=false; }
+  if(error){ alert('오류: '+error.message); return; }
+  closeModal('editClass');
+  await loadTeacherData();   // 선생님 화면만 갱신
 }
 
 // ── 1000행 제한 돌파용 페이지네이션 헬퍼 ─────────────────────────
@@ -20806,6 +21028,65 @@ tryAutoLogin();
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-full" onclick="closeModal('admEditClass')">취소</button>
       <button class="btn btn-primary btn-full" onclick="admSaveEditClass()">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 모달: 반 추가 (선생님) -->
+<div class="modal-backdrop" id="modal-addClass">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>📋 반 추가</h3>
+    <div class="form-group"><label>반 이름 *</label><input id="inp-className" placeholder="예: A반, 수학고급반, 화목오전반"></div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px">수업 요일 및 시간</label>
+      <div id="inp-day-time-wrap"></div>
+    </div>
+    <div class="form-group" style="margin-bottom:16px">
+      <label>반 구분</label>
+      <div style="display:flex;gap:6px">
+        <button type="button" id="inp-class-level-high" onclick="classLevelSelect('add','high')"
+          style="flex:1;padding:9px 0;border:1.5px solid #2563eb;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#eff6ff;color:#1d4ed8">🎓 고등부</button>
+        <button type="button" id="inp-class-level-middle" onclick="classLevelSelect('add','middle')"
+          style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">📚 중등부</button>
+        <button type="button" id="inp-class-level-both" onclick="classLevelSelect('add','both')"
+          style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">🏫 중고등</button>
+        <input type="hidden" id="inp-class-level-val" value="high">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-full" onclick="closeModal('addClass')">취소</button>
+      <button class="btn btn-primary btn-full" onclick="addClass()">추가</button>
+    </div>
+  </div>
+</div>
+
+<!-- 모달: 반 정보 수정 (선생님) -->
+<div class="modal-backdrop" id="modal-editClass">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>✏️ 반 정보 수정</h3>
+    <input type="hidden" id="edit-class-id">
+    <div class="form-group"><label>반 이름 *</label><input id="edit-class-name" placeholder="반 이름"></div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px">수업 요일 및 시간</label>
+      <div id="edit-day-time-wrap"></div>
+    </div>
+    <div class="form-group" style="margin-bottom:16px">
+      <label>반 구분</label>
+      <div style="display:flex;gap:6px">
+        <button type="button" id="edit-class-level-high" onclick="classLevelSelect('edit','high')"
+          style="flex:1;padding:9px 0;border:1.5px solid #2563eb;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#eff6ff;color:#1d4ed8">🎓 고등부</button>
+        <button type="button" id="edit-class-level-middle" onclick="classLevelSelect('edit','middle')"
+          style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">📚 중등부</button>
+        <button type="button" id="edit-class-level-both" onclick="classLevelSelect('edit','both')"
+          style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">🏫 중고등</button>
+        <input type="hidden" id="edit-class-level-val" value="high">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-full" onclick="closeModal('editClass')">취소</button>
+      <button class="btn btn-primary btn-full" onclick="saveEditClass()">저장</button>
     </div>
   </div>
 </div>
