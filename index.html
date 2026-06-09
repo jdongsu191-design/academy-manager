@@ -17542,7 +17542,7 @@ function renderClassList(){
         <button onclick="openClassStudentModal('${c.id}','${nameEsc}')"
           style="flex:1;background:transparent;border:none;border-right:1px solid #f1f5f9;padding:9px 4px;color:#16a34a;font-size:12px;font-weight:600;cursor:pointer;transition:background 0.1s"
           onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background='transparent'">👥 학생관리</button>
-        <button onclick="alert('학습진행표는 준비 중입니다')"
+        <button onclick="openLpClassModal('${c.id}','${nameEsc}')"
           style="flex:1;background:transparent;border:none;border-right:1px solid #f1f5f9;padding:9px 4px;color:#7c3aed;font-size:12px;font-weight:600;cursor:pointer;transition:background 0.1s"
           onmouseover="this.style.background='#f5f3ff'" onmouseout="this.style.background='transparent'">📊 학습진행표</button>
         <button onclick="openEditClassModal('${c.id}')"
@@ -18098,6 +18098,434 @@ async function csmUploadXlsx(){
   csmSwitchTab('current');
   await csmLoadCurrentStudents();
   csmXlsxReset();
+}
+
+/* ════════════════════════════════════════════════════════════
+   내 반 관리: 학습 진행표 (learning_progress) — B안 1단계
+   ─ 업무일지(work_logs/work_log_students) READ-ONLY 자동반영
+   ─ 저장은 learning_progress (student_id+class_id+log_date 유니크)
+   ─ lp는 work_logs에 절대 쓰지 않음 (업무일지 무손상)
+   ─ openLpViewModal(달력 조회)은 B-2에서 구현, 현재는 스텁
+   ════════════════════════════════════════════════════════════ */
+async function openLpClassModal(classId, className){
+  var ex = document.getElementById('lp-class-modal');
+  if(ex) ex.remove();
+
+  var _lpToday = new Date().toISOString().split('T')[0];
+  var {data:studs} = await db.from('users').select('id,name,school,grade')
+    .eq('class_id', classId).eq('status','active').lte('enrolled_at', _lpToday).order('name');
+
+  var lpMap = {};
+  if(studs && studs.length){
+    var sids = studs.map(function(s){ return s.id; });
+    var {data:lps} = await db.from('learning_progress')
+      .select('*').in('student_id', sids).eq('class_id', classId)
+      .order('log_date', {ascending:false});
+    (lps||[]).forEach(function(lp){
+      if(!lpMap[lp.student_id]) lpMap[lp.student_id] = lp;
+    });
+  }
+
+  var modal = document.createElement('div');
+  modal.id = 'lp-class-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+
+  var rows = (studs||[]).map(function(s){
+    var school = [s.school, s.grade].filter(Boolean).join(' ');
+    var lp = lpMap[s.id];
+    var lpBadge = lp
+      ? '<span style="width:8px;height:8px;border-radius:50%;background:#7c3aed;display:inline-block;flex-shrink:0" title="기록 있음"></span>'
+      : '';
+    return '<div style="padding:12px 14px;border:1px solid #ede9fe;border-radius:10px;margin-bottom:8px;background:#faf5ff">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between">'
+        +'<div>'
+          +'<div style="font-size:14px;font-weight:700;color:#1e293b;margin-bottom:2px">'+_esc(s.name)+'</div>'
+          +(school?'<div style="font-size:11px;color:#9ca3af">'+_esc(school)+'</div>':'')
+        +'</div>'
+        +'<div style="display:flex;gap:6px;align-items:center">'
+          +lpBadge
+          +(lp?'<button onclick="openLpViewModal(\''+s.id+'\',\''+_esc(s.name)+'\',\''+classId+'\',\''+_esc(className)+'\')" style="padding:5px 10px;background:#f5f3ff;color:#7c3aed;border:1.5px solid #ddd6fe;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer">👁 조회</button>':'')
+          +'<button onclick="openLpWriteModal(\''+s.id+'\',\''+_esc(s.name)+'\',\''+classId+'\',\''+_esc(className)+'\')" style="padding:5px 10px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer">📝 작성</button>'
+        +'</div>'
+      +'</div>'
+    +'</div>';
+  }).join('');
+
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:16px;max-width:480px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden;max-height:90vh;display:flex;flex-direction:column">'
+      +'<div style="background:linear-gradient(135deg,#7c3aed,#a855f7);padding:18px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">'
+        +'<div>'
+          +'<div style="font-size:15px;font-weight:800;color:#fff">📊 학습진행표</div>'
+          +'<div style="font-size:12px;color:#e9d5ff;margin-top:2px">'+_esc(className)+' · 학생을 선택하세요</div>'
+        +'</div>'
+        +'<button onclick="document.getElementById(\'lp-class-modal\').remove()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;width:30px;height:30px;border-radius:50%;font-size:18px;cursor:pointer;line-height:1">&times;</button>'
+      +'</div>'
+      +'<div style="padding:14px 16px;overflow-y:auto;flex:1">'
+        +(rows || '<div style="text-align:center;padding:30px;color:#9ca3af">이 반에 학생이 없습니다</div>')
+      +'</div>'
+    +'</div>';
+
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+  window._lpClassModalState = {classId: classId, className: className};
+}
+
+// B-2에서 달력 조회 모달로 교체 예정 (현재 스텁)
+function openLpViewModal(studentId, studentName, classId, className){
+  alert('📊 조회(달력) 화면은 준비 중입니다.\n작성/저장은 정상 작동합니다.');
+}
+
+async function openLpWriteModal(studentId, studentName, classId, className, initDate){
+  var ex = document.getElementById('lp-write-modal');
+  if(ex) ex.remove();
+
+  var modal = document.createElement('div');
+  modal.id = 'lp-write-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:3100;display:flex;align-items:center;justify-content:center;padding:12px;overflow-y:auto';
+
+  var today = initDate || new Date().toISOString().split('T')[0];
+
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:20px;max-width:520px;width:100%;box-shadow:0 24px 80px rgba(124,58,237,0.18);overflow:hidden;margin:auto">'
+      +'<div style="background:linear-gradient(135deg,#7c3aed 0%,#a855f7 100%);padding:20px 22px 16px">'
+        +'<div style="display:flex;align-items:flex-start;justify-content:space-between">'
+          +'<div>'
+            +'<div style="font-size:11px;font-weight:600;color:#e9d5ff;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">BESTIAN 학습 진행표</div>'
+            +'<div style="font-size:18px;font-weight:800;color:#fff">'+_esc(studentName)+'</div>'
+            +'<div style="font-size:12px;color:#d8b4fe;margin-top:3px">'+_esc(className)+'</div>'
+          +'</div>'
+          +'<button onclick="document.getElementById(\'lp-write-modal\').remove()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;width:32px;height:32px;border-radius:50%;font-size:18px;cursor:pointer;flex-shrink:0">×</button>'
+        +'</div>'
+      +'</div>'
+      +'<div style="padding:18px 20px;display:flex;flex-direction:column;gap:14px">'
+        +'<div style="background:#f5f3ff;border:1.5px solid #ddd6fe;border-radius:12px;padding:12px">'
+          +'<div style="font-size:12px;font-weight:700;color:#7c3aed;margin-bottom:8px">📅 작성일 선택 <span style="font-size:11px;font-weight:400;color:#9ca3af">(박스를 클릭하면 달력이 열립니다)</span></div>'
+          +'<input type="date" id="lp-date-input" value="'+today+'" onclick="this.showPicker&&this.showPicker()" onchange="lpLoadWorkLog(\''+studentId+'\',\''+classId+'\')" '
+            +'style="width:100%;padding:9px 12px;border:1.5px solid #ddd6fe;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box;cursor:pointer;font-weight:600;color:#4c1d95">'
+        +'</div>'
+        +'<div id="lp-worklog-section" style="background:#faf5ff;border:1.5px solid #e9d5ff;border-radius:12px;padding:14px">'
+          +'<div style="font-size:11px;font-weight:700;color:#7c3aed;letter-spacing:0.5px;margin-bottom:10px;display:flex;align-items:center;gap:6px">'
+            +'<span style="background:#7c3aed;color:#fff;padding:2px 8px;border-radius:100px;font-size:10px">업무일지 자동반영</span>'
+            +'<span id="lp-worklog-status" style="font-size:11px;color:#9ca3af;font-weight:400">날짜를 선택하면 불러옵니다</span>'
+          +'</div>'
+          +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+            +'<div style="background:#fff;border-radius:8px;padding:10px 12px;border:1px solid #ede9fe">'
+              +'<div style="font-size:11px;font-weight:600;color:#7c3aed;margin-bottom:5px">📖 진도</div>'
+              +'<textarea id="lp-progress-input" rows="3" placeholder="진도 내용을 입력하세요" style="width:100%;border:none;outline:none;font-size:12px;color:#374151;line-height:1.6;resize:none;background:transparent;box-sizing:border-box"></textarea>'
+            +'</div>'
+            +'<div style="background:#fff;border-radius:8px;padding:10px 12px;border:1px solid #ede9fe">'
+              +'<div style="font-size:11px;font-weight:600;color:#7c3aed;margin-bottom:5px">📝 숙제</div>'
+              +'<textarea id="lp-homework-input" rows="3" placeholder="숙제 내용을 입력하세요" style="width:100%;border:none;outline:none;font-size:12px;color:#374151;line-height:1.6;resize:none;background:transparent;box-sizing:border-box"></textarea>'
+            +'</div>'
+          +'</div>'
+        +'</div>'
+        +'<div style="background:#f0f4ff;border:1.5px solid #c7d2fe;border-radius:12px;padding:14px">'
+          +'<div style="font-size:11px;font-weight:700;color:#3730a3;letter-spacing:0.5px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">'
+            +'<span style="background:#4f46e5;color:#fff;padding:2px 8px;border-radius:100px;font-size:10px">개별 진도/숙제</span>'
+            +'<span style="font-size:10px;color:#9ca3af;font-weight:400">학생별 다른 내용이 있을 때 추가</span>'
+          +'</div>'
+          +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+            +'<div>'
+              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">📖 개별 진도</div>'
+              +'<div id="lp-indiv-progress-list" style="display:flex;flex-direction:column;gap:5px;margin-bottom:6px"></div>'
+              +'<button onclick="lpAddIndivRow(\'progress\')" style="width:100%;padding:6px;border:1.5px dashed #c7d2fe;border-radius:7px;background:#fff;color:#4f46e5;font-size:11px;font-weight:600;cursor:pointer">+ 추가</button>'
+            +'</div>'
+            +'<div>'
+              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">📝 개별 숙제</div>'
+              +'<div id="lp-indiv-homework-list" style="display:flex;flex-direction:column;gap:5px;margin-bottom:6px"></div>'
+              +'<button onclick="lpAddIndivRow(\'homework\')" style="width:100%;padding:6px;border:1.5px dashed #c7d2fe;border-radius:7px;background:#fff;color:#4f46e5;font-size:11px;font-weight:600;cursor:pointer">+ 추가</button>'
+            +'</div>'
+          +'</div>'
+        +'</div>'
+        +'<div style="background:#f0f4ff;border:1.5px solid #c7d2fe;border-radius:12px;padding:14px">'
+          +'<div style="font-size:11px;font-weight:700;color:#3730a3;letter-spacing:0.5px;margin-bottom:10px;display:flex;align-items:center;gap:6px">'
+            +'<span style="background:#4f46e5;color:#fff;padding:2px 8px;border-radius:100px;font-size:10px">특이사항 & TEST</span>'
+            +'<span style="font-size:10px;color:#9ca3af;font-weight:400">업무일지에서 자동반영</span>'
+          +'</div>'
+          +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+            +'<div>'
+              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">🧪 TEST 점수</div>'
+              +'<input type="text" id="lp-test-score" placeholder="예) 85, 90/100" style="width:100%;padding:8px 10px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">'
+            +'</div>'
+            +'<div>'
+              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">📌 특이사항</div>'
+              +'<textarea id="lp-note" rows="2" placeholder="특이사항을 입력하세요" style="width:100%;padding:8px 10px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:12px;outline:none;resize:none;box-sizing:border-box;line-height:1.5;font-family:inherit"></textarea>'
+            +'</div>'
+          +'</div>'
+        +'</div>'
+        +'<div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:12px;padding:14px">'
+          +'<div style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;margin-bottom:10px">'
+            +'<span style="background:#f59e0b;color:#fff;padding:2px 8px;border-radius:100px;font-size:10px">직접 입력</span>'
+          +'</div>'
+          +'<div style="display:flex;flex-direction:column;gap:10px">'
+            +'<div>'
+              +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">🏫 출결</div>'
+              +'<select id="lp-attendance" style="width:100%;padding:8px 10px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff">'
+                +'<option value="">선택</option>'
+                +'<option value="present">✅ 출석</option>'
+                +'<option value="late">⏰ 지각</option>'
+                +'<option value="absent">❌ 결석</option>'
+                +'<option value="makeup">🔄 보강</option>'
+              +'</select>'
+            +'</div>'
+            +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+              +'<div>'
+                +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">✅ 과제 점검</div>'
+                +'<input type="text" id="lp-homework-check" placeholder="예) 완료, 미완료, 일부완료" style="width:100%;padding:8px 10px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">'
+              +'</div>'
+              +'<div>'
+                +'<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:5px">📋 N제 점검</div>'
+                +'<input type="text" id="lp-naje-check" placeholder="예) 완료, 미완료, 일부완료" style="width:100%;padding:8px 10px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">'
+              +'</div>'
+            +'</div>'
+            +'<div>'
+              +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
+                +'<div style="font-size:12px;font-weight:600;color:#374151">⚠️ 벌점</div>'
+                +'<div style="font-size:11px;color:#9ca3af">이번달 누적: <span id="lp-monthly-penalty" style="font-weight:700;color:#dc2626">-</span>점</div>'
+              +'</div>'
+              +'<div style="display:flex;gap:8px;align-items:center">'
+                +'<button onclick="lpPenaltyAdj(-1)" style="width:32px;height:32px;border:1.5px solid #fde68a;border-radius:8px;background:#fff;font-size:16px;font-weight:700;cursor:pointer;color:#b45309">−</button>'
+                +'<input type="number" id="lp-penalty" value="0" min="0" style="flex:1;padding:8px;border:1.5px solid #fde68a;border-radius:8px;font-size:16px;font-weight:700;text-align:center;outline:none">'
+                +'<button onclick="lpPenaltyAdj(1)" style="width:32px;height:32px;border:1.5px solid #fde68a;border-radius:8px;background:#fff;font-size:16px;font-weight:700;cursor:pointer;color:#b45309">+</button>'
+                +'<span style="font-size:12px;color:#9ca3af">점</span>'
+              +'</div>'
+            +'</div>'
+          +'</div>'
+        +'</div>'
+        +'<div style="display:flex;gap:8px">'
+          +'<button onclick="document.getElementById(\'lp-write-modal\').remove()" style="flex:1;padding:11px;border:1.5px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#6b7280;font-size:13px;font-weight:600;cursor:pointer">취소</button>'
+          +'<button onclick="deleteLearningProgress(\''+studentId+'\',\''+classId+'\')" style="padding:11px 14px;border:1.5px solid #fca5a5;border-radius:10px;background:#fef2f2;color:#dc2626;font-size:13px;font-weight:600;cursor:pointer">🗑</button>'
+          +'<button onclick="saveLearningProgress(\''+studentId+'\',\''+classId+'\')" style="flex:2;padding:11px;border:none;border-radius:10px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button>'
+        +'</div>'
+      +'</div>'
+    +'</div>';
+
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+
+  await lpLoadWorkLog(studentId, classId);
+}
+
+async function lpLoadWorkLog(studentId, classId){
+  var dateEl = document.getElementById('lp-date-input');
+  var date = dateEl ? dateEl.value : new Date().toISOString().split('T')[0];
+  var statusEl    = document.getElementById('lp-worklog-status');
+  var progressEl  = document.getElementById('lp-progress-input');
+  var homeworkEl  = document.getElementById('lp-homework-input');
+  var hwCheckEl   = document.getElementById('lp-homework-check');
+  var najeEl      = document.getElementById('lp-naje-check');
+  var penaltyEl   = document.getElementById('lp-penalty');
+  var attendEl    = document.getElementById('lp-attendance');
+  if(statusEl) statusEl.textContent = '불러오는 중...';
+
+  // 해당 날짜 정확히 일치하는 업무일지만 검색 (class_id + log_date 기준)
+  var {data:logs} = await db.from('work_logs')
+    .select('*').eq('class_id', classId).eq('log_date', date);
+  var log = logs && logs[0] ? logs[0] : null;
+
+  // 학생 개별 진도/숙제/출결 로드
+  var indivProgress = '', indivHomework = '', stuAttendance = '';
+  var stuHomeworkDone = '', stuNCount = '', stuNote = '', stuTestScore = '';
+  if(log){
+    var {data:sl} = await db.from('work_log_students')
+      .select('*').eq('log_id', log.id).eq('student_id', studentId).maybeSingle();
+    if(sl){
+      indivProgress  = sl.individual_progress || '';
+      indivHomework  = sl.individual_homework || '';
+      stuAttendance  = sl.attendance || '';
+      stuNote        = sl.note        || '';
+      stuTestScore   = sl.test_score  != null ? String(sl.test_score) : '';
+      if(sl.homework_done === true || sl.homework_done === 'true') stuHomeworkDone = '완료';
+      else if(sl.homework_done === 'partial') stuHomeworkDone = '일부완료';
+      else if(sl.homework_done === false || sl.homework_done === 'false') stuHomeworkDone = '미완료';
+      stuNCount = sl.n_count != null ? String(sl.n_count) : '';
+    }
+  }
+
+  // 진도/숙제 채우기 - 공통만 (개별은 아래 따로)
+  var commonProgress = log ? log.progress||'' : '';
+  var commonHomework = log ? log.homework||'' : '';
+  if(progressEl) progressEl.value = commonProgress;
+  if(homeworkEl) homeworkEl.value = commonHomework;
+  if(attendEl)   attendEl.value   = stuAttendance;
+
+  // 상태 메시지
+  if(statusEl){
+    if(log){
+      var logDateStr = log.log_date.replace(/-/g,'.');
+      var note = (indivProgress||indivHomework) ? ' (공통+개별 반영)' : ' (공통 진도/숙제 반영)';
+      statusEl.textContent = logDateStr + ' 업무일지 자동반영' + note;
+      statusEl.style.color = '#7c3aed';
+    } else {
+      statusEl.textContent = '업무일지 없음 — 직접 입력하세요';
+      statusEl.style.color = '#ef4444';
+    }
+  }
+
+  // 월 누적 벌점 (작성 날짜 기준 월 전체, 당일 제외)
+  var monthlyPenaltyEl = document.getElementById('lp-monthly-penalty');
+  if(monthlyPenaltyEl){
+    var dateObj = new Date(date);
+    var monthStart = dateObj.getFullYear() + '-' + String(dateObj.getMonth()+1).padStart(2,'0') + '-01';
+    var nextM = new Date(dateObj.getFullYear(), dateObj.getMonth()+1, 1);
+    var monthEnd = nextM.getFullYear() + '-' + String(nextM.getMonth()+1).padStart(2,'0') + '-01';
+    var {data:monthLps} = await db.from('learning_progress')
+      .select('log_date, penalty')
+      .eq('student_id', studentId).eq('class_id', classId)
+      .gte('log_date', monthStart).lt('log_date', monthEnd);
+    var monthlyTotal = (monthLps||[]).reduce(function(sum, r){
+      if(r.log_date === date) return sum;
+      return sum + (parseInt(r.penalty)||0);
+    }, 0);
+    monthlyPenaltyEl.textContent = monthlyTotal;
+    monthlyPenaltyEl.style.color = monthlyTotal > 0 ? '#dc2626' : '#16a34a';
+  }
+
+  // 기존 학습진행표 데이터 복원 (저장값 우선)
+  var {data:existing} = await db.from('learning_progress')
+    .select('*').eq('student_id', studentId).eq('class_id', classId).eq('log_date', date).maybeSingle();
+  if(existing){
+    if(hwCheckEl && existing.homework_check) hwCheckEl.value = existing.homework_check;
+    if(najeEl    && existing.naje_check)     najeEl.value    = existing.naje_check;
+    if(penaltyEl && existing.penalty != null) penaltyEl.value = existing.penalty;
+    if(attendEl  && existing.attendance)     attendEl.value  = existing.attendance;
+    var noteEl = document.getElementById('lp-note');
+    if(noteEl) noteEl.value = existing.note || stuNote || '';
+    var testScoreEl = document.getElementById('lp-test-score');
+    if(testScoreEl) testScoreEl.value = (existing.test_score != null && existing.test_score !== '') ? String(existing.test_score) : stuTestScore;
+    if(existing.progress)  progressEl && (progressEl.value = existing.progress);
+    if(existing.homework)  homeworkEl && (homeworkEl.value = existing.homework);
+    if(existing.individual_progress) lpRestoreIndiv('progress', JSON.parse(existing.individual_progress||'[]'));
+    if(existing.individual_homework)  lpRestoreIndiv('homework', JSON.parse(existing.individual_homework||'[]'));
+  } else {
+    if(hwCheckEl) hwCheckEl.value = stuHomeworkDone || '';
+    if(najeEl)    najeEl.value    = stuNCount       || '';
+    if(penaltyEl) penaltyEl.value = '0';
+    var noteEl2 = document.getElementById('lp-note');
+    if(noteEl2 && stuNote) noteEl2.value = stuNote;
+    var testEl2 = document.getElementById('lp-test-score');
+    if(testEl2 && stuTestScore) testEl2.value = stuTestScore;
+    if(log && indivProgress) setTimeout(function(){ lpAddIndivRow('progress', indivProgress); }, 100);
+    if(log && indivHomework)  setTimeout(function(){ lpAddIndivRow('homework', indivHomework); }, 100);
+  }
+}
+
+function lpPenaltyAdj(delta){
+  var el = document.getElementById('lp-penalty');
+  if(!el) return;
+  var v = parseInt(el.value)||0;
+  el.value = Math.max(0, v + delta);
+}
+
+function lpAddIndivRow(type, value){
+  var listEl = document.getElementById('lp-indiv-'+type+'-list');
+  if(!listEl) return;
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:4px;align-items:flex-start';
+  row.innerHTML =
+    '<textarea rows="2" placeholder="내용 입력..." style="flex:1;padding:5px 7px;border:1.5px solid #c7d2fe;border-radius:7px;font-size:11px;resize:none;outline:none;line-height:1.5;font-family:inherit">'+(value||'')+'</textarea>'
+    +'<button onclick="this.parentElement.remove()" style="flex-shrink:0;width:22px;height:22px;border:none;background:#fee2e2;color:#dc2626;border-radius:5px;font-size:12px;cursor:pointer;margin-top:2px">×</button>';
+  listEl.appendChild(row);
+}
+
+function lpGetIndivList(type){
+  var listEl = document.getElementById('lp-indiv-'+type+'-list');
+  if(!listEl) return [];
+  return Array.from(listEl.querySelectorAll('textarea'))
+    .map(function(ta){ return ta.value.trim(); })
+    .filter(Boolean);
+}
+
+function lpRestoreIndiv(type, items){
+  var listEl = document.getElementById('lp-indiv-'+type+'-list');
+  if(!listEl) return;
+  listEl.innerHTML = '';
+  (items||[]).forEach(function(v){ lpAddIndivRow(type, v); });
+}
+
+async function lpAutoFillIndivFromWorklog(studentId, logId){
+  var {data:sl} = await db.from('work_log_students')
+    .select('individual_progress,individual_homework')
+    .eq('log_id', logId).eq('student_id', studentId).maybeSingle();
+  if(!sl) return;
+  if(sl.individual_progress){
+    var pList = document.getElementById('lp-indiv-progress-list');
+    if(pList && !pList.children.length) lpAddIndivRow('progress', sl.individual_progress);
+  }
+  if(sl.individual_homework){
+    var hList = document.getElementById('lp-indiv-homework-list');
+    if(hList && !hList.children.length) lpAddIndivRow('homework', sl.individual_homework);
+  }
+}
+
+async function deleteLearningProgress(studentId, classId){
+  var logDate = (document.getElementById('lp-date-input')||{}).value;
+  if(!logDate){ alert('날짜가 선택되지 않았습니다'); return; }
+  if(!confirm(logDate.replace(/-/g,'.')+' 학습진행표를 삭제하시겠습니까?')) return;
+
+  var {error} = await db.from('learning_progress')
+    .delete().eq('student_id', studentId).eq('class_id', classId).eq('log_date', logDate);
+  if(error){ alert('삭제 실패: '+error.message); return; }
+
+  document.getElementById('lp-write-modal').remove();
+  // 목록 모달 갱신
+  var classModal = document.getElementById('lp-class-modal');
+  if(classModal && window._lpClassModalState){
+    var st = window._lpClassModalState;
+    await openLpClassModal(st.classId, st.className);
+  }
+  var toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#dc2626;color:#fff;padding:10px 22px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
+  toast.textContent = '🗑 학습진행표가 삭제되었습니다';
+  document.body.appendChild(toast);
+  setTimeout(function(){ toast.remove(); }, 2200);
+}
+
+async function saveLearningProgress(studentId, classId){
+  var logDate       = (document.getElementById('lp-date-input')||{}).value || new Date().toISOString().split('T')[0];
+  var homeworkCheck = (document.getElementById('lp-homework-check')||{}).value||'';
+  var najeCheck     = (document.getElementById('lp-naje-check')||{}).value||'';
+  var penalty       = parseInt((document.getElementById('lp-penalty')||{}).value)||0;
+  var progressText  = (document.getElementById('lp-progress-input')||{}).value||'';
+  var homeworkText  = (document.getElementById('lp-homework-input')||{}).value||'';
+  var attendance    = (document.getElementById('lp-attendance')||{}).value||'';
+  var note          = (document.getElementById('lp-note')||{}).value||'';
+  var testScore     = (document.getElementById('lp-test-score')||{}).value.trim()||null;
+
+  var indivProgress = JSON.stringify(lpGetIndivList('progress'));
+  var indivHomework  = JSON.stringify(lpGetIndivList('homework'));
+
+  var {error} = await db.from('learning_progress').upsert({
+    student_id:          studentId,
+    class_id:            classId,
+    log_date:            logDate,
+    teacher_id:          currentUser.id,
+    homework_check:      homeworkCheck,
+    naje_check:          najeCheck,
+    penalty:             penalty,
+    progress:            progressText,
+    homework:            homeworkText,
+    attendance:          attendance,
+    note:                note,
+    test_score:          testScore,
+    individual_progress: indivProgress,
+    individual_homework: indivHomework,
+    updated_at:          new Date().toISOString()
+  }, {onConflict: 'student_id,class_id,log_date'});
+
+  if(error){ alert('저장 실패: '+error.message); return; }
+
+  document.getElementById('lp-write-modal').remove();
+  var classModal = document.getElementById('lp-class-modal');
+  if(classModal && window._lpClassModalState){
+    var st = window._lpClassModalState;
+    await openLpClassModal(st.classId, st.className);
+  }
+  var toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#7c3aed;color:#fff;padding:10px 22px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
+  toast.textContent = '✅ 학습진행표가 저장됩니다';
+  document.body.appendChild(toast);
+  setTimeout(function(){ toast.remove(); }, 2200);
 }
 
 // ── 1000행 제한 돌파용 페이지네이션 헬퍼 ─────────────────────────
