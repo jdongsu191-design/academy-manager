@@ -18384,9 +18384,140 @@ async function lpDeleteFromCal(dateStr){
   setTimeout(function(){toast.remove();},2200);
 }
 
-// B-3에서 html2canvas 이미지 추출로 교체 예정 (현재 스텁)
-function lpExportImage(dateStr, studentName, copyMode){
-  alert('🖼 이미지 저장/복사는 준비 중입니다 (B-3에서 구현).');
+// B-3: 학습진행표 이미지 추출 (html2canvas) — learning_progress 읽기만, work_logs 무관
+async function lpExportImage(dateStr, studentName, copyMode){
+  var st=window._lpCalState; if(!st)return;
+  var lp=st.lpByDate[dateStr];
+  if(!lp){alert('저장된 학습진행표가 없습니다');return;}
+  if(typeof html2canvas==='undefined'){alert('이미지 생성 모듈(html2canvas) 미로드');return;}
+  var d=dateStr.replace(/-/g,'.');
+  var teacherName=st.teacherName||''; var className=st.className||'';
+  var attendMap={'present':'정시','late':'지각','absent':'결석','makeup':'보강'};
+  var attendStr=lp.attendance?attendMap[lp.attendance]||lp.attendance:'';
+  var indivPList=[],indivHList=[];
+  try{indivPList=JSON.parse(lp.individual_progress||'[]');}catch(e){}
+  try{indivHList=JSON.parse(lp.individual_homework||'[]');}catch(e){}
+
+  // 월 누적 벌점 계산 (이미지용)
+  var _exportMonthlyPenalty = 0;
+  try {
+    var _expDateObj = new Date(dateStr);
+    var _expMonthStart = _expDateObj.getFullYear()+'-'+String(_expDateObj.getMonth()+1).padStart(2,'0')+'-01';
+    var _expNextM = new Date(_expDateObj.getFullYear(), _expDateObj.getMonth()+1, 1);
+    var _expMonthEnd = _expNextM.getFullYear()+'-'+String(_expNextM.getMonth()+1).padStart(2,'0')+'-01';
+    var {data:_expLps} = await db.from('learning_progress')
+      .select('log_date,penalty')
+      .eq('student_id', st.studentId).eq('class_id', st.classId)
+      .gte('log_date', _expMonthStart).lt('log_date', _expMonthEnd);
+    _exportMonthlyPenalty = (_expLps||[]).reduce(function(sum,r){ return sum + (parseInt(r.penalty)||0); }, 0);
+  } catch(e){}
+
+  var div=document.createElement('div');
+  div.style.cssText='position:fixed;left:-9999px;top:0;width:560px;background:#fff;font-family:Apple SD Gothic Neo,Noto Sans KR,sans-serif';
+
+  function badge(text, bg, color){
+    return '<span style="display:inline-block;background:'+bg+';color:'+color+';padding:4px 12px;border-radius:100px;font-size:12px;font-weight:700;white-space:nowrap">'+text+'</span>';
+  }
+  var badges='';
+  if(attendStr) badges+=badge(attendStr,'#ede9fe','#5b21b6');
+  if(lp.homework_check) badges+=badge('과제 '+lp.homework_check,lp.homework_check==='완료'?'#7c3aed':lp.homework_check==='일부완료'?'#f59e0b':'#ef4444','#fff');
+  if(lp.naje_check)     badges+=badge('N제 '+lp.naje_check,lp.naje_check==='완료'?'#7c3aed':lp.naje_check==='일부완료'?'#f59e0b':'#ef4444','#fff');
+  if(lp.penalty)        badges+=badge('벌점 '+lp.penalty+'점','#f59e0b','#fff');
+
+  function contentHtml(common, indivList){
+    var html='<span style="word-break:break-all;white-space:pre-wrap;display:block">'+_esc(common||'—')+'</span>';
+    if(indivList.length){
+      html+='<div style="margin-top:8px;background:#ede9fe;border-radius:6px;padding:7px 9px">'
+        +'<div style="font-size:10px;font-weight:800;color:#5b21b6;margin-bottom:3px">[개별]</div>'
+        +'<div style="font-size:12px;color:#4c1d95;line-height:1.7;word-break:break-all;white-space:pre-wrap">'+_esc(indivList.join('\n'))+'</div>'
+        +'</div>';
+    }
+    return html;
+  }
+
+  function checkColor(val){
+    if(!val) return '#9ca3af';
+    if(val==='완료'||val==='true') return '#166534';
+    if(val==='일부완료'||val==='partial') return '#b45309';
+    if(val==='미완료'||val==='false') return '#991b1b';
+    return '#374151';
+  }
+  var hwC = checkColor(lp.homework_check);
+  var njC = checkColor(lp.naje_check);
+  var PH='border-left:1.5px solid #e9d5ff;border-right:1.5px solid #e9d5ff';
+  var TH='background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;font-weight:800;font-size:13px;padding:10px 12px;vertical-align:top;white-space:nowrap';
+
+  div.innerHTML=
+    '<div style="overflow:hidden;border-radius:14px;box-shadow:0 6px 30px rgba(124,58,237,0.18)">'
+      +'<div style="background:linear-gradient(135deg,#7c3aed 0%,#a855f7 100%);padding:20px 22px 18px">'
+        +'<div style="font-size:11px;font-weight:700;color:#e9d5ff;letter-spacing:1.5px;margin-bottom:6px">BESTIAN 학습 진행표</div>'
+        +'<div style="font-size:22px;font-weight:900;color:#fff;letter-spacing:-0.5px">'+_esc(studentName)+'</div>'
+        +'<div style="font-size:12px;color:#d8b4fe;margin-top:4px">'+d+' &nbsp;&middot;&nbsp; '+_esc(teacherName)+'T</div>'
+      +'</div>'
+      +(badges?'<div style="background:#faf5ff;padding:10px 16px;display:flex;flex-wrap:nowrap;gap:7px;overflow:hidden;border-bottom:1.5px solid #e9d5ff">'+badges+'</div>':'')
+      +'<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
+        +'<colgroup><col style="width:64px"><col><col style="width:68px"><col style="width:90px"></colgroup>'
+        +'<tr style="border-bottom:1.5px solid #e9d5ff">'
+          +'<td style="'+TH+'">날짜</td>'
+          +'<td style="padding:9px 12px;font-size:13px;font-weight:700;color:#1e293b;'+PH+'">'+d+'</td>'
+          +'<td style="'+TH+';text-align:center">담당T</td>'
+          +'<td style="padding:9px 12px;font-size:13px;font-weight:700;color:#1e293b">'+_esc(teacherName)+'T</td>'
+        +'</tr>'
+        +'<tr style="border-bottom:1.5px solid #e9d5ff">'
+          +'<td style="'+TH+'">진도</td>'
+          +'<td style="padding:10px 12px;font-size:12px;color:#1e293b;vertical-align:top;line-height:1.7;'+PH+'">'+contentHtml(lp.progress,indivPList)+'</td>'
+          +'<td style="'+TH+';text-align:center">N제점검</td>'
+          +'<td style="padding:10px 12px;font-size:13px;font-weight:800;color:'+njC+';vertical-align:top">'+_esc(lp.naje_check||'')+'</td>'
+        +'</tr>'
+        +'<tr style="border-bottom:1.5px solid #e9d5ff">'
+          +'<td style="'+TH+'">과제</td>'
+          +'<td style="padding:10px 12px;font-size:12px;color:#1e293b;vertical-align:top;line-height:1.7;'+PH+'">'+contentHtml(lp.homework,indivHList)+'</td>'
+          +'<td style="'+TH+';text-align:center">과제점검</td>'
+          +'<td style="padding:10px 12px;font-size:13px;font-weight:800;color:'+hwC+';vertical-align:top">'+_esc(lp.homework_check||'')+'</td>'
+        +'</tr>'
+        +'<tr>'
+          +'<td style="'+TH+'" rowspan="2">출결</td>'
+          +'<td style="padding:10px 12px;font-size:13px;font-weight:700;color:#1e293b;'+PH+'" rowspan="2">'+attendStr+'</td>'
+          +'<td style="'+TH+'">벌점</td>'
+          +'<td style="padding:10px 12px;font-size:13px;font-weight:700;color:'+(lp.penalty>0?'#dc2626':'#374151')+';">'+(lp.penalty||0)+'점</td>'
+        +'</tr>'
+        +'<tr style="'+(lp.note?'border-bottom:1.5px solid #e9d5ff;':'')+'">'
+          +'<td style="'+TH+';border-top:1px solid rgba(255,255,255,0.25)">월 누적</td>'
+          +'<td style="padding:10px 12px;font-size:13px;font-weight:700;color:'+(_exportMonthlyPenalty>0?'#dc2626':'#374151')+';border-top:1px solid #e9d5ff">'+_exportMonthlyPenalty+'점</td>'
+        +'</tr>'
+        +(lp.note?
+          '<tr>'
+            +'<td style="'+TH+';line-height:1.4">특이<br>사항</td>'
+            +'<td colspan="3" style="padding:10px 12px;font-size:12px;color:#1e293b;line-height:1.7;word-break:break-all;white-space:pre-wrap;border-left:1.5px solid #e9d5ff">'+_esc(lp.note)+'</td>'
+          +'</tr>'
+        :'')
+      +'</table>'
+      +'<div style="background:#faf5ff;padding:7px 16px;text-align:right;font-size:10px;color:#a78bfa;letter-spacing:0.5px">'+_esc(className)+'</div>'
+    +'</div>';
+
+  document.body.appendChild(div);
+  try{
+    var canvas=await html2canvas(div,{scale:2,backgroundColor:'#fff',useCORS:true,allowTaint:true,logging:false});
+    document.body.removeChild(div);
+    if(copyMode){
+      canvas.toBlob(async function(blob){
+        try{
+          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+          var t=document.createElement('div');t.style.cssText='position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#7c3aed;color:#fff;padding:10px 22px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
+          t.textContent='📋 클립보드에 복사되었습니다';document.body.appendChild(t);setTimeout(function(){t.remove();},2200);
+        }catch(e){alert('복사 실패: '+e.message);}
+      },'image/png');
+    }else{
+      var a=document.createElement('a');
+      a.download='학습진행표_'+studentName+'_'+dateStr+'.png';
+      a.href=canvas.toDataURL('image/png');a.click();
+      var t=document.createElement('div');t.style.cssText='position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#7c3aed;color:#fff;padding:10px 22px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000';
+      t.textContent='🖼 이미지가 저장되었습니다';document.body.appendChild(t);setTimeout(function(){t.remove();},2200);
+    }
+  }catch(e){
+    if(div.parentNode)document.body.removeChild(div);
+    alert('이미지 생성 실패: '+e.message);
+  }
 }
 
 async function openLpWriteModal(studentId, studentName, classId, className, initDate){
