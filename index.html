@@ -17539,7 +17539,7 @@ function renderClassList(){
         ${(!days && !time) ? '<span style="color:#cbd5e1">시간 미설정</span>' : ''}
       </div>
       <div style="border-top:1px solid #f1f5f9;display:flex;align-items:stretch;background:#fafbfc;margin-top:auto">
-        <button onclick="alert('준비 중입니다')"
+        <button onclick="openClassStudentModal('${c.id}','${nameEsc}')"
           style="flex:1;background:transparent;border:none;border-right:1px solid #f1f5f9;padding:9px 4px;color:#16a34a;font-size:12px;font-weight:600;cursor:pointer;transition:background 0.1s"
           onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background='transparent'">👥 학생관리</button>
         <button onclick="alert('학습진행표는 준비 중입니다')"
@@ -17789,6 +17789,151 @@ async function saveEditClass(){
   if(error){ alert('오류: '+error.message); return; }
   closeModal('editClass');
   await loadTeacherData();   // 선생님 화면만 갱신
+}
+
+/* ── 내 반 관리: 학생관리 모달 (A안 3-a단계: 현재학생 / 학생추가 탭) ──
+   기존 학생의 class_id/class_id2 배정만 — 계정 생성 없음(users update).
+   XLSX 일괄등록 탭은 A-3b에서 student_code 규약 적응 후 추가 예정. */
+var _csmClassId = null, _csmClassName = '', _csmClassLevel = 'high', _csmAllCandidates = [];
+
+async function openClassStudentModal(classId, className){
+  _csmClassId = classId;
+  _csmClassName = className;
+  var cls = classes.find(function(c){ return c.id === classId; });
+  _csmClassLevel = cls ? (cls.school_level || 'high') : 'high';
+  document.getElementById('csm-title').textContent = '👥 ' + className + ' 학생 관리';
+  csmSwitchTab('current');
+  openModal('classStudents');
+  await csmLoadCurrentStudents();
+}
+
+function csmSwitchTab(tab){
+  var panels = {current:'csm-panel-current', add:'csm-panel-add'};
+  var tabs   = {current:'csm-tab-current',   add:'csm-tab-add'};
+  Object.keys(panels).forEach(function(k){
+    var panel = document.getElementById(panels[k]);
+    var btn   = document.getElementById(tabs[k]);
+    if(!panel || !btn) return;
+    var active = k === tab;
+    panel.style.display  = active ? 'block' : 'none';
+    btn.style.background = active ? 'var(--primary)' : 'transparent';
+    btn.style.color      = active ? '#fff' : '#6b7280';
+    btn.style.fontWeight = active ? '700' : '500';
+  });
+  if(tab === 'add') csmLoadAddList();
+}
+
+async function csmLoadCurrentStudents(){
+  var listEl = document.getElementById('csm-current-list');
+  var label  = document.getElementById('csm-count-label');
+  listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#9ca3af">불러오는 중...</div>';
+  var inClass = students.filter(function(s){
+    return s.class_id === _csmClassId || s.class_id2 === _csmClassId;
+  });
+  if(label) label.textContent = inClass.length + '명 재학 중';
+  if(!inClass.length){
+    listEl.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:13px">이 반에 소속된 학생이 없습니다<br>학생 추가 탭에서 추가하세요</div>';
+    return;
+  }
+  listEl.innerHTML = inClass.map(function(s){
+    var sg = [s.school, s.grade].filter(Boolean).join(' ');
+    var isMain = s.class_id === _csmClassId;
+    return '<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:#fff">'
+      +'<div style="width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">'+s.name[0]+'</div>'
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+s.name
+          +(isMain?'':' <span style="font-size:10px;color:#6b7280">(2반)</span>')
+        +'</div>'
+        +(sg?'<div style="font-size:11px;color:#9ca3af">'+sg+'</div>':'')
+      +'</div>'
+      +'<button onclick="csmRemoveStudent(\'' +s.id+ '\',\'' +s.name.replace(/'/g,'')+ '\',' +isMain+ ')"'
+        +' style="padding:3px 9px;border:1px solid #fca5a5;border-radius:6px;background:#fef2f2;color:#dc2626;font-size:12px;font-weight:600;cursor:pointer">제거</button>'
+    +'</div>';
+  }).join('');
+}
+
+async function csmRemoveStudent(studentId, studentName, isMain){
+  if(!confirm('['+studentName+'] 학생을 이 반에서 제거할까요?\n학생 데이터는 유지됩니다.')) return;
+  var updateObj = isMain ? {class_id: null} : {class_id2: null};
+  var {error} = await db.from('users').update(updateObj).eq('id', studentId);
+  if(error){ alert('오류: '+error.message); return; }
+  await loadTeacherData();
+  await csmLoadCurrentStudents();
+}
+
+function csmLoadAddList(){
+  var inClassIds = new Set(students.filter(function(s){
+    return s.class_id === _csmClassId || s.class_id2 === _csmClassId;
+  }).map(function(s){ return s.id; }));
+  _csmAllCandidates = students.filter(function(s){ return !inClassIds.has(s.id); });
+  var sb = document.getElementById('csm-search');
+  if(sb) sb.value = '';
+  csmFilterStudents();
+}
+
+function csmFilterStudents(){
+  var q = (document.getElementById('csm-search').value||'').toLowerCase();
+  var filtered = q
+    ? _csmAllCandidates.filter(function(s){ return s.name.toLowerCase().includes(q); })
+    : _csmAllCandidates;
+  var listEl = document.getElementById('csm-add-list');
+  if(!filtered.length){
+    listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#9ca3af;font-size:13px">해당하는 학생이 없습니다</div>';
+    csmUpdateSelCount();
+    return;
+  }
+  listEl.innerHTML = filtered.map(function(s){
+    var sg = [s.school, s.grade].filter(Boolean).join(' ');
+    var cls1 = classes.find(function(c){ return c.id===s.class_id; });
+    var cls2 = s.class_id2 ? classes.find(function(c){ return c.id===s.class_id2; }) : null;
+    var clsLabel = [cls1?cls1.name:'', cls2?cls2.name:''].filter(Boolean).join(', ');
+    return '<label style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;transition:background 0.1s" '
+      +'onmouseover="this.style.background=\'#f8fafc\'" onmouseout="this.style.background=\'\'">'
+      +'<input type="checkbox" class="csm-chk" data-id="'+s.id+'" onchange="csmUpdateSelCount()"'
+        +' style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:var(--primary)">'
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+s.name+'</div>'
+        +'<div style="font-size:11px;color:#9ca3af">'+(sg||'')+(clsLabel?' \u00B7 '+clsLabel:'')+'</div>'
+      +'</div>'
+    +'</label>';
+  }).join('');
+  csmUpdateSelCount();
+}
+
+function csmUpdateSelCount(){
+  var checked = document.querySelectorAll('.csm-chk:checked').length;
+  var label = document.getElementById('csm-sel-count');
+  var btn   = document.getElementById('csm-add-btn');
+  if(label) label.textContent = checked > 0 ? checked+'명 선택됨' : '';
+  if(btn)   btn.style.display  = checked > 0 ? 'block' : 'none';
+  if(btn && checked > 0) btn.textContent = '\u2705 선택한 '+checked+'명 추가';
+}
+
+async function csmAddSelected(){
+  var checked = Array.from(document.querySelectorAll('.csm-chk:checked'));
+  if(!checked.length){ alert('학생을 선택하세요'); return; }
+  var btn = document.getElementById('csm-add-btn');
+  if(btn){ btn.textContent = '⏳ 추가 중...'; btn.disabled = true; }
+  var ok=0, fail=[];
+  for(var i=0; i<checked.length; i++){
+    var sid = checked[i].dataset.id;
+    var s   = students.find(function(x){ return x.id===sid; });
+    if(!s){ fail.push(sid); continue; }
+    var updateObj;
+    if(!s.class_id){ updateObj = {class_id: _csmClassId}; }
+    else if(!s.class_id2){ updateObj = {class_id2: _csmClassId}; }
+    else { updateObj = {class_id2: _csmClassId}; }
+    updateObj.school_level = _csmClassLevel;
+    var {error} = await db.from('users').update(updateObj).eq('id', sid);
+    if(error) fail.push(s.name);
+    else ok++;
+  }
+  if(btn){ btn.disabled = false; }
+  await loadTeacherData();
+  if(fail.length) alert('⚠️ '+ok+'명 추가 완료, 실패: '+fail.join(', '));
+  else alert('✅ '+ok+'명이 ['+_csmClassName+']에 추가됐습니다!');
+  csmSwitchTab('current');
+  await csmLoadCurrentStudents();
 }
 
 // ── 1000행 제한 돌파용 페이지네이션 헬퍼 ─────────────────────────
@@ -21088,6 +21233,36 @@ tryAutoLogin();
       <button class="btn btn-full" onclick="closeModal('editClass')">취소</button>
       <button class="btn btn-primary btn-full" onclick="saveEditClass()">저장</button>
     </div>
+  </div>
+</div>
+
+<!-- 모달: 반 학생 관리 (선생님) -->
+<div class="modal-backdrop" id="modal-classStudents">
+  <div class="modal" style="max-height:90vh">
+    <div class="modal-handle"></div>
+    <h3 id="csm-title">👥 반 학생 관리</h3>
+    <!-- 탭: 현재 학생 / 학생 추가 -->
+    <div style="display:flex;gap:4px;margin-bottom:14px;background:#f5f6fa;border-radius:10px;padding:4px">
+      <button id="csm-tab-current" onclick="csmSwitchTab('current')"
+        style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--primary);color:#fff">📋 현재 학생</button>
+      <button id="csm-tab-add" onclick="csmSwitchTab('add')"
+        style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:#6b7280">➕ 학생 추가</button>
+    </div>
+    <!-- 현재 학생 목록 -->
+    <div id="csm-panel-current">
+      <div style="font-size:12px;color:#6b7280;margin-bottom:8px" id="csm-count-label">이 반의 학생 목록입니다</div>
+      <div id="csm-current-list" style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto"></div>
+    </div>
+    <!-- 학생 추가 패널 -->
+    <div id="csm-panel-add" style="display:none">
+      <input id="csm-search" type="text" placeholder="이름으로 검색..." oninput="csmFilterStudents()"
+        style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;margin-bottom:10px;box-sizing:border-box">
+      <div style="font-size:12px;color:#6b7280;margin-bottom:6px">체크박스로 추가할 학생을 선택하세요 <span id="csm-sel-count" style="color:var(--primary);font-weight:700"></span></div>
+      <div id="csm-add-list" style="display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:6px"></div>
+      <button onclick="csmAddSelected()" id="csm-add-btn"
+        style="width:100%;margin-top:10px;padding:11px;background:var(--primary);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;display:none">✅ 선택한 학생 추가</button>
+    </div>
+    <button class="btn btn-full" onclick="closeModal('classStudents')" style="margin-top:14px">닫기</button>
   </div>
 </div>
 
