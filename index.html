@@ -12414,6 +12414,14 @@ async function mnrLoad(){
     _mnrCheckData[c.student_id][c.check_date] = c;
   });
 
+  // 반 이름 미리 조회 (화면 카드뷰 + 이미지 공용)
+  window._mnrClassMap = {};
+  var _mnrClsIds = Array.from(new Set(_mnrStudents.filter(function(s){return s.class_id;}).map(function(s){return s.class_id;})));
+  if(_mnrClsIds.length){
+    var _mnrClsRes = await db.from('classes').select('id,name').in('id', _mnrClsIds);
+    (_mnrClsRes.data||[]).forEach(function(c){ window._mnrClassMap[c.id] = c.name; });
+  }
+
   var totalDone = 0, totalUndone = 0, totalScore = 0, scoreCount = 0;
   _mnrStudents.forEach(function(s){
     var dayData = _mnrCheckData[s.id] || {};
@@ -12434,17 +12442,121 @@ async function mnrLoad(){
   if(prev) prev.innerHTML = '';
 }
 
-function mnrRenderTable(dates){
-  var DAYS7 = ['일','월','화','수','목','금','토'];
-  var wrap = document.getElementById('mnr-table-wrap');
-  if(!wrap) return;
-  if(!_mnrStudents.length){
-    wrap.innerHTML = '<div class="empty-state"><div class="ei">👤</div><p>담당 중등 학생이 없습니다</p></div>';
-    return;
+/* ── 공용 카드형 결과 HTML 생성 (화면 데스크톱뷰 + 이미지 공용) ──
+   forImage=true: 이미지용(900px 고정, 배경). false: 화면용(가변폭). */
+function mnrBuildCardHTML(dates, forImage){
+  var DAYS=['일','월','화','수','목','금','토'];
+  var now=new Date();
+  var todayStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  var todayFmt=(now.getMonth()+1)+'/'+now.getDate()+'('+DAYS[now.getDay()]+')';
+  var weekDates=mnrGetWeekDates(_mnrWeekOffset);
+  function fmtTitle(dt){ return (dt.getUTCMonth()+1)+'/'+(dt.getUTCDate())+'('+DAYS[dt.getUTCDay()]+')'; }
+  function fmtDateHdr(d){
+    var dp=d.split('-'); var dt=new Date(Date.UTC(+dp[0],+dp[1]-1,+dp[2]));
+    var isPast=d<=todayStr;
+    return {label:(dt.getUTCMonth()+1)+'/'+(dt.getUTCDate())+'<br><span style="font-size:10px;opacity:0.7">('+DAYS[dt.getUTCDay()]+')</span>', isPast:isPast};
   }
+  var classMap = window._mnrClassMap || {};
+  var groups={},groupOrder=[];
+  _mnrStudents.forEach(function(s){
+    var k=s.class_id||'__none__';
+    var clsName=classMap[k]||(currentUser.name+'T 반');
+    if(!groups[clsName]){groups[clsName]=[];groupOrder.push(clsName);}
+    groups[clsName].push(s);
+  });
+  var totalStu=_mnrStudents.length,compA=0,notA=0;
+  _mnrStudents.forEach(function(s){
+    dates.forEach(function(d){
+      if(d>todayStr) return;
+      var c=_mnrCheckData[s.id]&&_mnrCheckData[s.id][d];
+      if(c && (c.is_completed||c.score!=null)) compA++;
+      else if(c) notA++;
+    });
+  });
+  var COLORS=[
+    {hd:'#1E3A5F',lite:'#EFF6FF',border:'#BFDBFE',sub:'#DBEAFE'},
+    {hd:'#14532D',lite:'#F0FDF4',border:'#BBF7D0',sub:'#DCFCE7'},
+    {hd:'#4C1D95',lite:'#F5F3FF',border:'#DDD6FE',sub:'#EDE9FE'},
+    {hd:'#7C2D12',lite:'#FFF7ED',border:'#FED7AA',sub:'#FFEDD5'}
+  ];
+  var sLabel=fmtTitle(weekDates.sunday), eLabel=fmtTitle(weekDates.thursday);
+  var outerStyle = forImage
+    ? 'width:900px;padding:28px 28px 20px;font-family:Apple SD Gothic Neo,Malgun Gothic,sans-serif;background:#f0f4f8;box-sizing:border-box'
+    : 'width:100%;padding:0;font-family:inherit;background:transparent;box-sizing:border-box';
+
+  var html='<div style="'+outerStyle+'">';
+  // 헤더 카드
+  html+='<div style="background:#fff;border-radius:14px;padding:20px 24px;margin-bottom:16px;box-shadow:0 2px 10px rgba(0,0,0,0.07)">'
+    +'<div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:2.5px;margin-bottom:6px">BESTIAN 수학학원</div>'
+    +'<div class="mnr-hdr-row" style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap">'
+      +'<div>'
+        +'<div class="mnr-hdr-title" style="font-size:22px;font-weight:900;color:#1e3a5f;margin-bottom:4px">'+_esc(currentUser.name)+' T 반 · 중등 일일N제 주간 학습 결과</div>'
+        +'<div style="font-size:13px;color:#64748b">'+sLabel+' ~ '+eLabel+'&nbsp;&nbsp;|&nbsp;&nbsp;기준일 '+todayFmt+'</div>'
+        +'<div style="font-size:11px;color:#94a3b8;margin-top:3px">※ 진행 전 날짜는 회색으로 표시</div>'
+      +'</div>'
+      +'<div style="display:flex;gap:10px">'
+        +'<div style="text-align:center;padding:8px 16px;background:#f8fafc;border-radius:10px;border:1.5px solid #e2e8f0"><div style="font-size:20px;font-weight:900;color:#1e3a5f">'+totalStu+'</div><div style="font-size:11px;color:#64748b;margin-top:2px">대상 학생</div></div>'
+        +'<div style="text-align:center;padding:8px 16px;background:#dcfce7;border-radius:10px;border:1.5px solid #bbf7d0"><div style="font-size:20px;font-weight:900;color:#15803d">'+compA+'</div><div style="font-size:11px;color:#15803d;margin-top:2px">✅ 완료</div></div>'
+        +'<div style="text-align:center;padding:8px 16px;background:#fee2e2;border-radius:10px;border:1.5px solid #fecaca"><div style="font-size:20px;font-weight:900;color:#dc2626">'+notA+'</div><div style="font-size:11px;color:#dc2626;margin-top:2px">미학습</div></div>'
+      +'</div>'
+    +'</div>'
+  +'</div>';
+  // 반별 테이블
+  groupOrder.forEach(function(clsName,gi){
+    var stus=groups[clsName];
+    var col=COLORS[gi%COLORS.length];
+    html+='<div style="background:#fff;border-radius:14px;margin-bottom:14px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06)">';
+    html+='<div style="background:'+col.hd+';padding:11px 18px;display:flex;justify-content:space-between;align-items:center">'
+      +'<div style="font-size:15px;font-weight:800;color:#fff">'+_esc(clsName)+'</div>'
+      +'<div style="font-size:13px;color:rgba(255,255,255,0.75);font-weight:600">'+stus.length+'명</div>'
+    +'</div>';
+    html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="width:100%;border-collapse:collapse;min-width:'+(forImage?'auto':'520px')+'">';
+    html+='<thead><tr>'
+      +'<th style="background:'+col.sub+';padding:9px 12px;text-align:center;font-size:12px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';width:36px">#</th>'
+      +'<th style="background:'+col.sub+';padding:9px 12px;text-align:left;font-size:12px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+'">학생</th>';
+    dates.forEach(function(d){
+      var dh=fmtDateHdr(d);
+      var thBg=dh.isPast?col.sub:'#f1f5f9', thColor=dh.isPast?col.hd:'#94a3b8';
+      html+='<th style="background:'+thBg+';padding:9px 10px;text-align:center;font-size:12px;font-weight:700;color:'+thColor+';border-bottom:2px solid '+col.border+';border-left:1px solid '+col.border+';min-width:72px">'+dh.label+'</th>';
+    });
+    html+='<th style="background:'+col.sub+';padding:9px 10px;text-align:center;font-size:12px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';border-left:2px solid '+col.hd+';min-width:56px">평균</th>'
+    +'</tr></thead><tbody>';
+    stus.forEach(function(s,si){
+      var rowBg=si%2===0?'#fff':col.lite;
+      html+='<tr style="background:'+rowBg+'">'
+        +'<td style="padding:10px 10px;text-align:center;font-size:12px;color:#94a3b8;font-weight:600;border-bottom:1px solid #f1f5f9">'+(si+1)+'</td>'
+        +'<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;white-space:nowrap"><div style="font-size:15px;font-weight:700;color:#1e293b">'+_esc(s.name)+'</div></td>';
+      var scoreSum=0,scoreCnt=0;
+      dates.forEach(function(d){
+        var c=_mnrCheckData[s.id]&&_mnrCheckData[s.id][d];
+        var cb,cc,ct;
+        if(!c){ cb='transparent'; cc='#cbd5e1'; ct='-'; }
+        else if(c.score!=null){
+          var sc=parseInt(c.score);
+          if(sc>=90){cb='#f0fdf4';cc='#15803d';}
+          else if(sc>=70){cb='#fefce8';cc='#a16207';}
+          else{cb='#fff7ed';cc='#c2410c';}
+          ct=sc+'점'; scoreSum+=sc; scoreCnt++;
+        } else if(c.is_completed){ cb='#f0fdf4';cc='#15803d';ct='완료';scoreSum+=100;scoreCnt++; }
+        else{ cb='#fff1f2';cc='#dc2626';ct='미학습'; }
+        html+='<td style="padding:10px 8px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:1px solid #f1f5f9;background:'+cb+'"><span style="font-size:14px;font-weight:700;color:'+cc+'">'+ct+'</span></td>';
+      });
+      var avgText=scoreCnt>0?Math.round(scoreSum/scoreCnt)+'점':'-';
+      var avgColor=scoreCnt===0?'#94a3b8':(scoreSum/scoreCnt>=80?'#15803d':scoreSum/scoreCnt>=60?'#a16207':'#c2410c');
+      html+='<td style="padding:10px 8px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:2px solid '+col.hd+';background:'+col.lite+'"><span style="font-size:14px;font-weight:800;color:'+avgColor+'">'+avgText+'</span></td></tr>';
+    });
+    html+='</tbody></table></div></div>';
+  });
+  html+='<div style="text-align:center;margin-top:4px;font-size:11px;color:#94a3b8">© BESTIAN 수학학원&nbsp;&nbsp;|&nbsp;&nbsp;기준일 '+todayFmt+'</div>';
+  html+='</div>';
+  return html;
+}
+
+/* ── 모바일용 compact 표 HTML (현행 어두운 테이블) ── */
+function mnrBuildCompactHTML(dates){
+  var DAYS7 = ['일','월','화','수','목','금','토'];
   var now = new Date();
   var todayStr = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-
   var html = '<style>'
     +'.mnr-tbl{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}'
     +'.mnr-tbl th{background:#1e293b;color:#e2e8f0;padding:5px 3px;text-align:center;font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden}'
@@ -12464,157 +12576,53 @@ function mnrRenderTable(dates){
       +'<br><span style="font-weight:400;font-size:9px">('+DAYS7[dd.getUTCDay()]+')</span></th>';
   });
   html += '<th style="font-size:9px">평균</th></tr></thead><tbody>';
-
   _mnrStudents.forEach(function(s, ri){
     var rowBg = ri%2===0 ? '#fff' : '#f8fafc';
     html += '<tr style="background:'+rowBg+'">'
       +'<td class="mnr-name-td" style="padding-left:6px;font-weight:700;color:#1e293b;font-size:12px">'+_esc(s.name)+'</td>';
     var scores = [];
     dates.forEach(function(d){
-      var isPast = d <= todayStr;
       var c = _mnrCheckData[s.id] && _mnrCheckData[s.id][d];
       var text='', cellBg='', textColor='#94a3b8';
-      // ★미입력=대시(데이터 없으면 과거/미래 무관 '-'), 명시적 미학습만 미학습
-      if(!c){
-        text = '-';
-      } else if(c.score!==null && c.score!==undefined){
+      if(!c){ text = '-'; }
+      else if(c.score!==null && c.score!==undefined){
         var sc=c.score; text=sc+'점'; scores.push(sc);
-        cellBg = sc>=70?'#f0fdf4':'#fffbeb';
-        textColor = sc>=70?'#16a34a':'#d97706';
-      } else if(c.is_completed===true){
-        text='완료'; cellBg='#f0fdf4'; textColor='#16a34a';
-      } else if(c.is_completed===false){
-        cellBg='#fef2f2'; text='미학습'; textColor='#dc2626';
-      } else {
-        text='-';
-      }
+        cellBg = sc>=70?'#f0fdf4':'#fffbeb'; textColor = sc>=70?'#16a34a':'#d97706';
+      } else if(c.is_completed===true){ text='완료'; cellBg='#f0fdf4'; textColor='#16a34a'; }
+      else if(c.is_completed===false){ cellBg='#fef2f2'; text='미학습'; textColor='#dc2626'; }
+      else { text='-'; }
       html += '<td style="background:'+cellBg+';color:'+textColor+';font-size:12px;font-weight:'+(text&&text!=='-'?'700':'400')+'">'+text+'</td>';
     });
     var avg = scores.length>0 ? Math.round(scores.reduce(function(a,b){return a+b;},0)/scores.length) : null;
     html += '<td style="font-weight:700;font-size:13px;color:'+(avg!==null?(avg>=70?'#15803d':'#d97706'):'#cbd5e1')+'">'+
       (avg!==null?avg+'점':'-')+'</td></tr>';
   });
-  html += '</tbody></table>';
-  wrap.innerHTML = html;
+  html += '</tbody></table></div>';
+  return html;
 }
 
+function mnrRenderTable(dates){
+  var wrap = document.getElementById('mnr-table-wrap');
+  if(!wrap) return;
+  if(!_mnrStudents.length){
+    wrap.innerHTML = '<div class="empty-state"><div class="ei">👤</div><p>담당 중등 학생이 없습니다</p></div>';
+    return;
+  }
+  // 데스크톱=카드형(이미지와 동일) / 모바일=compact표 — 반응형 토글
+  wrap.innerHTML =
+    '<style>'
+    +'.mnr-desktop-view{display:block}.mnr-mobile-view{display:none}'
+    +'@media (max-width:640px){.mnr-desktop-view{display:none}.mnr-mobile-view{display:block}}'
+    +'</style>'
+    +'<div class="mnr-desktop-view">'+mnrBuildCardHTML(dates,false)+'</div>'
+    +'<div class="mnr-mobile-view">'+mnrBuildCompactHTML(dates)+'</div>';
+}
 async function mnrCopyResultImage(){
   if(!_mnrStudents.length){ alert('담당 중등 학생이 없습니다'); return; }
   if(typeof html2canvas==='undefined'){ alert('이미지 생성 모듈(html2canvas) 미로드'); return; }
-
-  var DAYS=['일','월','화','수','목','금','토'];
   var weekDates=mnrGetWeekDates(_mnrWeekOffset);
-  var sunday=weekDates.sunday, thursday=weekDates.thursday, dates=weekDates.dates;
-  var now=new Date();
-  var todayStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  var todayFmt=(now.getMonth()+1)+'/'+now.getDate()+'('+DAYS[now.getDay()]+')';
-
-  function fmtTitle(dt){ return (dt.getUTCMonth()+1)+'/'+(dt.getUTCDate())+'('+DAYS[dt.getUTCDay()]+')'; }
-  function fmtDateHdr(d){
-    var dp=d.split('-'); var dt=new Date(Date.UTC(+dp[0],+dp[1]-1,+dp[2]));
-    var isPast=d<=todayStr;
-    return {label:(dt.getUTCMonth()+1)+'/'+(dt.getUTCDate())+'<br><span style="font-size:10px;opacity:0.7">('+DAYS[dt.getUTCDay()]+')</span>', isPast:isPast};
-  }
-
-  var classMap={};
-  var stuClassIds=Array.from(new Set(_mnrStudents.filter(function(s){return s.class_id;}).map(function(s){return s.class_id;})));
-  if(stuClassIds.length){
-    var clsRes=await db.from('classes').select('id,name').in('id',stuClassIds);
-    (clsRes.data||[]).forEach(function(c){classMap[c.id]=c.name;});
-  }
-  var groups={},groupOrder=[];
-  _mnrStudents.forEach(function(s){
-    var k=s.class_id||'__none__';
-    var clsName=classMap[k]||(currentUser.name+'T 반');
-    if(!groups[clsName]){groups[clsName]=[];groupOrder.push(clsName);}
-    groups[clsName].push(s);
-  });
-
-  var totalStu=_mnrStudents.length,compA=0,notA=0;
-  _mnrStudents.forEach(function(s){
-    dates.forEach(function(d){
-      if(d>todayStr) return;
-      var c=_mnrCheckData[s.id]&&_mnrCheckData[s.id][d];
-      // ★미입력은 완료/미학습 어느 쪽에도 포함하지 않음(셀 대시와 일관)
-      if(c && (c.is_completed||c.score!=null)) compA++;
-      else if(c) notA++;
-    });
-  });
-
-  var COLORS=[
-    {hd:'#1E3A5F',lite:'#EFF6FF',border:'#BFDBFE',sub:'#DBEAFE'},
-    {hd:'#14532D',lite:'#F0FDF4',border:'#BBF7D0',sub:'#DCFCE7'},
-    {hd:'#4C1D95',lite:'#F5F3FF',border:'#DDD6FE',sub:'#EDE9FE'},
-    {hd:'#7C2D12',lite:'#FFF7ED',border:'#FED7AA',sub:'#FFEDD5'}
-  ];
-  var sLabel=fmtTitle(sunday), eLabel=fmtTitle(thursday);
-
-  var html='<div style="width:900px;padding:28px 28px 20px;font-family:Apple SD Gothic Neo,Malgun Gothic,sans-serif;background:#f0f4f8;box-sizing:border-box">';
-  html+='<div style="background:#fff;border-radius:14px;padding:20px 24px;margin-bottom:16px;box-shadow:0 2px 10px rgba(0,0,0,0.07)">'
-    +'<div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:2.5px;margin-bottom:6px">BESTIAN 수학학원</div>'
-    +'<div style="display:flex;align-items:flex-end;justify-content:space-between">'
-      +'<div>'
-        +'<div style="font-size:22px;font-weight:900;color:#1e3a5f;margin-bottom:4px">'+_esc(currentUser.name)+' T 반 · 중등 일일N제 주간 학습 결과</div>'
-        +'<div style="font-size:13px;color:#64748b">'+sLabel+' ~ '+eLabel+'&nbsp;&nbsp;|&nbsp;&nbsp;기준일 '+todayFmt+'</div>'
-        +'<div style="font-size:11px;color:#94a3b8;margin-top:3px">※ 진행 전 날짜는 회색으로 표시</div>'
-      +'</div>'
-      +'<div style="display:flex;gap:10px">'
-        +'<div style="text-align:center;padding:8px 16px;background:#f8fafc;border-radius:10px;border:1.5px solid #e2e8f0"><div style="font-size:20px;font-weight:900;color:#1e3a5f">'+totalStu+'</div><div style="font-size:11px;color:#64748b;margin-top:2px">대상 학생</div></div>'
-        +'<div style="text-align:center;padding:8px 16px;background:#dcfce7;border-radius:10px;border:1.5px solid #bbf7d0"><div style="font-size:20px;font-weight:900;color:#15803d">'+compA+'</div><div style="font-size:11px;color:#15803d;margin-top:2px">✅ 완료</div></div>'
-        +'<div style="text-align:center;padding:8px 16px;background:#fee2e2;border-radius:10px;border:1.5px solid #fecaca"><div style="font-size:20px;font-weight:900;color:#dc2626">'+notA+'</div><div style="font-size:11px;color:#dc2626;margin-top:2px">미학습</div></div>'
-      +'</div>'
-    +'</div>'
-  +'</div>';
-
-  groupOrder.forEach(function(clsName,gi){
-    var stus=groups[clsName];
-    var col=COLORS[gi%COLORS.length];
-    html+='<div style="background:#fff;border-radius:14px;margin-bottom:14px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06)">';
-    html+='<div style="background:'+col.hd+';padding:11px 18px;display:flex;justify-content:space-between;align-items:center">'
-      +'<div style="font-size:15px;font-weight:800;color:#fff">'+_esc(clsName)+'</div>'
-      +'<div style="font-size:13px;color:rgba(255,255,255,0.75);font-weight:600">'+stus.length+'명</div>'
-    +'</div>';
-    html+='<table style="width:100%;border-collapse:collapse">';
-    html+='<thead><tr>'
-      +'<th style="background:'+col.sub+';padding:9px 12px;text-align:center;font-size:12px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';width:36px">#</th>'
-      +'<th style="background:'+col.sub+';padding:9px 12px;text-align:left;font-size:12px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+'">학생</th>';
-    dates.forEach(function(d){
-      var dh=fmtDateHdr(d);
-      var thBg=dh.isPast?col.sub:'#f1f5f9', thColor=dh.isPast?col.hd:'#94a3b8';
-      html+='<th style="background:'+thBg+';padding:9px 10px;text-align:center;font-size:12px;font-weight:700;color:'+thColor+';border-bottom:2px solid '+col.border+';border-left:1px solid '+col.border+';min-width:72px">'+dh.label+'</th>';
-    });
-    html+='<th style="background:'+col.sub+';padding:9px 10px;text-align:center;font-size:12px;font-weight:700;color:'+col.hd+';border-bottom:2px solid '+col.border+';border-left:2px solid '+col.hd+';min-width:56px">평균</th>'
-    +'</tr></thead><tbody>';
-    stus.forEach(function(s,si){
-      var rowBg=si%2===0?'#fff':col.lite;
-      html+='<tr style="background:'+rowBg+'">'
-        +'<td style="padding:10px 10px;text-align:center;font-size:12px;color:#94a3b8;font-weight:600;border-bottom:1px solid #f1f5f9">'+(si+1)+'</td>'
-        +'<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9"><div style="font-size:15px;font-weight:700;color:#1e293b">'+_esc(s.name)+'</div></td>';
-      var scoreSum=0,scoreCnt=0;
-      dates.forEach(function(d){
-        var c=_mnrCheckData[s.id]&&_mnrCheckData[s.id][d];
-        var cb,cc,ct;
-        // ★미입력=대시(데이터 없으면 무조건 '-'), c 존재 시에만 점수/완료/미학습
-        if(!c){ cb='transparent'; cc='#cbd5e1'; ct='-'; }
-        else if(c.score!=null){
-          var sc=parseInt(c.score);
-          if(sc>=90){cb='#f0fdf4';cc='#15803d';}
-          else if(sc>=70){cb='#fefce8';cc='#a16207';}
-          else{cb='#fff7ed';cc='#c2410c';}
-          ct=sc+'점'; scoreSum+=sc; scoreCnt++;
-        } else if(c.is_completed){ cb='#f0fdf4';cc='#15803d';ct='완료';scoreSum+=100;scoreCnt++; }
-        else{ cb='#fff1f2';cc='#dc2626';ct='미학습'; }
-        html+='<td style="padding:10px 8px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:1px solid #f1f5f9;background:'+cb+'"><span style="font-size:14px;font-weight:700;color:'+cc+'">'+ct+'</span></td>';
-      });
-      var avgText=scoreCnt>0?Math.round(scoreSum/scoreCnt)+'점':'-';
-      var avgColor=scoreCnt===0?'#94a3b8':(scoreSum/scoreCnt>=80?'#15803d':scoreSum/scoreCnt>=60?'#a16207':'#c2410c');
-      html+='<td style="padding:10px 8px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:2px solid '+col.hd+';background:'+col.lite+'"><span style="font-size:14px;font-weight:800;color:'+avgColor+'">'+avgText+'</span></td></tr>';
-    });
-    html+='</tbody></table></div>';
-  });
-  html+='<div style="text-align:center;margin-top:4px;font-size:11px;color:#94a3b8">© BESTIAN 수학학원&nbsp;&nbsp;|&nbsp;&nbsp;기준일 '+todayFmt+'</div>';
-  html+='</div>';
-
+  // 화면 카드뷰와 동일한 레이아웃 사용 (공용 함수, forImage=true → 900px 고정)
+  var html = mnrBuildCardHTML(weekDates.dates, true);
   var render=document.getElementById('mnr-image-render');
   render.innerHTML=html;
   try{
@@ -12623,13 +12631,13 @@ async function mnrCopyResultImage(){
     canvas.toBlob(async function(blob){
       try{
         await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-        alert('✅ 이미지가 클립보드에 복사됐습니다!\n카카오톡 등에서 붙여넣기 하세요.');
+        alert('\u2705 이미지가 클립보드에 복사됐습니다!\n카카오톡 등에서 붙여넣기 하세요.');
       } catch(e){
         var a=document.createElement('a');
         a.href=canvas.toDataURL('image/png');
         a.download=new Date().toISOString().slice(0,10)+'_중등일일N제_'+currentUser.name+'.png';
         a.click();
-        alert('클립보드 복사 불가 → 파일로 다운로드됩니다.');
+        alert('클립보드 복사 불가 \u2192 파일로 다운로드됩니다.');
       }
     },'image/png');
   } catch(e){
