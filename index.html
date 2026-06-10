@@ -3156,6 +3156,10 @@
         <label style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">퇴원 사유</label>
         <textarea id="withdraw-reason" rows="3" placeholder="퇴원 사유를 입력하세요 (선택사항)" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;resize:vertical"></textarea>
       </div>
+      <label style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;background:#fff7ed;border:1.5px solid #fed7aa;border-radius:8px;cursor:pointer">
+        <input type="checkbox" id="withdraw-cancelled" style="margin-top:2px;width:15px;height:15px;accent-color:#ea580c;cursor:pointer">
+        <span style="font-size:12px;color:#9a3412;line-height:1.5"><b>등록 취소 (실제 미등원)</b><br><span style="color:#c2632a">등원 예정이었으나 실제로 다니지 않은 경우 체크. 퇴원/월별 통계와 목록에서 제외됩니다.</span></span>
+      </label>
       <div style="display:flex;gap:8px">
         <button onclick="closeWithdrawModal()" class="btn btn-outline" style="flex:1">취소</button>
         <button onclick="confirmWithdraw()" class="btn btn-danger" style="flex:1">📋 퇴원 처리</button>
@@ -10905,7 +10909,7 @@ async function generateTeacherMonthlyReport() {
         .or('status.eq.active,and(status.eq.inactive,last_class_date.gte.'+monthStart+'),and(status.eq.inactive,and(last_class_date.is.null,withdrawn_at.gte.'+monthStart+'))'),
       db.from('users')
         .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_steps')
-        .eq('role','student').eq('teacher_id', currentUser.id)
+        .eq('role','student').eq('teacher_id', currentUser.id).neq('status','cancelled')
         .gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd),
       db.from('transfer_requests')
         .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
@@ -11182,7 +11186,7 @@ async function generateMonthlyReport() {
         .or('status.eq.active,and(status.eq.inactive,last_class_date.gte.'+monthStart+'),and(status.eq.inactive,and(last_class_date.is.null,withdrawn_at.gte.'+monthStart+'))'),
       db.from('users')
         .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_steps')
-        .eq('role','student').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd),
+        .eq('role','student').neq('status','cancelled').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd),
       db.from('transfer_requests')
         .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
         .eq('status','done')
@@ -19523,7 +19527,7 @@ async function loadAdminData() {
 
   // 통계
   let activeStudents    = allUsers.filter(u => u.role==='student' && u.status==='active');
-  let withdrawnStudents = allUsers.filter(u => u.role==='student' && u.status!=='active');
+  let withdrawnStudents = allUsers.filter(u => u.role==='student' && u.status==='inactive');  // 'cancelled'(등록취소) 제외
   let activeTeachers    = allUsers.filter(u => u.role==='teacher' && u.status==='active' && !u.deleted_at);
 
   if (isDeskMode && allowedBranchIds.length) {
@@ -20006,6 +20010,7 @@ function openWithdrawModal(studentId, studentName) {
   document.getElementById('withdraw-last-class').value = today;
   document.getElementById('withdraw-enrolled').value   = '';
   document.getElementById('withdraw-reason').value     = '';
+  var _wc = document.getElementById('withdraw-cancelled'); if (_wc) _wc.checked = false;  // 등록취소 체크 초기화
 
   const infoBlock = document.getElementById('withdraw-info-block');
   const isBulk = studentId === '__bulk__';
@@ -20038,6 +20043,7 @@ async function confirmWithdraw() {
   const enrolled  = document.getElementById('withdraw-enrolled').value;
   const lastClass = document.getElementById('withdraw-last-class').value;
   const reason    = (document.getElementById('withdraw-reason').value || '').trim();
+  const isCancelled = !!(document.getElementById('withdraw-cancelled') && document.getElementById('withdraw-cancelled').checked);
   if (!date) { alert('퇴원일을 입력하세요'); return; }
 
   const targets = isBulk
@@ -20066,7 +20072,8 @@ async function confirmWithdraw() {
     };
   }
 
-  const updateData = { status: 'inactive', withdrawn_at: date };
+  // 등록 취소 체크 시 status='cancelled' (통계/목록 자동 제외), 아니면 일반 퇴원
+  const updateData = { status: isCancelled ? 'cancelled' : 'inactive', withdrawn_at: date };
   if (reason)    updateData.withdraw_reason = reason;
   if (lastClass) updateData.last_class_date = lastClass;
   if (enrolled && !isBulk) updateData.enrolled_at = enrolled;
@@ -20100,6 +20107,19 @@ async function confirmWithdraw() {
 /* ============================================================
    [SECTION: REENROLL] 재입학 처리
 ============================================================ */
+// 등록취소(cancelled) → 일반 퇴원(inactive) 정정. 통계에 다시 잡히게 됨.
+async function correctCancelledToWithdrawn(studentId, studentName) {
+  const label = studentName ? `[${studentName}] ` : '';
+  if (!confirm(`${label}이 학생을 '등록취소'에서 '일반 퇴원'으로 변경할까요?\n퇴원/월별 통계에 다시 포함됩니다.`)) return;
+  try {
+    const { error } = await db.from('users').update({ status: 'inactive' }).eq('id', studentId);
+    if (error) throw error;
+    await loadTeacherData();
+    if (currentUser.role === 'admin' || currentUser.role === 'desk') await loadAdminData();
+    alert(`✅ '일반 퇴원'으로 변경 완료!`);
+  } catch(e) { alert('오류: ' + (e.message || e)); }
+}
+
 async function reEnrollStudent(studentId, studentName) {
   const today = new Date().toISOString().split('T')[0];
   const label = studentName ? `[${studentName}] ` : '';
@@ -20578,6 +20598,8 @@ function renderAdminStudents() {
 
   const filtered = srcList.filter(u => {
     if (q && !u.name.toLowerCase().includes(q)) return false;
+    // 등록취소(cancelled): 평소엔 모든 필터에서 제외. 단, 이름 검색어가 있으면 정정을 위해 노출.
+    if (u.status === 'cancelled' && !q) return false;
     // 상태 필터: ''=전체, 'active'=재원, 'inactive'=퇴원
     if (_admStudentStatusFilter === 'active'   && u.status !== 'active') return false;
     if (_admStudentStatusFilter === 'inactive' && u.status !== 'inactive') return false;
@@ -20629,11 +20651,15 @@ function renderAdminStudents() {
       ? `<div style="width:36px;height:36px;border-radius:50%;overflow:hidden;flex-shrink:0"><img src="${u.profile_image_url}" style="width:100%;height:100%;object-fit:cover"></div>`
       : `<div style="width:36px;height:36px;border-radius:50%;background:#eef3f8;color:var(--navy);font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0;opacity:${isActive?1:0.6}">${(u.name||'?')[0]}</div>`;
 
+    const isCancelled = u.status === 'cancelled';
     const actions = isActive
       ? `<button onclick="openEditStudentModal('${u.id}',true)" style="padding:4px 8px;border:1.5px solid #c7d2fe;border-radius:6px;background:#eef2ff;color:#4f46e5;font-size:11px;font-weight:700;cursor:pointer">✏️ 수정</button>
          <button onclick="reissueStudentCode('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #fde68a;border-radius:6px;background:#fffbeb;color:#92400e;font-size:11px;cursor:pointer">🔄 코드</button>
          <button onclick="openWithdrawModal('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #fca5a5;border-radius:6px;background:#fef2f2;color:#dc2626;font-size:11px;font-weight:600;cursor:pointer">퇴원</button>
          <button onclick="openAdminClassChangeModal('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:700;cursor:pointer">🔄 반 변경</button>`
+      : isCancelled
+      ? `<button onclick="correctCancelledToWithdrawn('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #fca5a5;border-radius:6px;background:#fef2f2;color:#dc2626;font-size:11px;font-weight:600;cursor:pointer">→ 일반 퇴원으로</button>
+         <button onclick="reEnrollStudent('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;cursor:pointer">재원 복원</button>`
       : `<button onclick="openWithdrawReport('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #7dd3fc;border-radius:6px;background:#f0f9ff;color:#0369a1;font-size:11px;font-weight:600;cursor:pointer">📋 퇴원 사유</button>
          <button onclick="reEnrollStudent('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;cursor:pointer">재원</button>`;
 
@@ -20642,7 +20668,7 @@ function renderAdminStudents() {
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
           ${(u.name||'')}
-          <span style="font-size:10px;padding:2px 7px;border-radius:100px;font-weight:700;background:${isActive?'#f0fdf4':'#fef2f2'};color:${isActive?'#16a34a':'#dc2626'}">${isActive?'재원':'퇴원'}</span>
+          <span style="font-size:10px;padding:2px 7px;border-radius:100px;font-weight:700;background:${isActive?'#f0fdf4':(isCancelled?'#fff7ed':'#fef2f2')};color:${isActive?'#16a34a':(isCancelled?'#ea580c':'#dc2626')}">${isActive?'재원':(isCancelled?'등록취소':'퇴원')}</span>
           ${cls    ? `<span style="font-size:11px;padding:2px 7px;border-radius:100px;background:#eef3f8;color:var(--navy);font-weight:600">${_esc(cls.name)}</span>` : ''}
           ${branch ? `<span style="font-size:11px;padding:2px 7px;border-radius:100px;background:#f5f3ff;color:#7c3aed;font-weight:600">${_esc(branch.name)}</span>` : ''}
         </div>
