@@ -4139,8 +4139,12 @@ function switchPanel(panelId, btn) {
 }
 
 function switchPanelAdmin(tabId, btn) {
-  switchPanel(tabId, btn);
-}
+    if (currentUser && currentUser.role === 'desk' && typeof deskHasTabAccess === 'function' && !deskHasTabAccess(tabId)) {
+      alert('접근 권한이 없는 메뉴입니다.');
+      return;
+    }
+    switchPanel(tabId, btn);
+  }
 
 function enterFirstPanel() {
   const role = currentUser.role;
@@ -4151,59 +4155,210 @@ function enterFirstPanel() {
     const firstBtn = document.getElementById('amenu-accounts');
     switchPanel('admin-accounts', firstBtn);
   } else if (role === 'desk') {
-    // 데스크는 부여된 첫 번째 메뉴로 진입 (추후 구현)
-    const firstBtn = document.getElementById('amenu-worklog');
-    switchPanel('admin-worklog', firstBtn);
+    // 데스크 첫 화면 (운영본 흐름): students/classes 권한 있으면 계정관리, 없으면 부여된 첫 메뉴
+    var _deskPermKeys = getDeskPermKeys(currentUser);
+    var _hasAccountAccess = (_deskPermKeys.indexOf('students') !== -1 || _deskPermKeys.indexOf('classes') !== -1);
+    if (_hasAccountAccess) {
+      switchPanel('admin-accounts', document.getElementById('amenu-accounts'));
+    } else {
+      var _firstTab = getDeskFirstTab();
+      if (_firstTab) {
+        switchPanel(_firstTab.tabId, document.getElementById(_firstTab.btnId));
+      } else {
+        switchPanel('admin-exam-score', document.getElementById('amenu-exam-score'));
+      }
+    }
   }
 }
 
 /* ============================================================
-   [SECTION: DESK FILTER] 데스크 권한 필터
-   ※ currentUser.permissions (jsonb) 기반으로 메뉴 표시/숨김
-   ※ 추후 permissions 구조 확정 후 세부 구현
+   [SECTION: DESK FILTER] 데스크 권한 시스템 (운영본 업무흐름 기준)
+   - permissions(jsonb) 키는 운영본 DESK_PERMISSIONS와 동일(언더스코어)
+   - exam_score(내신점수)는 권한 불필요 기본 허용, exam_view(분석표)만 권한 필요
+   - students/classes → 계정관리(amenu-accounts) 공통 진입
 ============================================================ */
-const DESK_PERMISSION_MAP = {
-  'worklog':           ['amenu-worklog'],
-  'homework':          ['amenu-homework'],
-  'lp_view':           ['amenu-lp-view'],
-  'timetable':         ['amenu-timetable'],
-  'monthly_report':    ['amenu-monthly-report'],
-  'weekend_naje':      ['amenu-weekend-naje'],
-  'weekend_potential': ['amenu-weekend-potential'],
-  'weekend_bety':      ['amenu-weekend-bety'],
-  'weekend_naesin':    ['amenu-weekend-naesin'],
-  'weekend_msg':       ['amenu-weekend-msg'],
-  'naje':              ['amenu-naje', 'amenu-middle-naje', 'amenu-naje-result'],
-  'exam_score':        ['amenu-exam-score'],
-  'exam_list':         ['amenu-exam-list'],
-  'reading_room':      ['amenu-rr-weekly'],
-};
-const DESK_HIDDEN_IDS = [
-  'amenu-accounts', 'amenu-branches', 'amenu-notify', 'amenu-beti',
-  'amenu-syllabus'
+// 데스크 권한 정의 (운영본 DESK_PERMISSIONS와 키 동일)
+var DESK_PERMISSIONS = [
+  {key:'weekend_naje', label:'📅 주말 일일N제',   group:'주말 프로그램'},
+  {key:'weekend_pt',   label:'🎯 주말 포텐셜',     group:'주말 프로그램'},
+  {key:'weekend_bety', label:'📝 주말 베티모의고사', group:'주말 프로그램'},
+  {key:'weekend_ns',   label:'📘 주말 내신대비',   group:'주말 프로그램'},
+  {key:'weekend_msg',  label:'💬 주말 메시지 전송', group:'주말 프로그램'},
+  {key:'students',     label:'👥 학생 관리',  group:'기타'},
+  {key:'classes',      label:'🏫 반 관리',    group:'기타'},
+  {key:'reading_room', label:'📚 독서실',     group:'기타'},
+  {key:'exam_view',    label:'📊 내신 분석표 조회', group:'기타'},
+  {key:'lp_view',      label:'📋 학습 진행표', group:'기타'},
 ];
 
+// 권한 키 → 사이드바 메뉴 매핑 (btnId + 부모 아코디언 그룹)
+var DESK_PERM_TO_MENUS = {
+  'weekend_naje':  [{btnId:'amenu-weekend-naje',      parent:'amenu-weekend-group'}],
+  'weekend_pt':    [{btnId:'amenu-weekend-potential', parent:'amenu-weekend-group'}],
+  'weekend_bety':  [{btnId:'amenu-weekend-bety',      parent:'amenu-weekend-group'}],
+  'weekend_ns':    [{btnId:'amenu-weekend-naesin',    parent:'amenu-weekend-group'}],
+  'weekend_msg':   [{btnId:'amenu-weekend-msg',       parent:'amenu-weekend-group'}],
+  'students':      [{btnId:'amenu-accounts',          parent:null}],
+  'classes':       [{btnId:'amenu-accounts',          parent:null}],
+  'reading_room':  [{btnId:'amenu-rr-weekly',         parent:'amenu-reading-room-group'}],
+  'exam_view':     [{btnId:'amenu-exam-list',         parent:'amenu-naesin-group'}],
+  'lp_view':       [{btnId:'amenu-lp-view',           parent:null}],
+};
+
+// 권한 키 → 패널 tabId (탭 접근 차단용)
+var DESK_PERM_TO_TABS = {
+  'weekend_naje':  ['admin-weekend-naje'],
+  'weekend_pt':    ['admin-weekend-potential'],
+  'weekend_bety':  ['admin-weekend-bety'],
+  'weekend_ns':    ['admin-weekend-naesin'],
+  'weekend_msg':   ['admin-weekend-msg'],
+  'students':      ['admin-accounts'],
+  'classes':       ['admin-accounts'],
+  'reading_room':  ['admin-rr-weekly'],
+  'exam_view':     ['admin-exam-list'],
+  'lp_view':       ['admin-lp-view'],
+};
+
+// 관리자 사이드바 전체 최상위 항목 (필터 시 비허용 항목 숨김용)
+var ADMIN_SIDEBAR_BUTTON_IDS = [
+  'amenu-accounts', 'amenu-notify', 'amenu-lp-view', 'amenu-homework',
+  'amenu-naje-accordion', 'amenu-syllabus', 'amenu-branches', 'amenu-worklog',
+  'amenu-timetable', 'amenu-monthly-report', 'amenu-weekend-group',
+  'amenu-naesin-group', 'amenu-reading-room-group'
+];
+
+// 데스크가 부여받은 권한 키 배열 (true인 것만)
+function getDeskPermKeys(user) {
+  var perms = user && user.permissions;
+  if (!perms) return [];
+  if (Array.isArray(perms)) return perms.filter(function(k){ return DESK_PERMISSIONS.some(function(p){return p.key===k;}); });
+  if (typeof perms === 'object') return DESK_PERMISSIONS.filter(function(p){ return perms[p.key] === true; }).map(function(p){ return p.key; });
+  return [];
+}
+function getDeskPermLabel(key) {
+  var p = DESK_PERMISSIONS.find(function(x){ return x.key === key; });
+  return p ? p.label : key;
+}
+
+// 데스크 사이드바 필터: 부여된 메뉴만 표시, 빈 아코디언 그룹 숨김
 function applyDeskFilter() {
-  const perms = currentUser.permissions || {};
-  // 데스크는 계정/분원/알림 항상 숨김
-  DESK_HIDDEN_IDS.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  });
-  // 모든 permission 대상 메뉴 일단 숨김
-  Object.values(DESK_PERMISSION_MAP).flat().forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  });
-  // 부여된 권한만 표시
-  Object.keys(perms).forEach(key => {
-    if (!perms[key]) return;
-    const ids = DESK_PERMISSION_MAP[key] || [];
-    ids.forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.style.display = '';
+  if (!currentUser || currentUser.role !== 'desk') return;
+  var permKeys = getDeskPermKeys(currentUser);
+
+  // 허용 btnId / 부모 그룹 집합
+  var allowedBtnIds = {};
+  var allowedParents = {};
+  permKeys.forEach(function(pk) {
+    (DESK_PERM_TO_MENUS[pk] || []).forEach(function(m) {
+      allowedBtnIds[m.btnId] = true;
+      if (m.parent) allowedParents[m.parent] = true;
     });
   });
+
+  // 1) 모든 관리자 최상위 항목 숨김
+  ADMIN_SIDEBAR_BUTTON_IDS.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+
+  // 2) 아코디언 그룹 내 모든 자식 일단 숨김
+  var allChildren = ['amenu-weekend-naje','amenu-weekend-potential','amenu-weekend-bety','amenu-weekend-naesin','amenu-weekend-msg',
+                     'amenu-rr-weekly','amenu-exam-score','amenu-exam-list'];
+  allChildren.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+
+  // 3) 부여된 부모 그룹 표시
+  Object.keys(allowedParents).forEach(function(pid) {
+    var el = document.getElementById(pid);
+    if (el) el.style.display = '';
+  });
+  // 4) 부여된 버튼 표시
+  Object.keys(allowedBtnIds).forEach(function(bid) {
+    var el = document.getElementById(bid);
+    if (el) el.style.display = '';
+  });
+
+  // 5) 내신고사 그룹: exam_score(내신점수)는 데스크 기본 허용 → 그룹+점수 항상 표시
+  var naesinGroup = document.getElementById('amenu-naesin-group');
+  if (naesinGroup) naesinGroup.style.display = '';
+  var examScoreBtn = document.getElementById('amenu-exam-score');
+  if (examScoreBtn) examScoreBtn.style.display = '';
+  var examListBtn = document.getElementById('amenu-exam-list');
+  if (examListBtn) examListBtn.style.display = allowedBtnIds['amenu-exam-list'] ? '' : 'none';
+}
+
+// 데스크가 특정 탭에 접근 권한이 있는지 (URL/직접 접근 차단용)
+function deskHasTabAccess(tabId) {
+  if (!currentUser || currentUser.role !== 'desk') return true;
+  if (tabId === 'admin-exam-score') return true; // 내신점수 기본 허용
+  var permKeys = getDeskPermKeys(currentUser);
+  for (var i = 0; i < permKeys.length; i++) {
+    var tabs = DESK_PERM_TO_TABS[permKeys[i]] || [];
+    if (tabs.indexOf(tabId) !== -1) return true;
+  }
+  return false;
+}
+
+// 데스크가 부여받은 첫 메뉴 (자동 진입용)
+function getDeskFirstTab() {
+  var permKeys = getDeskPermKeys(currentUser);
+  for (var i = 0; i < permKeys.length; i++) {
+    var menus = DESK_PERM_TO_MENUS[permKeys[i]] || [];
+    var tabs  = DESK_PERM_TO_TABS[permKeys[i]] || [];
+    if (menus.length && tabs.length) return { btnId: menus[0].btnId, tabId: tabs[0] };
+  }
+  return null;
+}
+
+// 관리자 사이드바 복원 (데스크→관리자 전환 시 숨겨졌던 항목 복원)
+function restoreAdminSidebar() {
+  ADMIN_SIDEBAR_BUTTON_IDS.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = '';
+  });
+  ['amenu-weekend-naje','amenu-weekend-potential','amenu-weekend-bety','amenu-weekend-naesin','amenu-weekend-msg',
+   'amenu-rr-weekly','amenu-exam-score','amenu-exam-list'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = '';
+  });
+  // is_master 전용/조건부 항목은 원래 규칙대로 재적용
+  var notifyBtn = document.getElementById('amenu-notify');
+  if (notifyBtn) notifyBtn.style.display = (currentUser && currentUser.is_master) ? '' : 'none';
+  var lpBtn = document.getElementById('amenu-lp-view');
+  if (lpBtn) lpBtn.style.display = (currentUser && (currentUser.is_master || currentUser.role === 'admin')) ? '' : 'none';
+}
+
+// 데스크 분원 select 잠금: 본인 branch_ids만 옵션 + 자동선택, 1개면 disabled
+function applyDeskBranchLock(branchSelectId) {
+  if (!currentUser || currentUser.role !== 'desk') return;
+  var sel = document.getElementById(branchSelectId);
+  if (!sel) return;
+  var allowed = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+  if (allowed.length === 0) return;
+  var newHtml = '';
+  Array.from(sel.options).forEach(function(opt) {
+    if (opt.value && allowed.indexOf(opt.value) !== -1) {
+      newHtml += '<option value="' + opt.value + '">' + opt.textContent + '</option>';
+    }
+  });
+  sel.innerHTML = newHtml;
+  if (sel.options.length > 0) sel.value = sel.options[0].value;
+  sel.disabled = (allowed.length === 1);
+}
+
+// 데스크가 볼 수 있는 branch_ids (admin/teacher는 빈 배열 = 제한 없음)
+function getDeskAllowedBranchIds() {
+  if (currentUser && currentUser.role === 'desk') {
+    return Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+  }
+  return [];
+}
+function deskCanAccessBranch(branchId) {
+  if (!currentUser || currentUser.role !== 'desk') return true;
+  var allowed = getDeskAllowedBranchIds();
+  return allowed.length === 0 || allowed.indexOf(branchId) !== -1;
 }
 
 /* ============================================================
@@ -9984,26 +10139,7 @@ async function deleteAdminAccount(id, name) {
 }
 
 /* ── 데스크 계정 탭 ─────────────────────────────────────── */
-function getDeskPermKeys(desk) {
-  var perms = desk && desk.permissions;
-  if (!perms) return [];
-  if (Array.isArray(perms)) return perms;
-  if (typeof perms === 'object') return Object.keys(perms).filter(function(k){ return perms[k]; });
-  return [];
-}
-
-var DESK_PERM_DEFS = [
-  {key:'weekend-naje',      label:'📅 일일N제'},
-  {key:'weekend-potential', label:'🎯 포텐셜'},
-  {key:'weekend-bety',      label:'📝 베티모의고사'},
-  {key:'weekend-naesin',    label:'📘 내신대비'},
-  {key:'weekend-msg',       label:'💬 메시지 전송'},
-  {key:'worklog',           label:'📋 업무일지'},
-  {key:'students',          label:'👨‍🎓 학생 관리'},
-  {key:'accounts',          label:'🏠 계정 관리'},
-  {key:'monthly-report',    label:'📊 월별 리포트'},
-  {key:'reading-room',      label:'📚 독서실'},
-];
+// (getDeskPermKeys / 데스크 권한 정의는 [SECTION: DESK FILTER]로 통합됨)
 
 async function loadDeskAccounts() {
   var el = document.getElementById('desk-account-list');
@@ -10082,7 +10218,7 @@ async function openDeskAccountModal(editId) {
   var permBox = document.getElementById('desk-perm-checkboxes');
   if (permBox) {
     var existPerms = getDeskPermKeys(existing || {});
-    permBox.innerHTML = DESK_PERM_DEFS.map(function(p) {
+    permBox.innerHTML = DESK_PERMISSIONS.map(function(p) {
       return '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;cursor:pointer;font-size:13px;border-bottom:1px solid #f1f5f9">'
         + '<input type="checkbox" name="desk-perm" value="' + p.key + '"' + (existPerms.indexOf(p.key) !== -1 ? ' checked' : '') + ' style="accent-color:#f59e0b;width:14px;height:14px">'
         + p.label
@@ -10110,7 +10246,7 @@ async function saveDeskAccount() {
 
   // 권한 수집
   var selectedPerms = {};
-  DESK_PERM_DEFS.forEach(function(p) { selectedPerms[p.key] = false; });
+  DESK_PERMISSIONS.forEach(function(p) { selectedPerms[p.key] = false; });
   document.querySelectorAll('input[name="desk-perm"]:checked').forEach(function(c){ selectedPerms[c.value] = true; });
 
   try {
@@ -19348,10 +19484,7 @@ async function loadAdminData() {
   renderAdminStudents();
 }
 
-function getDeskAllowedBranchIds() {
-  if (!currentUser || currentUser.role !== 'desk') return [];
-  return Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
-}
+  // (getDeskAllowedBranchIds는 [SECTION: DESK FILTER]로 통합됨)
 
 /* ============================================================
    [SECTION: STUDENTS] 선생님 학생 목록
