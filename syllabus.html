@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v2.3-admin-view]</title>
+<title>BMAPS · 진도계획서 제작 [v2.4-view-yearmonth]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -346,7 +346,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v2.3-admin-view</span>
+    <span class="tb-ver" id="syl-ver">v2.4-view-yearmonth</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -532,8 +532,10 @@
       <select id="svw-branch" class="svw-sel" onchange="sylViewLoadTeachers(this.value)"><option value="">분원 선택…</option></select>
       <label class="svw-lb">선생님</label>
       <select id="svw-teacher" class="svw-sel" disabled onchange="sylViewLoadRecords(this.value)"><option value="">선생님 선택…</option></select>
-      <label class="svw-lb">계획서</label>
-      <select id="svw-record" class="svw-sel" disabled onchange="sylViewPickRecord(this.value)"><option value="">계획서 선택…</option></select>
+      <label class="svw-lb">연도</label>
+      <select id="svw-year" class="svw-sel" disabled onchange="sylViewPickYear(this.value)"><option value="">연도…</option></select>
+      <label class="svw-lb">월</label>
+      <select id="svw-month" class="svw-sel" disabled onchange="sylViewPickMonth(this.value)"><option value="">월…</option></select>
     </div>
     <div class="svw-tabs" id="svw-course-tabs"></div>
     <div class="svw-stage" id="svw-stage">
@@ -630,7 +632,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v2.3-admin-view';
+  window.SYLLABUS_VERSION = 'v2.4-view-yearmonth';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1294,7 +1296,8 @@
     if(sc) sc.style.display = 'flex';
     await sylViewLoadBranches();
     var tSel = document.getElementById('svw-teacher'); if(tSel){ tSel.innerHTML = '<option value="">선생님 선택…</option>'; tSel.disabled = true; }
-    var rSel = document.getElementById('svw-record'); if(rSel){ rSel.innerHTML = '<option value="">계획서 선택…</option>'; rSel.disabled = true; }
+    var ySel = document.getElementById('svw-year'); if(ySel){ ySel.innerHTML = '<option value="">연도…</option>'; ySel.disabled = true; }
+    var mSel = document.getElementById('svw-month'); if(mSel){ mSel.innerHTML = '<option value="">월…</option>'; mSel.disabled = true; }
     document.getElementById('svw-course-tabs').innerHTML = '';
     sylViewShowEmpty(true);
   }
@@ -1342,7 +1345,8 @@
     var sel = document.getElementById('svw-teacher');
     if(!sel) return;
     sel.innerHTML = '<option value="">선생님 선택…</option>'; sel.disabled = true;
-    var rSel = document.getElementById('svw-record'); if(rSel){ rSel.innerHTML = '<option value="">계획서 선택…</option>'; rSel.disabled = true; }
+    var ySel = document.getElementById('svw-year'); if(ySel){ ySel.innerHTML = '<option value="">연도…</option>'; ySel.disabled = true; }
+    var mSel = document.getElementById('svw-month'); if(mSel){ mSel.innerHTML = '<option value="">월…</option>'; mSel.disabled = true; }
     document.getElementById('svw-course-tabs').innerHTML = '';
     sylViewShowEmpty(true);
     if(!branchId) return;
@@ -1356,31 +1360,80 @@
     } catch(e){ console.warn('조회 선생님 예외:', e); }
   }
 
+  // period 파싱: 'YYYY년 M월' → {year, month}. 실패 시 null
+  function sylParsePeriod(p){
+    var m = String(p || '').match(/^(\d{4})년\s*(\d{1,2})월$/);
+    if(!m) return null;
+    return { year: parseInt(m[1], 10), month: parseInt(m[2], 10) };
+  }
+
+  // 선생님 선택 → 전체 레코드 보관 + 연도 드롭다운 (기본=올해)
+  var _sylViewRecords = [];
   async function sylViewLoadRecords(teacherId){
-    var sel = document.getElementById('svw-record');
-    if(!sel) return;
-    sel.innerHTML = '<option value="">계획서 선택…</option>'; sel.disabled = true;
+    var ySel = document.getElementById('svw-year');
+    var mSel = document.getElementById('svw-month');
+    if(ySel){ ySel.innerHTML = '<option value="">연도…</option>'; ySel.disabled = true; }
+    if(mSel){ mSel.innerHTML = '<option value="">월…</option>'; mSel.disabled = true; }
     document.getElementById('svw-course-tabs').innerHTML = '';
     sylViewShowEmpty(true);
+    _sylViewRecords = [];
     if(!teacherId) return;
     try {
       var res = await db.from('bmaps_syllabuses').select('id, period, courses, updated_at')
         .eq('teacher_id', teacherId).order('updated_at', { ascending: false });
       var rows = res.data || [];
-      if(!rows.length){ sel.innerHTML = '<option value="">(저장된 계획서 없음)</option>'; return; }
-      var now = new Date();
-      var thisPeriod = now.getFullYear() + '년 ' + (now.getMonth()+1) + '월';
-      var html = '<option value="">계획서 선택…</option>';
-      var defaultId = '';
-      rows.forEach(function(r){
-        var n = Array.isArray(r.courses) ? r.courses.length : 0;
-        var label = (r.period || '(기간 미상)') + (n ? (' (강좌 ' + n + '개)') : '');
-        html += '<option value="' + esc(r.id) + '">' + esc(label) + '</option>';
-        if(r.period === thisPeriod && !defaultId) defaultId = r.id;
+      if(!rows.length){ if(ySel) ySel.innerHTML = '<option value="">(저장된 계획서 없음)</option>'; return; }
+      _sylViewRecords = rows.map(function(r){
+        var pp = sylParsePeriod(r.period);
+        return { id: r.id, period: r.period, courses: r.courses, year: pp ? pp.year : null, month: pp ? pp.month : null };
       });
-      sel.innerHTML = html; sel.disabled = false;
-      if(defaultId){ sel.value = defaultId; await sylViewPickRecord(defaultId); }
+      var years = [];
+      _sylViewRecords.forEach(function(r){ if(r.year && years.indexOf(r.year) < 0) years.push(r.year); });
+      years.sort(function(a,b){ return b - a; });
+      var yHtml = '<option value="">연도…</option>';
+      years.forEach(function(y){ yHtml += '<option value="' + y + '">' + y + '년</option>'; });
+      if(ySel){ ySel.innerHTML = yHtml; ySel.disabled = false; }
+      var nowYear = new Date().getFullYear();
+      var defYear = (years.indexOf(nowYear) >= 0) ? nowYear : (years.length ? years[0] : '');
+      if(defYear && ySel){ ySel.value = String(defYear); await sylViewPickYear(String(defYear)); }
     } catch(e){ console.warn('조회 계획서 예외:', e); }
+  }
+
+  // 연도 선택 → 그 연도의 월 드롭다운 (기본=이번달, 없으면 최근월)
+  async function sylViewPickYear(year){
+    var mSel = document.getElementById('svw-month');
+    if(mSel){ mSel.innerHTML = '<option value="">월…</option>'; mSel.disabled = true; }
+    document.getElementById('svw-course-tabs').innerHTML = '';
+    sylViewShowEmpty(true);
+    if(!year){ return; }
+    var y = parseInt(year, 10);
+    var recs = _sylViewRecords.filter(function(r){ return r.year === y; });
+    recs.sort(function(a,b){ return (b.month||0) - (a.month||0); });
+    var mHtml = '<option value="">월…</option>';
+    recs.forEach(function(r){
+      var n = Array.isArray(r.courses) ? r.courses.length : 0;
+      mHtml += '<option value="' + r.month + '">' + r.month + '월' + (n ? (' (강좌 ' + n + '개)') : '') + '</option>';
+    });
+    if(mSel){ mSel.innerHTML = mHtml; mSel.disabled = false; }
+    var now = new Date();
+    var defMonth = '';
+    if(y === now.getFullYear()){
+      var nm = now.getMonth() + 1;
+      if(recs.some(function(r){ return r.month === nm; })) defMonth = nm;
+    }
+    if(!defMonth && recs.length) defMonth = recs[0].month;
+    if(defMonth && mSel){ mSel.value = String(defMonth); await sylViewPickMonth(String(defMonth)); }
+  }
+
+  // 월 선택 → 연+월로 레코드 특정 → 로드
+  async function sylViewPickMonth(month){
+    if(!month){ sylViewShowEmpty(true); document.getElementById('svw-course-tabs').innerHTML=''; return; }
+    var ySel = document.getElementById('svw-year');
+    var y = ySel ? parseInt(ySel.value, 10) : null;
+    var m = parseInt(month, 10);
+    var rec = _sylViewRecords.find(function(r){ return r.year === y && r.month === m; });
+    if(!rec){ sylViewShowEmpty(true); return; }
+    await sylViewPickRecord(rec.id);
   }
 
   async function sylViewPickRecord(recordId){
