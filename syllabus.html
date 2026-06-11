@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v2.2-export-anystate]</title>
+<title>BMAPS · 진도계획서 제작 [v2.3-admin-view]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -65,6 +65,21 @@
   .syl-prev-modal .spm-close { width: 30px; height: 30px; border: 1px solid #d1d8e0; background: #fff; color: #64748b; border-radius: 8px; font-size: 15px; cursor: pointer; line-height: 1; padding: 0; }
   .syl-prev-modal .spm-close:hover { background: #f1f5f9; }
   .syl-prev-modal .spm-body { padding: 18px; display: flex; justify-content: center; }
+  /* [조회 화면] 관리자 전용 보기 화면 */
+  .syl-view-screen { position: fixed; inset: 0; z-index: 650; background: #eef1f5; display: flex; flex-direction: column; }
+  .syl-view-screen .svw-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 18px; background: #fff; border-bottom: 1px solid #e2e8f0; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+  .syl-view-screen .svw-back { padding: 7px 14px; border: 1px solid #d6bcbc; border-radius: 8px; background: #fdf6f6; color: #5C2A2A; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .syl-view-screen .svw-back:hover { background: #f7ebeb; }
+  .syl-view-screen .svw-title { font-size: 15px; font-weight: 800; color: #5C2A2A; margin-right: 8px; }
+  .syl-view-screen .svw-lb { font-size: 12px; font-weight: 700; color: #64748b; margin-left: 6px; }
+  .syl-view-screen .svw-sel { padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; background: #fff; min-width: 130px; }
+  .syl-view-screen .svw-sel:disabled { background: #f1f5f9; color: #94a3b8; }
+  .syl-view-screen .svw-tabs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 12px 18px 0; }
+  .syl-view-screen .svw-tab { padding: 7px 14px; border: 1px solid #d8c4c4; border-radius: 8px 8px 0 0; background: #f3e9e9; color: #6e4a4a; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .syl-view-screen .svw-tab.active { background: #5C2A2A; color: #fff; border-color: #5C2A2A; }
+  .syl-view-screen .svw-stage { flex: 1; overflow-y: auto; padding: 18px; display: flex; justify-content: center; align-items: flex-start; }
+  .syl-view-screen .svw-empty { color: #94a3b8; font-size: 14px; padding: 60px 20px; text-align: center; }
+  .syl-view-screen .svw-scaler { width: 794px; max-width: 100%; }
   .preview-note { font-size: 12px; color: #64748b; margin-bottom: 10px; }
 
   /* 상단(기본정보) 영역도 폭이 넓으니 라벨/입력을 2열로 배치해 세로 길이 단축 */
@@ -331,7 +346,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v2.2-export-anystate</span>
+    <span class="tb-ver" id="syl-ver">v2.3-admin-view</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -351,6 +366,7 @@
         <select id="syl-admin-branch" class="ab-select"><option value="">분원 선택…</option></select>
         <select id="syl-admin-teacher" class="ab-select" disabled><option value="">선생님 선택…</option></select>
         <span class="ab-hint" id="syl-admin-hint">분원과 선생님을 선택하면 해당 선생님의 진도계획서를 편집할 수 있습니다.</span>
+          <button type="button" id="syl-view-open-btn" class="ab-select" style="cursor:pointer;font-weight:700;color:#5C2A2A;border-color:#d6bcbc;background:#fdf6f6" onclick="sylViewOpen()">&#128214; 조회</button>
       </div>
 
       <!-- 상단 관리 바: 저장·작성월·저장목록 + 전체 강좌 추출 -->
@@ -507,6 +523,25 @@
     <!-- 관리 바는 입력 영역 상단으로 이동됨 -->
   </div>
 
+  <!-- [조회 화면] 관리자 전용: 저장된 진도계획서 보기(전용). 기본 display:none -->
+  <div class="syl-view-screen" id="syl-view-screen" style="display:none">
+    <div class="svw-bar">
+      <button type="button" class="svw-back" onclick="sylViewClose()">&#8592; 제작으로</button>
+      <span class="svw-title">진도계획서 조회</span>
+      <label class="svw-lb">분원</label>
+      <select id="svw-branch" class="svw-sel" onchange="sylViewLoadTeachers(this.value)"><option value="">분원 선택…</option></select>
+      <label class="svw-lb">선생님</label>
+      <select id="svw-teacher" class="svw-sel" disabled onchange="sylViewLoadRecords(this.value)"><option value="">선생님 선택…</option></select>
+      <label class="svw-lb">계획서</label>
+      <select id="svw-record" class="svw-sel" disabled onchange="sylViewPickRecord(this.value)"><option value="">계획서 선택…</option></select>
+    </div>
+    <div class="svw-tabs" id="svw-course-tabs"></div>
+    <div class="svw-stage" id="svw-stage">
+      <div class="svw-empty" id="svw-empty">분원·선생님·계획서를 선택하면 완성된 진도계획서를 볼 수 있습니다.</div>
+      <div class="svw-scaler" id="svw-scaler" style="display:none"></div>
+    </div>
+  </div>
+
   <!-- 미리보기 모달 (이미지 미리보기 + 추출) -->
   <div class="syl-prev-modal" id="syl-prev-modal" style="display:none">
     <div class="spm-box">
@@ -595,7 +630,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v2.2-export-anystate';
+  window.SYLLABUS_VERSION = 'v2.3-admin-view';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1235,6 +1270,170 @@
     if(modal) modal.style.display = 'none';
     sylPreviewOpen = false;
   }
+
+  /* ============================================================
+     [VIEW] 관리자 조회 화면 (보기 전용). 검증된 render/auto-fit 엔진 재사용.
+     안전: 조회 진입 시 제작 sylDoc/state/레코드ID/active 백업 → 나갈 때 복원.
+     a4-scaler DOM을 조회 스테이지로 이동 → 나갈 때 미리보기 모달로 복원.
+  ============================================================ */
+  var _sylViewBackup = null;
+  var _sylViewActive = false;
+
+  async function sylViewOpen(){
+    if(!currentUser || currentUser.role !== 'admin'){ alert('관리자 전용 기능입니다.'); return; }
+    _sylViewBackup = {
+      sylDoc: sylDoc, state: state,
+      recordId: window._sylCurrentRecordId,
+      adminTarget: (typeof sylAdminTarget !== 'undefined') ? sylAdminTarget : null,
+      previewOpen: sylPreviewOpen
+    };
+    _sylViewActive = true;
+    var shell = document.getElementById('syl-shell');
+    var sc = document.getElementById('syl-view-screen');
+    if(shell) shell.style.display = 'none';
+    if(sc) sc.style.display = 'flex';
+    await sylViewLoadBranches();
+    var tSel = document.getElementById('svw-teacher'); if(tSel){ tSel.innerHTML = '<option value="">선생님 선택…</option>'; tSel.disabled = true; }
+    var rSel = document.getElementById('svw-record'); if(rSel){ rSel.innerHTML = '<option value="">계획서 선택…</option>'; rSel.disabled = true; }
+    document.getElementById('svw-course-tabs').innerHTML = '';
+    sylViewShowEmpty(true);
+  }
+
+  function sylViewClose(){
+    sylViewReturnA4();
+    var sc = document.getElementById('syl-view-screen');
+    var shell = document.getElementById('syl-shell');
+    if(sc) sc.style.display = 'none';
+    if(shell) shell.style.display = '';
+    if(_sylViewBackup){
+      sylDoc = _sylViewBackup.sylDoc;
+      state = _sylViewBackup.state;
+      window._sylCurrentRecordId = _sylViewBackup.recordId;
+      if(typeof sylAdminTarget !== 'undefined') sylAdminTarget = _sylViewBackup.adminTarget;
+      sylPreviewOpen = _sylViewBackup.previewOpen;
+      _sylViewBackup = null;
+      if(sylDoc && sylDoc.courses && sylDoc.courses.length){
+        sylSetActive(sylDoc.active || 0);
+        if(typeof sylRenderTabs === 'function') sylRenderTabs();
+      }
+    }
+    _sylViewActive = false;
+  }
+
+  function sylViewShowEmpty(show){
+    var e = document.getElementById('svw-empty');
+    var sc = document.getElementById('svw-scaler');
+    if(e) e.style.display = show ? 'block' : 'none';
+    if(sc) sc.style.display = show ? 'none' : 'block';
+  }
+
+  async function sylViewLoadBranches(){
+    var sel = document.getElementById('svw-branch');
+    if(!sel) return;
+    try {
+      var res = await db.from('branches').select('id, name').order('name', { ascending: true });
+      var html = '<option value="">분원 선택…</option>';
+      (res.data || []).forEach(function(b){ html += '<option value="' + esc(b.id) + '">' + esc(b.name || '(이름없음)') + '</option>'; });
+      sel.innerHTML = html;
+    } catch(e){ console.warn('조회 분원 예외:', e); }
+  }
+
+  async function sylViewLoadTeachers(branchId){
+    var sel = document.getElementById('svw-teacher');
+    if(!sel) return;
+    sel.innerHTML = '<option value="">선생님 선택…</option>'; sel.disabled = true;
+    var rSel = document.getElementById('svw-record'); if(rSel){ rSel.innerHTML = '<option value="">계획서 선택…</option>'; rSel.disabled = true; }
+    document.getElementById('svw-course-tabs').innerHTML = '';
+    sylViewShowEmpty(true);
+    if(!branchId) return;
+    try {
+      var res = await db.from('users').select('id, name, branch_id, status, deleted_at')
+        .eq('role','teacher').eq('branch_id', branchId).order('name', { ascending: true });
+      var rows = (res.data || []).filter(function(u){ return u.status !== 'inactive' && !u.deleted_at; });
+      var html = '<option value="">선생님 선택…</option>';
+      rows.forEach(function(u){ html += '<option value="' + esc(u.id) + '">' + esc(u.name || '(이름없음)') + '</option>'; });
+      sel.innerHTML = html; sel.disabled = false;
+    } catch(e){ console.warn('조회 선생님 예외:', e); }
+  }
+
+  async function sylViewLoadRecords(teacherId){
+    var sel = document.getElementById('svw-record');
+    if(!sel) return;
+    sel.innerHTML = '<option value="">계획서 선택…</option>'; sel.disabled = true;
+    document.getElementById('svw-course-tabs').innerHTML = '';
+    sylViewShowEmpty(true);
+    if(!teacherId) return;
+    try {
+      var res = await db.from('bmaps_syllabuses').select('id, period, courses, updated_at')
+        .eq('teacher_id', teacherId).order('updated_at', { ascending: false });
+      var rows = res.data || [];
+      if(!rows.length){ sel.innerHTML = '<option value="">(저장된 계획서 없음)</option>'; return; }
+      var now = new Date();
+      var thisPeriod = now.getFullYear() + '년 ' + (now.getMonth()+1) + '월';
+      var html = '<option value="">계획서 선택…</option>';
+      var defaultId = '';
+      rows.forEach(function(r){
+        var n = Array.isArray(r.courses) ? r.courses.length : 0;
+        var label = (r.period || '(기간 미상)') + (n ? (' (강좌 ' + n + '개)') : '');
+        html += '<option value="' + esc(r.id) + '">' + esc(label) + '</option>';
+        if(r.period === thisPeriod && !defaultId) defaultId = r.id;
+      });
+      sel.innerHTML = html; sel.disabled = false;
+      if(defaultId){ sel.value = defaultId; await sylViewPickRecord(defaultId); }
+    } catch(e){ console.warn('조회 계획서 예외:', e); }
+  }
+
+  async function sylViewPickRecord(recordId){
+    if(!recordId){ sylViewShowEmpty(true); document.getElementById('svw-course-tabs').innerHTML=''; return; }
+    try {
+      var res = await db.from('bmaps_syllabuses').select('*').eq('id', recordId).maybeSingle();
+      var rec = res.data;
+      if(!rec || !Array.isArray(rec.courses) || !rec.courses.length){ sylViewShowEmpty(true); return; }
+      var courses = sylNormalizeCourses(rec.courses, rec.period);
+      sylDoc = { courses: courses, active: 0 };
+      sylSetActive(0);
+      sylViewRenderTabs();
+      await sylViewRenderActive();
+    } catch(e){ console.warn('조회 레코드 로드 예외:', e); }
+  }
+
+  function sylViewRenderTabs(){
+    var box = document.getElementById('svw-course-tabs');
+    if(!box || !sylDoc) return;
+    var html = '';
+    sylDoc.courses.forEach(function(c, i){
+      var name = (c.course && String(c.course).trim()) ? c.course : ('강좌 ' + (i+1));
+      var active = (i === sylDoc.active) ? ' active' : '';
+      html += '<div class="svw-tab' + active + '" onclick="sylViewSwitchCourse(' + i + ')">' + esc(name) + '</div>';
+    });
+    box.innerHTML = html;
+  }
+
+  function sylViewSwitchCourse(idx){
+    if(!sylDoc || idx === sylDoc.active) return;
+    sylSetActive(idx);
+    sylViewRenderTabs();
+    sylViewRenderActive();
+  }
+
+  async function sylViewRenderActive(){
+    if(!sylDoc || !state) return;
+    sylViewShowEmpty(false);
+    var scaler = document.getElementById('a4-scaler');
+    var stage = document.getElementById('svw-scaler');
+    if(!scaler || !stage) return;
+    if(scaler.parentNode !== stage){ stage.appendChild(scaler); }
+    sylPreviewOpen = true;
+    await new Promise(function(resolve){
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){ render(); resolve(); }); });
+    });
+  }
+
+  function sylViewReturnA4(){
+    var scaler = document.getElementById('a4-scaler');
+    var modalBody = document.querySelector('#syl-prev-modal .spm-body');
+    if(scaler && modalBody && scaler.parentNode !== modalBody){ modalBody.appendChild(scaler); }
+  }
   // ESC로 닫기
   document.addEventListener('keydown', function(e){
     if(e.key === 'Escape' && sylPreviewOpen){ sylClosePreview(); }
@@ -1766,12 +1965,6 @@
       pf.addEventListener('change', function(e){
         var file = e.target.files && e.target.files[0];
         if(!file) return;
-        // 용량 제한: 원본 2MB 초과 시 거부 (거대 이미지 저장 실패 방지)
-        if(file.size > 2 * 1024 * 1024){
-          alert('사진 용량이 너무 큽니다 (' + (file.size/1048576).toFixed(1) + 'MB).\n2MB 이하로 줄여서 올려주세요.');
-          pf.value = '';
-          return;
-        }
         if(!/^image\//.test(file.type || '')){
           alert('이미지 파일만 업로드할 수 있습니다.');
           pf.value = '';
