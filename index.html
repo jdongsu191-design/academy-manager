@@ -19015,6 +19015,10 @@ async function lpExportImage(dateStr, studentName, copyMode){
       .select('penalty')
       .eq('student_id', st.studentId);
     _exportMonthlyPenalty = (_expLps||[]).reduce(function(sum,r){ return sum + (parseInt(r.penalty)||0); }, 0);
+    var {data:_expAdj} = await db.from('penalty_adjustments')
+      .select('amount')
+      .eq('student_id', st.studentId);
+    _exportMonthlyPenalty += (_expAdj||[]).reduce(function(sum,r){ return sum + (parseInt(r.amount)||0); }, 0);
   } catch(e){}
 
   var div=document.createElement('div');
@@ -19231,7 +19235,7 @@ async function openLpWriteModal(studentId, studentName, classId, className, init
             +'<div>'
               +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
                 +'<div style="font-size:12px;font-weight:600;color:#374151">⚠️ 벌점</div>'
-                +'<div style="font-size:11px;color:#9ca3af">누적 벌점: <span id="lp-monthly-penalty" style="font-weight:700;color:#dc2626">-</span>점</div>'
+                +'<div style="font-size:11px;color:#9ca3af">누적 벌점: <span id="lp-monthly-penalty" style="font-weight:700;color:#dc2626">-</span>점 <button onclick="lpAdjustPenalty(\''+studentId+'\')" style="margin-left:6px;padding:1px 7px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;font-size:10px;font-weight:700;cursor:pointer">차감</button> <button onclick="lpResetPenalty(\''+studentId+'\')" style="padding:1px 7px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#475569;font-size:10px;font-weight:700;cursor:pointer">초기화</button></div>'
               +'</div>'
               +'<div style="display:flex;gap:8px;align-items:center">'
                 +'<button onclick="lpPenaltyAdj(-1)" style="width:32px;height:32px;border:1.5px solid #fde68a;border-radius:8px;background:#fff;font-size:16px;font-weight:700;cursor:pointer;color:#b45309">−</button>'
@@ -19322,6 +19326,10 @@ async function lpLoadWorkLog(studentId, classId){
     var monthlyTotal = (monthLps||[]).reduce(function(sum, r){
       return sum + (parseInt(r.penalty)||0);
     }, 0);
+    var {data:_adj} = await db.from('penalty_adjustments')
+      .select('amount')
+      .eq('student_id', studentId);
+    monthlyTotal += (_adj||[]).reduce(function(sum, r){ return sum + (parseInt(r.amount)||0); }, 0);
     monthlyPenaltyEl.textContent = monthlyTotal;
     monthlyPenaltyEl.style.color = monthlyTotal > 0 ? '#dc2626' : '#16a34a';
   }
@@ -19360,6 +19368,52 @@ function lpPenaltyAdj(delta){
   if(!el) return;
   var v = parseInt(el.value)||0;
   el.value = Math.max(0, v + delta);
+}
+
+// 누적 벌점 갱신 표시 (learning_progress 합 + penalty_adjustments 합)
+async function lpRefreshCumPenalty(studentId){
+  var el = document.getElementById('lp-monthly-penalty');
+  if(!el) return 0;
+  var {data:lps} = await db.from('learning_progress').select('penalty').eq('student_id', studentId);
+  var total = (lps||[]).reduce(function(s,r){ return s + (parseInt(r.penalty)||0); }, 0);
+  var {data:adj} = await db.from('penalty_adjustments').select('amount').eq('student_id', studentId);
+  total += (adj||[]).reduce(function(s,r){ return s + (parseInt(r.amount)||0); }, 0);
+  el.textContent = total;
+  el.style.color = total > 0 ? '#dc2626' : '#16a34a';
+  return total;
+}
+
+// 차감: 입력받은 점수만큼 penalty_adjustments에 음수 기록 (기존 데이터 무변경)
+async function lpAdjustPenalty(studentId){
+  if(!currentUser){ alert('로그인이 필요합니다'); return; }
+  var raw = prompt('차감할 벌점을 입력하세요 (양수 입력 = 그만큼 차감).\n예: 3 입력 → 누적에서 3점 차감');
+  if(raw === null) return;
+  var amt = parseInt(raw);
+  if(isNaN(amt) || amt <= 0){ alert('1 이상의 숫자를 입력하세요'); return; }
+  try {
+    var { error } = await db.from('penalty_adjustments').insert({ student_id: studentId, teacher_id: currentUser.id, amount: -amt, reason: '차감' });
+    if(error) throw error;
+    var newTotal = await lpRefreshCumPenalty(studentId);
+    alert('✅ ' + amt + '점 차감 완료! 현재 누적: ' + newTotal + '점');
+  } catch(e) { alert('차감 실패: ' + (e.message || e)); }
+}
+
+// 초기화: 현재 누적을 0으로 (현재 누적만큼 음수 조정 1건 추가, 기존 데이터 무변경)
+async function lpResetPenalty(studentId){
+  if(!currentUser){ alert('로그인이 필요합니다'); return; }
+  // 현재 누적 계산
+  var {data:lps} = await db.from('learning_progress').select('penalty').eq('student_id', studentId);
+  var cur = (lps||[]).reduce(function(s,r){ return s + (parseInt(r.penalty)||0); }, 0);
+  var {data:adj} = await db.from('penalty_adjustments').select('amount').eq('student_id', studentId);
+  cur += (adj||[]).reduce(function(s,r){ return s + (parseInt(r.amount)||0); }, 0);
+  if(cur === 0){ alert('이미 누적 벌점이 0점입니다'); return; }
+  if(!confirm('현재 누적 벌점 ' + cur + '점을 0으로 초기화할까요?')) return;
+  try {
+    var { error } = await db.from('penalty_adjustments').insert({ student_id: studentId, teacher_id: currentUser.id, amount: -cur, reason: '초기화' });
+    if(error) throw error;
+    await lpRefreshCumPenalty(studentId);
+    alert('✅ 누적 벌점을 0으로 초기화했습니다!');
+  } catch(e) { alert('초기화 실패: ' + (e.message || e)); }
 }
 
 function lpAddIndivRow(type, value){
