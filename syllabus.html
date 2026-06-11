@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v2.4-view-yearmonth]</title>
+<title>BMAPS · 진도계획서 제작 [v2.5-import-grouped]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -123,6 +123,8 @@
   .imp-pop .ip-mode button { flex: 1; padding: 6px 8px; border: 1px solid #d1d8e0; background: #f8fafc; border-radius: 6px; font-size: 11.5px; font-weight: 700; color: #475569; cursor: pointer; }
   .imp-pop .ip-mode button.on { background: #6e2b3d; color: #fff; border-color: #6e2b3d; }
   .imp-pop .ip-item { padding: 9px 11px; border: 1px solid #eef1f4; border-radius: 7px; margin-bottom: 6px; cursor: pointer; font-size: 12.5px; }
+  .imp-pop .ip-group { font-size: 11px; font-weight: 800; color: #6e2b3d; letter-spacing: 0.3px; padding: 8px 4px 5px; margin-top: 4px; border-bottom: 1px dashed #e3d3d9; position: sticky; top: 30px; background: #fff; z-index: 1; }
+  .imp-pop .ip-group:first-child { margin-top: 0; }
   .imp-pop .ip-item:hover { background: #f5e9ec; border-color: #d9c2c9; }
   .imp-pop .ip-item .ip-when { color: #94a3b8; font-size: 11px; margin-top: 2px; }
   .imp-pop .ip-src { display:inline-block; margin-left:6px; padding:1px 6px; background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; border-radius:5px; font-size:10px; font-weight:700; vertical-align:middle; }
@@ -346,7 +348,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v2.4-view-yearmonth</span>
+    <span class="tb-ver" id="syl-ver">v2.5-import-grouped</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -632,7 +634,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v2.4-view-yearmonth';
+  window.SYLLABUS_VERSION = 'v2.5-import-grouped';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -2874,12 +2876,29 @@
           return '<button type="button" data-mode="' + esc(m.key) + '"' + (mi===0?' class="on"':'') + '>' + esc(m.label) + '</button>';
         }).join('') + '</div>';
       }
+      // 그룹핑: 새 진도계획서(srcLabel='') 먼저 → 운영본(srcLabel='운영') 나중, 각그룹 내 period 내림차순.
+      // 원본 entries 인덱스(i)는 클릭 적용에 그대로 쓰므로 보존.
+      var _idxed = entries.map(function(en, i){ return { en: en, i: i }; });
+      function _periodKey(pd){ var pp = sylParsePeriod(pd); return pp ? (pp.year * 100 + pp.month) : -1; }
+      _idxed.sort(function(a, b){
+        // 새 진도계획서(빈 srcLabel)가 앞으로
+        var sa = a.en.srcLabel ? 1 : 0, sb = b.en.srcLabel ? 1 : 0;
+        if(sa !== sb) return sa - sb;
+        // period 내림차순
+        return _periodKey(b.en.period) - _periodKey(a.en.period);
+      });
       var listHtml = '';
-      entries.forEach(function(en, i){
-        var badge = en.srcLabel ? ('<span class="ip-src">' + esc(en.srcLabel) + '</span>') : '';
-        listHtml += '<div class="ip-item" data-idx="' + i + '">'
-          + '<div>' + esc(en.courseName) + badge + '</div>'
-          + '<div class="ip-when">' + esc(en.period || '') + '</div></div>';
+      var _lastGroup = null;
+      _idxed.forEach(function(rec){
+        var en = rec.en;
+        var groupKey = (en.srcLabel ? '운영·' : '') + (en.period || '(기간 미상)');
+        if(groupKey !== _lastGroup){
+          var headLabel = (en.period || '(기간 미상)') + (en.srcLabel ? ' · 운영본' : '');
+          listHtml += '<div class="ip-group">' + esc(headLabel) + '</div>';
+          _lastGroup = groupKey;
+        }
+        listHtml += '<div class="ip-item" data-idx="' + rec.i + '">'
+          + '<div>' + esc(en.courseName) + '</div></div>';
       });
       body.innerHTML = modeHtml + listHtml;
       // 모드 버튼 토글
