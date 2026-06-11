@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 독서실 출결 [v0.1-skeleton]</title>
+<title>BMAPS · 독서실 출결 [v0.2-bulk-register]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -49,6 +49,32 @@
   .admin-wrap { max-width: 1000px; margin: 0 auto; width: 100%; background: #fff; border-radius: 16px; padding: 28px; min-height: 60vh; }
   .admin-title { font-size: 20px; font-weight: 800; color: #075985; margin-bottom: 6px; }
   .admin-sub { font-size: 13px; color: #64748b; margin-bottom: 20px; }
+  /* 일괄 등록 UI */
+  .reg-section { margin-bottom: 24px; }
+  .reg-step-title { font-size: 15px; font-weight: 800; color: #0f172a; margin-bottom: 8px; }
+  .reg-hint { font-size: 12.5px; color: #64748b; line-height: 1.6; margin-bottom: 10px; }
+  .reg-textarea { width: 100%; min-height: 140px; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 10px; font-size: 13px; font-family: "SF Mono","Menlo","Consolas",monospace; line-height: 1.6; outline: none; resize: vertical; box-sizing: border-box; }
+  .reg-textarea:focus { border-color: #0369a1; }
+  .reg-btn-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .reg-btn { padding: 10px 18px; border: none; border-radius: 9px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .reg-btn-parse { background: #0369a1; color: #fff; }
+  .reg-btn-parse:hover { background: #075985; }
+  .reg-btn-clear { background: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; }
+  .reg-btn-clear:hover { background: #e2e8f0; }
+  .reg-btn-save { background: #16a34a; color: #fff; }
+  .reg-btn-save:hover { background: #15803d; }
+  .reg-btn-save:disabled { background: #94a3b8; cursor: not-allowed; }
+  .reg-btn-copy { background: #7c3aed; color: #fff; }
+  .reg-btn-copy:hover { background: #6d28d9; }
+  .reg-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 4px; }
+  .reg-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .reg-tbl th { background: #0369a1; color: #fff; padding: 8px 10px; text-align: left; font-weight: 700; white-space: nowrap; }
+  .reg-tbl td { padding: 7px 10px; border-top: 1px solid #eef2f6; white-space: nowrap; }
+  .reg-tbl tr:nth-child(even) td { background: #f8fafc; }
+  .reg-tbl .code-cell { font-family: "SF Mono","Menlo","Consolas",monospace; font-weight: 700; color: #0369a1; }
+  .reg-tbl .code-5 { color: #b45309; }
+  .reg-tbl .err-cell { color: #dc2626; font-weight: 700; }
+  .reg-tbl .warn-row td { background: #fef2f2 !important; }
 
   /* 인증 차단 오버레이 (관리자 모드 진입 시) */
   .sc-blocker {
@@ -79,7 +105,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.1-skeleton</span>
+    <span class="tb-ver" id="sc-ver">v0.2-bulk-register</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -104,8 +130,32 @@
       <div class="admin-wrap">
         <div class="admin-title">⚙️ 독서실 관리</div>
         <div class="admin-sub">독서실 학생 일괄 등록 · 코드 관리 (관리자 전용)</div>
-        <div class="kiosk-placeholder">
-          (Phase 1에서 일괄 등록 기능이 들어갑니다)
+        <div class="reg-section">
+          <div class="reg-step-title">&#49;&#65039;&#8419; 데이터 붙여넣기</div>
+          <div class="reg-hint">엑셀/시트에서 <b>학교 / 학년 / 이름 / 반명 / 핸드폰</b> 순서로 복사해 아래에 붙여넣으세요. (탭 또는 여러 칸 구분)</div>
+          <textarea id="reg-paste" class="reg-textarea" placeholder="예시:&#10;개봉고&#9;1학년&#9;고준수&#9;독서실 원생&#9;010-1234-5678&#10;개봉고&#9;2학년&#9;김철수&#9;독서실 비원생&#9;010-9876-5432"></textarea>
+          <div class="reg-btn-row">
+            <button class="reg-btn reg-btn-parse" onclick="scParsePaste()">&#128269; 미리보기</button>
+            <button class="reg-btn reg-btn-clear" onclick="scClearPaste()">지우기</button>
+          </div>
+        </div>
+
+        <div class="reg-section" id="reg-preview-section" style="display:none">
+          <div class="reg-step-title">&#50;&#65039;&#8419; 미리보기 · 코드 확인</div>
+          <div class="reg-hint" id="reg-preview-summary"></div>
+          <div class="reg-table-wrap" id="reg-preview-wrap"></div>
+          <div class="reg-btn-row">
+            <button class="reg-btn reg-btn-save" id="reg-save-btn" onclick="scRegisterAll()">&#128190; 전체 등록</button>
+          </div>
+        </div>
+
+        <div class="reg-section" id="reg-result-section" style="display:none">
+          <div class="reg-step-title">&#51;&#65039;&#8419; 등록 완료 · 코드 공지</div>
+          <div class="reg-hint" id="reg-result-summary"></div>
+          <div class="reg-table-wrap" id="reg-result-wrap"></div>
+          <div class="reg-btn-row">
+            <button class="reg-btn reg-btn-copy" onclick="scCopyCodes()">&#128203; 코드 전체 복사 (카톡 공지용)</button>
+          </div>
         </div>
       </div>
     </div>
@@ -132,7 +182,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.1-skeleton';
+  window.STUDYCENTER_VERSION = 'v0.2-bulk-register';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -143,6 +193,196 @@
   /* ============================================================
      [MODE] 화면 전환 — 키오스크(무인, 기본) ↔ 관리자(인증 필요)
   ============================================================ */
+  /* ============================================================
+     [REGISTER] 독서실 학생 일괄 등록 (Phase 1)
+     붙여넣기: 학교 / 학년 / 이름 / 반명 / 핸드폰
+     코드: 핸드폰 숫자 듷4자리, 충돌 시 이름 가나다순 후순위 5자리 승격.
+  ============================================================ */
+  var _scParsedRows = [];   // 미리보기 단계 데이터 [{school,grade,name,rrClass,phone,code,is5,err}]
+  var _scResultRows = [];   // 등록 완료 데이터 [{name, code}]
+
+  // 핸드폰 → 숫자만 추출
+  function scPhoneDigits(phone){
+    return String(phone || "").replace(/[^0-9]/g, "");
+  }
+  // 숫자만 추출한 핸드폰 → 듷4자리 (4자리 미만이면 null)
+  function scLast4(phone){
+    var d = scPhoneDigits(phone);
+    if(d.length < 4) return null;
+    return d.slice(-4);
+  }
+  // HTML escape
+  function scEsc(v){
+    return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  // 붙여넣기 텍스트 파싱 → 행 배열. 탭 우선, 없으면 2칸+ 공백 구분.
+  function scSplitCells(line){
+    if(line.indexOf("\t") !== -1) return line.split("\t");
+    return line.split(/\s{2,}/);   // 2칸 이상 공백
+  }
+
+  // 기존 DB 코드 + 이번 배치를 합쳐 충돌 없는 코드 생성
+  async function scGenerateCodes(rows){
+    // 기존 DB의 모든 reading_room_code 수집 (충돌 방지)
+    var existing = {};
+    try {
+      var res = await db.from("users").select("reading_room_code").not("reading_room_code","is",null);
+      (res.data || []).forEach(function(u){ if(u.reading_room_code) existing[u.reading_room_code] = true; });
+    } catch(e){ console.warn("기존 코드 조회 실패(무시 진행):", e); }
+
+    // 듷4자리별 그룹핑 (이번 배치 내)
+    var byLast4 = {};
+    rows.forEach(function(r){
+      r.last4 = scLast4(r.phone);
+      if(r.last4 == null){ r.err = "핸드폰 오류"; r.code = null; return; }
+      if(!byLast4[r.last4]) byLast4[r.last4] = [];
+      byLast4[r.last4].push(r);
+    });
+
+    Object.keys(byLast4).forEach(function(last4){
+      var group = byLast4[last4];
+      // 이름 가나다순 정렬 (후순위가 5자리)
+      group.sort(function(a,b){ return (a.name||"").localeCompare(b.name||"", "ko"); });
+      // 기존 DB에 이미 같은 4자리가 있으면 첫번째도 승격 필요
+      var baseConflict = !!existing[last4];
+      group.forEach(function(r, idx){
+        var needBump = baseConflict || idx > 0;
+        if(!needBump){
+          r.code = last4; r.is5 = false;
+        } else {
+          // 5자리 승격: last4 + suffix, 이미 쓰인 코드 피해 증가
+          var suffix = 1;
+          var cand = last4 + suffix;
+          while(existing[cand]){ suffix++; cand = last4 + suffix; }
+          r.code = cand; r.is5 = true;
+        }
+        existing[r.code] = true;   // 이번 배치 내에서도 충돌 방지
+      });
+    });
+    return rows;
+  }
+
+  // [미리보기] 버튼
+  async function scParsePaste(){
+    var ta = document.getElementById("reg-paste");
+    var raw = (ta && ta.value || "").trim();
+    if(!raw){ alert("붙여넣은 데이터가 없습니다."); return; }
+    var lines = raw.split(/\r?\n/).filter(function(l){ return l.trim(); });
+    var rows = lines.map(function(line){
+      var c = scSplitCells(line).map(function(x){ return (x||"").trim(); });
+      // 학교/학년/이름/반명/핸드폰
+      return {
+        school: c[0] || "", grade: c[1] || "", name: c[2] || "",
+        rrClass: c[3] || "", phone: c[4] || "",
+        code: null, is5: false, err: ""
+      };
+    });
+    // 필수값(이름/핸드폰) 검증
+    rows.forEach(function(r){
+      if(!r.name) r.err = "이름 없음";
+      else if(scLast4(r.phone) == null) r.err = "핸드폰 오류";
+    });
+    // 코드 생성 (오류 없는 행만)
+    var valid = rows.filter(function(r){ return !r.err; });
+    await scGenerateCodes(valid);
+    _scParsedRows = rows;
+    scRenderPreview();
+  }
+
+  function scRenderPreview(){
+    var sec = document.getElementById("reg-preview-section");
+    var wrap = document.getElementById("reg-preview-wrap");
+    var sum = document.getElementById("reg-preview-summary");
+    if(!_scParsedRows.length){ sec.style.display = "none"; return; }
+    var okCount = _scParsedRows.filter(function(r){ return !r.err; }).length;
+    var errCount = _scParsedRows.length - okCount;
+    var fiveCount = _scParsedRows.filter(function(r){ return r.is5; }).length;
+    sum.innerHTML = "총 " + _scParsedRows.length + "명 · 정상 <b style=\"color:#16a34a\">" + okCount + "</b>명"
+      + (errCount ? " · 오류 <b style=\"color:#dc2626\">" + errCount + "</b>명" : "")
+      + (fiveCount ? " · 5자리 코드 <b style=\"color:#b45309\">" + fiveCount + "</b>명(충돌)" : "");
+    var h = "<table class=\"reg-tbl\"><thead><tr><th>#</th><th>이름</th><th>학교</th><th>학년</th><th>반명</th><th>핸드폰</th><th>코드</th></tr></thead><tbody>";
+    _scParsedRows.forEach(function(r, i){
+      var codeCell = r.err
+        ? "<span class=\"err-cell\">" + scEsc(r.err) + "</span>"
+        : "<span class=\"code-cell" + (r.is5 ? " code-5" : "") + "\">" + scEsc(r.code) + "</span>";
+      h += "<tr" + (r.err ? " class=\"warn-row\"" : "") + ">"
+        + "<td>" + (i+1) + "</td>"
+        + "<td><b>" + scEsc(r.name) + "</b></td>"
+        + "<td>" + scEsc(r.school) + "</td>"
+        + "<td>" + scEsc(r.grade) + "</td>"
+        + "<td>" + scEsc(r.rrClass) + "</td>"
+        + "<td>" + scEsc(r.phone) + "</td>"
+        + "<td>" + codeCell + "</td></tr>";
+    });
+    h += "</tbody></table>";
+    wrap.innerHTML = h;
+    sec.style.display = "";
+    document.getElementById("reg-result-section").style.display = "none";
+  }
+
+  function scClearPaste(){
+    var ta = document.getElementById("reg-paste"); if(ta) ta.value = "";
+    _scParsedRows = [];
+    document.getElementById("reg-preview-section").style.display = "none";
+    document.getElementById("reg-result-section").style.display = "none";
+  }
+
+  // [전체 등록] 버튼 → Supabase insert
+  async function scRegisterAll(){
+    var valid = _scParsedRows.filter(function(r){ return !r.err && r.code; });
+    if(!valid.length){ alert("등록할 정상 데이터가 없습니다."); return; }
+    if(!confirm(valid.length + "명을 독서실 학생으로 등록합니다.\n계속하시겠습니까?")) return;
+    var btn = document.getElementById("reg-save-btn");
+    if(btn){ btn.disabled = true; btn.textContent = "⏳ 등록 중..."; }
+    try {
+      var payload = valid.map(function(r){
+        return {
+          name: r.name, school: r.school || null, grade: r.grade || null,
+          phone: r.phone || null, reading_room_class: r.rrClass || null,
+          reading_room_code: r.code, reading_room_yn: true,
+          role: "student", status: "active"
+        };
+      });
+      var res = await db.from("users").insert(payload).select("id, name, reading_room_code");
+      if(res.error) throw res.error;
+      _scResultRows = (res.data || []).map(function(u){ return { name: u.name, code: u.reading_room_code }; });
+      scRenderResult();
+      if(btn){ btn.disabled = false; btn.textContent = "💾 전체 등록"; }
+    } catch(e){
+      console.error("등록 실패:", e);
+      alert("등록 실패: " + (e.message || e));
+      if(btn){ btn.disabled = false; btn.textContent = "💾 전체 등록"; }
+    }
+  }
+
+  function scRenderResult(){
+    var sec = document.getElementById("reg-result-section");
+    var wrap = document.getElementById("reg-result-wrap");
+    var sum = document.getElementById("reg-result-summary");
+    sum.innerHTML = "✅ <b style=\"color:#16a34a\">" + _scResultRows.length + "명</b> 등록 완료! 아래 코드를 복사해 공지하세요.";
+    var h = "<table class=\"reg-tbl\"><thead><tr><th>이름</th><th>코드</th></tr></thead><tbody>";
+    _scResultRows.forEach(function(r){
+      h += "<tr><td><b>" + scEsc(r.name) + "</b></td><td><span class=\"code-cell\">" + scEsc(r.code) + "</span></td></tr>";
+    });
+    h += "</tbody></table>";
+    wrap.innerHTML = h;
+    sec.style.display = "";
+    document.getElementById("reg-preview-section").style.display = "none";
+  }
+
+  // [코드 전체 복사] 카톡 공지용 텍스트
+  async function scCopyCodes(){
+    if(!_scResultRows.length){ alert("복사할 코드가 없습니다."); return; }
+    var text = _scResultRows.map(function(r){ return r.name + ": " + r.code; }).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("✅ 코드 " + _scResultRows.length + "개를 복사했습니다!\n카톡에 붙여넣기 하세요.");
+    } catch(e){
+      alert("복사 실패. 수동으로 복사하세요:\n\n" + text);
+    }
+  }
+
   function scShowKiosk(){
     document.getElementById('sc-kiosk').classList.add('active');
     document.getElementById('sc-admin').classList.remove('active');
