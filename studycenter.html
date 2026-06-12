@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.6-desk-weekly]</title>
+<title>BMAPS · 독서실 출결 [v0.8-req-time]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -137,12 +137,20 @@
   .wk-tbl input.wk-t:focus { border-color: #0369a1; box-shadow: 0 0 0 2px rgba(3,105,161,0.15); }
   .wk-tbl input.wk-t.dirty { background: #fef9c3; border-color: #facc15; }
   .wk-tbl input.wk-extra { width: 48px; }
+  .wk-tbl td.wk-req-cell { background: #eff6ff !important; min-width: 130px; white-space: nowrap; }
+  .wk-tbl input.wk-req-input { width: 88px; border: 1.5px solid #bfdbfe; background: #fff; padding: 5px 6px; font-size: 12px; text-align: center; outline: none; border-radius: 5px; font-weight: 600; color: #1d4ed8; }
+  .wk-tbl input.wk-req-input:focus { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+  .wk-tbl input.wk-req-input.dirty { background: #fef9c3; border-color: #facc15; }
+  .wk-tbl .wk-req-save { padding: 4px 7px; border: 1px solid #2563eb; border-radius: 5px; background: #eff6ff; color: #1d4ed8; font-size: 11px; font-weight: 700; cursor: pointer; margin-left: 3px; }
+  .wk-tbl .wk-req-save:hover { background: #2563eb; color: #fff; }
+  .wk-tbl .wk-req-save.saved { background: #1d4ed8; color: #fff; }
   .wk-tbl .wk-now-btn { font-size: 10px; padding: 2px 5px; border: 1px solid #bae6fd; background: #f0f9ff; color: #0369a1; border-radius: 4px; cursor: pointer; font-weight: 700; margin-left: 2px; }
   .wk-tbl .wk-now-btn:hover { background: #0369a1; color: #fff; }
   .wk-tbl .wk-save-btn { padding: 5px 9px; border: 1px solid #16a34a; border-radius: 6px; background: #f0fdf4; color: #15803d; font-size: 11.5px; font-weight: 700; cursor: pointer; }
   .wk-tbl .wk-save-btn:hover { background: #16a34a; color: #fff; }
   .wk-tbl .wk-save-btn.saved { background: #15803d; color: #fff; }
-  .wk-tbl tr.wk-warn td { background: #fff7ed !important; }
+  .wk-tbl tr.wk-warn td { background: #ffe4cc !important; }
+  .wk-tbl tr.wk-warn td.wk-name { box-shadow: inset 3px 0 0 #f97316; }
   .wk-tbl .wk-warn-badge { font-size: 10px; color: #c2410c; font-weight: 700; margin-left: 4px; }
   .wk-table-scroll { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
   /* 일괄 등록 UI */
@@ -201,7 +209,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.6-desk-weekly</span>
+    <span class="tb-ver" id="sc-ver">v0.8-req-time</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -341,7 +349,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.6-desk-weekly';
+  window.STUDYCENTER_VERSION = 'v0.8-req-time';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -573,7 +581,10 @@
       }
       h += '<tr'+warnCls+'>'
         + '<td class="wk-name">'+scWkEsc(st.name)+warnBadge+'</td>'
-        + '<td>'+(reqMin!=null?scWkFmtDur(reqMin):"-")+'</td>'
+        + '<td class="wk-req-cell">'
+          + '<input class="wk-req-input" data-sid="'+sid+'" value="'+(reqMin!=null?scWkMinToHanguk(reqMin):"")+'" oninput="scWkReqEdit(this)" placeholder="예: 8시간 30분">'
+          + '<button class="wk-req-save" data-sid="'+sid+'" onclick="scWkSaveReq(\''+sid+'\')">저장</button>'
+          + '</td>'
         + '<td>'+cell("check_in_time", row?row.check_in_time:"")+'</td>'
         + '<td>'+cell("out_1_start", row?row.out_1_start:"")+'</td>'
         + '<td>'+cell("out_1_end", row?row.out_1_end:"")+'</td>'
@@ -649,6 +660,64 @@
       scWkRenderTable();
     } catch(e){
       console.error("저장 실패:", e);
+      alert("저장 실패: " + (e.message||e));
+      if(btn){ btn.textContent = "저장"; btn.disabled = false; }
+    }
+  }
+
+  /* ============================================================
+     [WEEKLY-REQ] 필수 공부시간 설정 (학생 속성, 모든 날짜 공통)
+     입력: "8시간 30분" / "8시간" / "30분" / "510"(분) → users.required_study_minutes
+  ============================================================ */
+  // 분 → "N시간 M분" (입력칸 표시용)
+  function scWkMinToHanguk(min){
+    if(min == null || isNaN(min)) return "";
+    var h = Math.floor(min/60), m = min%60;
+    if(h && m) return h + "시간 " + m + "분";
+    if(h) return h + "시간";
+    return m + "분";
+  }
+  // "8시간 30분" / "8시간" / "30분" / "510" → 분(정수). 빈값=null, 잘못=undefined
+  function scWkHangulToMin(str){
+    var v = (str||"").trim();
+    if(!v) return null;
+    // 순수 숫자만 → 분
+    if(/^\d+$/.test(v)) return parseInt(v,10);
+    var total = 0, matched = false;
+    var hm = v.match(/(\d+)\s*시간/);
+    if(hm){ total += parseInt(hm[1],10)*60; matched = true; }
+    var mm = v.match(/(\d+)\s*분/);
+    if(mm){ total += parseInt(mm[1],10); matched = true; }
+    if(!matched) return undefined;
+    return total;
+  }
+
+  function scWkReqEdit(inp){
+    inp.classList.add("dirty");
+    var sid = inp.getAttribute("data-sid");
+    var btn = document.querySelector('.wk-req-save[data-sid="'+sid+'"]');
+    if(btn){ btn.classList.remove("saved"); btn.textContent = "저장"; }
+  }
+
+  // [저장] 필수시간 → users.required_study_minutes
+  async function scWkSaveReq(sid){
+    var inp = document.querySelector('.wk-req-input[data-sid="'+sid+'"]');
+    if(!inp) return;
+    var min = scWkHangulToMin(inp.value);
+    if(min === undefined){ alert("시간 형식을 확인하세요.\n예: 8시간 30분 / 8시간 / 30분"); return; }
+    var btn = document.querySelector('.wk-req-save[data-sid="'+sid+'"]');
+    if(btn){ btn.textContent = "저장중..."; btn.disabled = true; }
+    try {
+      var res = await db.from("users").update({ required_study_minutes: min }).eq("id", sid);
+      if(res.error) throw res.error;
+      // 메모리 반영
+      var st = _wkStudents.find(function(x){ return x.id === sid; });
+      if(st) st.required_study_minutes = min;
+      if(btn){ btn.textContent = "✓"; btn.classList.add("saved"); btn.disabled = false; }
+      // 남은시간 재계산 위해 테이블 재렌더
+      scWkRenderTable();
+    } catch(e){
+      console.error("필수시간 저장 실패:", e);
       alert("저장 실패: " + (e.message||e));
       if(btn){ btn.textContent = "저장"; btn.disabled = false; }
     }
