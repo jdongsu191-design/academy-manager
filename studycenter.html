@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.10-req-enter-nav]</title>
+<title>BMAPS · 독서실 출결 [v0.11-wk-info-outing]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -90,7 +90,7 @@
   .ac-back { background: none; border: none; color: #94a3b8; font-size: 13px; text-decoration: underline; cursor: pointer; padding: 6px; }
 
   /* 관리자 화면 (Phase 0 placeholder) */
-  .admin-wrap { max-width: 1000px; margin: 0 auto; width: 100%; background: #fff; border-radius: 16px; padding: 28px; min-height: 60vh; }
+  .admin-wrap { max-width: min(1340px, 96vw); margin: 0 auto; width: 100%; background: #fff; border-radius: 16px; padding: 28px; min-height: 60vh; }
   .admin-title { font-size: 20px; font-weight: 800; color: #075985; margin-bottom: 6px; }
   .admin-sub { font-size: 13px; color: #64748b; margin-bottom: 20px; }
   /* 관리자 탭 */
@@ -156,6 +156,12 @@
   .wk-tbl tr.wk-warn td.wk-name { box-shadow: inset 3px 0 0 #f97316; }
   .wk-tbl .wk-warn-badge { font-size: 10px; color: #c2410c; font-weight: 700; margin-left: 4px; }
   .wk-table-scroll { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
+  .wk-tbl td.wk-name .wk-sub { font-size: 10.5px; font-weight: 600; color: #64748b; margin-top: 2px; white-space: nowrap; }
+  .wk-tbl td.wk-name .wk-sub .wk-code { display: inline-block; background: #e0f2fe; color: #075985; border-radius: 4px; padding: 0 5px; font-weight: 700; letter-spacing: 0.5px; }
+  .wk-tbl .wk-pending { display: inline-block; background: #fff7ed; border: 1.5px solid #fdba74; border-radius: 6px; padding: 3px 7px; color: #c2410c; font-weight: 700; font-size: 12px; line-height: 1.2; }
+  .wk-tbl .wk-pending .wk-pending-lbl { font-size: 9px; font-weight: 700; color: #ea580c; margin-top: 1px; }
+  .wk-refresh-btn { background: #0891b2 !important; }
+  .wk-refresh-btn:hover { background: #0e7490 !important; }
   /* 일괄 등록 UI */
   .reg-section { margin-bottom: 24px; }
   .reg-step-title { font-size: 15px; font-weight: 800; color: #0f172a; margin-bottom: 8px; }
@@ -212,7 +218,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.10-req-enter-nav</span>
+    <span class="tb-ver" id="sc-ver">v0.11-wk-info-outing</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -318,7 +324,8 @@
               <button class="wk-today-btn" onclick="scWkGoThisWeek()">이번주</button>
             </div>
             <input type="text" id="wk-search" class="wk-search" placeholder="학생 이름 검색..." oninput="scWkRenderTable()">
-            <button class="wk-load-btn" onclick="scWkLoad()">&#128260; 불러오기</button>
+            <button class="wk-load-btn" onclick="scWkLoad()">&#128229; 불러오기</button>
+            <button class="wk-load-btn wk-refresh-btn" onclick="scWkLoad()" title="현재 주차 데이터 새로고침">&#128260; 새로고침</button>
           </div>
           <div class="wk-week-label" id="wk-week-label"></div>
           <div id="wk-day-tabs"></div>
@@ -352,7 +359,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.10-req-enter-nav';
+  window.STUDYCENTER_VERSION = 'v0.11-wk-info-outing';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -447,7 +454,7 @@
     try {
       // reading_room 학생
       var stuRes = await db.from("users")
-        .select("id, name, school, grade, reading_room_class, required_study_minutes, status, deleted_at")
+        .select("id, name, school, grade, reading_room_code, reading_room_class, required_study_minutes, status, deleted_at")
         .eq("reading_room_yn", true).order("name");
       if(stuRes.error) throw stuRes.error;
       _wkStudents = (stuRes.data || []).filter(function(u){ return u.status !== "inactive" && !u.deleted_at; });
@@ -567,12 +574,21 @@
       var warnCls = (rs === "warn_noout" || rs === "warn_outing") ? " wk-warn" : "";
       var warnBadge = "";
       if(rs === "warn_noout") warnBadge = '<span class="wk-warn-badge">⚠ 미하원</span>';
-      else if(rs === "warn_outing") warnBadge = '<span class="wk-warn-badge">⚠ 외출중</span>';
+      else if(rs === "warn_outing") warnBadge = '<span class="wk-warn-badge">⚠ 외출중 '+scWkHm(row.pending_out_start)+'~</span>';
       var sid = st.id;
+      // 진행중 외출(pending)이 정산될 슬롯: out_1 비었으면 1, 아니면 out_2 비었으면 2, 둘 다 차면 0(추가외출)
+      var pendingSlot = (row && row.pending_out_start) ? (!row.out_1_start ? 1 : (!row.out_2_start ? 2 : 0)) : 0;
       function cell(field, val){
         return '<input class="wk-t" data-sid="'+sid+'" data-field="'+field+'" value="'+scWkHm(val)+'" '
           + 'oninput="scWkCellEdit(this)" placeholder="--:--">'
           + '<button class="wk-now-btn" onclick="scWkNow(\''+sid+'\',\''+field+'\')">지금</button>';
+      }
+      // 외출 시작칸: 해당 슬롯이 진행중 외출이면 읽기전용 표시(편집 input 미생성 → 복귀 정산 로직 무손상)
+      function outStartCell(slot, field, val){
+        if(row && row.pending_out_start && pendingSlot === slot){
+          return '<div class="wk-pending">🚶 '+scWkHm(row.pending_out_start)+'<div class="wk-pending-lbl">외출중</div></div>';
+        }
+        return cell(field, val);
       }
       var reqMin = st.required_study_minutes;
       var net = row ? scWkCalcDaily(row) : null;
@@ -583,7 +599,10 @@
         else remainHtml = scWkFmtDur(remain);
       }
       h += '<tr'+warnCls+'>'
-        + '<td class="wk-name">'+scWkEsc(st.name)+warnBadge+'</td>'
+        + '<td class="wk-name">'+scWkEsc(st.name)+warnBadge
+          + '<div class="wk-sub">'+scWkEsc(((st.school||'')+' '+(st.grade||'')).trim())
+          + (st.reading_room_code ? ' · <span class="wk-code">'+scWkEsc(st.reading_room_code)+'</span>' : '')
+          + '</div></td>'
         + '<td class="wk-req-cell">'
           + '<span class="wk-req-group">'
           + '<input type="number" min="0" max="99" class="wk-req-h" data-sid="'+sid+'" value="'+(reqMin!=null?Math.floor(reqMin/60):"")+'" oninput="scWkReqEdit(this)" onkeydown="scWkReqKey(event,this,\'h\')" placeholder="0"><span class="wk-req-unit">시간</span>'
@@ -592,9 +611,9 @@
           + '</span>'
           + '</td>'
         + '<td>'+cell("check_in_time", row?row.check_in_time:"")+'</td>'
-        + '<td>'+cell("out_1_start", row?row.out_1_start:"")+'</td>'
+        + '<td>'+outStartCell(1, "out_1_start", row?row.out_1_start:"")+'</td>'
         + '<td>'+cell("out_1_end", row?row.out_1_end:"")+'</td>'
-        + '<td>'+cell("out_2_start", row?row.out_2_start:"")+'</td>'
+        + '<td>'+outStartCell(2, "out_2_start", row?row.out_2_start:"")+'</td>'
         + '<td>'+cell("out_2_end", row?row.out_2_end:"")+'</td>'
         + '<td><input class="wk-t wk-extra" data-sid="'+sid+'" data-field="extra_out_minutes" value="'+(row&&row.extra_out_minutes?row.extra_out_minutes:"")+'" oninput="scWkCellEdit(this)" placeholder="0"></td>'
         + '<td>'+cell("check_out_time", row?row.check_out_time:"")+'</td>'
@@ -1211,6 +1230,7 @@
     document.getElementById('sc-kiosk').classList.remove('active');
     document.getElementById('sc-mode-kiosk').style.display = '';
     document.getElementById('sc-mode-admin').style.display = 'none';
+    scAdminTab('weekly');   // 관리자 진입 시 주간출결 우선 표시
   }
 
   // 관리 버튼 클릭 → 인증 차단 오버레이 표시
