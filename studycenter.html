@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 독서실 출결 [v0.3-kiosk-code]</title>
+<title>BMAPS · 독서실 출결 [v0.4-attendance]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -67,6 +67,26 @@
   .cf-yes:hover { background: #15803d; }
   .cf-no { background: #f1f5f9; color: #64748b; border: 1.5px solid #cbd5e1; }
   .cf-no:hover { background: #e2e8f0; }
+  /* 동작 화면 (입실/외출/복귀/하원) */
+  .ac-name { font-size: 30px; font-weight: 800; color: #0369a1; margin-bottom: 6px; }
+  .ac-status { font-size: 16px; font-weight: 700; margin-bottom: 26px; padding: 8px 16px; border-radius: 999px; display: inline-block; }
+  .ac-status.st-out-room { background: #f1f5f9; color: #64748b; }
+  .ac-status.st-studying { background: #dcfce7; color: #15803d; }
+  .ac-status.st-outing { background: #fef3c7; color: #b45309; }
+  .ac-status.st-done { background: #e0e7ff; color: #4338ca; }
+  .ac-btn-area { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  .ac-act-btn { padding: 22px; font-size: 22px; font-weight: 800; border: none; border-radius: 16px; cursor: pointer; color: #fff; -webkit-tap-highlight-color: transparent; }
+  .ac-act-btn:active { transform: scale(0.97); }
+  .ac-act-btn.act-in { background: #16a34a; }
+  .ac-act-btn.act-in:hover { background: #15803d; }
+  .ac-act-btn.act-out { background: #f59e0b; }
+  .ac-act-btn.act-out:hover { background: #d97706; }
+  .ac-act-btn.act-return { background: #0ea5e9; }
+  .ac-act-btn.act-return:hover { background: #0284c7; }
+  .ac-act-btn.act-leave { background: #ef4444; }
+  .ac-act-btn.act-leave:hover { background: #dc2626; }
+  .ac-msg { min-height: 24px; font-size: 14px; color: #475569; margin-bottom: 10px; }
+  .ac-back { background: none; border: none; color: #94a3b8; font-size: 13px; text-decoration: underline; cursor: pointer; padding: 6px; }
 
   /* 관리자 화면 (Phase 0 placeholder) */
   .admin-wrap { max-width: 1000px; margin: 0 auto; width: 100%; background: #fff; border-radius: 16px; padding: 28px; min-height: 60vh; }
@@ -128,7 +148,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.3-kiosk-code</span>
+    <span class="tb-ver" id="sc-ver">v0.4-attendance</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -169,6 +189,15 @@
             <button class="cf-btn cf-yes" onclick="scConfirmYes()">네, 맞아요</button>
             <button class="cf-btn cf-no" onclick="scConfirmNo()">아니에요</button>
           </div>
+        </div>
+
+        <!-- [키오스크 3] 동작 화면 (입실/외출/복귀/하원) -->
+        <div class="kiosk-card" id="kiosk-action-screen" style="display:none">
+          <div class="ac-name" id="ac-name">—</div>
+          <div class="ac-status" id="ac-status">—</div>
+          <div class="ac-btn-area" id="ac-btn-area"></div>
+          <div class="ac-msg" id="ac-msg"></div>
+          <button class="ac-back" onclick="scKioskReset()">← 돌아가기</button>
         </div>
       </div>
     </div>
@@ -230,7 +259,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.3-kiosk-code';
+  window.STUDYCENTER_VERSION = 'v0.4-attendance';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -327,11 +356,11 @@
   }
 
   // [네, 맞아요] → (Phase 3에서 상태머신 동작 화면으로 연결)
-  function scConfirmYes(){
+  async function scConfirmYes(){
     if(!_scKioskStudent) return;
-    // Phase 3 placeholder: 일단 확인 완료 안내 후 초기 화면 복귀
-    alert(_scKioskStudent.name + "님 확인되었습니다.\n(다음 단계에서 입실/외출/복귀/하원 버튼이 들어갑니다.)");
-    scKioskReset();
+    document.getElementById("kiosk-confirm-screen").style.display = "none";
+    document.getElementById("kiosk-action-screen").style.display = "";
+    await scShowAction();
   }
 
   // [아니에요] → 코드 입력으로 복귀
@@ -347,6 +376,160 @@
     var ds = document.getElementById("kiosk-code-screen"); if(ds) ds.style.display = "";
     var err = document.getElementById("kp-err"); if(err) err.textContent = "";
     scKpRender();
+  }
+
+  /* ============================================================
+     [ATTENDANCE] state machine + reading_room_attendance (Phase 3)
+     State inferred from today row. Outing uses pending_out_start (DB-backed)
+     so in-progress outing survives screen reset / other students.
+     On return: settle into out_1 -> out_2 -> extra_out_minutes (legacy calc compatible).
+     Next-day: end < start adds is_next_day flag.
+  ============================================================ */
+  var _scActionRow = null;
+
+  function scRrToday(){
+    var d = new Date();
+    var m = String(d.getMonth()+1).padStart(2,"0");
+    var day = String(d.getDate()).padStart(2,"0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+  function scNowTime(){
+    var d = new Date();
+    return String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0") + ":00";
+  }
+  function scTimeToMin(t){
+    if(!t) return null;
+    var p = String(t).split(":");
+    if(p.length < 2) return null;
+    return parseInt(p[0],10)*60 + parseInt(p[1],10);
+  }
+
+  async function scRrLoadToday(studentId){
+    try {
+      var res = await db.from("reading_room_attendance").select("*")
+        .eq("student_id", studentId).eq("attend_date", scRrToday()).maybeSingle();
+      if(res.error) throw res.error;
+      return res.data || null;
+    } catch(e){ console.error("today row load fail:", e); return null; }
+  }
+
+  // out_room / studying / outing / done
+  function scRrDetectState(row){
+    if(!row || !row.check_in_time) return "out_room";
+    if(row.check_out_time) return "done";
+    if(row.pending_out_start) return "outing";   // DB-backed in-progress outing
+    return "studying";
+  }
+
+  async function scShowAction(){
+    var stu = _scKioskStudent;
+    if(!stu) return;
+    document.getElementById("ac-name").textContent = stu.name || "";
+    var msg = document.getElementById("ac-msg"); if(msg) msg.textContent = "";
+    _scActionRow = await scRrLoadToday(stu.id);
+    var state = scRrDetectState(_scActionRow);
+    var statusEl = document.getElementById("ac-status");
+    var area = document.getElementById("ac-btn-area");
+    var labels = { out_room: "— 미입실", studying: "공부중", outing: "외출중", done: "하원 완료" };
+    var cls = { out_room: "st-out-room", studying: "st-studying", outing: "st-outing", done: "st-done" };
+    statusEl.textContent = labels[state];
+    statusEl.className = "ac-status " + cls[state];
+    var h = "";
+    if(state === "out_room"){
+      h = '<button class="ac-act-btn act-in" onclick="scActIn()">✅ 입실</button>';
+    } else if(state === "studying"){
+      h = '<button class="ac-act-btn act-out" onclick="scActOut()">⚡ 외출</button>'
+        + '<button class="ac-act-btn act-leave" onclick="scActLeave()">🏠 하원</button>';
+    } else if(state === "outing"){
+      var since = _scActionRow && _scActionRow.pending_out_start ? (" (" + String(_scActionRow.pending_out_start).slice(0,5) + " 나감)") : "";
+      h = '<button class="ac-act-btn act-return" onclick="scActReturn()">↩️ 복귀</button>';
+      if(msg) msg.textContent = "외출 중입니다" + since;
+    } else if(state === "done"){
+      if(msg) msg.textContent = "오늘은 이미 하원했습니다. 다시 이용하려면 데스크에 문의하세요.";
+    }
+    area.innerHTML = h;
+  }
+
+  async function scRrUpsert(patch){
+    var stu = _scKioskStudent;
+    var payload = Object.assign({ student_id: stu.id, attend_date: scRrToday() }, patch);
+    var res = await db.from("reading_room_attendance")
+      .upsert(payload, { onConflict: "student_id,attend_date" }).select("*").maybeSingle();
+    if(res.error) throw res.error;
+    return res.data;
+  }
+
+  // [입실]
+  async function scActIn(){
+    try {
+      _scActionRow = await scRrUpsert({ check_in_time: scNowTime() });
+      scActDone("입실", scNowTime());
+    } catch(e){ scActError(e); }
+  }
+
+  // [외출] → pending_out_start 설정 (DB에 진행중 외출 남음)
+  async function scActOut(){
+    try {
+      var now = scNowTime();
+      _scActionRow = await scRrUpsert({ pending_out_start: now, pending_out_is_next_day: false });
+      scActDone("외출", now);
+    } catch(e){ scActError(e); }
+  }
+
+  // [복귀] → pending~now 외출분 계산 → out_1/out_2/extra 정산 + pending 비우기
+  async function scActReturn(){
+    try {
+      var row = _scActionRow || {};
+      var now = scNowTime();
+      var startT = row.pending_out_start;
+      if(!startT){
+        // 안전장치: pending 없으면 상태 재동기화
+        await scShowAction(); return;
+      }
+      var patch = { pending_out_start: null, pending_out_is_next_day: false };
+      if(!row.out_1_start){
+        patch.out_1_start = startT; patch.out_1_end = now;
+        if(scTimeToMin(now) < scTimeToMin(startT)) patch.out_1_end_is_next_day = true;
+      } else if(!row.out_2_start){
+        patch.out_2_start = startT; patch.out_2_end = now;
+        if(scTimeToMin(now) < scTimeToMin(startT)) patch.out_2_end_is_next_day = true;
+      } else {
+        // 3회⁺ → extra_out_minutes 누적
+        var diff = scTimeToMin(now) - scTimeToMin(startT);
+        if(diff < 0) diff += 24*60;   // 자정 방어
+        patch.extra_out_minutes = (row.extra_out_minutes || 0) + diff;
+      }
+      _scActionRow = await scRrUpsert(patch);
+      scActDone("복귀", now);
+    } catch(e){ scActError(e); }
+  }
+
+  // [하원]
+  async function scActLeave(){
+    try {
+      var row = _scActionRow || {};
+      var now = scNowTime();
+      var patch = { check_out_time: now };
+      if(row.check_in_time && scTimeToMin(now) < scTimeToMin(row.check_in_time)) patch.check_out_is_next_day = true;
+      _scActionRow = await scRrUpsert(patch);
+      scActDone("하원", now);
+    } catch(e){ scActError(e); }
+  }
+
+  function scActDone(label, time){
+    var hhmm = String(time).slice(0,5);
+    var msg = document.getElementById("ac-msg");
+    var name = _scKioskStudent ? _scKioskStudent.name : "";
+    if(msg) msg.textContent = "✅ " + name + "님 " + label + " 처리됨 (" + hhmm + ")";
+    var area = document.getElementById("ac-btn-area"); if(area) area.innerHTML = "";
+    var statusEl = document.getElementById("ac-status"); if(statusEl) statusEl.textContent = label + " 완료!";
+    setTimeout(function(){ scKioskReset(); }, 2000);
+  }
+
+  function scActError(e){
+    console.error("attendance save fail:", e);
+    var msg = document.getElementById("ac-msg");
+    if(msg) msg.textContent = "⚠️ 저장 실패. 다시 시도하거나 데스크에 문의하세요.";
   }
 
   /* ============================================================
