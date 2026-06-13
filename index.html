@@ -22677,36 +22677,62 @@ function wlFmtDateLabel(date) {
   return `${dp[0]}/${String(+dp[1]).padStart(2,'0')}/${String(+dp[2]).padStart(2,'0')} (${dayNames[d.getDay()]})`;
 }
 
-// 카드 HTML → html2canvas 이미지(WYSIWYG, 인쇄 품질 보장)
-async function wlCardToImage(cardHtml) {
-  const CARD_W = 680;
-  const tmp = document.createElement('div');
-  tmp.style.cssText = `position:absolute;left:-9999px;top:0;width:${CARD_W}px;background:#fff`;
-  tmp.innerHTML = cardHtml;
-  document.body.appendChild(tmp);
-  try {
-    const canvas = await html2canvas(tmp, {
-      backgroundColor: '#fff', scale: 2, useCORS: true, logging: false,
-      width: CARD_W, height: tmp.scrollHeight
-    });
-    return canvas.toDataURL('image/png');
-  } finally {
-    document.body.removeChild(tmp);
+// 카드 HTML들을 html2canvas로 렌더 → 세로 병합 → 흑백 → A4 페이지 높이로 슬라이스 → 인쇄
+// (이미지 복사와 동일한 WYSIWYG 렌더, 페이지에 조밀하게 채움, 흑백 출력 보장)
+async function wlPrintCardImages(cardHtmls) {
+  if (!cardHtmls || !cardHtmls.length) { alert('출력할 내용이 없습니다'); return; }
+  const W = 680, scale = 2;
+  // 1. 카드별 캔버스 (offscreen, display:none 금지 — 높이 0 측정 방지)
+  const cvs = [];
+  for (const html of cardHtmls) {
+    const tmp = document.createElement('div');
+    tmp.style.cssText = `position:absolute;left:-9999px;top:0;width:${W}px;background:#fff`;
+    tmp.innerHTML = html;
+    document.body.appendChild(tmp);
+    try {
+      cvs.push(await html2canvas(tmp, { backgroundColor: '#fff', scale, useCORS: true, logging: false, width: W, height: tmp.scrollHeight }));
+    } finally {
+      document.body.removeChild(tmp);
+    }
   }
-}
-
-// 카드 이미지들을 A4 폭에 맞춰 인쇄(원본 크기 유지, 넘치면 다음 장 — 카드는 안 쪼개짐)
-function wlOpenPrintWindow(imgs) {
-  if (!imgs || !imgs.length) { alert('출력할 내용이 없습니다'); return; }
-  const body = imgs.map(src => '<img class="wl-pimg" src="' + src + '">').join('');
+  // 2. 세로 병합
+  const totalW = Math.max(...cvs.map(c => c.width));
+  const GAP = 16 * scale;
+  const totalH = cvs.reduce((s, c) => s + c.height, 0) + GAP * (cvs.length - 1);
+  const merged = document.createElement('canvas');
+  merged.width = totalW; merged.height = totalH;
+  const mx = merged.getContext('2d');
+  mx.fillStyle = '#fff'; mx.fillRect(0, 0, totalW, totalH);
+  let y = 0;
+  for (const c of cvs) { mx.drawImage(c, 0, y); y += c.height + GAP; }
+  // 3. 흑백 변환 (프린터 컬러 설정과 무관하게 흑백 출력 보장)
+  const im = mx.getImageData(0, 0, totalW, totalH), d = im.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  mx.putImageData(im, 0, 0);
+  // 4. A4 내용영역(190×277mm, 10mm 여백) 비율로 페이지 높이 산정 후 슬라이스
+  const pageH = Math.floor(totalW * 277 / 190);
+  const slices = [];
+  for (let sy = 0; sy < totalH; sy += pageH) {
+    const h = Math.min(pageH, totalH - sy);
+    const sc = document.createElement('canvas');
+    sc.width = totalW; sc.height = h;
+    sc.getContext('2d').drawImage(merged, 0, sy, totalW, h, 0, 0, totalW, h);
+    slices.push(sc.toDataURL('image/png'));
+  }
+  // 5. 인쇄 (슬라이스마다 한 페이지)
+  const body = slices.map(s => '<img class="wl-pslice" src="' + s + '">').join('');
   const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>업무일지 출력</title>'
     + '<style>@page{size:A4;margin:10mm}*{box-sizing:border-box}'
     + 'body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
-    + '.wl-pimg{display:block;width:100%;margin:0 auto 6mm;page-break-inside:avoid;break-inside:avoid}'
+    + '.wl-pslice{display:block;width:100%;page-break-after:always;break-after:page}'
+    + '.wl-pslice:last-child{page-break-after:auto;break-after:auto}'
     + '@media print{button{display:none!important}}'
     + '</style></head><body>'
     + body
-    + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},300);}<\/scr'+'ipt>'
+    + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},400);}<\/scr'+'ipt>'
     + '</body></html>';
   const win = window.open('', '_blank', 'width=1000,height=800');
   if (win) { win.document.write(html); win.document.close(); }
@@ -22715,14 +22741,14 @@ function wlOpenPrintWindow(imgs) {
 
 async function wlPrintLogs(date, logs) {
   const dateLabel = wlFmtDateLabel(date);
-  const imgs = [];
+  const htmls = [];
   for (const log of logs) {
     const cls = (classes || []).find(c => c.id === log.class_id);
     const { data: stus } = await db.from('work_log_students')
       .select('*, users(name,school,grade)').eq('log_id', log.id);
-    imgs.push(await wlCardToImage(buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name)));
+    htmls.push(buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name));
   }
-  wlOpenPrintWindow(imgs);
+  await wlPrintCardImages(htmls);
 }
 
 // 빈 양식 카드 (학생 명단만, 나머지는 펜 기입용 빈 칸)
@@ -22782,16 +22808,16 @@ function buildBlankWorkLogCardHTML(cls, roster, dateLabel, teacherName) {
 
 async function wlPrintBlankForms(date, classIds) {
   const dateLabel = wlFmtDateLabel(date);
-  const imgs = [];
+  const htmls = [];
   for (const cid of classIds) {
     const cls = (classes || []).find(c => c.id === cid);
     const { data: roster } = await db.from('users').select('id,name,school,grade')
       .eq('role','student').eq('status','active')
       .or(`class_id.eq.${cid},class_id2.eq.${cid}`)
       .lte('enrolled_at', date).order('name');
-    imgs.push(await wlCardToImage(buildBlankWorkLogCardHTML(cls, roster || [], dateLabel, currentUser.name)));
+    htmls.push(buildBlankWorkLogCardHTML(cls, roster || [], dateLabel, currentUser.name));
   }
-  wlOpenPrintWindow(imgs);
+  await wlPrintCardImages(htmls);
 }
 
 async function wlPrintSelected() {
