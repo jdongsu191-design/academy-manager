@@ -22669,23 +22669,15 @@ async function wlGenerateSelectedImage() {
   }
 }
 
-/* ── 출력 기능 (당일 목록 + 모달 공통 빌더) ── */
-async function wlPrintLogs(date, logs) {
-  const dp        = date.split('-');
-  const d         = new Date(date + 'T00:00:00');
-  const dayNames  = ['일','월','화','수','목','금','토'];
-  const dateLabel = `${dp[0]}/${String(+dp[1]).padStart(2,'0')}/${String(+dp[2]).padStart(2,'0')} (${dayNames[d.getDay()]})`;
+/* ── 출력 기능 (당일 목록 + 모달: 저장본 / 빈 양식) ── */
+function wlFmtDateLabel(date) {
+  const dp = date.split('-');
+  const d  = new Date(date + 'T00:00:00');
+  const dayNames = ['일','월','화','수','목','금','토'];
+  return `${dp[0]}/${String(+dp[1]).padStart(2,'0')}/${String(+dp[2]).padStart(2,'0')} (${dayNames[d.getDay()]})`;
+}
 
-  let cards = '';
-  for (const log of logs) {
-    const cls = (classes || []).find(c => c.id === log.class_id);
-    const { data: stus } = await db.from('work_log_students')
-      .select('*, users(name,school,grade)').eq('log_id', log.id);
-    cards += '<div class="wl-print-card">'
-      + buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name)
-      + '</div>';
-  }
-
+function wlOpenPrintWindow(cards) {
   const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>업무일지 출력</title>'
     + '<style>*{box-sizing:border-box}'
     + 'body{margin:0;background:#fff;font-family:\'Pretendard\',\'Noto Sans KR\',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
@@ -22695,10 +22687,94 @@ async function wlPrintLogs(date, logs) {
     + cards
     + '<scr'+'ipt>window.onload=function(){window.print();}<\/scr'+'ipt>'
     + '</body></html>';
-
   const win = window.open('', '_blank', 'width=1000,height=800');
   if (win) { win.document.write(html); win.document.close(); }
   else { alert('팝업이 차단되었습니다. 팝업 허용 후 다시 시도해주세요.'); }
+}
+
+async function wlPrintLogs(date, logs) {
+  const dateLabel = wlFmtDateLabel(date);
+  let cards = '';
+  for (const log of logs) {
+    const cls = (classes || []).find(c => c.id === log.class_id);
+    const { data: stus } = await db.from('work_log_students')
+      .select('*, users(name,school,grade)').eq('log_id', log.id);
+    cards += '<div class="wl-print-card">'
+      + buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name)
+      + '</div>';
+  }
+  wlOpenPrintWindow(cards);
+}
+
+// 빈 양식 카드 (학생 명단만, 나머지는 펜 기입용 빈 칸)
+function buildBlankWorkLogCardHTML(cls, roster, dateLabel, teacherName) {
+  const clsName = cls?.name || '반 정보 없음';
+  const clsInfo = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
+  const esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const sorted = (roster || []).slice().sort((a,b)=> (a.name||'').localeCompare(b.name||'','ko'));
+  const empty = '<td style="padding:12px 8px;border:1px solid #e5e7eb"></td>';
+  const rows = sorted.map((u,i)=>{
+    const sg = [u.school, u.grade].filter(Boolean).join(' ');
+    const bg = i%2===0 ? '#fff' : '#f8fbff';
+    return `<tr style="background:${bg}">
+      <td style="padding:12px 8px;border:1px solid #e5e7eb;color:#6b7280;font-size:12px">${esc(sg)}</td>
+      <td style="padding:12px 8px;border:1px solid #e5e7eb;font-weight:600">${esc(u.name || '')}</td>
+      ${empty}${empty}${empty}${empty}${empty}
+    </tr>`;
+  }).join('');
+  const blankBox = (title) => `<div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;min-height:66px">
+      <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:5px">${title}</div>
+    </div>`;
+  return `<div style="background:#fff;padding:16px;min-width:660px;font-family:'Pretendard','Noto Sans KR',sans-serif">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #178EF5">
+      <div>
+        <div style="font-size:20px;font-weight:700;color:#178EF5">📋 업무일지 <span style="font-size:11px;font-weight:700;color:#fff;background:#178EF5;padding:2px 8px;border-radius:100px;vertical-align:middle">빈 양식</span></div>
+        <div style="font-size:13px;color:#6b7280;margin-top:2px">${esc(teacherName)} 선생님${clsInfo ? ' · ' + esc(clsInfo) : ''}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:18px;font-weight:700;color:#1a1a2e">${esc(clsName)}</div>
+        <div style="font-size:13px;color:#6b7280;margin-top:2px">${dateLabel}</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px">
+      <thead>
+        <tr style="background:#E6F1FB">
+          <th style="padding:7px 8px;text-align:left;border:1px solid #d0e4f7;color:#185FA5">학교/학년</th>
+          <th style="padding:7px 8px;text-align:left;border:1px solid #d0e4f7;color:#185FA5">이름</th>
+          <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">출석</th>
+          <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">N제</th>
+          <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">숙제</th>
+          <th style="padding:7px 8px;text-align:center;border:1px solid #d0e4f7;color:#185FA5">TEST</th>
+          <th style="padding:7px 8px;text-align:left;border:1px solid #d0e4f7;color:#185FA5">특이사항</th>
+        </tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="7" style="padding:14px;text-align:center;color:#9ca3af;border:1px solid #e5e7eb">등록된 학생 없음</td></tr>'}</tbody>
+    </table>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      ${blankBox('📖 진도')}
+      ${blankBox('📝 숙제')}
+    </div>
+    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;min-height:50px">
+      <div style="font-size:11px;font-weight:600;color:#178EF5;margin-bottom:6px">기타 (시범수업 / 신입생 / 퇴원생 / 메모)</div>
+    </div>
+    <div style="margin-top:12px;text-align:right;font-size:11px;color:#9ca3af">BMAPS · 빈 양식</div>
+  </div>`;
+}
+
+async function wlPrintBlankForms(date, classIds) {
+  const dateLabel = wlFmtDateLabel(date);
+  let cards = '';
+  for (const cid of classIds) {
+    const cls = (classes || []).find(c => c.id === cid);
+    const { data: roster } = await db.from('users').select('id,name,school,grade')
+      .eq('role','student').eq('status','active')
+      .or(`class_id.eq.${cid},class_id2.eq.${cid}`)
+      .lte('enrolled_at', date).order('name');
+    cards += '<div class="wl-print-card">'
+      + buildBlankWorkLogCardHTML(cls, roster || [], dateLabel, currentUser.name)
+      + '</div>';
+  }
+  wlOpenPrintWindow(cards);
 }
 
 async function wlPrintSelected() {
@@ -22723,10 +22799,11 @@ async function wlPrintSelected() {
   }
 }
 
-/* ── 출력 모달 (불러오기 옆 "출력하기" 버튼) ── */
+/* ── 출력 모달 (불러오기 옆 "출력하기" 버튼 / 저장본·빈양식 모드) ── */
 function openWlPrintModal() {
   const ex = document.getElementById('wl-print-modal');
   if (ex) ex.remove();
+  window._wlPrintMode = 'saved';
   const modal = document.createElement('div');
   modal.id = 'wl-print-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
@@ -22735,36 +22812,53 @@ function openWlPrintModal() {
       <div style="background:#1d4ed8;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
         <div>
           <div style="font-size:15px;font-weight:800;color:#fff">🖨️ 업무일지 출력</div>
-          <div style="font-size:12px;color:#bfdbfe;margin-top:2px">날짜 선택 → 강좌 체크 → 출력</div>
+          <div style="font-size:12px;color:#bfdbfe;margin-top:2px">저장된 일지 또는 빈 양식(펜 기입용)</div>
         </div>
         <button onclick="document.getElementById('wl-print-modal').remove()"
           style="background:rgba(255,255,255,0.2);border:none;color:#fff;width:30px;height:30px;border-radius:50%;font-size:18px;cursor:pointer">✕</button>
       </div>
+      <div style="padding:12px 16px 0;flex-shrink:0;display:flex;gap:6px">
+        <button id="wl-pm-tab-saved" onclick="wlPrintModalSetMode('saved')"
+          style="flex:1;padding:8px;border:1.5px solid #c7d2fe;border-radius:8px;background:#1d4ed8;color:#fff;font-size:13px;font-weight:700;cursor:pointer">📋 저장된 일지</button>
+        <button id="wl-pm-tab-blank" onclick="wlPrintModalSetMode('blank')"
+          style="flex:1;padding:8px;border:1.5px solid #c7d2fe;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:13px;font-weight:700;cursor:pointer">📝 빈 양식</button>
+      </div>
       <div style="padding:14px 16px;flex-shrink:0;border-bottom:1px solid #e5e7eb">
         <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">날짜 선택</div>
-        <input type="date" id="wl-print-date" onchange="wlPrintModalLoadDate()"
+        <input type="date" id="wl-print-date" onchange="wlPrintModalRender()"
           onclick="this.showPicker&&this.showPicker()"
           style="width:100%;padding:9px 12px;border:1.5px solid #dbeafe;border-radius:8px;font-size:14px;outline:none;cursor:pointer">
       </div>
-      <div id="wl-print-preview" style="overflow-y:auto;flex:1;padding:12px 16px">
-        <div style="text-align:center;padding:30px 0;color:#9ca3af">
-          <div style="font-size:32px;margin-bottom:8px">📅</div>
-          <div style="font-size:13px">날짜를 선택하면 강좌 목록이 표시됩니다</div>
-        </div>
-      </div>
+      <div id="wl-print-preview" style="overflow-y:auto;flex:1;padding:12px 16px"></div>
       <div style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;flex-shrink:0">
         <button onclick="document.getElementById('wl-print-modal').remove()"
           style="flex:1;padding:9px;border:1.5px solid #d1d5db;border-radius:8px;background:#f9fafb;color:#6b7280;font-size:13px;font-weight:600;cursor:pointer">취소</button>
-        <button id="wl-print-modal-btn" onclick="wlPrintModalDo()" disabled
+        <button id="wl-print-modal-btn" onclick="wlPrintModalGo()" disabled
           style="flex:2;padding:9px;border:none;border-radius:8px;background:#93c5fd;color:#fff;font-size:13px;font-weight:700;cursor:not-allowed">🖨️ 선택 강좌 출력</button>
       </div>
     </div>`;
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
   document.body.appendChild(modal);
   const di = document.getElementById('wl-print-date');
-  const cur = document.getElementById('wl-date')?.value;
-  di.value = cur || new Date().toISOString().slice(0, 10);
-  wlPrintModalLoadDate();
+  di.value = document.getElementById('wl-date')?.value || new Date().toISOString().slice(0, 10);
+  wlPrintModalRender();
+}
+
+function wlPrintModalSetMode(mode) {
+  window._wlPrintMode = mode;
+  [['saved', document.getElementById('wl-pm-tab-saved')], ['blank', document.getElementById('wl-pm-tab-blank')]]
+    .forEach(([m, el]) => {
+      if (!el) return;
+      const on = (m === mode);
+      el.style.background = on ? '#1d4ed8' : '#eef2ff';
+      el.style.color = on ? '#fff' : '#4338ca';
+    });
+  wlPrintModalRender();
+}
+
+function wlPrintModalRender() {
+  if (window._wlPrintMode === 'blank') wlPrintModalLoadClasses();
+  else wlPrintModalLoadDate();
 }
 
 async function wlPrintModalLoadDate() {
@@ -22791,7 +22885,7 @@ async function wlPrintModalLoadDate() {
         const cName = cls?.name || '알 수 없는 반';
         const cInfo = cls ? [cls.class_days, cls.class_time].filter(Boolean).join(' · ') : '';
         return `<label style="display:flex;align-items:center;gap:10px;padding:11px 13px;border:1.5px solid #dbeafe;border-radius:10px;cursor:pointer;margin-bottom:8px">
-          <input type="checkbox" class="wl-pm-check" data-log-id="${log.id}" onchange="wlPrintModalUpdateBtn()"
+          <input type="checkbox" class="wl-pm-check" data-id="${log.id}" onchange="wlPrintModalUpdateBtn()"
             style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:#1d4ed8">
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:#1e293b">${cName}</div>
@@ -22803,6 +22897,34 @@ async function wlPrintModalLoadDate() {
     console.error('[wlPrintModalLoadDate]', e);
     preview.innerHTML = '<div style="text-align:center;padding:30px;color:#dc2626;font-size:13px">⚠️ 조회 실패: 네트워크를 확인하세요</div>';
   }
+}
+
+function wlPrintModalLoadClasses() {
+  const preview = document.getElementById('wl-print-preview');
+  const btn     = document.getElementById('wl-print-modal-btn');
+  if (btn) { btn.disabled = true; btn.style.background = '#93c5fd'; btn.style.cursor = 'not-allowed'; btn.textContent = '🖨️ 선택 빈 양식 출력'; }
+  const list = (classes || []).slice().sort((a,b)=> (a.name||'').localeCompare(b.name||'','ko'));
+  if (!list.length) {
+    preview.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af"><div style="font-size:28px;margin-bottom:8px">📭</div><div style="font-size:13px">담당하는 반이 없습니다</div></div>';
+    return;
+  }
+  const esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  preview.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div style="font-size:12px;font-weight:600;color:#374151">빈 양식 출력할 반 선택 (${list.length}개)</div>
+      <button onclick="wlPrintModalSelectAll(this)" id="wl-pm-selall-btn"
+        style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">전체선택</button>
+    </div>`
+    + list.map(c => {
+      const cInfo = [c.class_days, c.class_time].filter(Boolean).join(' · ');
+      return `<label style="display:flex;align-items:center;gap:10px;padding:11px 13px;border:1.5px solid #dbeafe;border-radius:10px;cursor:pointer;margin-bottom:8px">
+        <input type="checkbox" class="wl-pm-check" data-id="${c.id}" onchange="wlPrintModalUpdateBtn()"
+          style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:#1d4ed8">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:700;color:#1e293b">${esc(c.name || '')}</div>
+          ${cInfo ? `<div style="font-size:11px;color:#9ca3af;margin-top:1px">${esc(cInfo)}</div>` : ''}
+        </div>
+      </label>`;
+    }).join('');
 }
 
 function wlPrintModalSelectAll(btn) {
@@ -22817,33 +22939,39 @@ function wlPrintModalSelectAll(btn) {
 function wlPrintModalUpdateBtn() {
   const n = document.querySelectorAll('.wl-pm-check:checked').length;
   const btn = document.getElementById('wl-print-modal-btn');
-  if (btn) {
-    btn.disabled = n === 0;
-    btn.style.background = n > 0 ? '#1d4ed8' : '#93c5fd';
-    btn.style.cursor = n > 0 ? 'pointer' : 'not-allowed';
-    btn.textContent = n > 0 ? `🖨️ 선택 ${n}개 강좌 출력` : '🖨️ 선택 강좌 출력';
-  }
+  if (!btn) return;
+  const blank = window._wlPrintMode === 'blank';
+  btn.disabled = n === 0;
+  btn.style.background = n > 0 ? '#1d4ed8' : '#93c5fd';
+  btn.style.cursor = n > 0 ? 'pointer' : 'not-allowed';
+  btn.textContent = n > 0
+    ? (blank ? `🖨️ 선택 ${n}개 빈 양식 출력` : `🖨️ 선택 ${n}개 강좌 출력`)
+    : (blank ? '🖨️ 선택 빈 양식 출력' : '🖨️ 선택 강좌 출력');
 }
 
-async function wlPrintModalDo() {
+async function wlPrintModalGo() {
   const checked = Array.from(document.querySelectorAll('.wl-pm-check:checked'));
-  if (!checked.length) { alert('출력할 강좌를 선택하세요'); return; }
-  const selectedIds = checked.map(c => c.dataset.logId);
+  if (!checked.length) { alert('출력할 항목을 선택하세요'); return; }
+  const ids  = checked.map(c => c.dataset.id);
   const date = document.getElementById('wl-print-date')?.value || '';
-  const btn = document.getElementById('wl-print-modal-btn');
+  const btn  = document.getElementById('wl-print-modal-btn');
   const origText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 준비 중...'; }
   try {
-    const { data: allLogs } = await db.from('work_logs')
-      .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
-    const logs = (allLogs || []).filter(l => selectedIds.includes(l.id));
-    if (!logs.length) { alert('업무일지를 찾을 수 없습니다'); return; }
-    await wlPrintLogs(date, logs);
+    if (window._wlPrintMode === 'blank') {
+      await wlPrintBlankForms(date, ids);
+    } else {
+      const { data: allLogs } = await db.from('work_logs')
+        .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
+      const logs = (allLogs || []).filter(l => ids.includes(l.id));
+      if (!logs.length) { alert('업무일지를 찾을 수 없습니다'); return; }
+      await wlPrintLogs(date, logs);
+    }
     const m = document.getElementById('wl-print-modal'); if (m) m.remove();
   } catch(e) {
     alert('오류: ' + (e.message || e));
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = origText || '🖨️ 선택 강좌 출력'; }
+    if (btn) { btn.disabled = false; btn.textContent = origText || '🖨️ 출력'; }
   }
 }
 
