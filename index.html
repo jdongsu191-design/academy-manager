@@ -873,6 +873,8 @@
             <button class="btn btn-primary" onclick="saveWorkLog()" style="flex:1;min-width:80px">💾 저장</button>
             <button class="btn" onclick="openWlLoadModal()"
               style="flex:1;min-width:80px;background:#f0f7ff;border-color:#93c5fd;color:#1d4ed8;font-weight:700">📂 불러오기</button>
+            <button class="btn" onclick="openWlPrintModal()"
+              style="flex:1;min-width:80px;background:#eef2ff;border-color:#a5b4fc;color:#4338ca;font-weight:700">🖨️ 출력하기</button>
             <button class="btn" id="wl-copy-btn" onclick="copyWorkLogImage()"
               style="display:none;flex:1;min-width:120px;background:#25D366;color:#fff;border-color:#25D366;font-weight:700">📊 이미지 복사</button>
           </div>
@@ -22667,6 +22669,38 @@ async function wlGenerateSelectedImage() {
   }
 }
 
+/* ── 출력 기능 (당일 목록 + 모달 공통 빌더) ── */
+async function wlPrintLogs(date, logs) {
+  const dp        = date.split('-');
+  const d         = new Date(date + 'T00:00:00');
+  const dayNames  = ['일','월','화','수','목','금','토'];
+  const dateLabel = `${dp[0]}/${String(+dp[1]).padStart(2,'0')}/${String(+dp[2]).padStart(2,'0')} (${dayNames[d.getDay()]})`;
+
+  let cards = '';
+  for (const log of logs) {
+    const cls = (classes || []).find(c => c.id === log.class_id);
+    const { data: stus } = await db.from('work_log_students')
+      .select('*, users(name,school,grade)').eq('log_id', log.id);
+    cards += '<div class="wl-print-card">'
+      + buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name)
+      + '</div>';
+  }
+
+  const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>업무일지 출력</title>'
+    + '<style>*{box-sizing:border-box}'
+    + 'body{margin:0;background:#fff;font-family:\'Pretendard\',\'Noto Sans KR\',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    + '.wl-print-card{padding:8px 10px;page-break-inside:avoid;break-inside:avoid}'
+    + '@media print{button{display:none!important}}'
+    + '</style></head><body>'
+    + cards
+    + '<scr'+'ipt>window.onload=function(){window.print();}<\/scr'+'ipt>'
+    + '</body></html>';
+
+  const win = window.open('', '_blank', 'width=1000,height=800');
+  if (win) { win.document.write(html); win.document.close(); }
+  else { alert('팝업이 차단되었습니다. 팝업 허용 후 다시 시도해주세요.'); }
+}
+
 async function wlPrintSelected() {
   const checked = Array.from(document.querySelectorAll('.wl-log-check:checked'));
   if (!checked.length) { alert('업무일지를 선택하세요'); return; }
@@ -22674,48 +22708,142 @@ async function wlPrintSelected() {
   const btn = document.getElementById('wl-print-selected-btn');
   const origText = btn ? btn.textContent : '';
   if (btn) { btn.textContent = '⏳ 준비 중...'; btn.disabled = true; }
-
   try {
-    const date      = document.getElementById('wl-date')?.value || '';
-    const dp         = date.split('-');
-    const d          = new Date(date + 'T00:00:00');
-    const dayNames   = ['일','월','화','수','목','금','토'];
-    const dateLabel  = `${dp[0]}/${String(+dp[1]).padStart(2,'0')}/${String(+dp[2]).padStart(2,'0')} (${dayNames[d.getDay()]})`;
-
+    const date = document.getElementById('wl-date')?.value || '';
     const { data: allLogs } = await db.from('work_logs')
       .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
     const logs = (allLogs || []).filter(l => selectedIds.includes(l.id));
     if (!logs.length) { alert('업무일지를 찾을 수 없습니다'); return; }
-
-    let cards = '';
-    for (const log of logs) {
-      const cls = (classes || []).find(c => c.id === log.class_id);
-      const { data: stus } = await db.from('work_log_students')
-        .select('*, users(name,school,grade)').eq('log_id', log.id);
-      cards += '<div class="wl-print-card">'
-        + buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name)
-        + '</div>';
-    }
-
-    const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>업무일지 출력</title>'
-      + '<style>*{box-sizing:border-box}'
-      + 'body{margin:0;background:#fff;font-family:\'Pretendard\',\'Noto Sans KR\',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
-      + '.wl-print-card{padding:10px 12px;page-break-after:always;break-after:page}'
-      + '.wl-print-card:last-child{page-break-after:auto;break-after:auto}'
-      + '@media print{.wl-print-card{padding:0}button{display:none!important}}'
-      + '</style></head><body>'
-      + cards
-      + '<scr'+'ipt>window.onload=function(){window.print();}<\/scr'+'ipt>'
-      + '</body></html>';
-
-    const win = window.open('', '_blank', 'width=1000,height=800');
-    if (win) { win.document.write(html); win.document.close(); }
-    else { alert('팝업이 차단되었습니다. 팝업 허용 후 다시 시도해주세요.'); }
+    await wlPrintLogs(date, logs);
   } catch(e) {
     alert('오류: ' + (e.message || e));
   } finally {
     if (btn) { btn.textContent = origText || '🖨️ 선택 업무일지 출력'; btn.disabled = false; }
     wlUpdateGenBtn();
+  }
+}
+
+/* ── 출력 모달 (불러오기 옆 "출력하기" 버튼) ── */
+function openWlPrintModal() {
+  const ex = document.getElementById('wl-print-modal');
+  if (ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'wl-print-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:520px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden;max-height:90vh;display:flex;flex-direction:column">
+      <div style="background:#1d4ed8;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+        <div>
+          <div style="font-size:15px;font-weight:800;color:#fff">🖨️ 업무일지 출력</div>
+          <div style="font-size:12px;color:#bfdbfe;margin-top:2px">날짜 선택 → 강좌 체크 → 출력</div>
+        </div>
+        <button onclick="document.getElementById('wl-print-modal').remove()"
+          style="background:rgba(255,255,255,0.2);border:none;color:#fff;width:30px;height:30px;border-radius:50%;font-size:18px;cursor:pointer">✕</button>
+      </div>
+      <div style="padding:14px 16px;flex-shrink:0;border-bottom:1px solid #e5e7eb">
+        <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">날짜 선택</div>
+        <input type="date" id="wl-print-date" onchange="wlPrintModalLoadDate()"
+          onclick="this.showPicker&&this.showPicker()"
+          style="width:100%;padding:9px 12px;border:1.5px solid #dbeafe;border-radius:8px;font-size:14px;outline:none;cursor:pointer">
+      </div>
+      <div id="wl-print-preview" style="overflow-y:auto;flex:1;padding:12px 16px">
+        <div style="text-align:center;padding:30px 0;color:#9ca3af">
+          <div style="font-size:32px;margin-bottom:8px">📅</div>
+          <div style="font-size:13px">날짜를 선택하면 강좌 목록이 표시됩니다</div>
+        </div>
+      </div>
+      <div style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;flex-shrink:0">
+        <button onclick="document.getElementById('wl-print-modal').remove()"
+          style="flex:1;padding:9px;border:1.5px solid #d1d5db;border-radius:8px;background:#f9fafb;color:#6b7280;font-size:13px;font-weight:600;cursor:pointer">취소</button>
+        <button id="wl-print-modal-btn" onclick="wlPrintModalDo()" disabled
+          style="flex:2;padding:9px;border:none;border-radius:8px;background:#93c5fd;color:#fff;font-size:13px;font-weight:700;cursor:not-allowed">🖨️ 선택 강좌 출력</button>
+      </div>
+    </div>`;
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+  const di = document.getElementById('wl-print-date');
+  const cur = document.getElementById('wl-date')?.value;
+  di.value = cur || new Date().toISOString().slice(0, 10);
+  wlPrintModalLoadDate();
+}
+
+async function wlPrintModalLoadDate() {
+  const date    = document.getElementById('wl-print-date')?.value || '';
+  const preview = document.getElementById('wl-print-preview');
+  const btn     = document.getElementById('wl-print-modal-btn');
+  if (btn) { btn.disabled = true; btn.style.background = '#93c5fd'; btn.style.cursor = 'not-allowed'; btn.textContent = '🖨️ 선택 강좌 출력'; }
+  if (!date) return;
+  preview.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af">불러오는 중...</div>';
+  try {
+    const { data: logs } = await db.from('work_logs')
+      .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
+    if (!logs || !logs.length) {
+      preview.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af"><div style="font-size:28px;margin-bottom:8px">📭</div><div style="font-size:13px">해당 날짜에 저장된 업무일지가 없습니다</div></div>';
+      return;
+    }
+    preview.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:12px;font-weight:600;color:#374151">출력할 강좌 선택 (${logs.length}개)</div>
+        <button onclick="wlPrintModalSelectAll(this)" id="wl-pm-selall-btn"
+          style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">전체선택</button>
+      </div>`
+      + logs.map(log => {
+        const cls   = (classes || []).find(c => c.id === log.class_id);
+        const cName = cls?.name || '알 수 없는 반';
+        const cInfo = cls ? [cls.class_days, cls.class_time].filter(Boolean).join(' · ') : '';
+        return `<label style="display:flex;align-items:center;gap:10px;padding:11px 13px;border:1.5px solid #dbeafe;border-radius:10px;cursor:pointer;margin-bottom:8px">
+          <input type="checkbox" class="wl-pm-check" data-log-id="${log.id}" onchange="wlPrintModalUpdateBtn()"
+            style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:#1d4ed8">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:700;color:#1e293b">${cName}</div>
+            ${cInfo ? `<div style="font-size:11px;color:#9ca3af;margin-top:1px">${cInfo}</div>` : ''}
+          </div>
+        </label>`;
+      }).join('');
+  } catch(e) {
+    console.error('[wlPrintModalLoadDate]', e);
+    preview.innerHTML = '<div style="text-align:center;padding:30px;color:#dc2626;font-size:13px">⚠️ 조회 실패: 네트워크를 확인하세요</div>';
+  }
+}
+
+function wlPrintModalSelectAll(btn) {
+  const checks = document.querySelectorAll('.wl-pm-check');
+  const allChecked = Array.from(checks).every(c => c.checked);
+  const ns = !allChecked;
+  checks.forEach(c => { c.checked = ns; });
+  if (btn) btn.textContent = ns ? '전체해제' : '전체선택';
+  wlPrintModalUpdateBtn();
+}
+
+function wlPrintModalUpdateBtn() {
+  const n = document.querySelectorAll('.wl-pm-check:checked').length;
+  const btn = document.getElementById('wl-print-modal-btn');
+  if (btn) {
+    btn.disabled = n === 0;
+    btn.style.background = n > 0 ? '#1d4ed8' : '#93c5fd';
+    btn.style.cursor = n > 0 ? 'pointer' : 'not-allowed';
+    btn.textContent = n > 0 ? `🖨️ 선택 ${n}개 강좌 출력` : '🖨️ 선택 강좌 출력';
+  }
+}
+
+async function wlPrintModalDo() {
+  const checked = Array.from(document.querySelectorAll('.wl-pm-check:checked'));
+  if (!checked.length) { alert('출력할 강좌를 선택하세요'); return; }
+  const selectedIds = checked.map(c => c.dataset.logId);
+  const date = document.getElementById('wl-print-date')?.value || '';
+  const btn = document.getElementById('wl-print-modal-btn');
+  const origText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 준비 중...'; }
+  try {
+    const { data: allLogs } = await db.from('work_logs')
+      .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
+    const logs = (allLogs || []).filter(l => selectedIds.includes(l.id));
+    if (!logs.length) { alert('업무일지를 찾을 수 없습니다'); return; }
+    await wlPrintLogs(date, logs);
+    const m = document.getElementById('wl-print-modal'); if (m) m.remove();
+  } catch(e) {
+    alert('오류: ' + (e.message || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origText || '🖨️ 선택 강좌 출력'; }
   }
 }
 
