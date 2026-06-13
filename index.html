@@ -22697,14 +22697,15 @@ async function wlPrintCardImages(cardHtmls) {
   }
   // 2. 세로 병합
   const totalW = Math.max(...cvs.map(c => c.width));
-  const GAP = 16 * scale;
-  const totalH = cvs.reduce((s, c) => s + c.height, 0) + GAP * (cvs.length - 1);
+  const GAP = 8 * scale;                          // 강좌 간격 (좁혀서 더 잘 모이게)
+  const totalH = cvs.reduce((s, c) => s + c.height, 0) + GAP * Math.max(0, cvs.length - 1);
+  const offsets = [];                             // 각 카드 시작 y (강좌 경계 분할용)
   const merged = document.createElement('canvas');
   merged.width = totalW; merged.height = totalH;
   const mx = merged.getContext('2d');
   mx.fillStyle = '#fff'; mx.fillRect(0, 0, totalW, totalH);
   let y = 0;
-  for (const c of cvs) { mx.drawImage(c, 0, y); y += c.height + GAP; }
+  for (const c of cvs) { offsets.push(y); mx.drawImage(c, 0, y); y += c.height + GAP; }
   // 3. 흑백 변환 (프린터 컬러 설정과 무관하게 흑백 출력 보장)
   const im = mx.getImageData(0, 0, totalW, totalH), d = im.data;
   for (let i = 0; i < d.length; i += 4) {
@@ -22712,30 +22713,38 @@ async function wlPrintCardImages(cardHtmls) {
     d[i] = d[i + 1] = d[i + 2] = g;
   }
   mx.putImageData(im, 0, 0);
-  // 4. 세로 A4 한 페이지에 자동 축소 (읽기 한계 미만이면 여러 페이지로 분할)
-  const FLOOR = 0.55;                            // 최소 축소율 (이하이면 다중 페이지)
-  const pageH = Math.floor(totalW * 277 / 190);  // 세로 A4 내용영역 높이(px)
-  const fit = pageH / totalH;                    // 1장에 맞추기 위한 비율 (<1이면 축소 필요)
+  // 4. 세로 A4 한 페이지에 자동 맞춤 (높이를 직접 가둬 스필 방지; 너무 길면 강좌 경계로 분할)
+  const FLOOR = 0.55;                             // 최소 축소율 (이하이면 다중 페이지)
+  const SAFE = 0.96;                              // 페이지 여유(반올림·프린터 여백 대비)
+  const pageH = Math.floor(totalW * 277 / 190);   // 세로 A4 내용영역 높이(px)
+  const maxHmm = Math.floor(277 * SAFE);          // 한 페이지 최대 높이(mm) — 스필 차단
+  const fit = (pageH * SAFE) / totalH;
   const baseStyle = '@page{size:A4;margin:10mm}*{box-sizing:border-box}'
     + 'body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
     + '@media print{button{display:none!important}}';
   let css, body;
   if (fit >= FLOOR) {
-    // 한 페이지에 맞춤: 합친 이미지를 통째로 1장에 (필요시 축소, 확대는 안 함)
-    const w = Math.min(100, Math.round(fit * 1000) / 10);   // 폭 % (가로 중앙정렬, 세로 1장 fit)
-    css = baseStyle + '.wl-pone{display:block;width:' + w + '%;margin:0 auto}';
+    // 한 페이지: 폭·높이 모두 페이지 안에 가둠 → 다음 장으로 안 넘침
+    css = baseStyle + '.wl-pone{display:block;max-width:100%;max-height:' + maxHmm + 'mm;margin:0 auto}';
     body = '<img class="wl-pone" src="' + merged.toDataURL('image/png') + '">';
   } else {
-    // 너무 길어 축소 시 가독성 저하 → 원본 크기로 페이지 분할
-    const slices = [];
-    for (let sy = 0; sy < totalH; sy += pageH) {
-      const h = Math.min(pageH, totalH - sy);
+    // 다중 페이지: 강좌 경계로 분할 (강좌 중간에서 안 잘림)
+    const pages = [];
+    let p0 = 0, p1 = 0;
+    for (let i = 0; i < cvs.length; i++) {
+      const bot = offsets[i] + cvs[i].height;
+      if (p1 > p0 && (bot - p0) > pageH) { pages.push([p0, p1]); p0 = offsets[i]; }
+      p1 = bot;
+    }
+    if (p1 > p0) pages.push([p0, p1]);
+    const slices = pages.map(([a, b]) => {
+      const h = b - a;
       const sc = document.createElement('canvas');
       sc.width = totalW; sc.height = h;
-      sc.getContext('2d').drawImage(merged, 0, sy, totalW, h, 0, 0, totalW, h);
-      slices.push(sc.toDataURL('image/png'));
-    }
-    css = baseStyle + '.wl-pslice{display:block;width:100%;page-break-after:always;break-after:page}'
+      sc.getContext('2d').drawImage(merged, 0, a, totalW, h, 0, 0, totalW, h);
+      return sc.toDataURL('image/png');
+    });
+    css = baseStyle + '.wl-pslice{display:block;max-width:100%;max-height:' + maxHmm + 'mm;margin:0 auto;page-break-after:always;break-after:page}'
       + '.wl-pslice:last-child{page-break-after:auto;break-after:auto}';
     body = slices.map(s => '<img class="wl-pslice" src="' + s + '">').join('');
   }
