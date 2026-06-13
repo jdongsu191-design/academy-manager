@@ -22677,17 +22677,36 @@ function wlFmtDateLabel(date) {
   return `${dp[0]}/${String(+dp[1]).padStart(2,'0')}/${String(+dp[2]).padStart(2,'0')} (${dayNames[d.getDay()]})`;
 }
 
-function wlOpenPrintWindow(cards) {
+// 카드 HTML → html2canvas 이미지(WYSIWYG, 인쇄 품질 보장)
+async function wlCardToImage(cardHtml) {
+  const CARD_W = 680;
+  const tmp = document.createElement('div');
+  tmp.style.cssText = `position:absolute;left:-9999px;top:0;width:${CARD_W}px;background:#fff`;
+  tmp.innerHTML = cardHtml;
+  document.body.appendChild(tmp);
+  try {
+    const canvas = await html2canvas(tmp, {
+      backgroundColor: '#fff', scale: 2, useCORS: true, logging: false,
+      width: CARD_W, height: tmp.scrollHeight
+    });
+    return canvas.toDataURL('image/png');
+  } finally {
+    document.body.removeChild(tmp);
+  }
+}
+
+// 카드 이미지들을 A4 폭에 맞춰 인쇄(원본 크기 유지, 넘치면 다음 장 — 카드는 안 쪼개짐)
+function wlOpenPrintWindow(imgs) {
+  if (!imgs || !imgs.length) { alert('출력할 내용이 없습니다'); return; }
+  const body = imgs.map(src => '<img class="wl-pimg" src="' + src + '">').join('');
   const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>업무일지 출력</title>'
-    + '<style>*{box-sizing:border-box}'
-    + 'body{margin:0;background:#fff;font-family:\'Pretendard\',\'Noto Sans KR\',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
-    + '.wl-print-card{padding:8px 10px}'
-    + '.wl-print-card tr{page-break-inside:avoid;break-inside:avoid}'
-    + '.wl-print-card thead{display:table-header-group}'
+    + '<style>@page{size:A4;margin:10mm}*{box-sizing:border-box}'
+    + 'body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    + '.wl-pimg{display:block;width:100%;margin:0 auto 6mm;page-break-inside:avoid;break-inside:avoid}'
     + '@media print{button{display:none!important}}'
     + '</style></head><body>'
-    + cards
-    + '<scr'+'ipt>window.onload=function(){window.print();}<\/scr'+'ipt>'
+    + body
+    + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},300);}<\/scr'+'ipt>'
     + '</body></html>';
   const win = window.open('', '_blank', 'width=1000,height=800');
   if (win) { win.document.write(html); win.document.close(); }
@@ -22696,16 +22715,14 @@ function wlOpenPrintWindow(cards) {
 
 async function wlPrintLogs(date, logs) {
   const dateLabel = wlFmtDateLabel(date);
-  let cards = '';
+  const imgs = [];
   for (const log of logs) {
     const cls = (classes || []).find(c => c.id === log.class_id);
     const { data: stus } = await db.from('work_log_students')
       .select('*, users(name,school,grade)').eq('log_id', log.id);
-    cards += '<div class="wl-print-card">'
-      + buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name)
-      + '</div>';
+    imgs.push(await wlCardToImage(buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name)));
   }
-  wlOpenPrintWindow(cards);
+  wlOpenPrintWindow(imgs);
 }
 
 // 빈 양식 카드 (학생 명단만, 나머지는 펜 기입용 빈 칸)
@@ -22765,18 +22782,16 @@ function buildBlankWorkLogCardHTML(cls, roster, dateLabel, teacherName) {
 
 async function wlPrintBlankForms(date, classIds) {
   const dateLabel = wlFmtDateLabel(date);
-  let cards = '';
+  const imgs = [];
   for (const cid of classIds) {
     const cls = (classes || []).find(c => c.id === cid);
     const { data: roster } = await db.from('users').select('id,name,school,grade')
       .eq('role','student').eq('status','active')
       .or(`class_id.eq.${cid},class_id2.eq.${cid}`)
       .lte('enrolled_at', date).order('name');
-    cards += '<div class="wl-print-card">'
-      + buildBlankWorkLogCardHTML(cls, roster || [], dateLabel, currentUser.name)
-      + '</div>';
+    imgs.push(await wlCardToImage(buildBlankWorkLogCardHTML(cls, roster || [], dateLabel, currentUser.name)));
   }
-  wlOpenPrintWindow(cards);
+  wlOpenPrintWindow(imgs);
 }
 
 async function wlPrintSelected() {
