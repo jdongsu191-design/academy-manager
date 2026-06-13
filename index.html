@@ -893,6 +893,10 @@
               style="display:none;width:100%;padding:9px;border:none;border-radius:8px;background:#16a34a;color:#fff;font-size:13px;font-weight:700;cursor:pointer">
               📋 선택 업무일지 이미지 생성
             </button>
+            <button id="wl-print-selected-btn" onclick="wlPrintSelected()"
+              style="display:none;width:100%;padding:9px;border:none;border-radius:8px;background:#1d4ed8;color:#fff;font-size:13px;font-weight:700;cursor:pointer;margin-top:6px">
+              🖨️ 선택 업무일지 출력
+            </button>
           </div>
         </div>
 
@@ -22475,6 +22479,11 @@ function wlUpdateGenBtn() {
     btn.style.display = checked > 0 ? 'block' : 'none';
     btn.textContent   = checked > 0 ? `📋 선택된 ${checked}개 업무일지 이미지 생성` : '📋 선택 업무일지 이미지 생성';
   }
+  const pbtn = document.getElementById('wl-print-selected-btn');
+  if (pbtn) {
+    pbtn.style.display = checked > 0 ? 'block' : 'none';
+    pbtn.textContent   = checked > 0 ? `🖨️ 선택된 ${checked}개 업무일지 출력` : '🖨️ 선택 업무일지 출력';
+  }
 }
 
 function buildWorkLogCardHTML(log, cls, stus, dateLabel, teacherName) {
@@ -22654,6 +22663,58 @@ async function wlGenerateSelectedImage() {
     alert('오류: ' + (e.message || e));
   } finally {
     if (btn) { btn.textContent = '📋 선택 업무일지 이미지 생성'; btn.disabled = false; }
+    wlUpdateGenBtn();
+  }
+}
+
+async function wlPrintSelected() {
+  const checked = Array.from(document.querySelectorAll('.wl-log-check:checked'));
+  if (!checked.length) { alert('업무일지를 선택하세요'); return; }
+  const selectedIds = checked.map(c => c.dataset.logId);
+  const btn = document.getElementById('wl-print-selected-btn');
+  const origText = btn ? btn.textContent : '';
+  if (btn) { btn.textContent = '⏳ 준비 중...'; btn.disabled = true; }
+
+  try {
+    const date      = document.getElementById('wl-date')?.value || '';
+    const dp         = date.split('-');
+    const d          = new Date(date + 'T00:00:00');
+    const dayNames   = ['일','월','화','수','목','금','토'];
+    const dateLabel  = `${dp[0]}/${String(+dp[1]).padStart(2,'0')}/${String(+dp[2]).padStart(2,'0')} (${dayNames[d.getDay()]})`;
+
+    const { data: allLogs } = await db.from('work_logs')
+      .select('*').eq('teacher_id', currentUser.id).eq('log_date', date).order('created_at');
+    const logs = (allLogs || []).filter(l => selectedIds.includes(l.id));
+    if (!logs.length) { alert('업무일지를 찾을 수 없습니다'); return; }
+
+    let cards = '';
+    for (const log of logs) {
+      const cls = (classes || []).find(c => c.id === log.class_id);
+      const { data: stus } = await db.from('work_log_students')
+        .select('*, users(name,school,grade)').eq('log_id', log.id);
+      cards += '<div class="wl-print-card">'
+        + buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name)
+        + '</div>';
+    }
+
+    const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>업무일지 출력</title>'
+      + '<style>*{box-sizing:border-box}'
+      + 'body{margin:0;background:#fff;font-family:\'Pretendard\',\'Noto Sans KR\',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+      + '.wl-print-card{padding:10px 12px;page-break-after:always;break-after:page}'
+      + '.wl-print-card:last-child{page-break-after:auto;break-after:auto}'
+      + '@media print{.wl-print-card{padding:0}button{display:none!important}}'
+      + '</style></head><body>'
+      + cards
+      + '<scr'+'ipt>window.onload=function(){window.print();}<\/scr'+'ipt>'
+      + '</body></html>';
+
+    const win = window.open('', '_blank', 'width=1000,height=800');
+    if (win) { win.document.write(html); win.document.close(); }
+    else { alert('팝업이 차단되었습니다. 팝업 허용 후 다시 시도해주세요.'); }
+  } catch(e) {
+    alert('오류: ' + (e.message || e));
+  } finally {
+    if (btn) { btn.textContent = origText || '🖨️ 선택 업무일지 출력'; btn.disabled = false; }
     wlUpdateGenBtn();
   }
 }
