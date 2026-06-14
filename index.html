@@ -3668,6 +3668,7 @@ var _wnTestNameCacheByTeacher  = {};  // { teacherId: _wnTestNameCache }
 // ② 포텐셜 (weekend_potential)
 var _ptStudents    = [];
 var _ptData        = {};
+var _ptCarry       = {};
 var _ptSnapshot    = {};
 var _ptLoadedAt    = {};
 var _ptAllTeachers = [];
@@ -3977,7 +3978,7 @@ function doLogout() {
   _wnStudents = []; _wnData = {}; _wnSnapshot = {}; _wnLoadedAt = {}; _wnAllTeachers = [];
   _wnTestNameCache = null; _wnTestNameCacheByTeacher = {};
   _wnTestNameLoaded = false;  // 재로그인 시 다른 계정의 시험명칭 캐시 재사용 방지
-  _ptStudents = []; _ptData = {}; _ptSnapshot = {}; _ptLoadedAt = {}; _ptAllTeachers = [];
+  _ptStudents = []; _ptData = {}; _ptCarry = {}; _ptSnapshot = {}; _ptLoadedAt = {}; _ptAllTeachers = [];
   _ptAnswers = {};
   _nsStudents = []; _nsData = {}; _nsSnapshot = {}; _nsLoadedAt = {}; _nsAllTeachers = [];
   _nsExtraMsgCache = null; _nsExtraMsgCacheByTeacher = {}; _nsExtraMsgLoaded = false;
@@ -6668,15 +6669,18 @@ async function ptLoadData() {
       });
 
     // weekend_potential 레코드 조회
-    _ptData = {};
+    _ptData = {}; _ptCarry = {};
     if (_ptStudents.length) {
+      // 직전 회차 forward-fill: 그날 이하 전체를 가져와 exact/carry 분리
       var { data: records } = await db.from('weekend_potential')
-        .select('*').eq('session_date', date)
-        .in('student_id', _ptStudents.map(s => s.id));
+        .select('*').lte('session_date', date)
+        .in('student_id', _ptStudents.map(s => s.id))
+        .order('session_date', { ascending: true });
       (records || []).forEach(r => {
-        _ptData[r.student_id] = r;
-        // 정오답 캐시 갱신
-        if (Array.isArray(r.wrong_answers) && r.wrong_answers.length) {
+        if (r.session_date === date) _ptData[r.student_id] = r;  // 그날 입력(출결·점수용)
+        _ptCarry[r.student_id] = r;                              // 최신 회차(레벨·시간·요일 지속용)
+        // 정오답 캐시 갱신 (그날 회차 기준)
+        if (r.session_date === date && Array.isArray(r.wrong_answers) && r.wrong_answers.length) {
           if (!_ptAnswers) _ptAnswers = {};
           _ptAnswers[r.student_id] = r.wrong_answers.slice(0, 8);
         }
@@ -6744,13 +6748,14 @@ function ptRenderTable() {
 
   _ptStudents.forEach(s => {
     var r       = _ptData[s.id] || {};
+    var rc      = _ptCarry[s.id];   // 직전 회차(공란 포함) — 없으면 seed로 fallback
     var isSent  = sentSet.has(s.id);
     var curAtt  = (r.id && r.attendance) ? r.attendance : '';
     var curRes  = r.result || '';
     var curWrg  = r.id ? (r.wrong_done===true?'true':r.wrong_done===false?'false':'') : '';
     // level/attend_time: 당일 DB값 있으면 우선, 없으면 이력 적용된 users값
-    var curLv   = (r.id && r.level   != null) ? r.level        : (s.potential_level        || '');
-    var curTime = (r.id && r.attend_time != null) ? r.attend_time : ((s.potential_alt_yn && s.potential_alt_time) || s.potential_attend_time || '');
+    var curLv   = rc ? (rc.level == null ? '' : rc.level) : (s.potential_level || '');
+    var curTime = rc ? (rc.attend_time == null ? '' : rc.attend_time) : ((s.potential_alt_yn && s.potential_alt_time) || s.potential_attend_time || '');
     var curScore= (r.score != null && r.score !== '') ? parseFloat(r.score).toFixed(1) : '';
 
     var attSel  = ATT_OPTS.map(o => `<option value="${o.v}"${curAtt===o.v?' selected':''}>${o.l}</option>`).join('');
@@ -6762,7 +6767,7 @@ function ptRenderTable() {
       <td style="color:#6b7280;white-space:nowrap">${s.grade||''}</td>
       <td style="text-align:left;padding-left:6px;font-weight:700;color:#1e293b;white-space:nowrap">${_esc(s.name)}</td>
       <td><input class="pt-inp pt-focusable" data-sid="${s.id}" data-field="level" value="${curLv}" placeholder="A/B"></td>
-      <td><select class="pt-sel" data-sid="${s.id}" data-field="weekday">${weekendDayOptions(weekendDayValue(s,'potential',r))}</select></td>
+      <td><select class="pt-sel" data-sid="${s.id}" data-field="weekday">${weekendDayOptions(weekendDayValue(s,'potential',rc))}</select></td>
       <td><input class="pt-inp pt-focusable" data-sid="${s.id}" data-field="attend_time" value="${curTime}" placeholder="14:00"></td>
       <td><select class="pt-sel pt-focusable" data-sid="${s.id}" data-field="attendance">${attSel}</select></td>
       <td><select class="pt-sel pt-focusable" data-sid="${s.id}" data-field="wrong_done">${wrgSel}</select></td>
