@@ -1057,11 +1057,7 @@
       </div>
 
       <div class="panel" id="panel-questions">
-        <div class="panel-placeholder">
-          <div class="panel-placeholder-icon">❓</div>
-          <div class="panel-placeholder-text">질문</div>
-          <div class="panel-placeholder-sub">구현 예정</div>
-        </div>
+        <div id="teacherQuestionList"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
       </div>
 
       <div class="panel" id="panel-naje">
@@ -4178,6 +4174,7 @@ function switchPanel(panelId, btn) {
   if (panelId === 'admin-naje'             && typeof initAdminNaje            === 'function') initAdminNaje();
   if (panelId === 'admin-naje-result'      && typeof initAdminNajeResult      === 'function') initAdminNajeResult();
   if (panelId === 'students'                && typeof renderStudents            === 'function') renderStudents();
+  if (panelId === 'questions'               && typeof loadTeacherQuestions     === 'function') loadTeacherQuestions();
 }
 
 function switchPanelAdmin(tabId, btn) {
@@ -4573,6 +4570,116 @@ async function deleteMyQuestion(id, title) {
   if (error) { alert('삭제 중 오류가 발생했습니다: ' + error.message); return; }
   loadMyQuestions();
 }
+/* ===== 교사 질문(Q&A) — 운영본 이관 (Phase 2) ===== */
+let _currentAnswerQId = null;
+let _aPendingPhoto = null;
+
+function handleAPhotoSelect(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  _aPendingPhoto = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById('a-photo-preview').innerHTML = `
+      <div style="position:relative;display:inline-block;margin-top:4px">
+        <img src="${ev.target.result}" style="width:100%;max-height:180px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">
+        <button onclick="removeAPhoto()" style="position:absolute;top:4px;right:4px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,0.6);color:#fff;border:none;cursor:pointer;font-size:12px">\u2715</button>
+      </div>`;
+  };
+  reader.readAsDataURL(file);
+  e.target.value = '';
+}
+function removeAPhoto(){
+  _aPendingPhoto = null;
+  document.getElementById('a-photo-preview').innerHTML = '';
+}
+
+async function loadTeacherQuestions(){
+  const { data } = await db.from('questions')
+    .select('*, users!questions_student_id_fkey(name), classes(name)')
+    .eq('teacher_id', currentUser.id)
+    .order('created_at', { ascending:false });
+  renderTeacherQuestions(data||[]);
+}
+
+function renderTeacherQuestions(list){
+  const el = document.getElementById('teacherQuestionList');
+  if(!el) return;
+  const unanswered = list.filter(q=>!q.answer).length;
+  let html = '';
+  if(unanswered>0) html += `<div style="background:#FEF3C7;color:#92400E;padding:10px 14px;border-radius:10px;margin-bottom:10px;font-size:13px;font-weight:600">\u26A0\uFE0F 미답변 질문이 <strong>${unanswered}개</strong> 있습니다!</div>`;
+  if(!list.length){ el.innerHTML = '<div class="empty-state"><div class="ei">\uD83D\uDCAC</div><p>아직 질문이 없습니다</p></div>'; return; }
+  html += list.map(q=>`
+    <div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:10px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:#1a1a2e">${q.title}</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px">
+            <span class="badge badge-blue">${q.users?.name||'학생'}</span>
+            ${q.classes?.name?`<span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:100px;background:#FEF3C7;color:#92400E;margin-left:4px">${q.classes.name}</span>`:''}
+          </div>
+        </div>
+        <span style="font-size:11px;padding:3px 10px;border-radius:100px;font-weight:600;flex-shrink:0;${q.answer?'background:#EAF3DE;color:#3B6D11':'background:#FEF3C7;color:#92400E'}">${q.answer?'답변완료':'미답변'}</span>
+      </div>
+      <div style="font-size:13px;color:#4b5563;background:#f5f6fa;padding:10px;border-radius:8px;margin-bottom:8px">${q.content}</div>
+      ${q.question_image_url?`<div style="margin-bottom:10px"><img src="${q.question_image_url}" onclick="openImgViewer('${q.question_image_url}')" style="max-width:100%;max-height:200px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:pointer"></div>`:''}
+      ${q.answer?`
+        <div style="background:#EAF3DE;border-radius:10px;padding:10px;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#3B6D11;margin-bottom:4px">내 답변</div>
+          <div style="font-size:13px;color:#1a1a2e;margin-bottom:${q.answer_image_url?'8px':'0'}">${q.answer}</div>
+          ${q.answer_image_url?`<img src="${q.answer_image_url}" onclick="openImgViewer('${q.answer_image_url}')" style="max-width:100%;max-height:200px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:pointer">`:''}
+        </div>`:''}
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:11px;color:#9ca3af">${new Date(q.created_at).toLocaleDateString('ko-KR')}</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn btn-primary btn-sm" onclick="openAnswerModal('${q.id}','${(q.title||'').replace(/'/g,"\\'")}','${(q.content||'').replace(/'/g,"\\'")}','${(q.answer||'').replace(/'/g,"\\'")}')">${q.answer?'답변 수정':'답변하기'}</button>
+          <button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteQuestion('${q.id}','${(q.title||'').replace(/'/g,"\\'")}')">\uD83D\uDDD1\uFE0F 삭제</button>
+        </div>
+      </div>
+    </div>`).join('');
+  el.innerHTML = html;
+}
+
+async function deleteQuestion(id, title){
+  if(!confirm(`"${title}" 질문을 삭제하시겠습니까?\n삭제 후 복구가 불가능합니다.`)) return;
+  const { error } = await db.from('questions').delete().eq('id', id);
+  if(error){ alert('삭제 중 오류가 발생했습니다: ' + error.message); return; }
+  alert('질문이 삭제되었습니다.');
+  loadTeacherQuestions();
+}
+
+function openAnswerModal(qId, title, qContent, existingAnswer){
+  _currentAnswerQId = qId;
+  document.getElementById('answerQuestionContent').innerHTML = `<strong>${title}</strong><br><span style="color:#6b7280">${qContent}</span>`;
+  document.getElementById('inp-answer').value = existingAnswer||'';
+  _aPendingPhoto = null;
+  document.getElementById('a-photo-preview').innerHTML = '';
+  openModal('answerQuestion');
+}
+
+async function submitAnswer(){
+  const answer = document.getElementById('inp-answer').value.trim();
+  if(!answer){ alert('답변 내용을 입력하세요'); return; }
+  const btn = document.querySelector('#modal-answerQuestion .btn-primary');
+  btn.textContent = '등록 중...'; btn.disabled = true;
+  try{
+    let answer_image_url = null;
+    if(_aPendingPhoto){
+      answer_image_url = await uploadQuestionPhoto(_aPendingPhoto, `answers/${currentUser.id}`);
+    }
+    const updateData = { answer, answered_at:new Date().toISOString() };
+    if(answer_image_url) updateData.answer_image_url = answer_image_url;
+    const { error } = await db.from('questions').update(updateData).eq('id', _currentAnswerQId);
+    if(error) throw error;
+    _aPendingPhoto = null;
+    document.getElementById('a-photo-preview').innerHTML = '';
+    document.getElementById('inp-answer').value = '';
+    closeModal('answerQuestion');
+    loadTeacherQuestions();
+  }catch(err){ alert('오류: '+err.message); }
+  btn.textContent = '답변 등록'; btn.disabled = false;
+}
+
 
 /* ============================================================
    [SECTION: STUDENT - NAJE] 학생 N제 (목록/단계선택/풀이/결과)
@@ -24211,6 +24318,30 @@ tryAutoLogin();
   </div>
 </div>
 
+<div class="modal-backdrop" id="modal-answerQuestion">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>💬 질문 답변</h3>
+    <div id="answerQuestionContent" style="background:#f5f6fa;border-radius:10px;padding:12px;margin-bottom:14px;font-size:14px;color:#1a1a2e"></div>
+    <div class="form-group">
+      <label>답변 내용</label>
+      <textarea id="inp-answer" placeholder="답변을 입력하세요" style="width:100%;padding:11px 13px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;outline:none;min-height:100px;resize:vertical;font-family:inherit"></textarea>
+    </div>
+    <div class="form-group">
+      <label>사진 첨부 (선택)</label>
+      <div class="upload-area" onclick="document.getElementById('a-photo-input').click()">
+        <div class="ua-icon">📷</div>
+        <p><strong style="color:var(--primary)">사진을 선택하세요</strong></p>
+      </div>
+      <input type="file" id="a-photo-input" accept="image/*" style="display:none" onchange="handleAPhotoSelect(event)">
+      <div id="a-photo-preview" style="margin-top:8px"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn btn-full" onclick="closeModal('answerQuestion')">취소</button>
+      <button class="btn btn-primary btn-full" onclick="submitAnswer()">답변 등록</button>
+    </div>
+  </div>
+</div>
 <div class="img-viewer" id="imgViewer" onclick="closeImgViewer()">
   <button class="img-viewer-close" onclick="closeImgViewer()">✕</button>
   <img id="viewerImg" src="" alt="">
