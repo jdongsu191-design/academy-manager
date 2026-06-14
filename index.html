@@ -3911,6 +3911,7 @@ async function showApp() {
   renderSidebar();
   await loadAppData();   // 데이터 완전 로드 후
   enterFirstPanel();     // 첫 패널 진입 (allUsers/students 채워진 상태 보장)
+  if (currentUser && currentUser.role === 'teacher' && typeof initQuestionAlert === 'function') setTimeout(initQuestionAlert, 700);
 
   // 알림 Realtime 구독 시작 (마스터 제외 전체)
   if (typeof initNotifyRealtime === 'function') initNotifyRealtime();
@@ -4600,6 +4601,8 @@ async function loadTeacherQuestions(){
     .eq('teacher_id', currentUser.id)
     .order('created_at', { ascending:false });
   renderTeacherQuestions(data||[]);
+  _markQuestionsSeen(data||[]);
+  if(typeof updateQuestionBadge === 'function') updateQuestionBadge();
 }
 
 function renderTeacherQuestions(list){
@@ -4679,6 +4682,54 @@ async function submitAnswer(){
   }catch(err){ alert('오류: '+err.message); }
   btn.textContent = '답변 등록'; btn.disabled = false;
 }
+/* ===== 질문 알림 (Phase 4): 미확인 새 질문 배지 + 로그인 토스트 ===== */
+function _qSeenKey(qid){ return 'q_seen_' + (currentUser ? currentUser.id : '') + '_' + qid; }
+
+async function _fetchUnseenQuestionCount(){
+  if(!currentUser || currentUser.role !== 'teacher') return 0;
+  try{
+    const { data } = await db.from('questions').select('id').eq('teacher_id', currentUser.id);
+    if(!data) return 0;
+    return data.filter(q => localStorage.getItem(_qSeenKey(q.id)) !== '1').length;
+  }catch(e){ return 0; }
+}
+
+function _markQuestionsSeen(list){
+  (list||[]).forEach(q => { try{ localStorage.setItem(_qSeenKey(q.id), '1'); }catch(e){} });
+}
+
+async function updateQuestionBadge(){
+  if(!currentUser || currentUser.role !== 'teacher') return;
+  const btn = document.getElementById('tmenu-questions');
+  if(!btn) return;
+  const n = await _fetchUnseenQuestionCount();
+  let badge = btn.querySelector('.q-badge');
+  if(n > 0){
+    if(!badge){
+      badge = document.createElement('span');
+      badge.className = 'q-badge';
+      badge.style.cssText = 'margin-left:auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#dc2626;color:#fff;font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center';
+      btn.appendChild(badge);
+    }
+    badge.textContent = n > 99 ? '99+' : String(n);
+  } else if(badge){
+    badge.remove();
+  }
+}
+
+async function initQuestionAlert(){
+  if(!currentUser || currentUser.role !== 'teacher') return;
+  const n = await _fetchUnseenQuestionCount();
+  await updateQuestionBadge();
+  if(n > 0){
+    const t = document.createElement('div');
+    t.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#dc2626;color:#fff;padding:12px 20px;border-radius:100px;font-size:14px;font-weight:600;z-index:10001;box-shadow:0 4px 16px rgba(0,0,0,0.2)';
+    t.textContent = '💬 새 질문 ' + n + '개가 있습니다';
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3500);
+  }
+}
+
 
 
 /* ============================================================
