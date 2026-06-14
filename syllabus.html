@@ -1,0 +1,3250 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BMAPS · 진도계획서 제작 [v2.6-sched-limit10]</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Pretendard', 'Noto Sans KR', -apple-system, sans-serif; background: #e9edf2; color: #1e293b; }
+
+  /* ===== 페이지 셸 (제작 페이지 전용) ===== */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: linear-gradient(135deg, #4a1d29, #6e2b3d); color: #fff;
+    display: flex; align-items: center; gap: 14px;
+    padding: 11px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  }
+  .topbar .tb-title { font-size: 16px; font-weight: 800; letter-spacing: 0.3px; }
+  .topbar .tb-ver { font-size: 11px; background: rgba(255,255,255,0.18); padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .topbar .tb-spacer { flex: 1; }
+  .topbar .tb-fit { font-size: 11.5px; opacity: 0.9; white-space: nowrap; }
+  .topbar .tb-user { font-size: 12.5px; opacity: 0.92; white-space: nowrap; }
+
+  /* 인증 차단 오버레이 */
+  .blocker {
+    position: fixed; inset: 0; z-index: 200; display: none;
+    background: rgba(241,244,248,0.97); flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center;
+  }
+  .blocker .bk-card { background: #fff; border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,0.12); padding: 28px 32px; max-width: 380px; }
+  .blocker .bk-ico { font-size: 38px; }
+  .blocker .bk-msg { font-size: 14px; color: #475569; margin-top: 10px; line-height: 1.6; }
+  .blocker .bk-status { font-size: 12px; color: #94a3b8; margin-top: 8px; }
+
+  /* 본문 셸: 1단계 — 입력 전폭(상단) + 미리보기 전폭(하단) 세로 스택 */
+  .shell { display: none; max-width: 1920px; margin: 0 auto; padding: 16px 20px; gap: 16px; }
+  .shell.ready { display: grid; grid-template-columns: 1fr; align-items: start; }
+  .form-col { background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.07); padding: 18px; align-self: start; min-width: 0; }
+  .form-col h2 { font-size: 14px; color: #6e2b3d; margin-bottom: 8px; }
+  .form-col .ph { font-size: 12.5px; color: #94a3b8; line-height: 1.7; }
+  /* 입력 영역: 1단계 — 좌(기본정보·강사) / 우(상세구성) 좌우 분할, 각 영역 독립 스크롤 */
+  .form-grid { display: grid; grid-template-columns: 38% 62%; gap: 18px; align-items: start; }
+  .form-grid > .fcol { min-width: 0; overflow-y: auto; padding-bottom: 4px; }
+  .form-grid > .fcol-top { max-height: calc(100vh - 200px); padding: 4px 12px 14px; background: #fdfbfc; border: 1px solid #efe2e7; border-radius: 10px; }
+  .form-grid > .fcol-bottom { max-height: calc(100vh - 200px); padding-top: 2px; }
+  /* 미리보기·저장 영역: 1단계 — 입력 아래 전폭 배치(상시 표시 유지) */
+  .preview-col { min-width: 0; align-self: stretch; margin-top: 6px; padding-top: 16px; border-top: 2px solid #efe2e7; }
+  /* 2단계: 상단 관리 바 (저장/작성월/저장목록 + 전체 추출) */
+  .manage-top { background: #fdfbfc; border: 1px solid #efe2e7; border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
+  .manage-top .mt-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .manage-top .mt-row2 { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #efe2e7; }
+  .manage-top .mt-label { font-size: 11px; font-weight: 800; color: #b08596; letter-spacing: 0.4px; }
+  /* 강좌 탭 줄 + 미리보기 버튼 */
+  .tabs-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #f0e6ea; }
+  .tabs-row > .course-tabs { flex: 1; min-width: 0; margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+  .preview-open-btn { flex: 0 0 auto; padding: 8px 16px; background: #6e2b3d; color: #fff; border: none; border-radius: 9px; font-size: 13px; font-weight: 800; cursor: pointer; white-space: nowrap; box-shadow: 0 2px 6px rgba(110,43,61,0.25); }
+  .preview-open-btn:hover { background: #5a2231; }
+  /* 미리보기 모달 */
+  .syl-prev-modal { position: fixed; inset: 0; z-index: 700; background: rgba(15,23,42,0.55); display: flex; align-items: flex-start; justify-content: center; padding: 24px 16px; overflow-y: auto; }
+  .syl-prev-modal .spm-box { background: #f4f6f9; border-radius: 14px; box-shadow: 0 16px 50px rgba(0,0,0,0.35); width: 860px; max-width: 100%; margin: auto; }
+  .syl-prev-modal .spm-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; background: #fff; border-bottom: 1px solid #e6edf3; border-radius: 14px 14px 0 0; flex-wrap: wrap; }
+  .syl-prev-modal .spm-title { font-size: 14px; font-weight: 800; color: #6e2b3d; }
+  .syl-prev-modal .spm-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .syl-prev-modal .spm-close { width: 30px; height: 30px; border: 1px solid #d1d8e0; background: #fff; color: #64748b; border-radius: 8px; font-size: 15px; cursor: pointer; line-height: 1; padding: 0; }
+  .syl-prev-modal .spm-close:hover { background: #f1f5f9; }
+  .syl-prev-modal .spm-body { padding: 18px; display: flex; justify-content: center; }
+  /* [조회 화면] 관리자 전용 보기 화면 */
+  .syl-view-screen { position: fixed; inset: 0; z-index: 650; background: #eef1f5; display: flex; flex-direction: column; }
+  .syl-view-screen .svw-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 18px; background: #fff; border-bottom: 1px solid #e2e8f0; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+  .syl-view-screen .svw-back { padding: 7px 14px; border: 1px solid #d6bcbc; border-radius: 8px; background: #fdf6f6; color: #5C2A2A; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .syl-view-screen .svw-back:hover { background: #f7ebeb; }
+  .syl-view-screen .svw-title { font-size: 15px; font-weight: 800; color: #5C2A2A; margin-right: 8px; }
+  .syl-view-screen .svw-lb { font-size: 12px; font-weight: 700; color: #64748b; margin-left: 6px; }
+  .syl-view-screen .svw-sel { padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; background: #fff; min-width: 130px; }
+  .syl-view-screen .svw-sel:disabled { background: #f1f5f9; color: #94a3b8; }
+  .syl-view-screen .svw-tabs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 12px 18px 0; }
+  .syl-view-screen .svw-tab { padding: 7px 14px; border: 1px solid #d8c4c4; border-radius: 8px 8px 0 0; background: #f3e9e9; color: #6e4a4a; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .syl-view-screen .svw-tab.active { background: #5C2A2A; color: #fff; border-color: #5C2A2A; }
+  .syl-view-screen .svw-stage { flex: 1; overflow-y: auto; padding: 18px; display: flex; justify-content: center; align-items: flex-start; }
+  .syl-view-screen .svw-empty { color: #94a3b8; font-size: 14px; padding: 60px 20px; text-align: center; }
+  .syl-view-screen .svw-scaler { width: 794px; max-width: 100%; }
+  .preview-note { font-size: 12px; color: #64748b; margin-bottom: 10px; }
+
+  /* 상단(기본정보) 영역도 폭이 넓으니 라벨/입력을 2열로 배치해 세로 길이 단축 */
+  .fcol-top .basic-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; align-items: start; }
+  .fcol-top .basic-grid .bfull { grid-column: 1 / -1; }
+
+  /* 좁은 화면: 입력 좌우 분할 → 세로 스택, 미리보기는 그대로 아래 */
+  @media (max-width: 1100px){
+    .form-grid { grid-template-columns: 1fr; }
+    .form-grid > .fcol { max-height: none; overflow: visible; }
+    .fcol-top .basic-grid { grid-template-columns: 1fr; }
+  }
+
+
+
+  /* 관리자 분원·선생님 선택 바 */
+  .admin-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 11px; background: #fef6f8; border: 1px solid #ecd3db; border-radius: 9px; }
+  .admin-bar .ab-label { font-size: 12px; font-weight: 800; color: #6e2b3d; }
+  .admin-bar .ab-select { padding: 6px 9px; border: 1px solid #d1d8e0; border-radius: 7px; font-size: 12.5px; background: #fff; min-width: 130px; }
+  .admin-bar .ab-select:disabled { background: #f1f5f9; color: #94a3b8; }
+  .admin-bar .ab-hint { font-size: 11px; color: #94a3b8; flex-basis: 100%; }
+  /* 입력 영역 잠금 오버레이 */
+  .form-region { position: relative; }
+  .form-lock { position: absolute; inset: 0; background: rgba(255,255,255,0.72); backdrop-filter: blur(1px); display: flex; align-items: flex-start; justify-content: center; padding-top: 60px; z-index: 50; border-radius: 8px; }
+  .form-lock .fl-msg { background: #6e2b3d; color: #fff; font-size: 13px; font-weight: 700; padding: 10px 18px; border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.18); }
+
+  /* 강좌 탭 */
+  .course-tabs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #f0e6ea; }
+  /* 항목 단위 불러오기 버튼 (섹션 제목 우측) */
+  .fsec-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .imp-btn { padding: 3px 9px; border: 1px solid #c9d8e2; background: #fff; color: #2563eb; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .imp-btn:hover { background: #eff6ff; }
+  .imp-btn:disabled { color: #cbd5e1; border-color: #e2e8f0; cursor: not-allowed; }
+  /* 불러오기 선택 팝업 */
+  /* 불러오기 선택 모달 (중앙 고정 + 배경 딤) */
+  .imp-pop { position: fixed; inset: 0; z-index: 600; background: rgba(15,23,42,0.42); display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .imp-box { background: #fff; border: 1.5px solid #d1d8e0; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.28); width: 360px; max-width: 100%; max-height: 80vh; overflow-y: auto; padding: 12px; }
+  .imp-pop .ip-head { font-size: 13px; font-weight: 800; color: #6e2b3d; padding: 2px 4px 9px; border-bottom: 1px solid #f0e6ea; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: -12px; background: #fff; }
+  .imp-pop .ip-close { border: none; background: transparent; font-size: 18px; cursor: pointer; color: #94a3b8; padding: 0 4px; }
+  .imp-pop .ip-mode { display: flex; gap: 5px; padding: 0 2px 9px; flex-wrap: wrap; }
+  .imp-pop .ip-mode button { flex: 1; padding: 6px 8px; border: 1px solid #d1d8e0; background: #f8fafc; border-radius: 6px; font-size: 11.5px; font-weight: 700; color: #475569; cursor: pointer; }
+  .imp-pop .ip-mode button.on { background: #6e2b3d; color: #fff; border-color: #6e2b3d; }
+  .imp-pop .ip-item { padding: 9px 11px; border: 1px solid #eef1f4; border-radius: 7px; margin-bottom: 6px; cursor: pointer; font-size: 12.5px; }
+  .imp-pop .ip-group { font-size: 11px; font-weight: 800; color: #6e2b3d; letter-spacing: 0.3px; padding: 8px 4px 5px; margin-top: 4px; border-bottom: 1px dashed #e3d3d9; position: sticky; top: 30px; background: #fff; z-index: 1; }
+  .imp-pop .ip-group:first-child { margin-top: 0; }
+  .imp-pop .ip-item:hover { background: #f5e9ec; border-color: #d9c2c9; }
+  .imp-pop .ip-item .ip-when { color: #94a3b8; font-size: 11px; margin-top: 2px; }
+  .imp-pop .ip-src { display:inline-block; margin-left:6px; padding:1px 6px; background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; border-radius:5px; font-size:10px; font-weight:700; vertical-align:middle; }
+  .imp-pop .ip-empty { color: #94a3b8; font-size: 12.5px; padding: 18px 8px; text-align: center; }
+  .ctab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid #d9c2c9; background: #fff; color: #6e2b3d; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; max-width: 240px; }
+  .ctab .ct-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ctab.active { background: #6e2b3d; color: #fff; border-color: #6e2b3d; }
+  .ctab .ct-del { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 0 0 2px; opacity: 0.7; }
+  .ctab .ct-del:hover { opacity: 1; }
+  .ctab-add { padding: 6px 12px; border: 1px dashed #b9c4d0; background: #fff; color: #2563eb; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .ctab-add:hover { background: #eff6ff; }
+  .ctab-count { font-size: 11px; color: #94a3b8; margin-left: auto; }
+
+  /* 추출 버튼 바 */
+  .export-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .exp-btn { padding: 8px 14px; border: none; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; color: #fff; white-space: nowrap; }
+  .exp-btn:disabled { opacity: 0.6; cursor: default; }
+  .exp-jpg { background: #16a34a; }
+  .exp-pdf { background: #2563eb; }
+  .exp-save { background: #6e2b3d; }
+  .exp-sum { background: #0f766e; }
+  /* 요약 모달 */
+  .sum-modal { position: fixed; inset: 0; z-index: 650; background: rgba(15,23,42,0.5); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .sum-box { background: #f1f5f9; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); width: auto; max-width: 96vw; max-height: 94vh; display: flex; flex-direction: column; overflow: hidden; }
+  .sum-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #fff; border-bottom: 1px solid #e2e8f0; flex-shrink: 0; }
+  .sum-bar .sum-title { font-size: 13px; font-weight: 800; color: #0f766e; margin-right: auto; }
+  .sum-bar button { padding: 7px 13px; border: none; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; color: #fff; }
+  .sum-bar .sb-jpg { background: #16a34a; }
+  .sum-bar .sb-pdf { background: #2563eb; }
+  .sum-bar .sb-close { background: #e2e8f0; color: #475569; }
+  .sum-scroll { overflow: auto; padding: 16px; flex: 1; }
+  .sum-status { font-size: 12px; color: #64748b; }
+  .exp-status { font-size: 12px; color: #64748b; }
+  /* 저장 목록 바 */
+  .saved-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .saved-bar .sb-label { font-size: 11px; font-weight: 700; color: #94a3b8; }
+  .saved-bar .sb-select { flex: 1; min-width: 160px; padding: 6px 9px; border: 1px solid #d1d8e0; border-radius: 7px; font-size: 12.5px; background: #fff; }
+  .saved-bar .sb-del { padding: 6px 10px; border: 1px solid #e2c9d0; background: #fff; color: #b5455f; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .saved-bar .sb-del:hover { background: #fbeef1; }
+  .saved-bar .sb-new { padding: 6px 10px; border: 1px solid #c9d8e2; background: #fff; color: #2563eb; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .saved-bar .sb-new:hover { background: #eff6ff; }
+
+  /* ===== 입력 폼 (1b) ===== */
+  .fnote { font-size: 11.5px; color: #94a3b8; line-height: 1.6; margin-bottom: 12px; }
+  .fsec { font-size: 12px; font-weight: 800; letter-spacing: 0.3px; color: #6e2b3d; margin: 16px 0 8px; padding: 1px 0 1px 9px; border-left: 3px solid #6e2b3d; line-height: 1.3; }
+  .fsec:first-of-type { margin-top: 8px; }
+  /* B: 하단 섹션 카드 — 진도/2페이지/주말/연간을 박스로 구획 */
+  .fblock { background: #fcf9fa; border: 1px solid #efe2e7; border-radius: 10px; padding: 12px 13px; margin-bottom: 14px; }
+  .fblock > .fsec:first-child { margin-top: 0; }
+  .fblock > .fsec { margin-top: 0; }
+  /* C: 상/하 영역 라벨 */
+  .area-label { font-size: 11px; font-weight: 800; letter-spacing: 0.6px; color: #b08596; text-transform: uppercase; margin: 2px 0 10px; display: flex; align-items: center; gap: 8px; }
+  .area-label::after { content: ''; flex: 1; height: 1px; background: #efe2e7; }
+  .fl { display: block; font-size: 11px; font-weight: 700; color: #94a3b8; margin: 9px 0 3px; }
+  .fi { width: 100%; padding: 7px 9px; border: 1px solid #d1d8e0; border-radius: 7px; font-size: 12.5px; font-family: inherit; color: #1e293b; background: #fff; }
+  .fi:focus { outline: none; border-color: #6e2b3d; }
+  .fta { resize: vertical; line-height: 1.5; min-height: 100px; }
+  .fbtn { margin-top: 6px; padding: 6px 10px; border: 1px solid #d1d8e0; border-radius: 7px; background: #fff; font-size: 11.5px; font-weight: 600; color: #475569; cursor: pointer; }
+  .fbtn:hover { background: #f8fafc; }
+  /* 동적 행 입력 (진도/주말) */
+  .fck { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: #475569; margin: 4px 0 8px; cursor: pointer; }
+  .fck input { width: 15px; height: 15px; cursor: pointer; }
+  .frow { display: flex; gap: 5px; align-items: flex-start; margin-bottom: 5px; }
+  .frow .fri { padding: 5px 6px; font-size: 12px; }
+  .fr-date { flex: 0 0 64px; }
+  .fr-wd { flex: 0 0 40px; text-align: center; background: #f4f7fa; color: #6e2b3d; font-weight: 700; padding-left: 2px; padding-right: 2px; }
+  .fr-flag { flex: 0 0 68px; padding: 5px 4px; font-size: 12px; background: #f8fafc; }
+  .fr-sym { flex: 0 0 32px; height: 32px; border: 1.5px solid #6e2b3d; background: #6e2b3d; color: #fff; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 700; padding: 0; line-height: 1; }
+  .fr-sym:hover { background: #5a2231; }
+  .fr-content { flex: 1; min-width: 0; }
+  .fr-wlabel { flex: 0 0 52px; }
+  .fr-wbody { flex: 1; min-width: 0; min-height: 46px; resize: vertical; line-height: 1.4; font-family: inherit; }
+  .fdel { flex: 0 0 auto; width: 26px; height: 30px; border: 1px solid #e2c9d0; background: #fff; color: #b5455f; border-radius: 6px; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; }
+  .fdel:hover { background: #fbeef1; }
+  /* 수학기호 팝오버 */
+  .sym-pop { position: absolute; z-index: 400; background: #fff; border: 1.5px solid #d1d8e0; border-radius: 8px; padding: 6px; display: flex; flex-wrap: wrap; gap: 3px; width: 232px; box-shadow: 0 4px 14px rgba(0,0,0,0.14); }
+  .sym-pop button { width: 26px; height: 24px; border: 1px solid #e2e8f0; background: #fff; border-radius: 4px; cursor: pointer; font-size: 12px; color: #1e293b; padding: 0; }
+  .sym-pop button:hover { background: #f5e9ec; border-color: #6e2b3d; }
+  .fhint { font-size: 11px; color: #94a3b8; margin: 2px 0 6px; }
+  /* N제/모의 라벨 모드(기본/직접입력) 행 */
+  .lbl-row { display: flex; gap: 6px; }
+  .lbl-mode { flex: 0 0 110px; background: #f8fafc; }
+  .lbl-custom { flex: 1; min-width: 0; }
+  /* 연간 커리큘럼 입력 (월 라벨 고정 + 내용 입력) */
+  .fcurr-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+  .fcurr-row .fc-mon { flex: 0 0 40px; font-size: 12px; font-weight: 700; color: #6e2b3d; text-align: center; }
+  .fcurr-row .fc-val { flex: 1; min-width: 0; padding: 5px 7px; font-size: 12px; }
+
+  /* ============================================================
+     ↓↓↓ 검증된 auto-fit 엔진 (syllabus_fulltest.html에서 그대로 이식) ↓↓↓
+     절대 임의 변경 금지 — 데이터 소스만 폼(state)으로 일반화함
+  ============================================================ */
+
+  /* ===== A4 (794 x 1123) ===== */
+  /* A4 미리보기 축소 래퍼: 794px 고정 A4를 미리보기 컬럼 폭에 맞춰 축소.
+     scale 변환은 레이아웃 박스를 줄이지 않으므로, 바깥 높이를 JS가 보정(--prev-scale).
+     좌측 정렬(top left)로 버튼바·설명멘트와 같은 좌측 기준선에 맞춤. */
+  .a4-scaler { width: 100%; overflow: hidden; }
+  .a4-wrap { width: 794px; max-width: 794px; margin: 0; transform: scale(var(--prev-scale, 1)); transform-origin: top left; }
+  .a4 {
+    width: 794px; height: 1123px; background: #fff; position: relative;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15); overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+
+  /* 헤더 (고정) */
+  .hd { background: linear-gradient(135deg, var(--hd-c2, #4a1d29), var(--hd-c1, #6e2b3d)); color: #fff; padding: 18px 26px; flex-shrink: 0; display: flex; align-items: stretch; gap: 18px; position: relative; }
+  .hd-text { flex: 1; min-width: 0; align-self: center; }
+  /* 1페이지 헤더 텍스트만 사진 가로폭만큼 우측 공간 예약(2페이지 간소헤더 .hd-slim 제외).
+     기본값 236px(사진 최대폭+여유)으로 첫 프레임 겹침 방지, JS가 실제 폭으로 좁혀줌. */
+  .hd:not(.hd-slim) .hd-text { padding-right: var(--photo-reserve, 236px); }
+  .hd .brand { font-size: 12px; letter-spacing: 2px; opacity: 0.82; }
+  .hd .course { font-size: 21px; font-weight: 800; margin-top: 5px; }
+  .hd .meta { font-size: 12.5px; opacity: 0.9; margin-top: 5px; }
+  /* 강사 사진: absolute 배치 → 헤더 높이 계산에서 분리(큰 이미지가 헤더를 늘리지 못함).
+     헤더 높이는 텍스트가 결정하고, 사진은 그 밴드 높이를 꽉 채움(top~bottom). */
+  .hd-photo { position: absolute; top: var(--photo-top, 6px); bottom: 0; right: 26px;
+              display: flex; align-items: flex-end; justify-content: flex-end; pointer-events: none; }
+  .hd-photo svg, .hd-photo img { max-height: 100%; max-width: var(--photo-max-w, 220px);
+              height: auto; width: auto; display: block; object-fit: contain; object-position: bottom center; }
+  .hd.no-photo .hd-photo { display: none; }
+  .hd.hd-slim { padding: 14px 26px; }
+  .a4-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 14px 26px; }
+  .a4-footer { flex-shrink: 0; padding: 10px 26px; border-top: 2px solid var(--course-dark, #4a1d29); display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: #6a5560; }
+  .a4-footer b { color: var(--course-dark, #4a1d29); }
+
+  /* 정보 + 특징 (반가변) */
+  .midsec { flex-shrink: 0; padding: 14px 26px 0; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; font-size: 11.5px; margin-bottom: 10px; }
+  .info-item { display: flex; gap: 8px; align-items: flex-start; }
+  .info-item .k { color: #94a3b8; min-width: 50px; font-weight: 600; flex-shrink: 0; }
+  .info-item .v { color: #1e293b; font-weight: 700; line-height: 1.4; word-break: keep-all; overflow-wrap: anywhere; }
+  .feat-title { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--course-c, #6e2b3d); margin-bottom: 5px; }
+  .feat-box { background: var(--course-tint, #f8f4f5); border-radius: 7px; padding: 9px 12px; font-size: var(--fs-feat, 11px); line-height: 1.5; color: #334155; }
+
+  /* 본문: 진도표 + 주말계획 (가변 - auto-fit 핵심) */
+  .main { flex: 1; min-height: 0; padding: 12px 26px; overflow: hidden; display: flex; gap: 14px; }
+  .main.layout-1col { flex-direction: row; }
+  .main.layout-1col .col-sched { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .main.layout-1col .col-week { flex: 0 0 30%; min-height: 0; display: flex; flex-direction: column; }
+  .main.layout-2col { flex-direction: column; }
+  .main.layout-2col .col-sched { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  .main.layout-2col .col-week { flex: 0 0 var(--week-h, 30%); min-height: 0; display: flex; flex-direction: column; margin-top: 12px; }
+  .main.no-week .col-week { display: none !important; }
+  .main.no-week .col-sched { flex: 1; }
+  .sched-table.two-col { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: var(--row-gap, 6px); align-content: stretch; }
+  .sched-table.two-col .srow { min-height: 0; }
+  .col-sched { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .col-week { min-height: 0; display: flex; flex-direction: column; }
+  .sec-title { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--course-c, #6e2b3d); margin-bottom: 7px; flex-shrink: 0; display: flex; align-items: center; gap: 5px; }
+  .sec-title::before { content: ''; width: 3px; height: 13px; background: var(--course-c, #6e2b3d); border-radius: 2px; }
+
+  .sched-table { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--row-gap, 6px); }
+  .srow { display: flex; align-items: stretch; border: 1.3px solid var(--course-tint-bd, #e8d5da); border-radius: 7px; overflow: hidden; }
+  .sdate { flex: 0 0 64px; background: var(--course-tint, #faf3f5); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--cell-pad, 7px) 4px; overflow: hidden; }
+  .sdate .d { font-size: var(--fs-date, 13px); font-weight: 800; color: var(--course-c, #6e2b3d); white-space: nowrap; }
+  .sdate .w { font-size: var(--fs-week, 9px); color: var(--course-c, #b08); opacity: 0.65; margin-top: 1px; white-space: nowrap; }
+  .scontent { flex: 1; display: flex; align-items: center; padding: var(--cell-pad, 7px) 11px; font-size: var(--fs-main, 12px); font-weight: 700; color: #1e293b; line-height: 1.32; word-break: keep-all; overflow-wrap: anywhere; }
+  /* 구분 플래그: 휴강(H) 행은 붉게, 특별(S)/휴강(H) 배지 */
+  .srow.flag-H { background: #fff8ed; border-color: #f3c9b8; }
+  .srow.flag-H .sdate .d, .srow.flag-H .scontent { color: #b94040; }
+  .srow.flag-S .scontent { color: #7c5a00; }
+  .sflag-badge { display: inline-block; font-size: calc(var(--fs-main, 12px) * 0.72); font-weight: 800; border-radius: 3px; padding: 0 4px; margin-left: 5px; vertical-align: middle; line-height: 1.5; flex-shrink: 0; }
+  .sflag-badge.s { background: #fef3c7; border: 1px solid #fbbf24; color: #92400e; }
+  .sflag-badge.h { background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; }
+
+  .week-table { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0; border: 1.3px solid #dbe4f0; border-radius: 7px; overflow: hidden; }
+  .week-table.two-col { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: var(--row-gap, 6px); border: none; border-radius: 0; overflow: hidden; align-content: stretch; }
+  .week-table.two-col .wrow { border: 1.3px solid #dbe4f0; border-radius: 7px; min-height: 0; }
+  .wrow { border-bottom: 1px solid #dbe4f0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; flex: 1 1 0; min-height: 0; }
+  .week-table .wrow:last-child { border-bottom: none; }
+  .whead { background: #eef3fa; padding: 3px 8px; font-size: var(--fs-whead, 10px); font-weight: 800; color: #3b5b82; flex-shrink: 0; }
+  .wbody { padding: 4px 9px; font-size: var(--fs-week-main, 10px); color: #334155; line-height: 1.4; word-break: keep-all; overflow-wrap: anywhere; }
+
+  /* 연간 커리큘럼 (고정) */
+  .curr { flex-shrink: 0; padding: 8px 26px 0; }
+  .a4.no-curr .curr { display: none; }
+  .curr-grid { display: grid; grid-template-columns: repeat(6, 1fr); border: 1.3px solid #cbd5e1; border-radius: 7px; overflow: hidden; font-size: var(--fs-curr, 9px); }
+  .curr-cell { padding: 5px 3px; text-align: center; border-right: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; overflow: hidden; word-break: keep-all; }
+  .curr-cell.mon { background: var(--course-dark, #4a1d29); color: #fff; font-weight: 800; }
+  .curr-cell.val { color: #475569; font-weight: 600; min-height: 26px; display: flex; align-items: center; justify-content: center; line-height: 1.25; overflow-wrap: anywhere; }
+  /* 현재 기간(월) 강조 */
+  .curr-cell.mon.hl { background: #ffd9a8; color: #7c3a00; font-weight: 800; box-shadow: inset 0 0 0 2px #e8852e; }
+  .curr-cell.val.hl { background: var(--course-tint, #f5e9ec); color: var(--course-c, #6e2b3d); font-weight: 800; box-shadow: inset 0 0 0 2px var(--course-tint-bd, #e8c4ce); }
+
+  /* 푸터 (고정) */
+  .ft { flex-shrink: 0; padding: 10px 26px; margin-top: 8px; border-top: 2px solid var(--course-dark, #4a1d29); display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: #6a5560; }
+  .ft b { color: var(--course-dark, #4a1d29); }
+
+  .badge { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.7); color: #fff; font-size: 9.5px; padding: 3px 7px; border-radius: 5px; z-index: 10; }
+</style>
+</head>
+<body>
+
+  <!-- 인증 차단 오버레이 -->
+  <div class="blocker" id="syl-blocker">
+    <div class="bk-card">
+      <div class="bk-ico">🔒</div>
+      <div class="bk-msg" id="syl-blocker-msg">접근 권한을 확인하는 중입니다…</div>
+      <div class="bk-status" id="syl-auth-status"></div>
+      <!-- 로그인 폼 (미로그인 시 표시) -->
+      <div id="syl-login-form" style="display:none;margin-top:16px;text-align:left">
+        <div style="margin-bottom:8px">
+          <label style="display:block;font-size:12px;font-weight:700;color:#64748b;margin-bottom:3px">아이디</label>
+          <input id="syl-login-id" type="text" placeholder="아이디 입력" autocomplete="username"
+            style="width:100%;padding:9px 11px;border:1.5px solid #d1d8e0;border-radius:8px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="display:block;font-size:12px;font-weight:700;color:#64748b;margin-bottom:3px">비밀번호</label>
+          <input id="syl-login-pw" type="password" placeholder="비밀번호 입력" autocomplete="current-password"
+            style="width:100%;padding:9px 11px;border:1.5px solid #d1d8e0;border-radius:8px;font-size:13px;box-sizing:border-box"
+            onkeydown="if(event.key==='Enter')sylDoLogin()">
+        </div>
+        <button type="button" onclick="sylDoLogin()" id="syl-login-btn"
+          style="width:100%;padding:10px;background:#6e2b3d;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">로그인</button>
+        <div id="syl-login-err" style="margin-top:8px;font-size:12px;color:#dc2626;text-align:center;min-height:16px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 상단바 -->
+  <div class="topbar" id="syl-topbar" style="display:none">
+    <span class="tb-title">📑 진도계획서 제작</span>
+    <span class="tb-ver" id="syl-ver">v2.6-sched-limit10</span>
+    <span class="tb-spacer"></span>
+    <span class="tb-fit" id="syl-fit"></span>
+    <span class="tb-user" id="syl-user"></span>
+    <button type="button" id="syl-logout-btn" onclick="sylLogout()"
+      style="margin-left:10px;padding:5px 12px;border:1px solid #d1d8e0;background:#fff;color:#64748b;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">로그아웃</button>
+  </div>
+
+  <!-- 본문 셸 -->
+  <div class="shell" id="syl-shell">
+    <div class="form-col">
+      <h2>📝 진도계획서 입력</h2>
+      <div class="fnote">위쪽에 기본 정보·강사 사진을, 아래쪽에 강의 진도·주말·연간·2페이지를 입력하면 미리보기에 바로 반영됩니다. (학원명·기간은 자동 / 강사 사진은 모든 강좌 공통)</div>
+
+      <!-- 관리자 전용: 분원·선생님 선택 -->
+      <div class="admin-bar" id="syl-admin-bar" style="display:none">
+        <span class="ab-label">🔑 관리자</span>
+        <select id="syl-admin-branch" class="ab-select"><option value="">분원 선택…</option></select>
+        <select id="syl-admin-teacher" class="ab-select" disabled><option value="">선생님 선택…</option></select>
+        <span class="ab-hint" id="syl-admin-hint">분원과 선생님을 선택하면 해당 선생님의 진도계획서를 편집할 수 있습니다.</span>
+          <button type="button" id="syl-view-open-btn" class="ab-select" style="cursor:pointer;font-weight:700;color:#5C2A2A;border-color:#d6bcbc;background:#fdf6f6" onclick="sylViewOpen()">&#128214; 조회</button>
+      </div>
+
+      <!-- 상단 관리 바: 저장·작성월·저장목록 + 전체 강좌 추출 -->
+      <div class="manage-top">
+        <div class="mt-row">
+          <button id="syl-save-btn" class="exp-btn exp-save" type="button" onclick="syllabusSave()">💾 저장</button>
+          <label class="sb-label" style="margin-left:4px">작성 월</label>
+          <select id="syl-period" class="sb-select" style="flex:0 0 auto;min-width:128px" onchange="sylOnPeriodChange(this)"></select>
+          <button id="syl-new-btn" class="sb-new" type="button" onclick="syllabusNewCurrentMonth()" title="선택한 월의 빈 진도계획서로 새로 시작">+ 새로 작성</button>
+          <label class="sb-label" style="margin-left:10px">저장 목록</label>
+          <select id="syl-saved-list" class="sb-select" style="flex:1;min-width:150px" onchange="syllabusLoadSelected(this.value)">
+            <option value="">불러올 진도계획서 선택…</option>
+          </select>
+          <button id="syl-del-btn" class="sb-del" type="button" onclick="syllabusDeleteSelected()" title="선택한 진도계획서 삭제">🗑️ 삭제</button>
+        </div>
+        <div class="mt-row mt-row2">
+          <span class="mt-label">전체 강좌</span>
+          <button id="syl-jpg-all-btn" class="exp-btn exp-jpg" type="button" onclick="syllabusExport('jpg','all')" title="진도 있는 모든 강좌 저장">🖼️ JPG (전체)</button>
+          <button id="syl-pdf-all-btn" class="exp-btn exp-pdf" type="button" onclick="syllabusExport('pdf','all')" title="진도 있는 모든 강좌 저장">📄 PDF (전체)</button>
+          <button id="syl-sum-btn" class="exp-btn exp-sum" type="button" onclick="syllabusSummaryOpen()">📋 요약</button>
+          <span class="exp-status" id="syl-exp-status-top"></span>
+        </div>
+      </div>
+
+      <div class="form-region" id="syl-form-region">
+        <div class="tabs-row">
+          <div class="course-tabs" id="syl-course-tabs"></div>
+          <button id="syl-preview-btn" class="preview-open-btn" type="button" onclick="sylOpenPreview()">👁️ 미리보기</button>
+        </div>
+
+        <div class="form-grid">
+        <!-- 위: 강사사진 + 기본정보 + 강의특징 -->
+        <div class="fcol fcol-top">
+          <div class="area-label">기본 정보 · 강사</div>
+          <div class="basic-grid">
+            <div class="bfull">
+              <div class="fsec">강사 사진 <span style="font-weight:500;color:#94a3b8">(누끼 PNG 권장)</span></div>
+              <input id="f-photo" class="fi" type="file" accept="image/*">
+              <button id="f-photo-profile" class="fbtn" type="button">👤 프로필 사진 가져오기</button>
+              <button id="f-photo-clear" class="fbtn" type="button">사진 제거 (placeholder로)</button>
+            </div>
+
+            <div class="bfull"><div class="fsec fsec-row">기본 정보
+              <button type="button" class="imp-btn" onclick="sylOpenImportPicker('basic', this)">🔄 불러오기</button>
+            </div></div>
+
+            <div>
+              <label class="fl" for="f-course">강좌명</label>
+              <input id="f-course" class="fi" type="text" placeholder="예: [화목2] 미적분 심화">
+            </div>
+            <div>
+              <label class="fl" for="f-teacher">담당 강사</label>
+              <input id="f-teacher" class="fi" type="text" placeholder="예: 송현우">
+            </div>
+            <div>
+              <label class="fl" for="f-grade">대상 학년</label>
+              <input id="f-grade" class="fi" type="text" placeholder="예: 고등3">
+            </div>
+            <div>
+              <label class="fl" for="f-time">수업 시간</label>
+              <input id="f-time" class="fi" type="text" placeholder="예: 화목 7:45~10:00">
+            </div>
+            <div>
+              <label class="fl" for="f-bookmain">주교재</label>
+              <input id="f-bookmain" class="fi" type="text" placeholder="예: 고쟁이 미적분">
+            </div>
+            <div>
+              <label class="fl" for="f-booksub">부교재</label>
+              <input id="f-booksub" class="fi" type="text" placeholder="예: 수능특강 미적분">
+            </div>
+
+            <div>
+              <label class="fl">N제</label>
+              <div class="lbl-row">
+                <select id="f-naje-mode" class="fi lbl-mode">
+                  <option value="default">N제 시간</option>
+                  <option value="custom">직접 입력</option>
+                </select>
+                <input id="f-naje-label" class="fi lbl-custom" type="text" placeholder="라벨 직접 입력" style="display:none">
+              </div>
+              <input id="f-naje-time" class="fi" type="text" placeholder="예: 토 13:00~15:00" style="margin-top:5px">
+            </div>
+            <div>
+              <label class="fl">모의고사</label>
+              <div class="lbl-row">
+                <select id="f-mock-mode" class="fi lbl-mode">
+                  <option value="default">모의고사 시간</option>
+                  <option value="custom">직접 입력</option>
+                </select>
+                <input id="f-mock-label" class="fi lbl-custom" type="text" placeholder="라벨 직접 입력" style="display:none">
+              </div>
+              <input id="f-mock-time" class="fi" type="text" placeholder="예: 일요일 지정 [11시 or 2시30분]" style="margin-top:5px">
+            </div>
+
+            <div class="bfull">
+              <div class="fsec fsec-row">강의 특징 &amp; 관리
+                <button type="button" class="imp-btn" onclick="sylOpenImportPicker('feature', this)">🔄 불러오기</button>
+              </div>
+              <textarea id="f-feature" class="fi fta" placeholder="줄바꿈은 그대로 반영됩니다."></textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- 아래: 진도 + 2페이지 + 주말 + 연간 (전체 폭) -->
+        <div class="fcol fcol-bottom">
+          <div class="area-label">상세 구성</div>
+
+          <div class="fblock">
+            <div class="fsec fsec-row">회차별 진도
+              <button type="button" class="imp-btn" onclick="sylOpenImportPicker('sched', this)">🔄 불러오기</button>
+            </div>
+            <div class="fhint">진도 7개 이상이면 1열(좌우 배치), 6개 이하면 2열(상하 배치)로 자동 전환됩니다.</div>
+            <div id="f-sched-list"></div>
+            <button id="f-sched-add" class="fbtn" type="button">+ 진도 추가</button>
+          </div>
+
+          <div class="fblock">
+            <div class="fsec">2페이지 (다음 달)</div>
+            <label class="fck"><input type="checkbox" id="f-p2-on"> 2페이지 추가 (다음 달 진도)</label>
+            <div id="f-p2-wrap" style="display:none">
+              <label class="fl" for="f-p2-period">2페이지 기간</label>
+              <input id="f-p2-period" class="fi" type="text" placeholder="예: 2026년 7월">
+              <div class="fhint" style="margin-top:8px">2페이지는 다음 달 회차별 진도만 표시됩니다 (헤더 간소화).</div>
+              <div id="f-p2-list"></div>
+              <button id="f-p2-add" class="fbtn" type="button">+ 진도 추가</button>
+            </div>
+          </div>
+
+          <div class="fblock">
+            <div class="fsec fsec-row">주말 학습 계획
+              <button type="button" class="imp-btn" onclick="sylOpenImportPicker('week', this)">🔄 불러오기</button>
+            </div>
+            <label class="fck"><input type="checkbox" id="f-week-on"> 주말 계획 포함</label>
+            <div id="f-week-list"></div>
+            <button id="f-week-add" class="fbtn" type="button">+ 주차 추가</button>
+          </div>
+
+          <div class="fblock">
+            <div class="fsec fsec-row">연간 커리큘럼
+              <button type="button" class="imp-btn" onclick="sylOpenImportPicker('curr', this)">🔄 불러오기</button>
+            </div>
+            <label class="fck"><input type="checkbox" id="f-curr-on"> 연간 커리큘럼 포함 (12개월)</label>
+            <div class="fhint">현재 기간(월)에 해당하는 칸이 미리보기에서 강조됩니다.</div>
+            <div id="f-curr-list"></div>
+          </div>
+        </div>
+      </div>
+        <div class="form-lock" id="syl-form-lock" style="display:none">
+          <div class="fl-msg">먼저 분원과 선생님을 선택하세요</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 관리 바는 입력 영역 상단으로 이동됨 -->
+  </div>
+
+  <!-- [조회 화면] 관리자 전용: 저장된 진도계획서 보기(전용). 기본 display:none -->
+  <div class="syl-view-screen" id="syl-view-screen" style="display:none">
+    <div class="svw-bar">
+      <button type="button" class="svw-back" onclick="sylViewClose()">&#8592; 제작으로</button>
+      <span class="svw-title">진도계획서 조회</span>
+      <label class="svw-lb">분원</label>
+      <select id="svw-branch" class="svw-sel" onchange="sylViewLoadTeachers(this.value)"><option value="">분원 선택…</option></select>
+      <label class="svw-lb">선생님</label>
+      <select id="svw-teacher" class="svw-sel" disabled onchange="sylViewLoadRecords(this.value)"><option value="">선생님 선택…</option></select>
+      <label class="svw-lb">연도</label>
+      <select id="svw-year" class="svw-sel" disabled onchange="sylViewPickYear(this.value)"><option value="">연도…</option></select>
+      <label class="svw-lb">월</label>
+      <select id="svw-month" class="svw-sel" disabled onchange="sylViewPickMonth(this.value)"><option value="">월…</option></select>
+    </div>
+    <div class="svw-tabs" id="svw-course-tabs"></div>
+    <div class="svw-stage" id="svw-stage">
+      <div class="svw-empty" id="svw-empty">분원·선생님·계획서를 선택하면 완성된 진도계획서를 볼 수 있습니다.</div>
+      <div class="svw-scaler" id="svw-scaler" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- 미리보기 모달 (이미지 미리보기 + 추출) -->
+  <div class="syl-prev-modal" id="syl-prev-modal" style="display:none">
+    <div class="spm-box">
+      <div class="spm-head">
+        <span class="spm-title">📄 미리보기</span>
+        <div class="spm-actions">
+          <button id="syl-jpg-btn" class="exp-btn exp-jpg" type="button" onclick="syllabusExport('jpg','current')" title="현재 강좌만 저장">🖼️ JPG (이 강좌)</button>
+          <button id="syl-pdf-btn" class="exp-btn exp-pdf" type="button" onclick="syllabusExport('pdf','current')" title="현재 강좌만 저장">📄 PDF (이 강좌)</button>
+          <span class="exp-status" id="syl-exp-status"></span>
+          <button class="spm-close" type="button" onclick="sylClosePreview()" title="닫기">✕</button>
+        </div>
+      </div>
+      <div class="spm-body">
+        <div class="a4-scaler" id="a4-scaler">
+        <div class="a4-wrap">
+          <!-- 1페이지 -->
+          <div class="a4" id="a4">
+            <div class="badge" id="badge"></div>
+
+            <div class="hd">
+              <div class="hd-text">
+                <div class="brand" id="hd-brand"></div>
+                <div class="course" id="hd-course"></div>
+                <div class="meta" id="hd-meta"></div>
+              </div>
+              <div class="hd-photo" id="hd-photo"></div>
+            </div>
+
+            <div class="midsec">
+              <div class="info-grid" id="info-grid"></div>
+              <div class="feat-title">강의 특징 &amp; 관리</div>
+              <div class="feat-box" id="feat"></div>
+            </div>
+
+            <div class="main">
+              <div class="col-sched">
+                <div class="sec-title">회차별 진도 계획</div>
+                <div class="sched-table" id="sched"></div>
+              </div>
+              <div class="col-week" id="weekcol">
+                <div class="sec-title">주말 학습 계획</div>
+                <div class="week-table" id="week"></div>
+              </div>
+            </div>
+
+            <div class="curr">
+              <div class="curr-grid" id="curr"></div>
+            </div>
+
+            <div class="ft">
+              <span><b id="ft-brand"></b></span>
+              <span id="ft-right"></span>
+            </div>
+          </div>
+
+          <!-- 2페이지: 간소 헤더 + 진도표만 (다음 달) -->
+          <div class="a4" id="a4-p2" style="display:none;margin-top:24px">
+            <div class="hd hd-slim">
+              <div class="hd-text">
+                <div class="brand" id="p2-brand"></div>
+                <div class="course" id="p2-course"></div>
+              </div>
+            </div>
+            <div class="a4-body">
+              <div class="sec-title" id="p2-sectitle">회차별 진도 계획</div>
+              <div class="sched-table" id="sched2"></div>
+            </div>
+            <div class="a4-footer">
+              <span><b id="p2-ft-brand"></b></span>
+              <span id="p2-ft-right"></span>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  /* ============================================================
+     [CONFIG] Supabase (nje.html / 메인과 동일 — 같은 도메인 localStorage 공유)
+  ============================================================ */
+  const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
+  window.SYLLABUS_VERSION = 'v2.6-sched-limit10';
+  console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
+
+  let currentUser = null;
+  var sylAdminTarget = null;   // 관리자가 선택한 작업 대상 선생님 {id,name,branch} (없으면 null)
+
+  // 현재 작업 대상(저장/조회의 teacher_id 기준): 선생님=본인, 관리자=선택한 선생님
+  function sylTarget(){
+    if(!currentUser) return null;
+    if(currentUser.role === 'admin') return sylAdminTarget;   // 미선택이면 null
+    return currentUser;
+  }
+  function sylTargetReady(){
+    var t = sylTarget();
+    return !!(t && t.id);
+  }
+  // 작업 대상의 프로필 사진 URL (선생님=본인, 관리자=선택 선생님). 없으면 ''
+  function sylTargetPhotoUrl(){
+    var t = sylTarget();
+    if(!t) return '';
+    return t.profile_image_url || t.photoUrl || '';
+  }
+
+  /* 강좌별 색상 팔레트 (운영본과 동일, index % 8 순환). 포인트는 흰색 고정. */
+  var SYL_COURSE_PALETTE = ['#1F3A51','#5C2A2A','#68B125','#1CA6C2','#CB4C0B','#314C97','#262626','#7030A0'];
+  function sylCourseColor(idx){
+    if(!idx || idx < 0) idx = 0;
+    return SYL_COURSE_PALETTE[idx % SYL_COURSE_PALETTE.length];
+  }
+  // 헤더 그라데이션용 진한 보조색 (대략 어둡게)
+  function sylDarken(hex, amt){
+    var m = /^#?([0-9a-f]{6})$/i.exec(String(hex||''));
+    if(!m) return hex;
+    var n = parseInt(m[1], 16);
+    var r = (n>>16)&255, g = (n>>8)&255, b = n&255;
+    amt = (amt==null) ? 0.28 : amt;
+    r = Math.max(0, Math.round(r*(1-amt)));
+    g = Math.max(0, Math.round(g*(1-amt)));
+    b = Math.max(0, Math.round(b*(1-amt)));
+    return '#' + ((1<<24) + (r<<16) + (g<<8) + b).toString(16).slice(1);
+  }
+  // 강좌색을 흰색과 섞어 아주 연한 틴트 생성 (ratio 0~1, 클수록 흰색에 가까움)
+  function sylTint(hex, ratio){
+    var m = /^#?([0-9a-f]{6})$/i.exec(String(hex||''));
+    if(!m) return hex;
+    var n = parseInt(m[1], 16);
+    var r = (n>>16)&255, g = (n>>8)&255, b = n&255;
+    ratio = (ratio==null) ? 0.92 : ratio;
+    r = Math.round(r + (255-r)*ratio);
+    g = Math.round(g + (255-g)*ratio);
+    b = Math.round(b + (255-b)*ratio);
+    return '#' + ((1<<24) + (r<<16) + (g<<8) + b).toString(16).slice(1);
+  }
+
+  /* ============================================================
+     [STATE] 진도계획서 데이터 모델
+     1a에서는 아래 SAMPLE 로 채워 렌더링.
+     1b에서 입력 폼이 이 state 를 구성하게 됨.
+       - sched : [[날짜, 요일, 내용], ...]
+       - week  : [[주차라벨, 내용(\n 허용)], ...]   (빈 배열이면 주말 영역 숨김)
+       - curr  : [[월, 값] x12]  또는 null(연간 커리큘럼 off)
+       - photo : 이미지 dataURL 또는 null(누끼 placeholder)
+       - page2 : { period2, sched2:[[날짜,요일,내용],...] } 또는 null
+  ============================================================ */
+  var state = null;     // 현재 활성 강좌 객체 (sylDoc.courses[sylDoc.active])
+  var sylDoc = null;    // 진도계획서 문서: { courses:[course,...], active:int }
+  var sylPreviewOpen = false;   // 미리보기 모달 열림 여부 — 측정(auto-fit/scale)은 열렸을 때만 수행(숨김 시 0측정 방지)
+
+  // 빈 강좌 1개 (실사용 시작용). period/brand/photo는 공통값으로 채워 넣음.
+  function sylBlankCourse(){
+    return {
+      brand: '베스티안 수학학원',
+      period: sylTargetPeriod(),
+      course: '', teacher: '', grade: '', time: '',
+      bookMain: '', bookSub: '',
+      najeLabel: 'N제 시간', najeTime: '',
+      mockLabel: '모의고사 시간', mockTime: '',
+      photo: null,
+      feature: '',
+      sched: [['', '', '', '']],
+      week: [],
+      curr: null, currOn: false,
+      maxfs: 15,
+      page2: null
+    };
+  }
+
+  // 현재 활성 강좌로 state 포인터 설정
+  function sylSetActive(idx){
+    if(!sylDoc || !sylDoc.courses.length) return;
+    if(idx < 0) idx = 0;
+    if(idx > sylDoc.courses.length - 1) idx = sylDoc.courses.length - 1;
+    sylDoc.active = idx;
+    state = sylDoc.courses[idx];
+  }
+
+  // 공통 사진을 모든 강좌에 동기화
+  function sylSyncPhotoToAll(photo){
+    if(!sylDoc) return;
+    sylDoc.courses.forEach(function(c){ c.photo = photo; });
+  }
+
+  // 대상 선생님의 프로필 사진을 가져와 강사 사진(공통)으로 적용.
+  // 안전: URL을 fetch → base64 변환해 저장(추출 시 CORS 안전). 실패 시 원본 유지 + 안내.
+  async function sylUseProfilePhoto(btn){
+    if(currentUser && currentUser.role === 'admin' && !sylTargetReady()){
+      alert('먼저 분원과 선생님을 선택해주세요.'); return;
+    }
+    var url = sylTargetPhotoUrl();
+    if(!url){ alert('등록된 프로필 사진이 없습니다. 선생님이 BMAPS에서 프로필 사진을 먼저 등록해야 합니다.'); return; }
+    var prevText = btn ? btn.textContent : '';
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ 가져오는 중…'; }
+    try {
+      var resp = await fetch(url, { mode: 'cors', cache: 'no-store' });
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      var blob = await resp.blob();
+      if(!/^image\//.test(blob.type || '')) throw new Error('이미지가 아닙니다');
+      var dataUrl = await new Promise(function(resolve, reject){
+        var r = new FileReader();
+        r.onload = function(){ resolve(r.result); };
+        r.onerror = function(){ reject(new Error('변환 실패')); };
+        r.readAsDataURL(blob);
+      });
+      state.photo = dataUrl;
+      sylSyncPhotoToAll(dataUrl);     // 공통 사진 → 전 강좌 반영
+      var pf = document.getElementById('f-photo'); if(pf) pf.value = '';
+      render();
+    } catch(e){
+      console.warn('프로필 사진 가져오기 실패:', e);
+      alert('프로필 사진을 가져오지 못했습니다.\n(' + (e && e.message ? e.message : e) + ')\n파일 업로드로 직접 등록해 주세요.');
+    } finally {
+      if(btn){ btn.disabled = false; btn.textContent = prevText || '👤 프로필 사진 가져오기'; }
+    }
+  }
+
+  // [자동·조용] 빈 강좌로 시작할 때만 프로필 사진을 1회 자동 적용. 실패는 조용히 무시(빈 상태 유지).
+  // guardDoc: 호출 시점의 sylDoc 참조 — 비동기 도중 문서가 바뀌면(다른 선생님 선택/불러오기) 적용 취소.
+  async function sylAutoApplyProfilePhoto(){
+    try {
+      var url = sylTargetPhotoUrl();
+      if(!url) return;                                  // 프로필 없음 → 그대로 빈 상태
+      if(!sylDoc || !sylDoc.courses.length) return;
+      // 이미 사진이 있으면(불러온 저장본 등) 자동 적용 안 함
+      if(sylDoc.courses.some(function(c){ return !!c.photo; })) return;
+      var guardDoc = sylDoc;
+      var guardActiveCourse = sylDoc.courses[sylDoc.active];
+      var resp = await fetch(url, { mode: 'cors', cache: 'no-store' });
+      if(!resp.ok) return;
+      var blob = await resp.blob();
+      if(!/^image\//.test(blob.type || '')) return;
+      var dataUrl = await new Promise(function(resolve, reject){
+        var r = new FileReader();
+        r.onload = function(){ resolve(r.result); };
+        r.onerror = function(){ reject(new Error('read fail')); };
+        r.readAsDataURL(blob);
+      });
+      // 비동기 도중 문서/선생님이 바뀌었으면 취소 (오적용 방지)
+      if(sylDoc !== guardDoc) return;
+      // 그 사이 사용자가 사진을 넣었으면 덮어쓰지 않음
+      if(sylDoc.courses.some(function(c){ return !!c.photo; })) return;
+      sylSyncPhotoToAll(dataUrl);
+      if(state) state.photo = dataUrl;
+      render();
+    } catch(e){
+      // 자동 적용 실패는 조용히 무시 (사용자에겐 빈 상태로 보임)
+      console.warn('프로필 사진 자동 적용 생략:', e && e.message ? e.message : e);
+    }
+  }
+
+  // 기간 자동: 제작 시점의 시스템 연/월 ('YYYY년 M월')
+  function sylCurrentPeriod(){
+    var d = new Date();
+    return d.getFullYear() + '년 ' + (d.getMonth() + 1) + '월';
+  }
+
+  // 다음 달 'YYYY년 M월' (연말이면 다음 해 1월로 자동 넘김)
+  function sylNextPeriod(){
+    var d = new Date();
+    var y = d.getFullYear(), m = d.getMonth() + 1; // 1~12 (이번 달)
+    m += 1;                                         // 다음 달
+    if(m > 12){ m = 1; y += 1; }
+    return y + '년 ' + m + '월';
+  }
+
+  // 사용자가 드롭다운으로 고른 작업 대상 월 (없으면 null → 기본=다음 달)
+  var sylSelectedPeriod = null;
+
+  // 현재 작업 대상 월: 선택값 우선, 없으면 다음 달 (저장/불러오기/복원/생성 공통 기준)
+  function sylTargetPeriod(){
+    return sylSelectedPeriod || sylNextPeriod();
+  }
+
+  // 작성 월 드롭다운 옵션 채우기 (현재월 -3 ~ +6), 기본 선택 = 현재 작업 대상(다음 달/선택값)
+  function sylBuildPeriodOptions(){
+    var sel = document.getElementById('syl-period');
+    if(!sel) return;
+    var now = new Date();
+    var target = sylTargetPeriod();
+    var html = '';
+    for(var off = -3; off <= 6; off++){
+      var d = new Date(now.getFullYear(), now.getMonth() + off, 1);
+      var label = d.getFullYear() + '년 ' + (d.getMonth() + 1) + '월';
+      html += '<option value="' + label + '"' + (label === target ? ' selected' : '') + '>' + label + '</option>';
+    }
+    sel.innerHTML = html;
+    sel.value = target;
+  }
+
+  // 현재 작업 대상(선생님 + 작성 월)에 맞춰 저장본 로드 후 화면 구성 (init/월변경 공통)
+  async function sylLoadAndRenderForTarget(){
+    var loadedCourses = await sylLoadCurrentMonthCourses();
+    var startedBlank = !(loadedCourses && loadedCourses.length);
+    sylDoc = { courses: startedBlank ? [sylBlankCourse()] : loadedCourses, active: 0 };
+    sylSetActive(0);
+    sylRenderTabs();
+    rebindAndRender();
+    if(typeof sylApplyLock === 'function') sylApplyLock();
+    syllabusRefreshSavedList();
+    if(startedBlank) sylAutoApplyProfilePhoto();
+  }
+
+  // 작성 월 변경 → 확인 후 해당 월 저장본 재로드
+  async function sylOnPeriodChange(sel){
+    var val = sel.value;
+    if(val === sylTargetPeriod()) return;   // 변화 없음
+    if(!confirm('작성 월을 "' + val + '"(으)로 바꿀까요?\n저장하지 않은 현재 내용은 사라집니다.')){
+      sel.value = sylTargetPeriod();          // 되돌림
+      return;
+    }
+    sylSelectedPeriod = val;
+    window._sylCurrentRecordId = null;
+    await sylLoadAndRenderForTarget();
+  }
+
+  function sampleState(){
+    return {
+      brand: '베스티안 수학학원',
+      period: sylTargetPeriod(),
+      course: '[화목2] 미적분 심화',
+      teacher: '송현우',
+      grade: '고등3',
+      time: '화목 7:45~10:00',
+      bookMain: '고쟁이 미적분',
+      bookSub: '수능특강 미적분',
+      najeLabel: 'N제 시간',
+      najeTime: '토 13:00~15:00',
+      mockLabel: '모의고사 시간',
+      mockTime: '일요일 지정 [11시 or 2시30분]',
+      photo: null,
+      feature: '미적분의 개념으로부터 수능 4점 고난도 문항까지 학습하는 수업입니다.\n'
+             + '학교별 출판사에 맞춘 내신대비 학습자료를 제공하고, EBS수능특강 및 모의고사 변형문제가 제공됩니다.\n'
+             + '모든 수업은 녹화되어 제공되며, 카톡으로 1:1 질문이 가능합니다.',
+      sched: [
+        ['6/2','화','도함수의 활용'], ['6/4','목','여러 가지 적분법'], ['6/9','화','정적분의 활용'],
+        ['6/11','목','학교별 프린트'], ['6/16','화','직전대비 모의'], ['6/18','목','내신 총정리'],
+        ['6/23','화','오답 클리닉'], ['6/25','목','실전 점검']
+      ],
+      week: [
+        ['1주','[현충일 정상수업]\n토 – 수능특강+별별별 N제 1주차\n일 – 내신대비 보충 1주차'],
+        ['2주','토 – 수능특강+별별별 N제 2주차\n일 – 내신대비 보충 2주차'],
+        ['3주','토 – 수능특강+별별별 N제 3주차\n일 – 내신대비 보충 3주차'],
+        ['4주','토 – 학교별 프린트\n일 – 내신대비 보충 4주차'],
+        ['5주','토 – 직전보강주간 내신대비 보충\n일 – 직전보강(해당학교)']
+      ],
+      curr: [
+        ['1월','개념'],['2월','개념'],['3월','중간내신'],['4월','중간내신'],['5월','기말내신'],['6월','기말내신'],
+        ['7월','수1+수2'],['8월','수1+수2'],['9월','실전모의'],['10월','실전모의'],['11월','수능'],['12월','종강']
+      ],
+      currOn: true,
+      maxfs: 15,
+      page2: null
+    };
+  }
+
+  // [임시·테스트용] 4개 강좌 샘플 — 요약/다중강좌/색상 순환 테스트. 실사용 전환 시 제거.
+  function sylSampleCourses(){
+    var period = sylTargetPeriod();
+    function mk(o){
+      return {
+        brand: '베스티안 수학학원', period: period,
+        course: o.course, teacher: o.teacher, grade: o.grade, time: o.time,
+        bookMain: o.bookMain, bookSub: o.bookSub,
+        najeLabel: 'N제 시간', najeTime: o.najeTime || '',
+        mockLabel: '모의고사 시간', mockTime: o.mockTime || '',
+        photo: null, feature: o.feature,
+        sched: o.sched, week: o.week || [],
+        curr: o.curr || null, currOn: !!o.curr, maxfs: 15, page2: null
+      };
+    }
+    return [
+      mk({
+        course:'[화목2] 미적분 심화', teacher:'송현우', grade:'고등3', time:'화목 7:45~10:00',
+        bookMain:'고쟁이 미적분', bookSub:'수능특강 미적분', najeTime:'토 13:00~15:00',
+        mockTime:'일요일 지정 [11시 or 2시30분]',
+        feature:'미적분의 개념으로부터 수능 4점 고난도 문항까지 학습하는 수업입니다.\n학교별 출판사에 맞춘 내신대비 학습자료를 제공합니다.',
+        sched:[['6/2','화','도함수의 활용',''],['6/4','목','여러 가지 적분법',''],['6/9','화','정적분의 활용','S'],
+               ['6/11','목','학교별 프린트',''],['6/16','화','직전대비 모의',''],['6/18','목','내신 총정리','']],
+        week:[['1주','토 – 수능특강 1주차\n일 – 내신대비 보충'],['2주','토 – 수능특강 2주차\n일 – 내신대비 보충']],
+        curr:[['1월','개념'],['2월','개념'],['3월','중간내신'],['4월','중간내신'],['5월','기말내신'],['6월','기말내신'],
+              ['7월','수1+수2'],['8월','수1+수2'],['9월','실전모의'],['10월','실전모의'],['11월','수능'],['12월','종강']]
+      }),
+      mk({
+        course:'[월수1] 수학Ⅱ 개념', teacher:'송현우', grade:'고등2', time:'월수 5:30~7:30',
+        bookMain:'쎈 수학Ⅱ', bookSub:'마플 교과서', najeTime:'토 10:00~12:00',
+        mockTime:'토 오후 2시',
+        feature:'수학Ⅱ 핵심 개념을 탄탄히 다지는 강좌입니다.\n매주 형성평가로 성취도를 점검합니다.',
+        sched:[['6/1','월','함수의 극한',''],['6/3','수','연속',''],['6/8','월','미분계수','H'],
+               ['6/10','수','도함수',''],['6/15','월','접선의 방정식',''],['6/17','수','함수의 증가·감소','']],
+        week:[['1주','토 – 개념 복습\n일 – 오답 정리'],['2주','토 – 단원 평가\n일 – 보충']],
+        curr:[['1월','선행'],['2월','선행'],['3월','중간'],['4월','중간'],['5월','기말'],['6월','기말'],
+              ['7월','수Ⅱ 심화'],['8월','수Ⅱ 심화'],['9월','내신'],['10월','내신'],['11월','총정리'],['12월','종강']]
+      }),
+      mk({
+        course:'[금] 확률과 통계', teacher:'송현우', grade:'고등3', time:'금 7:00~10:00',
+        bookMain:'자이스토리 확통', bookSub:'수능특강 확통', najeTime:'일 13:00~15:00',
+        mockTime:'일요일 오전',
+        feature:'확률과 통계 빈출 유형을 집중 공략합니다.\n실전 모의고사로 시간 관리 훈련을 병행합니다.',
+        sched:[['6/5','금','순열과 조합',''],['6/12','금','이항정리',''],['6/19','금','확률의 정의','S'],
+               ['6/26','금','조건부확률','']],
+        week:[['1주','토 – 유형 훈련\n일 – 모의 풀이']]
+      }),
+      mk({
+        course:'[토] 수능 파이널', teacher:'송현우', grade:'고등3', time:'토 9:00~12:00',
+        bookMain:'파이널 모의고사', bookSub:'', najeTime:'', mockTime:'토 9시 정규',
+        feature:'수능 직전 실전 감각을 끌어올리는 파이널 강좌입니다.\n매주 실전 모의고사 + 해설로 약점을 보완합니다.',
+        sched:[['6/7','토','실전 모의 1회',''],['6/14','토','실전 모의 2회',''],['6/21','토','실전 모의 3회',''],
+               ['6/28','토','파이널 점검','']]
+      })
+    ];
+  }
+
+  // 연간 커리큘럼 12칸 보장(월 라벨 자동 채움, 기존 내용 유지)
+  function sylNormalizeCurr(arr){
+    var out = [];
+    for(var i=0;i<12;i++){
+      var src = (Array.isArray(arr) && arr[i]) ? arr[i] : [];
+      var label = (src[0] && String(src[0]).trim()) ? src[0] : ((i+1) + '월');
+      var content = src[1] || '';
+      out.push([label, content]);
+    }
+    return out;
+  }
+
+  /* 누끼 사진 placeholder (업로드 전 / 사진 없음 표시용) */
+  var PHOTO_PLACEHOLDER =
+    '<svg viewBox="0 0 100 120" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMax meet">'
+    + '<circle cx="50" cy="38" r="20" fill="#ffffff" opacity="0.6"/>'
+    + '<path d="M 22 120 Q 22 78 50 78 Q 78 78 78 120 Z" fill="#ffffff" opacity="0.6"/>'
+    + '<text x="50" y="106" font-size="7" fill="#4a1d29" text-anchor="middle" font-weight="bold">누끼 사진</text>'
+    + '</svg>';
+
+  function esc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  // 진도 한 행 HTML (flag: ''=일반, 'S'=특별, 'H'=휴강)
+  function sylSchedRowHTML(date, day, content, flag){
+    var cls = (flag === 'H') ? ' flag-H' : (flag === 'S' ? ' flag-S' : '');
+    var badge = (flag === 'S') ? '<span class="sflag-badge s">특별</span>'
+              : (flag === 'H') ? '<span class="sflag-badge h">휴강</span>' : '';
+    return '<div class="srow' + cls + '"><div class="sdate"><div class="d">' + esc(date) + '</div>'
+         + '<div class="w">' + esc(day) + '</div></div>'
+         + '<div class="scontent">' + esc(content) + badge + '</div></div>';
+  }
+  // 기간 문자열에서 짧은 월 라벨 추출 ('2026년 7월' -> '7월'), 실패 시 원문
+  function shortMonth(period){
+    var m = String(period||'').match(/(\d+)\s*월/);
+    return m ? (m[1] + '월') : String(period||'');
+  }
+  // 날짜('M/D')→요일(단축 '일'~'토'). 연도는 period에서, 실패 시 현재연도.
+  function sylDateToWeekday(dateStr, period){
+    if(!dateStr) return '';
+    var p = String(dateStr).replace(/\s/g,'').match(/^(\d{1,2})[\/\-.](\d{1,2})$/);
+    if(!p) return '';
+    var mo = parseInt(p[1],10), d = parseInt(p[2],10);
+    if(isNaN(mo)||isNaN(d)||mo<1||mo>12||d<1||d>31) return '';
+    var ym = String(period||'').match(/(\d{4})\s*년/);
+    var year = ym ? parseInt(ym[1],10) : new Date().getFullYear();
+    var dt = new Date(year, mo-1, d);
+    if(dt.getMonth() !== mo-1) return ''; // 존재하지 않는 날짜(2/30 등)
+    return ['일','월','화','수','목','금','토'][dt.getDay()];
+  }
+  // 리스트(listId) 내 row번째 행의 날짜 입력칸에 포커스 (Enter 이동용)
+  function sylFocusRowDate(listId, row){
+    var list = document.getElementById(listId);
+    if(!list) return;
+    var rows = list.querySelectorAll('.frow');
+    if(row < 0 || row >= rows.length) return;
+    var dateEl = rows[row].querySelector('.fr-date');
+    if(dateEl){ dateEl.focus(); }
+  }
+
+  // 수학 기호 팔레트 (내용 입력칸 커서 위치에 삽입)
+  var SYL_SYMBOLS = ['Σ','∫','√','π','∞','≤','≥','≠','±','×','÷','∈','⊂','⊃','∪','∩','∀','∃','α','β','γ','δ','θ','λ','μ','ω','→','⇒','⇔','∂','²','³'];
+  function sylCloseSymPop(){
+    var ex = document.getElementById('syl-sym-pop');
+    if(ex && ex.parentNode) ex.parentNode.removeChild(ex);
+    document.removeEventListener('mousedown', sylSymOutside, true);
+  }
+  function sylSymOutside(e){
+    var pop = document.getElementById('syl-sym-pop');
+    if(pop && !pop.contains(e.target)) sylCloseSymPop();
+  }
+  function sylOpenSymPop(btn, contentEl, onChange){
+    var wasOpen = !!document.getElementById('syl-sym-pop');
+    sylCloseSymPop();
+    if(wasOpen) return; // 토글: 열려있었으면 닫고 종료
+    var pop = document.createElement('div');
+    pop.id = 'syl-sym-pop';
+    pop.className = 'sym-pop';
+    SYL_SYMBOLS.forEach(function(sym){
+      var b = document.createElement('button');
+      b.type = 'button'; b.textContent = sym;
+      b.addEventListener('click', function(){
+        var start = (contentEl.selectionStart != null) ? contentEl.selectionStart : contentEl.value.length;
+        var end   = (contentEl.selectionEnd   != null) ? contentEl.selectionEnd   : contentEl.value.length;
+        var v = contentEl.value;
+        contentEl.value = v.slice(0, start) + sym + v.slice(end);
+        var pos = start + sym.length;
+        contentEl.focus();
+        try { contentEl.setSelectionRange(pos, pos); } catch(e){}
+        if(onChange) onChange(contentEl.value);
+      });
+      pop.appendChild(b);
+    });
+    document.body.appendChild(pop);
+    var r = btn.getBoundingClientRect();
+    var top = r.bottom + window.scrollY + 3;
+    var left = r.left + window.scrollX;
+    var maxLeft = window.scrollX + document.documentElement.clientWidth - pop.offsetWidth - 8;
+    if(left > maxLeft) left = Math.max(window.scrollX + 8, maxLeft);
+    pop.style.top = top + 'px';
+    pop.style.left = left + 'px';
+    setTimeout(function(){ document.addEventListener('mousedown', sylSymOutside, true); }, 0);
+  }
+
+  /* ============================================================
+     [RENDER] state -> A4 DOM (데이터 소스만 폼/state로 일반화, 레이아웃·auto-fit 로직은 fulltest와 동일)
+  ============================================================ */
+  function render(){
+    if(!state) return;
+
+    // 하위호환: 구버전 단일 mock 문자열 → mockTime으로 이관 (한 번만)
+    if(state.mock !== undefined){
+      if(!state.mockTime && state.mock) state.mockTime = state.mock;
+      delete state.mock;
+    }
+
+    // 헤더
+    // 강좌별 색상 (활성 강좌 index 기준) — 헤더 + 내부 포인트색
+    var cColor = sylCourseColor(sylDoc ? sylDoc.active : 0);
+    var cDark = sylDarken(cColor, 0.32);
+    var cTint = sylTint(cColor, 0.93);       // 아주 연한 배경
+    var cTintBd = sylTint(cColor, 0.80);     // 살짝 진한 틴트 테두리
+    var a4root = document.getElementById('a4');
+    if(a4root){
+      a4root.style.setProperty('--course-c', cColor);
+      a4root.style.setProperty('--course-dark', cDark);
+      a4root.style.setProperty('--course-tint', cTint);
+      a4root.style.setProperty('--course-tint-bd', cTintBd);
+    }
+    var hd1 = document.querySelector('#a4 .hd');
+    if(hd1){ hd1.style.setProperty('--hd-c1', cColor); hd1.style.setProperty('--hd-c2', cDark); }
+    document.getElementById('hd-brand').textContent  = state.brand + ' · ' + state.period + ' 진도계획서';
+    document.getElementById('hd-course').textContent = state.course;
+    document.getElementById('hd-meta').textContent   =
+      [state.grade, state.time, ('담당 ' + state.teacher), ('주교재 ' + state.bookMain)]
+        .filter(function(x){ return x && String(x).trim() && x !== '담당 ' && x !== '주교재 '; })
+        .join(' · ');
+
+    // 강사 사진 (있으면 img, 없으면 placeholder SVG)
+    var hd = document.querySelector('.hd');
+    var hdPhoto = document.getElementById('hd-photo');
+    if(state.photo){
+      hd.classList.remove('no-photo');
+      hdPhoto.innerHTML = '<img src="' + esc(state.photo) + '" alt="강사 사진">';
+      // 이미지 디코드는 비동기 — 로드 완료 후 한 번 더 auto-fit (최종 레이아웃 기준 측정)
+      var pimg = hdPhoto.querySelector('img');
+      if(pimg){
+        pimg.onload = function(){
+          autoFitAll();
+          if(state.page2 && state.page2.sched2 && state.page2.sched2.length) fitSched2();
+        };
+      }
+    } else {
+      hd.classList.remove('no-photo');         // placeholder도 표시(레이아웃 동일 유지)
+      hdPhoto.innerHTML = PHOTO_PLACEHOLDER;
+    }
+
+    // 정보 그리드 (값이 있는 항목만 표시; N제·모의는 라벨 커스텀 가능)
+    var najeLabel = (state.najeLabel && String(state.najeLabel).trim()) || 'N제 시간';
+    var mockLabel = (state.mockLabel && String(state.mockLabel).trim()) || '모의고사 시간';
+    var info = [
+      ['담당 강사', state.teacher],
+      ['대상 학년', state.grade],
+      ['수업 시간', state.time],
+      ['주교재', state.bookMain],
+      ['부교재', state.bookSub],
+      [najeLabel, state.najeTime],
+      [mockLabel, state.mockTime]
+    ].filter(function(it){ return it[1] && String(it[1]).trim(); });
+    document.getElementById('info-grid').innerHTML = info.map(function(it){
+      return '<div class="info-item"><span class="k">' + esc(it[0]) + '</span>'
+           + '<span class="v">' + esc(it[1]) + '</span></div>';
+    }).join('');
+
+    // 강의 특징
+    document.getElementById('feat').innerHTML = esc(state.feature).replace(/\n/g, '<br>');
+
+    // ===== 레이아웃 모드: 진도 6개 이하면 2열+상하, 초과면 1열+좌우 =====
+    var main = document.querySelector('.main');
+    var sched = state.sched || [];
+    var weekArr = state.week || [];
+    var weekCount = weekArr.length;
+    var twoCol = (sched.length <= 6);
+    main.classList.toggle('layout-2col', twoCol);
+    main.classList.toggle('layout-1col', !twoCol);
+    main.classList.toggle('no-week', weekCount === 0);
+
+    // 주말 "길게" 여부 추정(2열 높이 배분 휴리스틱용 — fulltest weeklen 대체)
+    state._weekLong = weekArr.some(function(w){
+      var b = String(w[1]||'');
+      return b.length > 50 || (b.match(/\n/g)||[]).length >= 2;
+    });
+
+    // 진도표 렌더
+    var sh = '';
+    for(var i=0;i<sched.length;i++){
+      var r = sched[i];
+      sh += sylSchedRowHTML(r[0], r[1], r[2], r[3]);
+    }
+    var schedEl = document.getElementById('sched');
+    schedEl.innerHTML = sh;
+    schedEl.classList.toggle('two-col', twoCol);
+
+    // 주말계획 (표시/숨김은 .main.no-week CSS로 제어)
+    if(weekCount > 0){
+      var wh = '';
+      for(var j=0;j<weekArr.length;j++){
+        wh += '<div class="wrow"><div class="whead">' + esc(weekArr[j][0]) + '</div>'
+            + '<div class="wbody">' + esc(weekArr[j][1]).replace(/\n/g,'<br>') + '</div></div>';
+      }
+      var weekEl = document.getElementById('week');
+      weekEl.innerHTML = wh;
+      weekEl.classList.toggle('two-col', twoCol);
+    }
+
+    // 연간 커리큘럼 (on/off는 state.currOn 플래그로 명시 제어)
+    var a4 = document.getElementById('a4');
+    if(state.currOn && (!Array.isArray(state.curr) || state.curr.length < 12)){
+      state.curr = sylNormalizeCurr(state.curr);  // 12칸 보장
+    }
+    var hasCurr = !!(state.currOn && state.curr && state.curr.length >= 12);
+    a4.classList.toggle('no-curr', !hasCurr);
+    if(hasCurr){
+      var CURR = state.curr;
+      // 강조할 월 인덱스(0-based): 기간 문자열의 'N월' 파싱, 실패 시 강조 없음(-1)
+      var hlIdx = (function(){
+        var mm = String(state.period || '').match(/(\d{1,2})\s*월/);
+        if(mm){ var v = parseInt(mm[1], 10); if(v>=1 && v<=12) return v-1; }
+        return -1;
+      })();
+      function cell(kind, idx, text){
+        var hl = (idx === hlIdx) ? ' hl' : '';
+        return '<div class="curr-cell ' + kind + hl + '">' + esc(text) + '</div>';
+      }
+      var ch = '';
+      for(var k=0;k<6;k++)  ch += cell('mon', k, CURR[k][0]);
+      for(var k=0;k<6;k++)  ch += cell('val', k, CURR[k][1]);
+      for(var k=6;k<12;k++) ch += cell('mon', k, CURR[k][0]);
+      for(var k=6;k<12;k++) ch += cell('val', k, CURR[k][1]);
+      document.getElementById('curr').innerHTML = ch;
+    }
+
+    // 푸터
+    document.getElementById('ft-brand').textContent = state.brand;
+    document.getElementById('ft-right').textContent = state.period + ' · 진도계획서 · ' + state.course;
+
+    // ===== 2페이지(다음 달) =====
+    var p2 = document.getElementById('a4-p2');
+    var p2on = !!(state.page2 && state.page2.on);
+    if(p2on){
+      p2.style.display = 'flex';
+      p2.style.setProperty('--course-c', cColor);
+      p2.style.setProperty('--course-dark', cDark);
+      p2.style.setProperty('--course-tint', cTint);
+      p2.style.setProperty('--course-tint-bd', cTintBd);
+      var hd2 = document.querySelector('#a4-p2 .hd');
+      if(hd2){ hd2.style.setProperty('--hd-c1', cColor); hd2.style.setProperty('--hd-c2', cDark); }
+      var sm = shortMonth(state.page2.period2);
+      document.getElementById('p2-brand').textContent  = state.brand + ' · ' + state.page2.period2 + ' 진도계획서';
+      document.getElementById('p2-course').innerHTML   = esc(state.course) + ' <span style="font-size:13px;opacity:0.8">· ' + esc(sm) + '</span>';
+      document.getElementById('p2-sectitle').innerHTML = '회차별 진도 계획 · <span style="color:' + cColor + '">' + esc(sm) + '</span>';
+      document.getElementById('p2-ft-brand').textContent = state.brand;
+      document.getElementById('p2-ft-right').textContent = state.page2.period2 + ' · 진도계획서 · ' + state.course + ' · (2/2)';
+
+      var data2 = state.page2.sched2 || [];
+      var twoCol2 = (data2.length <= 6);
+      var sh2 = '';
+      for(var i2=0;i2<data2.length;i2++){
+        var r2 = data2[i2];
+        sh2 += sylSchedRowHTML(r2[0], r2[1], r2[2], r2[3]);
+      }
+      var sched2El = document.getElementById('sched2');
+      sched2El.innerHTML = sh2;
+      sched2El.classList.toggle('two-col', twoCol2);
+    } else {
+      p2.style.display = 'none';
+    }
+
+    // ★ auto-fit 실행 (레이아웃 안정 후)
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        autoFitAll();
+        if(p2on && state.page2.sched2 && state.page2.sched2.length) fitSched2();
+        sylFitPreview();
+      });
+    });
+  }
+
+  // 미리보기 모달 열기: 보이게 만든 뒤(레이아웃 안정) 1회 렌더+auto-fit 수행
+  function sylOpenPreview(){
+    if(!sylDoc || !state){ return; }
+    var modal = document.getElementById('syl-prev-modal');
+    if(!modal) return;
+    sylPreviewOpen = true;
+    modal.style.display = 'flex';
+    // 모달이 화면에 그려진 뒤(이중 rAF) 렌더 — auto-fit이 정확한 높이를 측정하도록
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        render();   // render 내부의 rAF→autoFitAll/sylFitPreview가 이제 동작(sylPreviewOpen=true)
+      });
+    });
+  }
+  // 미리보기 모달 닫기 (DOM 유지, 표시만 숨김)
+  function sylClosePreview(){
+    var modal = document.getElementById('syl-prev-modal');
+    if(modal) modal.style.display = 'none';
+    sylPreviewOpen = false;
+  }
+
+  /* ============================================================
+     [VIEW] 관리자 조회 화면 (보기 전용). 검증된 render/auto-fit 엔진 재사용.
+     안전: 조회 진입 시 제작 sylDoc/state/레코드ID/active 백업 → 나갈 때 복원.
+     a4-scaler DOM을 조회 스테이지로 이동 → 나갈 때 미리보기 모달로 복원.
+  ============================================================ */
+  var _sylViewBackup = null;
+  var _sylViewActive = false;
+
+  async function sylViewOpen(){
+    if(!currentUser || currentUser.role !== 'admin'){ alert('관리자 전용 기능입니다.'); return; }
+    _sylViewBackup = {
+      sylDoc: sylDoc, state: state,
+      recordId: window._sylCurrentRecordId,
+      adminTarget: (typeof sylAdminTarget !== 'undefined') ? sylAdminTarget : null,
+      previewOpen: sylPreviewOpen
+    };
+    _sylViewActive = true;
+    var shell = document.getElementById('syl-shell');
+    var sc = document.getElementById('syl-view-screen');
+    if(shell) shell.style.display = 'none';
+    if(sc) sc.style.display = 'flex';
+    await sylViewLoadBranches();
+    var tSel = document.getElementById('svw-teacher'); if(tSel){ tSel.innerHTML = '<option value="">선생님 선택…</option>'; tSel.disabled = true; }
+    var ySel = document.getElementById('svw-year'); if(ySel){ ySel.innerHTML = '<option value="">연도…</option>'; ySel.disabled = true; }
+    var mSel = document.getElementById('svw-month'); if(mSel){ mSel.innerHTML = '<option value="">월…</option>'; mSel.disabled = true; }
+    document.getElementById('svw-course-tabs').innerHTML = '';
+    sylViewShowEmpty(true);
+  }
+
+  function sylViewClose(){
+    sylViewReturnA4();
+    var sc = document.getElementById('syl-view-screen');
+    var shell = document.getElementById('syl-shell');
+    if(sc) sc.style.display = 'none';
+    if(shell) shell.style.display = '';
+    if(_sylViewBackup){
+      sylDoc = _sylViewBackup.sylDoc;
+      state = _sylViewBackup.state;
+      window._sylCurrentRecordId = _sylViewBackup.recordId;
+      if(typeof sylAdminTarget !== 'undefined') sylAdminTarget = _sylViewBackup.adminTarget;
+      sylPreviewOpen = _sylViewBackup.previewOpen;
+      _sylViewBackup = null;
+      if(sylDoc && sylDoc.courses && sylDoc.courses.length){
+        sylSetActive(sylDoc.active || 0);
+        if(typeof sylRenderTabs === 'function') sylRenderTabs();
+      }
+    }
+    _sylViewActive = false;
+  }
+
+  function sylViewShowEmpty(show){
+    var e = document.getElementById('svw-empty');
+    var sc = document.getElementById('svw-scaler');
+    if(e) e.style.display = show ? 'block' : 'none';
+    if(sc) sc.style.display = show ? 'none' : 'block';
+  }
+
+  async function sylViewLoadBranches(){
+    var sel = document.getElementById('svw-branch');
+    if(!sel) return;
+    try {
+      var res = await db.from('branches').select('id, name').order('name', { ascending: true });
+      var html = '<option value="">분원 선택…</option>';
+      (res.data || []).forEach(function(b){ html += '<option value="' + esc(b.id) + '">' + esc(b.name || '(이름없음)') + '</option>'; });
+      sel.innerHTML = html;
+    } catch(e){ console.warn('조회 분원 예외:', e); }
+  }
+
+  async function sylViewLoadTeachers(branchId){
+    var sel = document.getElementById('svw-teacher');
+    if(!sel) return;
+    sel.innerHTML = '<option value="">선생님 선택…</option>'; sel.disabled = true;
+    var ySel = document.getElementById('svw-year'); if(ySel){ ySel.innerHTML = '<option value="">연도…</option>'; ySel.disabled = true; }
+    var mSel = document.getElementById('svw-month'); if(mSel){ mSel.innerHTML = '<option value="">월…</option>'; mSel.disabled = true; }
+    document.getElementById('svw-course-tabs').innerHTML = '';
+    sylViewShowEmpty(true);
+    if(!branchId) return;
+    try {
+      var res = await db.from('users').select('id, name, branch_id, status, deleted_at')
+        .eq('role','teacher').eq('branch_id', branchId).order('name', { ascending: true });
+      var rows = (res.data || []).filter(function(u){ return u.status !== 'inactive' && !u.deleted_at; });
+      var html = '<option value="">선생님 선택…</option>';
+      rows.forEach(function(u){ html += '<option value="' + esc(u.id) + '">' + esc(u.name || '(이름없음)') + '</option>'; });
+      sel.innerHTML = html; sel.disabled = false;
+    } catch(e){ console.warn('조회 선생님 예외:', e); }
+  }
+
+  // period 파싱: 'YYYY년 M월' → {year, month}. 실패 시 null
+  function sylParsePeriod(p){
+    var m = String(p || '').match(/^(\d{4})년\s*(\d{1,2})월$/);
+    if(!m) return null;
+    return { year: parseInt(m[1], 10), month: parseInt(m[2], 10) };
+  }
+
+  // 선생님 선택 → 전체 레코드 보관 + 연도 드롭다운 (기본=올해)
+  var _sylViewRecords = [];
+  async function sylViewLoadRecords(teacherId){
+    var ySel = document.getElementById('svw-year');
+    var mSel = document.getElementById('svw-month');
+    if(ySel){ ySel.innerHTML = '<option value="">연도…</option>'; ySel.disabled = true; }
+    if(mSel){ mSel.innerHTML = '<option value="">월…</option>'; mSel.disabled = true; }
+    document.getElementById('svw-course-tabs').innerHTML = '';
+    sylViewShowEmpty(true);
+    _sylViewRecords = [];
+    if(!teacherId) return;
+    try {
+      var res = await db.from('bmaps_syllabuses').select('id, period, courses, updated_at')
+        .eq('teacher_id', teacherId).order('updated_at', { ascending: false });
+      var rows = res.data || [];
+      if(!rows.length){ if(ySel) ySel.innerHTML = '<option value="">(저장된 계획서 없음)</option>'; return; }
+      _sylViewRecords = rows.map(function(r){
+        var pp = sylParsePeriod(r.period);
+        return { id: r.id, period: r.period, courses: r.courses, year: pp ? pp.year : null, month: pp ? pp.month : null };
+      });
+      var years = [];
+      _sylViewRecords.forEach(function(r){ if(r.year && years.indexOf(r.year) < 0) years.push(r.year); });
+      years.sort(function(a,b){ return b - a; });
+      var yHtml = '<option value="">연도…</option>';
+      years.forEach(function(y){ yHtml += '<option value="' + y + '">' + y + '년</option>'; });
+      if(ySel){ ySel.innerHTML = yHtml; ySel.disabled = false; }
+      var nowYear = new Date().getFullYear();
+      var defYear = (years.indexOf(nowYear) >= 0) ? nowYear : (years.length ? years[0] : '');
+      if(defYear && ySel){ ySel.value = String(defYear); await sylViewPickYear(String(defYear)); }
+    } catch(e){ console.warn('조회 계획서 예외:', e); }
+  }
+
+  // 연도 선택 → 그 연도의 월 드롭다운 (기본=이번달, 없으면 최근월)
+  async function sylViewPickYear(year){
+    var mSel = document.getElementById('svw-month');
+    if(mSel){ mSel.innerHTML = '<option value="">월…</option>'; mSel.disabled = true; }
+    document.getElementById('svw-course-tabs').innerHTML = '';
+    sylViewShowEmpty(true);
+    if(!year){ return; }
+    var y = parseInt(year, 10);
+    var recs = _sylViewRecords.filter(function(r){ return r.year === y; });
+    recs.sort(function(a,b){ return (b.month||0) - (a.month||0); });
+    var mHtml = '<option value="">월…</option>';
+    recs.forEach(function(r){
+      var n = Array.isArray(r.courses) ? r.courses.length : 0;
+      mHtml += '<option value="' + r.month + '">' + r.month + '월' + (n ? (' (강좌 ' + n + '개)') : '') + '</option>';
+    });
+    if(mSel){ mSel.innerHTML = mHtml; mSel.disabled = false; }
+    var now = new Date();
+    var defMonth = '';
+    if(y === now.getFullYear()){
+      var nm = now.getMonth() + 1;
+      if(recs.some(function(r){ return r.month === nm; })) defMonth = nm;
+    }
+    if(!defMonth && recs.length) defMonth = recs[0].month;
+    if(defMonth && mSel){ mSel.value = String(defMonth); await sylViewPickMonth(String(defMonth)); }
+  }
+
+  // 월 선택 → 연+월로 레코드 특정 → 로드
+  async function sylViewPickMonth(month){
+    if(!month){ sylViewShowEmpty(true); document.getElementById('svw-course-tabs').innerHTML=''; return; }
+    var ySel = document.getElementById('svw-year');
+    var y = ySel ? parseInt(ySel.value, 10) : null;
+    var m = parseInt(month, 10);
+    var rec = _sylViewRecords.find(function(r){ return r.year === y && r.month === m; });
+    if(!rec){ sylViewShowEmpty(true); return; }
+    await sylViewPickRecord(rec.id);
+  }
+
+  async function sylViewPickRecord(recordId){
+    if(!recordId){ sylViewShowEmpty(true); document.getElementById('svw-course-tabs').innerHTML=''; return; }
+    try {
+      var res = await db.from('bmaps_syllabuses').select('*').eq('id', recordId).maybeSingle();
+      var rec = res.data;
+      if(!rec || !Array.isArray(rec.courses) || !rec.courses.length){ sylViewShowEmpty(true); return; }
+      var courses = sylNormalizeCourses(rec.courses, rec.period);
+      sylDoc = { courses: courses, active: 0 };
+      sylSetActive(0);
+      sylViewRenderTabs();
+      await sylViewRenderActive();
+    } catch(e){ console.warn('조회 레코드 로드 예외:', e); }
+  }
+
+  function sylViewRenderTabs(){
+    var box = document.getElementById('svw-course-tabs');
+    if(!box || !sylDoc) return;
+    var html = '';
+    sylDoc.courses.forEach(function(c, i){
+      var name = (c.course && String(c.course).trim()) ? c.course : ('강좌 ' + (i+1));
+      var active = (i === sylDoc.active) ? ' active' : '';
+      html += '<div class="svw-tab' + active + '" onclick="sylViewSwitchCourse(' + i + ')">' + esc(name) + '</div>';
+    });
+    box.innerHTML = html;
+  }
+
+  function sylViewSwitchCourse(idx){
+    if(!sylDoc || idx === sylDoc.active) return;
+    sylSetActive(idx);
+    sylViewRenderTabs();
+    sylViewRenderActive();
+  }
+
+  async function sylViewRenderActive(){
+    if(!sylDoc || !state) return;
+    sylViewShowEmpty(false);
+    var scaler = document.getElementById('a4-scaler');
+    var stage = document.getElementById('svw-scaler');
+    if(!scaler || !stage) return;
+    if(scaler.parentNode !== stage){ stage.appendChild(scaler); }
+    sylPreviewOpen = true;
+    await new Promise(function(resolve){
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){ render(); resolve(); }); });
+    });
+  }
+
+  function sylViewReturnA4(){
+    var scaler = document.getElementById('a4-scaler');
+    var modalBody = document.querySelector('#syl-prev-modal .spm-body');
+    if(scaler && modalBody && scaler.parentNode !== modalBody){ modalBody.appendChild(scaler); }
+  }
+  // ESC로 닫기
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && sylPreviewOpen){ sylClosePreview(); }
+  });
+
+  // A4(794px 고정)를 미리보기 컬럼 폭에 맞춰 축소하고, scale로 줄어든 만큼 바깥 높이 보정
+  function sylFitPreview(){
+    if(!sylPreviewOpen) return;   // 모달 닫힘 → 폭 측정 무의미(열 때 수행)
+    var scaler = document.getElementById('a4-scaler');
+    var wrap = scaler ? scaler.querySelector('.a4-wrap') : null;
+    if(!scaler || !wrap) return;
+    var avail = scaler.clientWidth;
+    if(!avail) return;
+    var natural = 794;
+    // 박스섀도/반올림으로 인한 우측 미세 잘림 방지용 안전 여백(4px)
+    var scale = Math.min(1, (avail - 4) / natural);
+    if(scale <= 0) return;
+    wrap.style.setProperty('--prev-scale', scale.toFixed(4));
+    // transform은 레이아웃 높이를 줄이지 않으므로, scaler 높이를 축소분만큼 보정
+    var h = wrap.offsetHeight * scale;   // offsetHeight는 변환 전 높이
+    scaler.style.height = Math.ceil(h) + 'px';
+  }
+  // 창 크기 변화 시 미리보기 스케일 재계산
+  window.addEventListener('resize', function(){
+    clearTimeout(window._sylResizeT);
+    window._sylResizeT = setTimeout(sylFitPreview, 120);
+  });
+
+  /* ============================================================
+     [AUTO-FIT] syllabus_fulltest.html 검증 로직 — 그대로 이식
+  ============================================================ */
+  function autoFitAll(){
+    if(!sylPreviewOpen) return;   // 모달 닫힘 → 측정값 0이므로 폰트 계산 생략(열 때 1회 수행)
+    fitPhoto();
+    fitFeature();
+    fitCurr();
+    allocate2col();
+    fitSched();
+    fitWeek();
+    report();
+  }
+
+  function allocate2col(){
+    var a4 = document.getElementById('a4');
+    var main = document.querySelector('.main');
+    var twoCol = main.classList.contains('layout-2col');
+    var weekCount = state.week ? state.week.length : 0;
+    if(!twoCol || weekCount === 0){
+      a4.style.removeProperty('--week-h');
+      return;
+    }
+    var mainH = main.clientHeight;
+    var wn = weekCount;
+    var perRow = state._weekLong ? 0.10 : 0.06;
+    var ratio = Math.max(0.25, Math.min(0.45, wn * perRow));
+    var wh = Math.round(mainH * ratio);
+    a4.style.setProperty('--week-h', wh + 'px');
+  }
+
+  function fitCurr(){
+    var a4 = document.getElementById('a4');
+    if(a4.classList.contains('no-curr')) return;
+    var grid = document.getElementById('curr');
+    // 한 칸만 매우 긴 경우에도 칸 안에 들어가도록 하한을 6px까지 허용(고정영역이라 가독 여유 있음)
+    var lo=6, hi=Math.max(9, state.maxfs*0.72), best=6;
+    for(var i=0;i<16;i++){
+      var mid=(lo+hi)/2;
+      a4.style.setProperty('--fs-curr', mid.toFixed(2)+'px');
+      if(currCellsFit(grid)){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.12) break;
+    }
+    a4.style.setProperty('--fs-curr', best.toFixed(2)+'px');
+  }
+
+  function fitPhoto(){
+    // 사진은 absolute라 헤더 높이에 영향 없음(폭주 불가) + 밴드 높이를 꽉 채움(CSS).
+    // 여기서는 텍스트가 사진과 겹치지 않도록 사진 실제 가로폭만큼만 우측 공간을 예약.
+    var a4 = document.getElementById('a4');
+    var hdPhoto = document.getElementById('hd-photo');
+    var w = hdPhoto ? hdPhoto.offsetWidth : 0;
+    a4.style.setProperty('--photo-reserve', (w > 0 ? (w + 18) : 0) + 'px');
+  }
+
+  function fitFeature(){
+    var a4 = document.getElementById('a4');
+    var box = document.getElementById('feat');
+    var lo=8.5, hi=Math.max(10, state.maxfs*0.82), best=8.5;
+    for(var i=0;i<14;i++){
+      var mid=(lo+hi)/2;
+      a4.style.setProperty('--fs-feat', mid.toFixed(2)+'px');
+      if(box.scrollHeight <= 96){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.2) break;
+    }
+    a4.style.setProperty('--fs-feat', best.toFixed(2)+'px');
+  }
+
+  var MIN_FS = 9.5;  // 학부모 공지용 최소 가독 폰트
+
+  function fitSched2(){
+    var a4 = document.getElementById('a4-p2');
+    var sched = document.getElementById('sched2');
+    if(!sched) return;
+    var n = sched.children.length;
+    if(n === 0) return;
+    var twoCol = sched.classList.contains('two-col');
+    var visualRows = twoCol ? Math.ceil(n/2) : n;
+    var avail = sched.parentElement.clientHeight - sched.previousElementSibling.offsetHeight - 6;
+    var gap = visualRows>12?3:(visualRows>8?5:7);
+    a4.style.setProperty('--row-gap', gap+'px');
+    var lo=MIN_FS, hi=state.maxfs, best=MIN_FS;
+    for(var it=0;it<22;it++){
+      var mid=(lo+hi)/2;
+      applySched2Fs(a4, mid, visualRows);
+      var ok = (sched.scrollHeight<=avail+1) && cellsFit(sched, '.scontent, .sdate');
+      if(ok){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.15) break;
+    }
+    applySched2Fs(a4, MIN_FS, visualRows);
+    var overflowAtMin = (sched.scrollHeight > avail + 2) || !cellsFit(sched, '.scontent, .sdate');
+    if(!overflowAtMin){
+      applySched2Fs(a4, best, visualRows);
+      if(!twoCol){ fillSched2Padding(a4, sched, avail, visualRows); }
+    }
+    window._sched2Fs = overflowAtMin ? MIN_FS : best;
+  }
+  function applySched2Fs(a4, fs, n){
+    a4.style.setProperty('--fs-main', fs.toFixed(1)+'px');
+    a4.style.setProperty('--fs-date', (fs*1.05).toFixed(1)+'px');
+    a4.style.setProperty('--fs-week', (fs*0.72).toFixed(1)+'px');
+  }
+  function fillSched2Padding(a4, sched, avail, n){
+    a4.style.setProperty('--cell-pad', '4px');
+    var natural = sched.scrollHeight;
+    var slack = avail - natural;
+    if(slack <= 0) return;
+    var extra = Math.min(28, (slack / n) / 2);
+    a4.style.setProperty('--cell-pad', (4+extra).toFixed(1)+'px');
+  }
+
+  function fitSched(){
+    var a4 = document.getElementById('a4');
+    var sched = document.getElementById('sched');
+    var n = sched.children.length;
+    if(n === 0){ window._schedFs = null; window._schedOverflow = false; window._dbg = null; return; }
+    var twoCol = sched.classList.contains('two-col');
+    var visualRows = twoCol ? Math.ceil(n/2) : n;
+    var avail = sched.parentElement.clientHeight - sched.previousElementSibling.offsetHeight - 6;
+
+    var gap = visualRows>12?3:(visualRows>8?5:7);
+    a4.style.setProperty('--row-gap', gap+'px');
+
+    var lo=MIN_FS, hi=state.maxfs, best=MIN_FS;
+    for(var it=0;it<22;it++){
+      var mid=(lo+hi)/2;
+      applySchedFs(a4, mid, visualRows);
+      var ok = (sched.scrollHeight<=avail+1) && cellsFit(sched, '.scontent, .sdate');
+      if(ok){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.15) break;
+    }
+    applySchedFs(a4, MIN_FS, visualRows);
+    var overflowAtMin = (sched.scrollHeight > avail + 2) || !cellsFit(sched, '.scontent, .sdate');
+    if(!overflowAtMin){
+      applySchedFs(a4, best, visualRows);
+      if(!twoCol){ fillSchedPadding(a4, sched, avail, visualRows); }
+    }
+    window._schedFs = overflowAtMin ? MIN_FS : best;
+    window._schedOverflow = overflowAtMin;
+    window._dbg = {avail: Math.round(avail), n: n, mode: twoCol?'2열':'1열', schedH: Math.round(sched.scrollHeight)};
+  }
+  function applySchedFs(a4, fs, n){
+    a4.style.setProperty('--fs-main', fs.toFixed(1)+'px');
+    a4.style.setProperty('--fs-date', (fs*1.05).toFixed(1)+'px');
+    a4.style.setProperty('--fs-week', (fs*0.72).toFixed(1)+'px');
+  }
+  function fillSchedPadding(a4, sched, avail, n){
+    a4.style.setProperty('--cell-pad', '4px');
+    var natural = sched.scrollHeight;
+    var slack = avail - natural;
+    if(slack <= 0){ return; }
+    var extra = Math.min(28, (slack / n) / 2);
+    var pad = 4 + extra;
+    a4.style.setProperty('--cell-pad', pad.toFixed(1)+'px');
+  }
+
+  function fitWeek(){
+    var weekCount = state.week ? state.week.length : 0;
+    if(weekCount === 0){ window._weekFs = null; return; }
+    var a4 = document.getElementById('a4');
+    var week = document.getElementById('week');
+    var lo=8.5, hi=state.maxfs, best=8.5;
+    for(var it=0;it<18;it++){
+      var mid=(lo+hi)/2;
+      a4.style.setProperty('--fs-week-main', mid.toFixed(1)+'px');
+      a4.style.setProperty('--fs-whead', mid.toFixed(1)+'px');
+      if(weekCellsFit(week)){ best=mid; lo=mid; } else { hi=mid; }
+      if(hi-lo<0.15) break;
+    }
+    a4.style.setProperty('--fs-week-main', best.toFixed(1)+'px');
+    a4.style.setProperty('--fs-whead', best.toFixed(1)+'px');
+    window._weekFs = best;
+  }
+  function weekCellsFit(week){
+    for(var i=0;i<week.children.length;i++){
+      var row = week.children[i];
+      if(row.scrollHeight > row.clientHeight + 1) return false;
+      var body = row.querySelector('.wbody');
+      if(body && body.scrollHeight > body.clientHeight + 1) return false;
+    }
+    return true;
+  }
+
+  function cellsFit(container, sel){
+    var cells = container.querySelectorAll(sel);
+    for(var j=0;j<cells.length;j++){
+      if(cells[j].scrollHeight > cells[j].clientHeight + 1) return false;
+    }
+    return true;
+  }
+
+  // 커리큘럼 전용: 세로 + 가로 넘침 모두 검사 (한 칸만 긴 내용일 때 가로 잘림 방지).
+  // 진도/주말이 쓰는 cellsFit은 가로로 길어도 되므로 분리해서 영향 없음.
+  function currCellsFit(grid){
+    var cells = grid.querySelectorAll('.curr-cell');
+    for(var j=0;j<cells.length;j++){
+      var el = cells[j];
+      if(el.scrollHeight > el.clientHeight + 1) return false;
+      if(el.scrollWidth  > el.clientWidth  + 1) return false;
+    }
+    return true;
+  }
+
+  function report(){
+    var over = window._schedOverflow;
+    var badge = document.getElementById('badge');
+    if(badge){
+      badge.textContent =
+        '진도 ' + (window._schedFs?window._schedFs.toFixed(1):'-') + 'px'
+        + (window._weekFs?(' · 주말 '+window._weekFs.toFixed(1)+'px'):'')
+        + (over?' · ⚠️넘침':'');
+    }
+    var fit = document.getElementById('syl-fit');
+    if(fit){
+      fit.textContent = over
+        ? '⚠️ 최소폰트로도 한 장에 안 들어감 — 내용 축소 또는 2페이지 분할 필요'
+        : ('✅ 한 장 맞음 · 진도 ' + (window._schedFs?window._schedFs.toFixed(1):'-') + 'px'
+           + (window._weekFs?(' · 주말 '+window._weekFs.toFixed(1)+'px'):''));
+    }
+  }
+
+  /* ============================================================
+     [AUTH] localStorage savedUserId -> users -> role (teacher/admin 허용)
+            nje.html 패턴 동일. 같은 도메인이라 메인과 localStorage 공유.
+  ============================================================ */
+  // 자체 로그인 (메인과 동일 방식: username+password로 users 조회). 성공 시 savedUserId 저장 후 리로드.
+  async function sylDoLogin(){
+    var idEl = document.getElementById('syl-login-id');
+    var pwEl = document.getElementById('syl-login-pw');
+    var errEl = document.getElementById('syl-login-err');
+    var btn = document.getElementById('syl-login-btn');
+    var username = (idEl && idEl.value || '').trim();
+    var password = (pwEl && pwEl.value || '').trim();
+    if(errEl) errEl.textContent = '';
+    if(!username || !password){ if(errEl) errEl.textContent = '아이디와 비밀번호를 입력하세요.'; return; }
+    if(btn){ btn.disabled = true; btn.textContent = '로그인 중…'; }
+    try{
+      var res = await db.from('users').select('*').eq('username', username).eq('password', password).maybeSingle();
+      var data = res.data;
+      if(res.error || !data){ if(errEl) errEl.textContent = '아이디 또는 비밀번호가 올바르지 않습니다.'; return; }
+      if(data.role !== 'teacher' && data.role !== 'admin'){ if(errEl) errEl.textContent = '진도계획서 권한이 없는 계정입니다 (선생님/관리자 전용).'; return; }
+      if(data.status === 'pending'){ if(errEl) errEl.textContent = '관리자 승인 대기 중인 계정입니다.'; return; }
+      if(data.status === 'inactive' || data.deleted_at){ if(errEl) errEl.textContent = '비활성화된 계정입니다.'; return; }
+      // 성공 → 메인과 동일하게 저장 후 리로드(기존 인증·초기화 흐름 재사용)
+      localStorage.setItem('savedUserId', data.id);
+      localStorage.setItem('savedUserRole', data.role);
+      location.reload();
+    } catch(e){
+      if(errEl) errEl.textContent = '로그인 처리 중 오류가 발생했습니다.';
+      console.warn('sylDoLogin:', e && e.message ? e.message : e);
+    } finally {
+      if(btn){ btn.disabled = false; btn.textContent = '로그인'; }
+    }
+  }
+
+  // 로그아웃: 저장된 로그인 정보 제거 후 리로드 (로그인 폼으로 복귀)
+  function sylLogout(){
+    if(!confirm('로그아웃할까요?\n저장하지 않은 변경 내용은 사라집니다.')) return;
+    try { localStorage.removeItem('savedUserId'); localStorage.removeItem('savedUserRole'); } catch(e){}
+    location.reload();
+  }
+
+  async function syllabusInitAuth(){
+    var statusEl = document.getElementById('syl-auth-status');
+    var msgEl = document.getElementById('syl-blocker-msg');
+    var blocker = document.getElementById('syl-blocker');
+    var topbar = document.getElementById('syl-topbar');
+    var shell = document.getElementById('syl-shell');
+
+    function block(msg, status, showLogin){
+      msgEl.textContent = msg;
+      statusEl.textContent = status || '';
+      blocker.style.display = 'flex';
+      topbar.style.display = 'none';
+      shell.classList.remove('ready');
+      var lf = document.getElementById('syl-login-form');
+      if(lf) lf.style.display = showLogin ? 'block' : 'none';
+      if(showLogin){
+        var idEl = document.getElementById('syl-login-id');
+        if(idEl) setTimeout(function(){ idEl.focus(); }, 50);
+      }
+    }
+
+    try{
+      var savedId = localStorage.getItem('savedUserId');
+      if(!savedId){ block('진도계획서를 작성하려면 로그인하세요.', '', true); return; }
+
+      var res = await db.from('users').select('*').eq('id', savedId).single();
+      var data = res.data, error = res.error;
+      if(error || !data){ block('계정 조회에 실패했습니다. 다시 로그인해 주세요.', '계정 조회 실패', true); return; }
+      if(data.role !== 'teacher' && data.role !== 'admin'){
+        block('진도계획서 제작 권한이 없습니다 (선생님/관리자 전용). 다른 계정으로 로그인하세요.', data.name + ' (' + data.role + ')', true);
+        return;
+      }
+      if(data.status === 'inactive' || data.deleted_at){
+        block('비활성화된 계정입니다. 다른 계정으로 로그인하세요.', data.name || '', true);
+        return;
+      }
+
+      currentUser = data;
+      var roleLabel = (data.role === 'admin') ? '관리자' : '선생님';
+      document.getElementById('syl-user').textContent = '✅ ' + data.name + ' (' + roleLabel + ')';
+      blocker.style.display = 'none';
+      topbar.style.display = 'flex';
+      shell.classList.add('ready');
+
+      if(data.role === 'admin'){
+        // 관리자: 분원·선생님 선택 전까지 입력 잠금. 빈 양식으로 폼만 준비.
+        sylDoc = { courses: [sylBlankCourse()], active: 0 };
+        sylSetActive(0);
+        sylRenderTabs();
+        bindForm();
+        render();
+        await sylAdminSetup();     // 분원 목록 로드 + UI 표시
+        sylApplyLock();            // 대상 미선택 → 잠금
+        sylBuildPeriodOptions();
+        syllabusRefreshSavedList();
+      } else {
+        // 선생님: 본인 현재월 저장본 복원(여러 강좌), 없으면 빈 강좌 1개로 시작
+        var loadedCourses = await sylLoadCurrentMonthCourses();
+        var startedBlank = !(loadedCourses && loadedCourses.length);
+        sylDoc = { courses: startedBlank ? [sylBlankCourse()] : loadedCourses, active: 0 };
+        sylSetActive(0);
+        sylRenderTabs();
+        bindForm();
+        render();
+        sylBuildPeriodOptions();
+        syllabusRefreshSavedList();
+        if(startedBlank) sylAutoApplyProfilePhoto();   // 빈 시작일 때만 프로필 사진 자동(논블로킹)
+      }
+    } catch(e){
+      block('인증 처리 중 오류가 발생했습니다.', String(e && e.message ? e.message : e));
+    }
+  }
+
+  /* ============================================================
+     [ADMIN] 분원·선생님 선택 (관리자 전용)
+  ============================================================ */
+  // 잠금 적용: 대상 미선택이면 입력 영역 오버레이 표시 + 저장/추출 버튼 비활성
+  function sylApplyLock(){
+    var locked = (currentUser && currentUser.role === 'admin' && !sylTargetReady());
+    var lock = document.getElementById('syl-form-lock');
+    if(lock) lock.style.display = locked ? 'flex' : 'none';
+    ['syl-save-btn','syl-jpg-btn','syl-pdf-btn','syl-del-btn','syl-new-btn'].forEach(function(id){
+      var b = document.getElementById(id); if(b) b.disabled = locked;
+    });
+  }
+
+  // 관리자 UI 초기화: 분원 목록 채우고 바 표시
+  async function sylAdminSetup(){
+    var bar = document.getElementById('syl-admin-bar');
+    if(bar) bar.style.display = 'flex';
+    var branchSel = document.getElementById('syl-admin-branch');
+    var teacherSel = document.getElementById('syl-admin-teacher');
+    if(!branchSel || !teacherSel) return;
+    // 분원 목록 = 운영본 branches 테이블 (value=branch id, label=name)
+    try {
+      var res = await db.from('branches').select('id, name').order('name', { ascending: true });
+      if(res.error){ console.warn('분원 조회 실패:', res.error); }
+      var html = '<option value="">분원 선택…</option>';
+      (res.data || []).forEach(function(b){
+        html += '<option value="' + esc(b.id) + '" data-name="' + esc(b.name||'') + '">' + esc(b.name || '(이름없음)') + '</option>';
+      });
+      branchSel.innerHTML = html;
+    } catch(e){ console.warn('분원 조회 예외:', e); }
+
+    branchSel.addEventListener('change', async function(){
+      sylAdminTarget = null;             // 분원 바꾸면 선생님 선택 초기화
+      await sylAdminLoadTeachers(branchSel.value);
+      sylApplyLock();
+    });
+    teacherSel.addEventListener('change', async function(){
+      await sylAdminPickTeacher(teacherSel.value, teacherSel.options[teacherSel.selectedIndex], branchSel.options[branchSel.selectedIndex]);
+    });
+  }
+
+  // 선택 분원(branchId)의 선생님 목록 채우기 (운영본: users.branch_id, status='active')
+  async function sylAdminLoadTeachers(branchId){
+    var teacherSel = document.getElementById('syl-admin-teacher');
+    if(!teacherSel) return;
+    teacherSel.innerHTML = '<option value="">선생님 선택…</option>';
+    teacherSel.disabled = true;
+    if(!branchId) return;
+    try {
+      var res = await db.from('users').select('id, name, branch_id, status, deleted_at, profile_image_url')
+        .eq('role', 'teacher').eq('branch_id', branchId).order('name', { ascending: true });
+      if(res.error){ console.warn('선생님 조회 실패:', res.error); return; }
+      var rows = (res.data || []).filter(function(u){ return u.status !== 'inactive' && !u.deleted_at; });
+      var html = '<option value="">선생님 선택…</option>';
+      rows.forEach(function(u){
+        html += '<option value="' + esc(u.id) + '" data-name="' + esc(u.name||'') + '" data-photo="' + esc(u.profile_image_url||'') + '">' + esc(u.name || '(이름없음)') + '</option>';
+      });
+      teacherSel.innerHTML = html;
+      teacherSel.disabled = false;
+    } catch(e){ console.warn('선생님 조회 예외:', e); }
+  }
+
+  // 선생님 확정 → 대상 설정(+분원명) + 그 선생님 현재월 저장본 로드
+  async function sylAdminPickTeacher(id, optEl, branchOptEl){
+    if(!id){ sylAdminTarget = null; sylApplyLock(); return; }
+    sylAdminTarget = {
+      id: id,
+      name: optEl ? optEl.getAttribute('data-name') : '',
+      branch: branchOptEl ? (branchOptEl.getAttribute('data-name') || '') : '',   // 표시용 분원명
+      photoUrl: optEl ? (optEl.getAttribute('data-photo') || '') : ''             // 프로필 사진 URL
+    };
+    window._sylCurrentRecordId = null;
+    var loadedCourses = await sylLoadCurrentMonthCourses();
+    var startedBlank = !(loadedCourses && loadedCourses.length);
+    sylDoc = { courses: startedBlank ? [sylBlankCourse()] : loadedCourses, active: 0 };
+    sylSetActive(0);
+    sylRenderTabs();
+    rebindAndRender();
+    sylApplyLock();
+    syllabusRefreshSavedList();
+    if(startedBlank) sylAutoApplyProfilePhoto();   // 빈 시작일 때만 선택 선생님 프로필 사진 자동
+  }
+
+  /* 저장본 course 객체 → 안전 정규화 (누락 필드 보정, 구조 변화 대비) */
+  function sylNormalizeLoaded(loaded, period){
+    if(!loaded || typeof loaded !== 'object') return null;
+    if(loaded.period == null) loaded.period = period || sylTargetPeriod();
+    if(loaded.brand == null) loaded.brand = '베스티안 수학학원';
+    if(!Array.isArray(loaded.sched)) loaded.sched = [];
+    if(!Array.isArray(loaded.week)) loaded.week = [];
+    return loaded;
+  }
+
+  /* 저장본 courses 배열 정규화 + 공통 사진 일관화(첫 강좌 사진을 공통으로) */
+  function sylNormalizeCourses(courses, period){
+    if(!Array.isArray(courses)) return [];
+    var out = [];
+    courses.forEach(function(c){
+      var n = sylNormalizeLoaded(c, period);
+      if(n) out.push(n);
+    });
+    if(out.length){
+      var commonPhoto = out[0].photo || null;   // 사진은 공통 → 첫 강좌 기준으로 통일
+      out.forEach(function(c){ c.photo = commonPhoto; });
+    }
+    return out;
+  }
+
+  /* 작업 대상 선생님의 현재월 저장본 → 정규화된 courses 배열(없으면 null) */
+  async function sylLoadCurrentMonthCourses(){
+    try {
+      var tgt = sylTarget();
+      if(!tgt || !tgt.id) return null;
+      var period = sylTargetPeriod();
+      var res = await db.from('bmaps_syllabuses')
+        .select('*')
+        .eq('teacher_id', tgt.id)
+        .eq('period', period)
+        .maybeSingle();
+      if(res.error){ console.warn('저장본 조회 실패:', res.error); return null; }
+      var rec = res.data;
+      if(!rec || !Array.isArray(rec.courses) || !rec.courses.length) return null;
+      window._sylCurrentRecordId = rec.id;
+      return sylNormalizeCourses(rec.courses, period);
+    } catch(e){
+      console.warn('저장본 조회 예외:', e);
+      return null;
+    }
+  }
+
+  /* ============================================================
+     [FORM] 입력 폼 -> state -> render (1b-1: 스칼라 필드 + 사진 + 특징)
+     · 진도/주말/연간 배열 입력은 1b-2에서 연결.
+  ============================================================ */
+  function debounce(fn, ms){
+    var t;
+    return function(){ clearTimeout(t); t = setTimeout(fn, ms); };
+  }
+  var scheduleRender = debounce(function(){ render(); }, 160);
+
+  // 입력 id -> state 키 매핑 (텍스트 필드)
+  var FORM_TEXT_MAP = {
+    'f-course':'course', 'f-teacher':'teacher',
+    'f-grade':'grade', 'f-time':'time',
+    'f-bookmain':'bookMain', 'f-booksub':'bookSub', 'f-feature':'feature',
+    'f-naje-time':'najeTime', 'f-mock-time':'mockTime'
+  };
+
+  function bindForm(){
+    // state -> 입력값 채우기 + 리스너 연결
+    Object.keys(FORM_TEXT_MAP).forEach(function(id){
+      var el = document.getElementById(id);
+      if(!el) return;
+      var key = FORM_TEXT_MAP[id];
+      el.value = (state[key] == null) ? '' : state[key];
+      el.addEventListener('input', function(){
+        state[key] = el.value;
+        if(key === 'course') sylRenderTabs();   // 탭 라벨 실시간 갱신
+        scheduleRender();
+      });
+    });
+
+    // 강사 사진 업로드 (로컬 미리보기만 — Supabase 저장은 추후 단계)
+    var pf = document.getElementById('f-photo');
+    if(pf){
+      pf.addEventListener('change', function(e){
+        var file = e.target.files && e.target.files[0];
+        if(!file) return;
+        if(!/^image\//.test(file.type || '')){
+          alert('이미지 파일만 업로드할 수 있습니다.');
+          pf.value = '';
+          return;
+        }
+        var reader = new FileReader();
+        reader.onload = function(){ state.photo = reader.result; sylSyncPhotoToAll(reader.result); render(); };
+        reader.onerror = function(){ alert('이미지를 읽지 못했습니다. 다시 시도해주세요.'); };
+        reader.readAsDataURL(file);
+      });
+    }
+    var pc = document.getElementById('f-photo-clear');
+    if(pc){
+      pc.addEventListener('click', function(){
+        state.photo = null;
+        sylSyncPhotoToAll(null);
+        if(pf) pf.value = '';
+        render();
+      });
+    }
+    var pp = document.getElementById('f-photo-profile');
+    if(pp){
+      pp.addEventListener('click', function(){ sylUseProfilePhoto(pp); });
+    }
+
+    // ── N제 / 모의고사 라벨 모드(기본/직접입력) ──
+    // cfg: {mode 셀렉트, custom 입력, state 키, 기본 라벨}
+    function bindLabelMode(modeId, customId, stateKey, defaultLabel){
+      var modeEl = document.getElementById(modeId);
+      var customEl = document.getElementById(customId);
+      if(!modeEl || !customEl) return;
+      // 초기 상태: state 값이 기본 라벨과 다르면 custom 모드
+      var cur = (state[stateKey] && String(state[stateKey]).trim()) || '';
+      var isCustom = !!(cur && cur !== defaultLabel);
+      modeEl.value = isCustom ? 'custom' : 'default';
+      customEl.style.display = isCustom ? '' : 'none';
+      customEl.value = isCustom ? cur : '';
+      // 기본 모드면 state는 기본 라벨로 정규화
+      if(!isCustom) state[stateKey] = defaultLabel;
+
+      modeEl.addEventListener('change', function(){
+        if(modeEl.value === 'custom'){
+          customEl.style.display = '';
+          state[stateKey] = customEl.value.trim() || defaultLabel;
+          customEl.focus();
+        } else {
+          customEl.style.display = 'none';
+          state[stateKey] = defaultLabel;
+        }
+        scheduleRender();
+      });
+      customEl.addEventListener('input', function(){
+        state[stateKey] = customEl.value.trim() || defaultLabel;
+        scheduleRender();
+      });
+    }
+    bindLabelMode('f-naje-mode', 'f-naje-label', 'najeLabel', 'N제 시간');
+    bindLabelMode('f-mock-mode', 'f-mock-label', 'mockLabel', '모의고사 시간');
+
+    // ── 회차별 진도 (동적 행) ──
+    buildSchedForm();
+    var schedAdd = document.getElementById('f-sched-add');
+    if(schedAdd){
+      schedAdd.addEventListener('click', function(){
+        if(!Array.isArray(state.sched)) state.sched = [];
+        if(state.sched.length >= 10){
+          alert('회차별 진도는 1페이지에 최대 10개까지 입력할 수 있습니다.\n\n11회차부터는 아래의 "2페이지 (다음 달)" 기능을 켜고 입력해 주세요.\n( ☑ 2페이지 추가 → 진도 입력 )');
+          return;
+        }
+        state.sched.push(['', '', '', '']);
+        buildSchedForm();
+        scheduleRender();
+      });
+    }
+
+    // ── 주말 학습 계획 (on/off + 동적 행) ──
+    var wkOn = document.getElementById('f-week-on');
+    if(wkOn){
+      wkOn.checked = !!(state.week && state.week.length > 0);
+      wkOn.addEventListener('change', function(){
+        if(wkOn.checked){
+          // 이전 입력 복원, 없으면 빈 한 줄로 시작
+          state.week = (state._weekBackup && state._weekBackup.length) ? state._weekBackup : [['', '']];
+        } else {
+          state._weekBackup = state.week;  // 끄면 백업(실수 토글 보호) 후 비움 → render에서 no-week
+          state.week = [];
+        }
+        buildWeekForm();
+        scheduleRender();
+      });
+    }
+    buildWeekForm();
+    var weekAdd = document.getElementById('f-week-add');
+    if(weekAdd){
+      weekAdd.addEventListener('click', function(){
+        if(!Array.isArray(state.week)) state.week = [];
+        state.week.push(['', '']);
+        // 행을 추가하면 주말 포함 상태로 간주
+        if(wkOn) wkOn.checked = true;
+        buildWeekForm();
+        scheduleRender();
+      });
+    }
+
+    // ── 연간 커리큘럼 (on/off + 12칸) ──
+    var currOn = document.getElementById('f-curr-on');
+    if(currOn){
+      currOn.checked = !!state.currOn;
+      currOn.addEventListener('change', function(){
+        state.currOn = currOn.checked;
+        if(state.currOn) state.curr = sylNormalizeCurr(state.curr); // 12칸 보장
+        buildCurrForm();
+        scheduleRender();
+      });
+    }
+    buildCurrForm();
+
+    // ── 2페이지 (다음 달) on/off + 기간 + 진도 행 ──
+    var p2On = document.getElementById('f-p2-on');
+    var p2Wrap = document.getElementById('f-p2-wrap');
+    var p2Period = document.getElementById('f-p2-period');
+    function ensurePage2(){
+      if(!state.page2) state.page2 = { on:false, period2:'', sched2:[] };
+      if(!Array.isArray(state.page2.sched2)) state.page2.sched2 = [];
+      return state.page2;
+    }
+    if(p2On){
+      p2On.checked = !!(state.page2 && state.page2.on);
+      if(p2Wrap) p2Wrap.style.display = p2On.checked ? '' : 'none';
+      p2On.addEventListener('change', function(){
+        var pg = ensurePage2();
+        pg.on = p2On.checked;
+        if(pg.on){
+          // 기간 비어있으면 다음 달로 추정 채움, 진도 없으면 한 줄 시작
+          if(!pg.period2) pg.period2 = sylGuessNextPeriod(state.period);
+          if(!pg.sched2.length) pg.sched2 = [['', '', '', '']];
+          if(p2Period) p2Period.value = pg.period2;
+        }
+        if(p2Wrap) p2Wrap.style.display = pg.on ? '' : 'none';
+        buildPage2Form();
+        scheduleRender();
+      });
+    }
+    if(p2Period){
+      if(state.page2 && state.page2.period2) p2Period.value = state.page2.period2;
+      p2Period.addEventListener('input', function(){
+        ensurePage2().period2 = p2Period.value;
+        scheduleRender();
+      });
+    }
+    buildPage2Form();
+    var p2Add = document.getElementById('f-p2-add');
+    if(p2Add){
+      p2Add.addEventListener('click', function(){
+        var pg = ensurePage2();
+        pg.sched2.push(['', '', '', '']);
+        pg.on = true;
+        if(p2On) p2On.checked = true;
+        if(p2Wrap) p2Wrap.style.display = '';
+        buildPage2Form();
+        scheduleRender();
+      });
+    }
+  }
+
+  // 기간 '2026년 6월' -> 다음 달 '2026년 7월' 추정 (파싱 실패 시 빈 문자열)
+  function sylGuessNextPeriod(period){
+    var m = String(period||'').match(/(\d{4})\s*년\s*(\d{1,2})\s*월/);
+    if(!m) return '';
+    var y = parseInt(m[1],10), mo = parseInt(m[2],10) + 1;
+    if(mo > 12){ mo = 1; y += 1; }
+    return y + '년 ' + mo + '월';
+  }
+
+  // 2페이지 진도 입력 행 빌드 (off면 wrap이 숨겨지므로 목록만 갱신)
+  function buildPage2Form(){
+    var list = document.getElementById('f-p2-list');
+    if(!list) return;
+    list.innerHTML = '';
+    var pg = state.page2;
+    if(!pg || !Array.isArray(pg.sched2)) return;
+    pg.sched2.forEach(function(row, i){
+      var div = document.createElement('div');
+      div.className = 'frow';
+      div.innerHTML =
+        '<input class="fi fri fr-date" type="text" placeholder="날짜">'
+        + '<input class="fi fri fr-wd" type="text" placeholder="요일" readonly title="날짜 입력 시 자동">'
+        + '<select class="fi fri fr-flag" title="구분"><option value="">-</option><option value="S">특별</option><option value="H">휴강</option></select>'
+        + '<button type="button" class="fr-sym" title="수학 기호">Σ</button>'
+        + '<input class="fi fri fr-content" type="text" placeholder="내용">'
+        + '<button type="button" class="fdel" title="이 행 삭제">×</button>';
+      var d = div.querySelector('.fr-date'), w = div.querySelector('.fr-wd'),
+          fg = div.querySelector('.fr-flag'), sym = div.querySelector('.fr-sym'),
+          c = div.querySelector('.fr-content');
+      d.value = row[0] || ''; w.value = row[1] || ''; c.value = row[2] || ''; fg.value = row[3] || '';
+      d.addEventListener('input', function(){
+        pg.sched2[i][0] = d.value;
+        var wd = sylDateToWeekday(d.value, pg.period2 || state.period); // 2페이지 기간 기준
+        if(wd){ w.value = wd; pg.sched2[i][1] = wd; }
+        scheduleRender();
+      });
+      d.addEventListener('keydown', function(e){
+        if(e.key !== 'Enter') return;
+        e.preventDefault();
+        if(i >= pg.sched2.length - 1){
+          pg.sched2.push(['', '', '', '']);
+          buildPage2Form();
+          scheduleRender();
+        }
+        sylFocusRowDate('f-p2-list', i + 1);
+      });
+      fg.addEventListener('change', function(){ pg.sched2[i][3] = fg.value; scheduleRender(); });
+      sym.addEventListener('click', function(e){ sylOpenSymPop(e.currentTarget, c, function(v){ pg.sched2[i][2] = v; scheduleRender(); }); });
+      c.addEventListener('input', function(){ pg.sched2[i][2] = c.value; scheduleRender(); });
+      div.querySelector('.fdel').addEventListener('click', function(){
+        pg.sched2.splice(i, 1);
+        buildPage2Form();
+        scheduleRender();
+      });
+      list.appendChild(div);
+    });
+  }
+
+  // 연간 커리큘럼 입력 행 빌드 (off면 목록 숨김)
+  function buildCurrForm(){
+    var list = document.getElementById('f-curr-list');
+    var currOn = document.getElementById('f-curr-on');
+    if(!list) return;
+    var on = currOn ? currOn.checked : !!state.currOn;
+    list.style.display = on ? '' : 'none';
+    list.innerHTML = '';
+    if(!on) return;
+    state.curr = sylNormalizeCurr(state.curr);
+    state.curr.forEach(function(row, i){
+      var div = document.createElement('div');
+      div.className = 'fcurr-row';
+      div.innerHTML =
+        '<span class="fc-mon"></span>'
+        + '<input class="fi fc-val" type="text" placeholder="예: 개념 / 내신 / 수능">';
+      div.querySelector('.fc-mon').textContent = row[0];
+      var val = div.querySelector('.fc-val');
+      val.value = row[1] || '';
+      val.addEventListener('input', function(){ state.curr[i][1] = val.value; scheduleRender(); });
+      list.appendChild(div);
+    });
+  }
+
+  // 진도 입력 행 빌드. 구조 변경(추가/삭제) 시에만 재빌드 → 입력 중 포커스 유지.
+  function buildSchedForm(){
+    var list = document.getElementById('f-sched-list');
+    if(!list) return;
+    list.innerHTML = '';
+    if(!Array.isArray(state.sched)) state.sched = [];
+    state.sched.forEach(function(row, i){
+      var div = document.createElement('div');
+      div.className = 'frow';
+      div.innerHTML =
+        '<input class="fi fri fr-date" type="text" placeholder="날짜">'
+        + '<input class="fi fri fr-wd" type="text" placeholder="요일" readonly title="날짜 입력 시 자동">'
+        + '<select class="fi fri fr-flag" title="구분"><option value="">-</option><option value="S">특별</option><option value="H">휴강</option></select>'
+        + '<button type="button" class="fr-sym" title="수학 기호">Σ</button>'
+        + '<input class="fi fri fr-content" type="text" placeholder="내용">'
+        + '<button type="button" class="fdel" title="이 행 삭제">×</button>';
+      var d = div.querySelector('.fr-date'), w = div.querySelector('.fr-wd'),
+          fg = div.querySelector('.fr-flag'), sym = div.querySelector('.fr-sym'),
+          c = div.querySelector('.fr-content');
+      d.value = row[0] || ''; w.value = row[1] || ''; c.value = row[2] || ''; fg.value = row[3] || '';
+      d.addEventListener('input', function(){
+        state.sched[i][0] = d.value;
+        var wd = sylDateToWeekday(d.value, state.period);
+        if(wd){ w.value = wd; state.sched[i][1] = wd; }   // 유효 날짜만 요일 갱신
+        scheduleRender();
+      });
+      d.addEventListener('keydown', function(e){
+        if(e.key !== 'Enter') return;
+        e.preventDefault();
+        if(i >= state.sched.length - 1){          // 마지막 행이면 새 행 추가
+          if(state.sched.length >= 10){
+            alert('회차별 진도는 1페이지에 최대 10개까지 입력할 수 있습니다.\n\n11회차부터는 아래의 "2페이지 (다음 달)" 기능을 켜고 입력해 주세요.\n( ☑ 2페이지 추가 → 진도 입력 )');
+            return;
+          }
+          state.sched.push(['', '', '', '']);
+          buildSchedForm();
+          scheduleRender();
+        }
+        sylFocusRowDate('f-sched-list', i + 1);    // 다음 행 날짜칸으로 이동
+      });
+      fg.addEventListener('change', function(){ state.sched[i][3] = fg.value; scheduleRender(); });
+      sym.addEventListener('click', function(e){ sylOpenSymPop(e.currentTarget, c, function(v){ state.sched[i][2] = v; scheduleRender(); }); });
+      c.addEventListener('input', function(){ state.sched[i][2] = c.value; scheduleRender(); });
+      div.querySelector('.fdel').addEventListener('click', function(){
+        state.sched.splice(i, 1);
+        buildSchedForm();   // 인덱스 재정렬 위해 재빌드
+        scheduleRender();
+      });
+      list.appendChild(div);
+    });
+  }
+
+  // 주말 입력 행 빌드 (체크 해제 시 목록/추가버튼 숨김).
+  function buildWeekForm(){
+    var list = document.getElementById('f-week-list');
+    var addBtn = document.getElementById('f-week-add');
+    var wkOn = document.getElementById('f-week-on');
+    if(!list) return;
+    var on = wkOn ? wkOn.checked : !!(state.week && state.week.length > 0);
+    list.style.display = on ? '' : 'none';
+    if(addBtn) addBtn.style.display = on ? '' : 'none';
+    list.innerHTML = '';
+    if(!on) return;
+    if(!Array.isArray(state.week)) state.week = [];
+    state.week.forEach(function(row, i){
+      var div = document.createElement('div');
+      div.className = 'frow';
+      div.innerHTML =
+        '<input class="fi fri fr-wlabel" type="text" placeholder="주차">'
+        + '<textarea class="fi fr-wbody" placeholder="내용 (줄바꿈 가능)"></textarea>'
+        + '<button type="button" class="fdel" title="이 행 삭제">×</button>';
+      var lb = div.querySelector('.fr-wlabel'), bd = div.querySelector('.fr-wbody');
+      lb.value = row[0] || ''; bd.value = row[1] || '';
+      lb.addEventListener('input', function(){ state.week[i][0] = lb.value; scheduleRender(); });
+      bd.addEventListener('input', function(){ state.week[i][1] = bd.value; scheduleRender(); });
+      div.querySelector('.fdel').addEventListener('click', function(){
+        state.week.splice(i, 1);
+        buildWeekForm();
+        scheduleRender();
+      });
+      list.appendChild(div);
+    });
+  }
+
+  /* ============================================================
+     [EXPORT] JPG / PDF 추출
+     · 운영본 검증 패턴 채택: 라이브러리 지연 로드, html2canvas scale:2 +
+       useCORS/allowTaint/흰배경, showSaveFilePicker→a.download 폴백.
+     · 개선: 운영본은 추출용 HTML을 오프스크린에서 재생성했으나,
+       우리는 이미 auto-fit 끝난 "실물 A4 노드(#a4,#a4-p2)"를 직접 캡처
+       → 미리보기 = 추출물 1:1 보장, HTML 재발명/불일치 제거.
+  ============================================================ */
+  var SYL_LIBS = {
+    h2c: 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
+    jspdf: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+    jszip: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
+  };
+  function sylLoadScript(src){
+    return new Promise(function(resolve, reject){
+      // 이미 로드된 동일 src면 재로드 안 함
+      var existing = Array.prototype.slice.call(document.scripts).some(function(s){ return s.src === src; });
+      if(existing){ resolve(); return; }
+      var s = document.createElement('script');
+      s.src = src; s.onload = resolve;
+      s.onerror = function(){ reject(new Error('스크립트 로드 실패: ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // 추출 파일명: 운영본 규칙 (선생님명_진도계획서_O월). 활성 강좌가 바뀌어도 일관되게 문서 기준.
+  // 개별 강좌 파일명: 강좌명 기준 (없으면 강좌N) + 월
+  function sylExportNameForCourse(idx){
+    var c = (sylDoc && sylDoc.courses && sylDoc.courses[idx]) ? sylDoc.courses[idx] : (state || {});
+    var cname = (c.course && String(c.course).trim()) ? c.course : ('강좌' + (idx+1));
+    var raw = String(c.period || (state && state.period) || '');
+    var m = raw.match(/(\d{1,2})\s*월/);
+    var month = m ? (m[1] + '월') : raw.replace(/[\/:*?"<>|]/g, '_');
+    return String(cname).replace(/[\/:*?"<>|]/g, '_') + (month ? ('_' + month) : '');
+  }
+
+  function sylExportName(){
+    var base = (sylDoc && sylDoc.courses && sylDoc.courses[0]) ? sylDoc.courses[0] : (state || {});
+    var tName = (currentUser && currentUser.name) ? currentUser.name : (base.teacher || '선생님');
+    var t = String(tName).replace(/[\/:*?"<>|]/g, '_');
+    var raw = String(base.period || (state && state.period) || '');
+    var m = raw.match(/(\d{1,2})\s*월/);
+    var month = m ? (m[1] + '월') : raw.replace(/[\/:*?"<>|]/g, '_');
+    return t + '_진도계획서_' + (month || '');
+  }
+
+  // 운영본 sylSaveFile 패턴 (저장위치 선택 → 폴백 다운로드)
+  async function sylSaveFile(blob, suggestedName, mimeType, ext){
+    if(window.showSaveFilePicker){
+      try {
+        var typeMap = {
+          'image/jpeg': [{description:'JPEG 이미지', accept:{'image/jpeg':['.jpg','.jpeg']}}],
+          'application/zip': [{description:'ZIP 파일', accept:{'application/zip':['.zip']}}],
+          'application/pdf': [{description:'PDF 파일', accept:{'application/pdf':['.pdf']}}]
+        };
+        var handle = await window.showSaveFilePicker({
+          suggestedName: suggestedName,
+          types: typeMap[mimeType] || [{description:'파일', accept:{}}],
+          startIn: 'downloads'
+        });
+        var w = await handle.createWritable();
+        await w.write(blob); await w.close();
+        return true;
+      } catch(e){
+        if(e.name === 'AbortError') return false; // 사용자가 취소
+        console.warn('showSaveFilePicker 실패, 폴백:', e);
+      }
+    }
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = suggestedName; a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    return true;
+  }
+
+  // 실물 A4 노드 하나를 캔버스로 (캡처 직전 디버그 배지 숨김)
+  async function sylCaptureNode(node){
+    var badge = node.querySelector('.badge');
+    var prevBadge = badge ? badge.style.display : null;
+    if(badge) badge.style.display = 'none';
+    // 미리보기 축소(scale)는 캡처 정확도에 영향 줄 수 있으므로 캡처 동안 1배로 복원
+    var wrap = document.querySelector('.a4-wrap');
+    var prevScale = wrap ? wrap.style.getPropertyValue('--prev-scale') : null;
+    if(wrap) wrap.style.setProperty('--prev-scale', '1');
+    try {
+      // 변환 해제가 레이아웃에 반영되도록 한 프레임 대기
+      await new Promise(function(r){ requestAnimationFrame(function(){ requestAnimationFrame(r); }); });
+      return await html2canvas(node, {
+        scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff',
+        width: 794, height: 1123, windowWidth: 794, windowHeight: 1123, logging: false
+      });
+    } finally {
+      if(badge) badge.style.display = prevBadge; // 항상 원복
+      if(wrap){                                   // 스케일 항상 원복
+        if(prevScale) wrap.style.setProperty('--prev-scale', prevScale);
+        else wrap.style.removeProperty('--prev-scale');
+        sylFitPreview();
+      }
+    }
+  }
+
+  // 추출 대상 페이지 노드 목록 (1페이지 + (있으면)2페이지)
+  function sylGetPageNodes(){
+    var nodes = [document.getElementById('a4')];
+    var p2 = document.getElementById('a4-p2');
+    if(p2 && p2.style.display !== 'none') nodes.push(p2);
+    return nodes;
+  }
+
+  function sylExportBusy(on, msg){
+    // 개별(모달)·전체(상단) 추출 버튼 모두 비활성화
+    Array.prototype.forEach.call(document.querySelectorAll('.exp-jpg, .exp-pdf'), function(b){ b.disabled = on; });
+    // 상태 메시지는 보이는 위치(상단·모달) 모두에 표시
+    Array.prototype.forEach.call(document.querySelectorAll('.exp-status'), function(st){ st.textContent = msg || ''; });
+  }
+
+  // 한 강좌를 활성화해 화면에 렌더하고 auto-fit이 안정될 때까지 대기
+  async function sylActivateForCapture(idx){
+    sylSetActive(idx);
+    render();   // 활성 강좌를 #a4/#a4-p2에 렌더 (내부 rAF→autoFitAll)
+    // render 내부의 이중 rAF(autoFit) 이후까지 확실히 대기
+    await new Promise(function(r){
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){ setTimeout(r, 80); }); });
+    });
+  }
+
+  // ★ 추출 전용: 미리보기가 닫혀 있어도 #a4 가 레이아웃되도록 화면 밖에서 임시 활성화.
+  //   (#a4 는 미리보기 모달 안에만 있어, 닫힌 채 캡처하면 0×0 → autoFit 생략 + html2canvas 크래시)
+  //   미리보기가 이미 열려 있으면(token=null) 손대지 않는다.
+  function sylBeginCaptureLayout(){
+    if(sylPreviewOpen) return null;                   // 이미 열려 있으면 그대로 사용
+    var modal = document.getElementById('syl-prev-modal');
+    if(!modal) return null;
+    var prev = { display: modal.style.display, transform: modal.style.transform };
+    modal.style.display = 'flex';                      // 레이아웃 활성화(측정 가능)
+    modal.style.transform = 'translateX(-100000px)';   // 화면 밖(깜빡임 방지, 레이아웃은 유지)
+    sylPreviewOpen = true;                             // autoFitAll/sylFitPreview 가드 통과
+    return { modal: modal, prev: prev };
+  }
+  function sylEndCaptureLayout(token){
+    if(!token) return;                                 // 원래 열려 있던 경우 → 건드리지 않음
+    sylPreviewOpen = false;
+    token.modal.style.display   = token.prev.display || 'none';
+    token.modal.style.transform = token.prev.transform || '';
+  }
+
+  async function syllabusExport(type, scope){
+    if(window._sylExporting) return;       // 중복 클릭 가드
+    if(!sylDoc || !sylDoc.courses.length){ alert('내보낼 강좌가 없습니다.'); return; }
+    scope = (scope === 'current') ? 'current' : 'all';
+    // 대상 강좌: 개별=현재 강좌, 전체=진도 있는 모든 강좌 (둘 다 진도 있어야 추출)
+    var targets = [];
+    if(scope === 'current'){
+      var ai = sylDoc.active;
+      var cc = sylDoc.courses[ai];
+      if(!cc || !cc.sched || !cc.sched.length){ alert('현재 강좌에 진도 내용을 먼저 입력하세요.'); return; }
+      targets = [ai];
+    } else {
+      sylDoc.courses.forEach(function(c, i){ if(c.sched && c.sched.length) targets.push(i); });
+      if(!targets.length){ alert('진도 내용을 먼저 입력하세요.'); return; }
+    }
+    // 파일명 base: 개별=강좌명 기준 / 전체=선생님 기준
+    var baseName = (scope === 'current') ? sylExportNameForCourse(targets[0]) : sylExportName();
+
+    window._sylExporting = true;
+    var prevActive = sylDoc.active;        // 작업 후 되돌릴 강좌
+    var _capTok = null;                    // ★ 추출용 미리보기 레이아웃 토큰
+    sylExportBusy(true, '⏳ 라이브러리 준비 중…');
+    try {
+      await sylLoadScript(SYL_LIBS.h2c);
+      if(typeof html2canvas === 'undefined') throw new Error('html2canvas 로드 실패');
+      _capTok = sylBeginCaptureLayout();   // ★ 미리보기 닫혀 있으면 화면 밖에서 임시 활성화(0×0/크래시 방지)
+
+      // 강좌별로 전환→캡처. pages = [{canvas, courseIdx, pageNo, courseName}]
+      var pages = [];
+      for(var t=0; t<targets.length; t++){
+        var idx = targets[t];
+        sylExportBusy(true, '⏳ 이미지 변환 중… (' + (t+1) + '/' + targets.length + ')');
+        await sylActivateForCapture(idx);
+        var nodes = sylGetPageNodes();      // 현재 활성 강좌의 1~2페이지
+        for(var p=0; p<nodes.length; p++){
+          var cv = await sylCaptureNode(nodes[p]);
+          pages.push({ canvas: cv, courseIdx: idx, pageNo: p+1, course: sylDoc.courses[idx].course || ('강좌'+(idx+1)) });
+        }
+      }
+
+      if(type === 'jpg'){
+        await sylExportJPG(pages, baseName);
+      } else {
+        await sylExportPDF(pages, baseName);
+      }
+      sylExportBusy(false, '✅ 저장 완료');
+    } catch(e){
+      console.error(e);
+      sylExportBusy(false, '');
+      alert('추출 중 오류가 발생했습니다: ' + (e && e.message ? e.message : e));
+    } finally {
+      sylEndCaptureLayout(_capTok);        // ★ 임시 활성화 원복(재렌더 전에)
+      // 원래 보던 강좌로 복원 (화면 일관성)
+      sylSetActive(prevActive);
+      sylRenderTabs();
+      rebindAndRender();
+      window._sylExporting = false;
+      setTimeout(function(){ Array.prototype.forEach.call(document.querySelectorAll('.exp-status'), function(st){ if(st.textContent==='✅ 저장 완료') st.textContent=''; }); }, 3000);
+    }
+  }
+
+  function sylCanvasToBlob(canvas, mime, q){
+    return new Promise(function(resolve){ canvas.toBlob(resolve, mime, q); });
+  }
+
+  // 파일 안전 이름 조각
+  function sylSafe(s){ return String(s||'').replace(/[\/:*?"<>|]/g,'_').trim(); }
+
+  async function sylExportJPG(pages, base){
+    base = base || sylExportName();
+    if(pages.length === 1){
+      var blob = await sylCanvasToBlob(pages[0].canvas, 'image/jpeg', 0.95);
+      await sylSaveFile(blob, base + '.jpg', 'image/jpeg', 'jpg');
+    } else {
+      await sylLoadScript(SYL_LIBS.jszip);
+      if(typeof JSZip === 'undefined') throw new Error('JSZip 로드 실패');
+      var zip = new JSZip();
+      // 파일명: 01_강좌명(_2페이지) ... 순서 보존 위해 2자리 prefix
+      for(var i=0;i<pages.length;i++){
+        var pg = pages[i];
+        var b = await sylCanvasToBlob(pg.canvas, 'image/jpeg', 0.95);
+        var seq = String(i+1).padStart(2, '0');
+        var pageSuffix = (pg.pageNo > 1) ? ('_' + pg.pageNo + '페이지') : '';
+        zip.file(seq + '_' + sylSafe(pg.course) + pageSuffix + '.jpg', b);
+      }
+      var zipBlob = await zip.generateAsync({type:'blob'});
+      await sylSaveFile(zipBlob, base + '.zip', 'application/zip', 'zip');
+    }
+  }
+
+  async function sylExportPDF(pages, base){
+    base = base || sylExportName();
+    await sylLoadScript(SYL_LIBS.jspdf);
+    if(typeof window.jspdf === 'undefined') throw new Error('jsPDF 로드 실패');
+    var jsPDF = window.jspdf.jsPDF;
+    var pdf = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
+    var pW = pdf.internal.pageSize.getWidth();
+    for(var i=0;i<pages.length;i++){
+      if(i>0) pdf.addPage();
+      var cv = pages[i].canvas;
+      var fitH = pW * (cv.height / cv.width);  // 가로 꽉 채우고 세로 비율
+      pdf.addImage(cv.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pW, fitH);
+    }
+    var pdfBlob = pdf.output('blob');
+    await sylSaveFile(pdfBlob, base + '.pdf', 'application/pdf', 'pdf');
+  }
+
+  /* ============================================================
+     [SAVE] Supabase 저장 — bmaps_syllabuses (운영본과 분리된 전용 테이블)
+     · 식별: (teacher_id, period) 유니크 → 있으면 수정, 없으면 새로 (upsert)
+     · courses: 현재 강좌 state 배열 [state] (추후 여러 강좌로 확장)
+  ============================================================ */
+  function sylSaveBusy(on, msg){
+    var b = document.getElementById('syl-save-btn');
+    if(b) b.disabled = on;
+    Array.prototype.forEach.call(document.querySelectorAll('.exp-status'), function(st){ st.textContent = msg || ''; });
+  }
+
+  async function syllabusSave(){
+    if(window._sylSaving) return;             // 중복 클릭 가드
+    if(!currentUser || !currentUser.id){ alert('로그인 정보가 없습니다. 다시 로그인 후 시도해주세요.'); return; }
+    var tgt = sylTarget();
+    if(!tgt || !tgt.id){ alert('관리자는 먼저 분원과 선생님을 선택해주세요.'); return; }
+    if(!sylDoc || !sylDoc.courses.length){ alert('저장할 내용이 없습니다.'); return; }
+    // 강좌명이 하나도 없으면 차단
+    var named = sylDoc.courses.filter(function(c){ return c.course && String(c.course).trim(); });
+    if(!named.length){ alert('강좌명을 입력한 뒤 저장해주세요.'); return; }
+
+    window._sylSaving = true;
+    sylSaveBusy(true, '⏳ 저장 중…');
+    try {
+      // 모든 강좌를 깨끗하게(파생/임시 필드 제거) 직렬화
+      var cleanCourses = sylDoc.courses.map(function(c){
+        var cc = JSON.parse(JSON.stringify(c));
+        delete cc._weekLong; delete cc._weekBackup;
+        return cc;
+      });
+      var period = (sylDoc.courses[0] && sylDoc.courses[0].period) || sylTargetPeriod();
+
+      var payload = {
+        teacher_id:   tgt.id,
+        teacher_name: tgt.name || null,
+        branch:       tgt.branch || null,
+        period:       period,
+        courses:      cleanCourses,       // 전체 강좌
+        updated_at:   new Date().toISOString()
+      };
+
+      // (teacher_id, period) 기준 upsert — 유니크 인덱스가 충돌 시 갱신 처리
+      var res = await db.from('bmaps_syllabuses')
+        .upsert(payload, { onConflict: 'teacher_id,period' })
+        .select().single();
+      if(res.error) throw res.error;
+
+      window._sylCurrentRecordId = res.data && res.data.id;   // 이후 불러오기/갱신용
+      sylSaveBusy(false, '✅ 저장 완료 (' + state.period + ')');
+      syllabusRefreshSavedList();   // 목록 갱신(새 달이면 항목 추가)
+    } catch(e){
+      console.error(e);
+      sylSaveBusy(false, '');
+      alert('저장 실패: ' + (e && e.message ? e.message : e));
+    } finally {
+      window._sylSaving = false;
+      setTimeout(function(){
+        Array.prototype.forEach.call(document.querySelectorAll('.exp-status'), function(st){
+          if(st.textContent.indexOf('저장 완료')>=0) st.textContent='';
+        });
+      }, 3500);
+    }
+  }
+
+  /* ============================================================
+     [SAVED LIST] 저장 목록 조회 / 선택 불러오기 / 삭제 / 새로 시작
+  ============================================================ */
+  // 작업 대상 선생님의 저장본 목록을 드롭다운에 채움 (최신순). 현재 레코드를 기본 선택.
+  async function syllabusRefreshSavedList(){
+    var sel = document.getElementById('syl-saved-list');
+    if(!sel) return;
+    var tgt = sylTarget();
+    if(!tgt || !tgt.id){ sel.innerHTML = '<option value="">불러올 진도계획서 선택…</option>'; return; }
+    try {
+      var res = await db.from('bmaps_syllabuses')
+        .select('id, period, courses, updated_at')
+        .eq('teacher_id', tgt.id)
+        .order('updated_at', { ascending: false });
+      if(res.error){ console.warn('목록 조회 실패:', res.error); return; }
+      var rows = res.data || [];
+      var html = '<option value="">불러올 진도계획서 선택…</option>';
+      rows.forEach(function(r){
+        var n = Array.isArray(r.courses) ? r.courses.length : 0;
+        var label = (r.period || '(기간 미상)') + ' 진도계획서' + (n ? (' (강좌 ' + n + '개)') : '');
+        html += '<option value="' + esc(r.id) + '">' + esc(label) + '</option>';
+      });
+      sel.innerHTML = html;
+      if(window._sylCurrentRecordId) sel.value = window._sylCurrentRecordId;
+    } catch(e){ console.warn('목록 조회 예외:', e); }
+  }
+
+  /* ============================================================
+     [ITEM IMPORT] 항목 단위 불러오기 — 대상 선생님의 저장본에서 특정 항목만 복사
+  ============================================================ */
+  // 항목 정의: 라벨 + 현재 강좌(state)에 적용하는 함수 + 모드 지원여부
+  function sylDeepCopy(v){ return JSON.parse(JSON.stringify(v == null ? null : v)); }
+
+  // 운영본(syllabuses) course → 리빌딩(bmaps) course 구조로 변환 (MCP 검증된 매핑)
+  // rec: 운영 레코드(period, teacher_name) — course엔 없는 공통값을 주입
+  function sylConvertOpsCourse(c, rec){
+    function flagConv(f){ return (f === 'H') ? 'H' : (f === 'S') ? 'S' : ''; }
+    var _period = (rec && rec.period) || '';
+    // 요일을 축약형('화')으로 정규화: 날짜로 재계산 우선, 실패 시 운영본 day의 첫 글자 사용
+    function normWeekday(dateStr, rawDay){
+      var wd = sylDateToWeekday(dateStr, _period);   // 날짜 기준 정확한 축약 요일
+      if(wd) return wd;
+      var rd = String(rawDay || '').trim();
+      if(!rd) return '';
+      var first = rd.charAt(0);                       // "화요일" → "화"
+      return (['일','월','화','수','목','금','토'].indexOf(first) >= 0) ? first : rd;
+    }
+    function convSched(arr){
+      return (Array.isArray(arr) ? arr : []).map(function(r){
+        return [ r.date || '', normWeekday(r.date, r.day), flagConv(r.flag), r.main || '' ];
+      });
+    }
+    var sched = convSched(c.schedule); if(!sched.length) sched = [['', '', '', '']];
+    var week = (Array.isArray(c.weekend) ? c.weekend : [])
+      .filter(function(w){ return w && (w.text || '').trim(); })
+      .map(function(w, i){ return [ (c.weekendLabel && c.weekendLabel.trim()) ? c.weekendLabel : (i+1)+'주', w.text || '' ]; });
+    var curr = (Array.isArray(c.curriculum) ? c.curriculum : []).map(function(cu){ return [ cu.period || '', cu.content || '' ]; });
+    var currOn = curr.some(function(x){ return (x[1] || '').trim(); });
+    var page2 = null;
+    if(Array.isArray(c.extraPages) && c.extraPages[0] && Array.isArray(c.extraPages[0].schedule) && c.extraPages[0].schedule.length){
+      page2 = { on: true, period2: (c.extraPages[0].period2 || c.extraPages[0].period || ''), sched2: convSched(c.extraPages[0].schedule) };
+    }
+    return {
+      brand: '베스티안 수학학원',
+      period: (rec && rec.period) || '',
+      course: c.title || '',
+      teacher: (rec && rec.teacher_name) || '',
+      grade: c.grade || '', time: c.time || '',
+      bookMain: c.mainBook || '', bookSub: c.subBook || '',
+      najeLabel: c.najeLabel || 'N제 시간', najeTime: c.najeTime || '',
+      mockLabel: c.mogiLabel || '모의고사 시간', mockTime: c.mogiTime || '',
+      photo: null, feature: c.feature || '',
+      sched: sched, week: week, curr: currOn ? curr : null, currOn: currOn,
+      maxfs: 15, page2: page2
+    };
+  }
+
+  var SYL_IMPORT_ITEMS = {
+    basic: {
+      label: '기본 정보',
+      apply: function(src){
+        state.course   = src.course || '';
+        state.teacher  = src.teacher || '';
+        state.grade    = src.grade || '';
+        state.time     = src.time || '';
+        state.bookMain = src.bookMain || '';
+        state.bookSub  = src.bookSub || '';
+        state.najeLabel = src.najeLabel || 'N제 시간';
+        state.najeTime  = src.najeTime || '';
+        state.mockLabel = src.mockLabel || '모의고사 시간';
+        state.mockTime  = src.mockTime || '';
+      },
+      refresh: function(){ sylRenderTabs(); rebindAndRender(true); }   // 강좌명 바뀌면 탭도 갱신
+    },
+    feature: {
+      label: '강의 특징 & 관리',
+      apply: function(src){ state.feature = src.feature || ''; },
+      // 폼 전체 재구성 없이 해당 입력칸만 갱신 → 스크롤 위치 보존
+      refresh: function(){
+        var el = document.getElementById('f-feature');
+        if(el) el.value = state.feature || '';
+        render();
+      }
+    },
+    sched: {
+      label: '회차별 진도',
+      modes: [ {key:'all',label:'모두'}, {key:'date',label:'날짜만'}, {key:'content',label:'내용만'} ],
+      apply: function(src, mode){
+        var rows = Array.isArray(src.sched) ? src.sched : [];
+        if(mode === 'date'){
+          state.sched = rows.map(function(r){ return [ r[0]||'', r[1]||'', '', '' ]; });        // 날짜·요일만, 내용 빈칸
+        } else if(mode === 'content'){
+          state.sched = rows.map(function(r){ return [ '', '', r[2]||'', r[3]||'' ]; });          // 내용·구분만, 날짜 빈칸
+        } else {
+          state.sched = rows.map(function(r){ return [ r[0]||'', r[1]||'', r[2]||'', r[3]||'' ]; }); // 모두
+        }
+        if(!state.sched.length) state.sched = [['', '', '', '']];   // 최소 1행
+      },
+      refresh: function(){ rebindAndRender(true); }
+    },
+    week: {
+      label: '주말 학습 계획',
+      apply: function(src){
+        state.week = Array.isArray(src.week) ? src.week.map(function(w){ return [ w[0]||'', w[1]||'' ]; }) : [];
+        state._weekBackup = null;
+      },
+      refresh: function(){ rebindAndRender(true); }
+    },
+    curr: {
+      label: '연간 커리큘럼',
+      apply: function(src){
+        state.curr = Array.isArray(src.curr) ? sylDeepCopy(src.curr) : null;
+        state.currOn = !!src.currOn;
+      },
+      refresh: function(){ rebindAndRender(true); }
+    }
+  };
+
+  function sylCloseImportPop(){
+    var ex = document.getElementById('syl-imp-pop');
+    if(ex && ex.parentNode) ex.parentNode.removeChild(ex);
+  }
+
+  // 항목 불러오기 모달 열기 (중앙 고정)
+  async function sylOpenImportPicker(itemKey, anchorBtn){
+    var def = SYL_IMPORT_ITEMS[itemKey];
+    if(!def){ return; }
+    if(currentUser && currentUser.role === 'admin' && !sylTargetReady()){
+      alert('먼저 분원과 선생님을 선택해주세요.'); return;
+    }
+    var wasOpen = !!document.getElementById('syl-imp-pop');
+    sylCloseImportPop();
+    if(wasOpen) return;   // 토글 닫기
+
+    var pop = document.createElement('div');
+    pop.id = 'syl-imp-pop';
+    pop.className = 'imp-pop';
+    pop.innerHTML = '<div class="imp-box">'
+      + '<div class="ip-head"><span>🔄 ' + esc(def.label) + ' 불러오기</span>'
+      + '<button type="button" class="ip-close" onclick="sylCloseImportPop()">×</button></div>'
+      + '<div class="ip-body"><div class="ip-empty">불러오는 중…</div></div>'
+      + '</div>';
+    document.body.appendChild(pop);
+    // 배경(딤) 클릭 시 닫기 — 모달 박스 클릭은 유지
+    pop.addEventListener('mousedown', function(e){ if(e.target === pop) sylCloseImportPop(); });
+
+    // 대상 선생님의 저장본들 조회 → 강좌 단위로 펼침 (새 진도계획서 + 운영본 둘 다)
+    var tgt = sylTarget();
+    var body = pop.querySelector('.ip-body');
+    try {
+      var entries = [];   // {period, courseName, course, srcLabel}
+
+      // (1) 새 진도계획서(bmaps_syllabuses)
+      var res = await db.from('bmaps_syllabuses')
+        .select('id, period, courses, updated_at')
+        .eq('teacher_id', tgt.id)
+        .order('updated_at', { ascending: false });
+      if(res.error) throw res.error;
+      (res.data || []).forEach(function(r){
+        (Array.isArray(r.courses) ? r.courses : []).forEach(function(c){
+          entries.push({ period: r.period, courseName: (c.course && String(c.course).trim()) ? c.course : '(강좌명 없음)', course: c, srcLabel: '' });
+        });
+      });
+
+      // (2) 운영본(syllabuses) — 읽기 전용. 변환해서 합침. 실패해도 (1)은 유지.
+      //     운영본은 회차별 진도가 '날짜'만 의미있게 들어오므로, 기본정보·연간만 운영 데이터 노출(나머지는 혼선 방지로 숨김)
+      var SYL_OPS_IMPORT_KEYS = ['basic', 'curr'];
+      if(SYL_OPS_IMPORT_KEYS.indexOf(itemKey) !== -1){
+        try {
+          var resOps = await db.from('syllabuses')
+            .select('id, teacher_name, period, courses, updated_at')
+            .eq('teacher_id', tgt.id)
+            .order('period', { ascending: false });
+          if(!resOps.error && Array.isArray(resOps.data)){
+            resOps.data.forEach(function(r){
+              (Array.isArray(r.courses) ? r.courses : []).forEach(function(c){
+                var conv = sylConvertOpsCourse(c, r);
+                entries.push({ period: r.period, courseName: (conv.course && conv.course.trim()) ? conv.course : '(강좌명 없음)', course: conv, srcLabel: '운영' });
+              });
+            });
+          }
+        } catch(opsErr){ console.warn('운영본 불러오기 생략:', opsErr && opsErr.message ? opsErr.message : opsErr); }
+      }
+
+      if(!entries.length){
+        body.innerHTML = '<div class="ip-empty">불러올 저장본이 없습니다.</div>';
+        return;
+      }
+      // 모드 지원 항목(회차별 진도)이면 모드 버튼 표시
+      var curMode = (def.modes && def.modes.length) ? def.modes[0].key : null;
+      var modeHtml = '';
+      if(def.modes && def.modes.length){
+        modeHtml = '<div class="ip-mode">' + def.modes.map(function(m, mi){
+          return '<button type="button" data-mode="' + esc(m.key) + '"' + (mi===0?' class="on"':'') + '>' + esc(m.label) + '</button>';
+        }).join('') + '</div>';
+      }
+      // 그룹핑: 새 진도계획서(srcLabel='') 먼저 → 운영본(srcLabel='운영') 나중, 각그룹 내 period 내림차순.
+      // 원본 entries 인덱스(i)는 클릭 적용에 그대로 쓰므로 보존.
+      var _idxed = entries.map(function(en, i){ return { en: en, i: i }; });
+      function _periodKey(pd){ var pp = sylParsePeriod(pd); return pp ? (pp.year * 100 + pp.month) : -1; }
+      _idxed.sort(function(a, b){
+        // 새 진도계획서(빈 srcLabel)가 앞으로
+        var sa = a.en.srcLabel ? 1 : 0, sb = b.en.srcLabel ? 1 : 0;
+        if(sa !== sb) return sa - sb;
+        // period 내림차순
+        return _periodKey(b.en.period) - _periodKey(a.en.period);
+      });
+      var listHtml = '';
+      var _lastGroup = null;
+      _idxed.forEach(function(rec){
+        var en = rec.en;
+        var groupKey = (en.srcLabel ? '운영·' : '') + (en.period || '(기간 미상)');
+        if(groupKey !== _lastGroup){
+          var headLabel = (en.period || '(기간 미상)') + (en.srcLabel ? ' · 운영본' : '');
+          listHtml += '<div class="ip-group">' + esc(headLabel) + '</div>';
+          _lastGroup = groupKey;
+        }
+        listHtml += '<div class="ip-item" data-idx="' + rec.i + '">'
+          + '<div>' + esc(en.courseName) + '</div></div>';
+      });
+      body.innerHTML = modeHtml + listHtml;
+      // 모드 버튼 토글
+      if(def.modes && def.modes.length){
+        Array.prototype.forEach.call(body.querySelectorAll('.ip-mode button'), function(mb){
+          mb.addEventListener('click', function(){
+            curMode = mb.getAttribute('data-mode');
+            Array.prototype.forEach.call(body.querySelectorAll('.ip-mode button'), function(x){ x.classList.remove('on'); });
+            mb.classList.add('on');
+          });
+        });
+      }
+      // 클릭 → 적용
+      Array.prototype.forEach.call(body.querySelectorAll('.ip-item'), function(el){
+        el.addEventListener('click', function(){
+          var en = entries[parseInt(el.getAttribute('data-idx'),10)];
+          if(!en) return;
+          def.apply(en.course, curMode);
+          sylCloseImportPop();
+          if(typeof def.refresh === 'function') def.refresh();   // 부분 갱신(스크롤 보존)
+          else rebindAndRender(true);                            // 폴백(스크롤 보존)
+          Array.prototype.forEach.call(document.querySelectorAll('.exp-status'), function(st){
+            st.textContent = '✅ ' + def.label + ' 불러옴';
+            setTimeout(function(){ if(st.textContent.indexOf('불러옴')>=0) st.textContent=''; }, 3000);
+          });
+        });
+      });
+    } catch(e){
+      console.error(e);
+      if(body) body.innerHTML = '<div class="ip-empty">불러오기 실패: ' + esc(e && e.message ? e.message : String(e)) + '</div>';
+    }
+  }
+
+  // 선택한 레코드를 불러와 state 복원
+  async function syllabusLoadSelected(id){
+    if(!id) return;
+    try {
+      var res = await db.from('bmaps_syllabuses').select('*').eq('id', id).maybeSingle();
+      if(res.error) throw res.error;
+      var rec = res.data;
+      if(!rec || !Array.isArray(rec.courses) || !rec.courses.length){
+        alert('불러올 내용이 없습니다.'); return;
+      }
+      var courses = sylNormalizeCourses(rec.courses, rec.period);
+      if(!courses.length){ alert('데이터 형식이 올바르지 않습니다.'); return; }
+      window._sylCurrentRecordId = rec.id;
+      sylDoc = { courses: courses, active: 0 };
+      sylSetActive(0);
+      // 불러온 레코드의 월로 작성 월 동기화 (드롭다운·작업 대상 일치)
+      if(rec.period){
+        sylSelectedPeriod = rec.period;
+        var pSel = document.getElementById('syl-period');
+        if(pSel){
+          var has = Array.prototype.some.call(pSel.options, function(o){ return o.value === rec.period; });
+          if(!has){ var op = document.createElement('option'); op.value = rec.period; op.textContent = rec.period; pSel.appendChild(op); }
+          pSel.value = rec.period;
+        }
+      }
+      sylRenderTabs();
+      rebindAndRender();   // 폼 재구성 + 렌더 (리스너 중복 없이)
+      var st = document.getElementById('syl-exp-status');
+      if(st) st.textContent = '✅ 불러옴 (' + (rec.period || '') + ')';
+      setTimeout(function(){ if(st && st.textContent.indexOf('불러옴')>=0) st.textContent=''; }, 3000);
+    } catch(e){
+      console.error(e);
+      alert('불러오기 실패: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  // 선택한 레코드 삭제
+  async function syllabusDeleteSelected(){
+    var sel = document.getElementById('syl-saved-list');
+    var id = sel ? sel.value : '';
+    if(!id){ alert('삭제할 진도계획서를 목록에서 먼저 선택하세요.'); return; }
+    var label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '';
+    if(!confirm('이 진도계획서를 삭제할까요?\n\n' + label + '\n\n삭제하면 되돌릴 수 없습니다.')) return;
+    try {
+      var res = await db.from('bmaps_syllabuses').delete().eq('id', id);
+      if(res.error) throw res.error;
+      if(window._sylCurrentRecordId === id) window._sylCurrentRecordId = null;
+      await syllabusRefreshSavedList();
+      var st = document.getElementById('syl-exp-status');
+      if(st){ st.textContent = '🗑️ 삭제됨'; setTimeout(function(){ if(st.textContent==='🗑️ 삭제됨') st.textContent=''; }, 3000); }
+    } catch(e){
+      console.error(e);
+      alert('삭제 실패: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  // 선택한 작성 월의 빈 진도계획서로 새로 시작
+  function syllabusNewCurrentMonth(){
+    if(!confirm('"' + sylTargetPeriod() + '" 빈 진도계획서로 새로 시작할까요?\n(저장하지 않은 변경은 사라집니다)')) return;
+    window._sylCurrentRecordId = null;
+    sylDoc = { courses: [sylBlankCourse()], active: 0 };
+    sylSetActive(0);
+    sylRenderTabs();
+    var sel = document.getElementById('syl-saved-list'); if(sel) sel.value='';
+    rebindAndRender();
+  }
+
+  /* ============================================================
+     [COURSE TABS] 강좌 전환 / 추가 / 삭제
+  ============================================================ */
+  function sylRenderTabs(){
+    var box = document.getElementById('syl-course-tabs');
+    if(!box || !sylDoc) return;
+    var html = '';
+    sylDoc.courses.forEach(function(c, i){
+      var name = (c.course && String(c.course).trim()) ? c.course : ('강좌 ' + (i+1));
+      var active = (i === sylDoc.active) ? ' active' : '';
+      var delBtn = (sylDoc.courses.length > 1)
+        ? '<button class="ct-del" type="button" title="이 강좌 삭제" onclick="event.stopPropagation(); sylDeleteCourse(' + i + ')">×</button>'
+        : '';
+      html += '<div class="ctab' + active + '" onclick="sylSwitchCourse(' + i + ')">'
+            + '<span class="ct-name">' + esc(name) + '</span>' + delBtn + '</div>';
+    });
+    html += '<button class="ctab-add" type="button" onclick="sylAddCourse()">+ 강좌 추가</button>';
+    html += '<span class="ctab-count">강좌 ' + sylDoc.courses.length + '개</span>';
+    box.innerHTML = html;
+  }
+
+  function sylSwitchCourse(idx){
+    if(!sylDoc || idx === sylDoc.active) { return; }
+    sylSetActive(idx);
+    sylRenderTabs();
+    rebindAndRender();
+  }
+
+  function sylAddCourse(){
+    if(!sylDoc) return;
+    var c = sylBlankCourse();
+    c.photo = (sylDoc.courses[0] && sylDoc.courses[0].photo) || null;  // 공통 사진 상속
+    c.period = (sylDoc.courses[0] && sylDoc.courses[0].period) || sylTargetPeriod();
+    sylDoc.courses.push(c);
+    sylSetActive(sylDoc.courses.length - 1);   // 새 강좌로 전환
+    sylRenderTabs();
+    rebindAndRender();
+  }
+
+  function sylDeleteCourse(idx){
+    if(!sylDoc || sylDoc.courses.length <= 1) return;   // 최소 1개 유지
+    var c = sylDoc.courses[idx];
+    var name = (c && c.course && String(c.course).trim()) ? c.course : ('강좌 ' + (idx+1));
+    if(!confirm('"' + name + '" 강좌를 삭제할까요?\n(저장 전이면 되돌릴 수 없습니다)')) return;
+    sylDoc.courses.splice(idx, 1);
+    if(sylDoc.active >= sylDoc.courses.length) sylDoc.active = sylDoc.courses.length - 1;
+    else if(sylDoc.active > idx) sylDoc.active -= 1;
+    sylSetActive(sylDoc.active);
+    sylRenderTabs();
+    rebindAndRender();
+  }
+
+  // state 교체 후: 폼을 비우고 다시 바인딩 + 렌더 (리스너 중복 방지 위해 노드 교체)
+  function rebindAndRender(preserveScroll){
+    // 스크롤 보존이 필요하면(예: 항목 단위 불러오기) 현재 스크롤 위치 기억
+    var topPos = 0, botPos = 0;
+    if(preserveScroll){
+      var pt = document.querySelector('.fcol-top'), pb = document.querySelector('.fcol-bottom');
+      if(pt) topPos = pt.scrollTop;
+      if(pb) botPos = pb.scrollTop;
+    }
+    // 폼 입력 영역(form-grid)을 복제 교체하면 기존 리스너가 깨끗이 제거됨
+    var grid = document.querySelector('.form-grid');
+    if(grid){
+      var clone = grid.cloneNode(true);
+      grid.parentNode.replaceChild(clone, grid);
+    }
+    bindForm();
+    render();
+    if(preserveScroll){
+      var nt = document.querySelector('.fcol-top'), nb = document.querySelector('.fcol-bottom');
+      if(nt) nt.scrollTop = topPos;
+      if(nb) nb.scrollTop = botPos;
+    }
+  }
+
+  /* ============================================================
+     [SUMMARY] 강좌 요약 페이지 (A4 1장) — 운영본 레이아웃 이식
+     · 강좌수→열: 1=1열,2=2열,3=세로3행,4=2×2,5+=3열
+     · 카드: 강좌명 + 정보표(학년·시간·주교재·부교재). 카드 헤더는 강좌색.
+  ============================================================ */
+  function sylBuildSummaryHTML(){
+    if(!sylDoc || !sylDoc.courses.length) return '';
+    // 진도가 있는(=실제) 강좌만 — 빈 강좌 제외
+    var courses = sylDoc.courses;
+    var teacherName = (sylTarget() && sylTarget().name) || (currentUser && currentUser.name) || (courses[0] && courses[0].teacher) || '선생님';
+    var period = (courses[0] && courses[0].period) || sylTargetPeriod();
+    var brand = sylCourseColor(0);                 // 헤더는 1번 강좌색 기준
+    var accent = '#ffffff';
+    var photo = courses[0] && courses[0].photo;
+
+    var n = courses.length, cols;
+    if(n <= 1) cols = 1; else if(n === 2) cols = 2; else if(n === 3) cols = 1; else if(n === 4) cols = 2; else cols = 3;
+    var rows = Math.ceil(n / cols);
+    var availableH = 870, gridGapPx = (cols===3?10:14);
+    var cardMinHeight = Math.floor((availableH - gridGapPx*(rows-1)) / rows);
+    if(rows === 3){ cardMinHeight = Math.floor((1123 - 143 - 3 - 36 - 40 - 28) / 3); }
+    else { if(cardMinHeight < 260) cardMinHeight = 260; }
+    if(rows === 1){
+      if(n === 1) cardMinHeight = Math.min(cardMinHeight, 560);
+      else if(n === 2) cardMinHeight = Math.min(cardMinHeight, 500);
+    }
+    // 스케일 3단계
+    var labelSize, valSize, padRow, minLabelW, headerPad, courseLabelSize, titleSize;
+    if(cols === 1 && n === 1){
+      labelSize='13px'; valSize='15.5px'; padRow='13px 18px'; minLabelW='96px'; headerPad='20px 24px'; courseLabelSize='12px'; titleSize='24px';
+    } else if(cols === 2 || (cols === 1 && n === 3)){
+      labelSize='12px'; valSize='14px'; padRow='12px 16px'; minLabelW='84px'; headerPad='18px 22px'; courseLabelSize='11px'; titleSize='21px';
+    } else {
+      labelSize='10px'; valSize='11.5px'; padRow='8px 10px'; minLabelW='66px'; headerPad='12px 14px'; courseLabelSize='9px'; titleSize='16px';
+    }
+
+    var cards = courses.map(function(c, ci){
+      var cColor = sylCourseColor(ci);
+      var rowsData = [
+        {label:'대상 학년', val:c.grade,   icon:'👥'},
+        {label:'수업 시간', val:c.time,    icon:'🕐'},
+        {label:'주교재',   val:c.bookMain, icon:'📖'},
+        {label:'부교재',   val:c.bookSub,  icon:'📄'}
+      ].filter(function(r){ return r.val && String(r.val).trim(); });
+      var infoHTML = rowsData.map(function(r, ri){
+        var bb = ri < rowsData.length-1 ? 'border-bottom:1px solid #eef2f6;' : '';
+        return '<tr style="'+bb+'">'
+          +'<td style="padding:'+padRow+';vertical-align:middle;white-space:nowrap;font-size:'+labelSize+';font-weight:700;color:#64748b;background:#f8fafc;border-right:1px solid #e2e8f0;min-width:'+minLabelW+'">'+r.icon+' '+esc(r.label)+'</td>'
+          +'<td style="padding:'+padRow+';font-size:'+valSize+';font-weight:600;color:#1e293b;line-height:1.5">'+esc(r.val)+'</td></tr>';
+      }).join('');
+      var title = (c.course && String(c.course).trim()) ? c.course : ('강좌 ' + (ci+1));
+      return '<div style="border:2px solid '+cColor+';border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column;min-height:'+cardMinHeight+'px">'
+        +'<div style="background:'+cColor+';padding:'+headerPad+';flex-shrink:0">'
+          +'<div style="font-size:'+courseLabelSize+';font-weight:700;letter-spacing:2px;color:'+accent+';opacity:0.85;text-transform:uppercase;margin-bottom:5px">강좌 '+(ci+1)+'</div>'
+          +'<div style="font-size:'+titleSize+';font-weight:900;color:#fff;line-height:1.2;letter-spacing:-0.3px">'+esc(title)+'</div>'
+        +'</div>'
+        +'<div style="background:#fff;flex:1;display:flex;flex-direction:column">'
+          +'<table style="border-collapse:collapse;width:100%;flex:1;height:100%"><tbody>'+infoHTML+'</tbody></table>'
+        +'</div></div>';
+    }).join('');
+
+    var gridGap = (cols===3?'10px':'14px'), gridPad = (cols===3?'16px 16px':'18px 20px');
+    var photoHTML = photo
+      ? '<div style="align-self:stretch;flex-shrink:0;display:flex;align-items:flex-end"><img src="'+photo+'" style="max-width:140px;max-height:140px;object-fit:contain;display:block"></div>'
+      : '';
+    return '<div id="syl-summary-page" style="width:794px;min-height:1123px;background:#fff;font-family:inherit;margin:0 auto;display:flex;flex-direction:column">'
+      +'<div style="background:'+brand+';padding:0 28px;display:flex;align-items:stretch;justify-content:space-between;gap:16px;min-height:130px">'
+        +'<div style="flex:1;display:flex;flex-direction:column;justify-content:center;padding:22px 0">'
+          +'<div style="font-size:10px;font-weight:700;letter-spacing:3px;color:'+accent+';opacity:0.85;text-transform:uppercase;margin-bottom:8px">베스티안 수학학원 · '+esc(period)+' 강좌 안내</div>'
+          +'<div style="font-size:32px;font-weight:900;color:#fff;line-height:1.1;letter-spacing:-0.5px">'+esc(teacherName)+' <span style="font-size:17px;font-weight:400;color:rgba(255,255,255,0.65)">선생님</span></div>'
+          +'<div style="font-size:12px;color:rgba(255,255,255,0.55);margin-top:6px">총 '+n+'개 강좌 운영</div>'
+        +'</div>'+photoHTML
+      +'</div>'
+      +'<div style="height:3px;background:linear-gradient(90deg,'+brand+' 0%,rgba(0,0,0,0.15) 60%,transparent 100%)"></div>'
+      +'<div style="padding:'+gridPad+';display:grid;grid-template-columns:repeat('+cols+',1fr);gap:'+gridGap+';flex:1">'+cards+'</div>'
+      +'<div style="background:#f4f7fa;border-top:1px solid #e2e8f0;padding:9px 28px;display:flex;align-items:center;justify-content:space-between">'
+        +'<div style="font-size:11px;font-weight:800;color:'+brand+'">베스티안 수학학원</div>'
+        +'<div style="font-size:9.5px;color:#64748b">'+esc(period)+' · 강좌 요약</div>'
+      +'</div></div>';
+  }
+
+  function sylSummaryClose(){
+    var ex = document.getElementById('syl-sum-modal');
+    if(ex && ex.parentNode) ex.parentNode.removeChild(ex);
+  }
+
+  function syllabusSummaryOpen(){
+    if(currentUser && currentUser.role === 'admin' && !sylTargetReady()){
+      alert('먼저 분원과 선생님을 선택해주세요.'); return;
+    }
+    if(!sylDoc || !sylDoc.courses.length){ alert('강좌가 없습니다.'); return; }
+    sylSummaryClose();
+    var html = sylBuildSummaryHTML();
+    var modal = document.createElement('div');
+    modal.id = 'syl-sum-modal';
+    modal.className = 'sum-modal';
+    modal.innerHTML = '<div class="sum-box">'
+      + '<div class="sum-bar">'
+      + '<span class="sum-title">📋 강좌 요약 미리보기 (A4)</span>'
+      + '<span class="sum-status" id="syl-sum-status"></span>'
+      + '<button class="sb-jpg" type="button" onclick="syllabusSummaryExport(\'jpg\')">🖼️ JPG</button>'
+      + '<button class="sb-pdf" type="button" onclick="syllabusSummaryExport(\'pdf\')">📄 PDF</button>'
+      + '<button class="sb-close" type="button" onclick="sylSummaryClose()">닫기</button>'
+      + '</div>'
+      + '<div class="sum-scroll">' + html + '</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('mousedown', function(e){ if(e.target === modal) sylSummaryClose(); });
+  }
+
+  function sylSummaryBusy(msg){ var st=document.getElementById('syl-sum-status'); if(st) st.textContent = msg||''; }
+
+  async function syllabusSummaryExport(type){
+    if(window._sylSumExporting) return;
+    var node = document.getElementById('syl-summary-page');
+    if(!node){ alert('요약 미리보기를 먼저 열어주세요.'); return; }
+    window._sylSumExporting = true;
+    sylSummaryBusy('⏳ 라이브러리 준비 중…');
+    try {
+      await sylLoadScript(SYL_LIBS.h2c);
+      if(typeof html2canvas === 'undefined') throw new Error('html2canvas 로드 실패');
+      sylSummaryBusy('⏳ 이미지 변환 중…');
+      var canvas = await html2canvas(node, {
+        scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff',
+        width: 794, windowWidth: 794, logging: false
+      });
+      var base = sylSummaryName();
+      if(type === 'jpg'){
+        var blob = await sylCanvasToBlob(canvas, 'image/jpeg', 0.95);
+        await sylSaveFile(blob, base + '.jpg', 'image/jpeg', 'jpg');
+      } else {
+        await sylLoadScript(SYL_LIBS.jspdf);
+        if(typeof window.jspdf === 'undefined') throw new Error('jsPDF 로드 실패');
+        var jsPDF = window.jspdf.jsPDF;
+        var pdf = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
+        var pW = pdf.internal.pageSize.getWidth();
+        var fitH = pW * (canvas.height / canvas.width);
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pW, Math.min(fitH, pdf.internal.pageSize.getHeight()));
+        await sylSaveFile(pdf.output('blob'), base + '.pdf', 'application/pdf', 'pdf');
+      }
+      sylSummaryBusy('✅ 저장 완료');
+      setTimeout(function(){ sylSummaryBusy(''); }, 2500);
+    } catch(e){
+      console.error(e); sylSummaryBusy('');
+      alert('요약 추출 오류: ' + (e && e.message ? e.message : e));
+    } finally {
+      window._sylSumExporting = false;
+    }
+  }
+
+  // 요약 파일명: 선생님명_기간_강좌요약
+  function sylSummaryName(){
+    var c0 = (sylDoc && sylDoc.courses && sylDoc.courses[0]) || {};
+    var tName = (sylTarget() && sylTarget().name) || (currentUser && currentUser.name) || c0.teacher || '선생님';
+    var t = String(tName).replace(/[\/:*?"<>|]/g, '_');
+    var raw = String(c0.period || '');
+    var m = raw.match(/(\d{1,2})\s*월/);
+    var month = m ? (m[1] + '월') : raw.replace(/[\/:*?"<>|]/g, '_');
+    return t + '_' + (month || '') + '_강좌요약';
+  }
+
+  window.addEventListener('DOMContentLoaded', syllabusInitAuth);
+</script>
+</body>
+</html>
