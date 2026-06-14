@@ -3693,6 +3693,7 @@ var _nsEmStudentNameMap   = {};
 // ④ 베티모의고사 (weekend_bety)
 var _byStudents    = [];
 var _byData        = {};
+var _byCarry       = {};
 var _bySnapshot    = {};
 var _byLoadedAt    = {};
 var _byAllTeachers = [];
@@ -4006,7 +4007,7 @@ function doLogout() {
   if (_adminNajeSearchTimer) { clearTimeout(_adminNajeSearchTimer); _adminNajeSearchTimer = null; }
   _admNaState = {setId:null, classId:null, setSteps:[], setInfo:null, classStudents:{}, original:{}, current:{}, excludedOriginal:{}, excludedCurrent:{}};
   _anrData = null; _anrAllTeachers = []; _anrAllClasses = [];
-  _byStudents = []; _byData = {}; _bySnapshot = {}; _byLoadedAt = {}; _byAllTeachers = [];
+  _byStudents = []; _byData = {}; _byCarry = {}; _bySnapshot = {}; _byLoadedAt = {}; _byAllTeachers = [];
   // 옵션D DOM 복원: 관리자/데스크가 이동시킨 주말 패널을 mainContent로 되돌림
   // (이동 안 됐어도 안전 — parentElement 체크 + null 가드 포함)
   const _mc = document.getElementById('mainContent');
@@ -5303,10 +5304,6 @@ var _wnFields = ['attendance','homework_done','score_first','score_retry','resul
 var _wnTestNameLoaded = false; // 로드 여부 플래그
 
 /* ── 초기화 ─────────────────────────────────────────────── */
-function _localYMD(d){
-  var y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0');
-  return y+'-'+m+'-'+dd;
-}
 async function initWeekendNaje() {
   // 선생님/데스크 진입 시 관리자 전용 카드 숨김
   var setupCard = document.getElementById('wn-setup-card');
@@ -5320,7 +5317,7 @@ async function initWeekendNaje() {
     var diff  = day === 6 ? 0 : day === 0 ? -1 : 6 - day;
     var sat   = new Date(today);
     sat.setDate(today.getDate() + diff);
-    dateEl.value = _localYMD(sat);
+    dateEl.value = sat.toISOString().split('T')[0];
   }
   try {
     await wnLoadTestNameSettingsFromDB();
@@ -6477,7 +6474,7 @@ async function initAdminWeekendNaje() {
     // N제는 토요일 기준
     var sat = new Date(today);
     sat.setDate(today.getDate() + (day === 6 ? 0 : (6 - day)));
-    dateEl.value = _localYMD(sat);
+    dateEl.value = sat.toISOString().split('T')[0];
   }
   if (!_wnTestNameLoaded) {
     try { await wnLoadTestNameSettingsFromDB(); } catch(e) { console.error('[initAdminWeekendNaje] testname', e); }
@@ -6512,7 +6509,7 @@ async function initPotential() {
     var today = new Date(), day = today.getDay();
     var sat = new Date(today);
     sat.setDate(today.getDate() + (day === 6 ? 0 : day === 0 ? -1 : 6 - day));
-    dateEl.value = _localYMD(sat);
+    dateEl.value = sat.toISOString().split('T')[0];
   }
   try {
     await ptLoadFilters();
@@ -8161,7 +8158,7 @@ async function initAdminWeekendPotential() {
     var today = new Date(), day = today.getDay();
     var sat   = new Date(today);
     sat.setDate(today.getDate() + (day===6?0:day===0?-1:6-day));
-    dateEl.value = _localYMD(sat);
+    dateEl.value = sat.toISOString().split('T')[0];
   }
 
   try {
@@ -8192,9 +8189,9 @@ async function initBety() {
   if (dateEl && !dateEl.value) {
     var today = new Date();
     var sun   = new Date(today);
-    sun.setDate(today.getDate() + (today.getDay()===0 ? 0 : 7 - today.getDay())); // 다가오는 일요일
+    sun.setDate(today.getDate() - today.getDay()); // 이번 주 일요일
     // 오늘이 일요일이면 오늘, 아니면 지난 일요일
-    dateEl.value = _localYMD(sun);
+    dateEl.value = sun.toISOString().split('T')[0];
   }
   try {
     await byLoadFilters();
@@ -8371,12 +8368,17 @@ async function byLoadData() {
       });
 
     // weekend_bety 레코드 조회
-    _byData = {};
+    _byData = {}; _byCarry = {};
     if (_byStudents.length) {
+      // 직전 회차 forward-fill: 그날 이하 전체를 가져와 exact/carry 분리
       var { data: records } = await db.from('weekend_bety')
-        .select('*').eq('session_date', date)
-        .in('student_id', _byStudents.map(s => s.id));
-      (records || []).forEach(r => { _byData[r.student_id] = r; });
+        .select('*').lte('session_date', date)
+        .in('student_id', _byStudents.map(s => s.id))
+        .order('session_date', { ascending: true });
+      (records || []).forEach(r => {
+        if (r.session_date === date) _byData[r.student_id] = r;  // 그날 입력(출결·점수용)
+        _byCarry[r.student_id] = r;                              // 최신 회차(레벨·시간·요일 지속용)
+      });
     }
 
     byRenderTable();
@@ -8441,13 +8443,14 @@ function byRenderTable() {
 
   _byStudents.forEach(s => {
     var r       = _byData[s.id] || {};
+    var rc      = _byCarry[s.id];   // 직전 회차(공란 포함) — 없으면 seed로 fallback
     var isSent  = sentSet.has(s.id);
     var curAtt  = (r.id && r.attendance) ? r.attendance : '';
     var curRes  = r.result || '';
     var curWrg  = r.id ? (r.wrong_done===true?'true':r.wrong_done===false?'false':'') : '';
     // level/attend_time: 당일 DB값 우선, 없으면 이력 적용된 users값
-    var curLv   = (r.id && r.level       != null) ? r.level        : (s.bety_level        || '');
-    var curTime = (r.id && r.attend_time != null) ? r.attend_time  : ((s.bety_alt_yn && s.bety_alt_time) || s.bety_attend_time  || '');
+    var curLv   = rc ? (rc.level == null ? '' : rc.level) : (s.bety_level || '');
+    var curTime = rc ? (rc.attend_time == null ? '' : rc.attend_time) : ((s.bety_alt_yn && s.bety_alt_time) || s.bety_attend_time || '');
     // score: 소수점 2자리 (포텐셜과 달리 2자리)
     var curScore= (r.score != null && r.score !== '') ? parseFloat(r.score).toFixed(2) : '';
 
@@ -8461,7 +8464,7 @@ function byRenderTable() {
       <td style="color:#6b7280;white-space:nowrap">${s.grade||''}</td>
       <td style="text-align:left;padding-left:6px;font-weight:700;color:#1e293b;white-space:nowrap">${_esc(s.name)}</td>
       <td><select class="by-sel by-focusable" data-sid="${s.id}" data-field="level">${lvSel}</select></td>
-      <td><select class="by-sel" data-sid="${s.id}" data-field="weekday">${weekendDayOptions(weekendDayValue(s,'bety',r))}</select></td>
+      <td><select class="by-sel" data-sid="${s.id}" data-field="weekday">${weekendDayOptions(weekendDayValue(s,'bety',rc))}</select></td>
       <td><input class="by-inp by-focusable" data-sid="${s.id}" data-field="attend_time" value="${curTime}" placeholder="14:00"></td>
       <td><select class="by-sel by-focusable" data-sid="${s.id}" data-field="attendance">${attSel}</select></td>
       <td><select class="by-sel by-focusable" data-sid="${s.id}" data-field="wrong_done">${wrgSel}</select></td>
@@ -8986,8 +8989,8 @@ async function initAdminWeekendBety() {
   if (dateEl && !dateEl.value) {
     var today = new Date();
     var sun   = new Date(today);
-    sun.setDate(today.getDate() + (today.getDay()===0 ? 0 : 7 - today.getDay()));
-    dateEl.value = _localYMD(sun);
+    sun.setDate(today.getDate() - today.getDay());
+    dateEl.value = sun.toISOString().split('T')[0];
   }
   try {
     await byLoadFilters();
@@ -9017,7 +9020,7 @@ async function initNaesin() {
     var diff  = day === 0 ? 0 : (7 - day);
     var sun   = new Date(today);
     sun.setDate(today.getDate() + diff);
-    dateEl.value = _localYMD(sun);
+    dateEl.value = sun.toISOString().split('T')[0];
   }
   // 추가메시지 설정 로드
   if (!_nsExtraMsgLoaded) await nsLoadExtraMsgFromDB();
@@ -9939,7 +9942,7 @@ async function initAdminWeekendNaesin() {
     var diff  = day === 0 ? 0 : (7 - day);
     var sun   = new Date(today);
     sun.setDate(today.getDate() + diff);
-    dateEl.value = _localYMD(sun);
+    dateEl.value = sun.toISOString().split('T')[0];
   }
 
   // initNaesin 직접 호출 금지 (버튼 상태 충돌) → 직접 로드
@@ -9960,7 +9963,7 @@ function initWeekendMsg() {
   // 날짜 기본값: 오늘
   var dateEl = document.getElementById('wmsg-date');
   if (dateEl && !dateEl.value) {
-    dateEl.value = _localYMD(new Date());
+    dateEl.value = new Date().toISOString().split('T')[0];
   }
   wmsgCheckChange();
   // 분원/선생님 드롭다운 채우기
@@ -22054,7 +22057,7 @@ function initWorkLog() {
   // 날짜 기본값: 오늘
   const dateEl = document.getElementById('wl-date');
   if (dateEl && !dateEl.value) {
-    dateEl.value = _localYMD(new Date());
+    dateEl.value = new Date().toISOString().split('T')[0];
   }
 
   const hasClass = !!sel.value;
@@ -23447,7 +23450,7 @@ async function wlApplyLoadedData() {
 
   // 날짜 미설정이면 오늘 날짜
   const dateEl = document.getElementById('wl-date');
-  if (dateEl && !dateEl.value) dateEl.value = _localYMD(new Date());
+  if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().split('T')[0];
 
   await loadWorkLog();
 
@@ -23788,7 +23791,7 @@ async function initAdminWorklog() {
 
   // 날짜 기본값: 오늘
   const dateEl = document.getElementById('awl-date');
-  if (dateEl && !dateEl.value) dateEl.value = _localYMD(new Date());
+  if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().split('T')[0];
 
   const sec  = document.getElementById('awl-logs-section');
   const det  = document.getElementById('awl-detail');
