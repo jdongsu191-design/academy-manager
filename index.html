@@ -3496,6 +3496,7 @@ window._wlIndividualData = {};
 // ① 일일N제 (weekend_naje)
 var _wnStudents    = [];  // 로드된 학생 목록
 var _wnData        = {};  // { student_id: DB 레코드 }
+var _wnCarry       = {};  // { student_id: 직전 회차(forward-fill용) }
 var _wnSnapshot    = {};  // { student_id: { field: "stringValue" } } — 변경감지용
 var _wnLoadedAt    = {};  // { student_id: updated_at }
 var _wnAllTeachers = [];  // 선생님 필터 캐시
@@ -3813,7 +3814,7 @@ function doLogout() {
   _wlTempStudents = []; _wlLoadedData = null; _wlLoadedStudents = [];
   window._wlIndividualData = {};
   // 주말 프로그램 4종 상태 초기화
-  _wnStudents = []; _wnData = {}; _wnSnapshot = {}; _wnLoadedAt = {}; _wnAllTeachers = [];
+  _wnStudents = []; _wnData = {}; _wnCarry = {}; _wnSnapshot = {}; _wnLoadedAt = {}; _wnAllTeachers = [];
   _wnTestNameCache = null; _wnTestNameCacheByTeacher = {};
   _wnTestNameLoaded = false;  // 재로그인 시 다른 계정의 시험명칭 캐시 재사용 방지
   _ptStudents = []; _ptData = {}; _ptCarry = {}; _ptSnapshot = {}; _ptLoadedAt = {}; _ptAllTeachers = [];
@@ -5316,12 +5317,16 @@ async function wnLoadData() {
       .sort((a, b) => (a.name||'').localeCompare(b.name||'', 'ko'));
 
     // weekend_naje 레코드 조회
-    _wnData = {};
+    _wnData = {}; _wnCarry = {};
     if (_wnStudents.length) {
       var { data: records } = await db.from('weekend_naje')
-        .select('*').eq('session_date', date)
-        .in('student_id', _wnStudents.map(s => s.id));
-      (records || []).forEach(r => { _wnData[r.student_id] = r; });
+        .select('*').lte('session_date', date)
+        .in('student_id', _wnStudents.map(s => s.id))
+        .order('session_date', { ascending: true });
+      (records || []).forEach(r => {
+        if (r.session_date === date) _wnData[r.student_id] = r;  // 그날 입력(출결·점수용)
+        _wnCarry[r.student_id] = r;                              // 최신 회차(레벨·시간·요일 지속용)
+      });
     }
 
     // 데스크/관리자 모드: 학생별 담당 선생님 시험명 batch 로드
@@ -5422,6 +5427,7 @@ function wnRenderTable() {
 
   _wnStudents.forEach((s, i) => {
     var r       = _wnData[s.id] || {};
+    var rc      = _wnCarry[s.id];   // 직전 회차(공란 포함) — 없으면 seed로 fallback
     var isSent  = sentSet.has(s.id);
     var curAtt  = (r.id && r.attendance) ? r.attendance : '';
     var curHw   = r.id ? (r.homework_done===true?'true':r.homework_done===false?'false':'') : '';
@@ -5441,9 +5447,9 @@ function wnRenderTable() {
     html += `<tr id="wn-row-${s.id}"${isSent?' style="background:#dcfce7"':''}>
       ${schoolTd}
       <td style="text-align:left;padding-left:4px;font-weight:700;color:#1e293b;white-space:nowrap;font-size:${isMob?'10px':'12px'}">${_esc(s.name)}</td>
-      <td><input class="wn-inp wn-focusable" data-sid="${s.id}" data-field="level" value="${r.level||s.weekend_level||''}" style="min-width:28px"></td>
-      <td><select class="wn-sel" data-sid="${s.id}" data-field="weekday">${weekendDayOptions(weekendDayValue(s,'naje',r))}</select></td>
-      <td><input class="wn-inp wn-focusable" data-sid="${s.id}" data-field="attend_time" value="${r.attend_time||(s.weekend_alt_yn&&s.weekend_alt_time)||s.weekend_attend_time||''}" style="min-width:28px"></td>
+      <td><input class="wn-inp wn-focusable" data-sid="${s.id}" data-field="level" value="${rc ? (rc.level == null ? '' : rc.level) : (s.weekend_level||'')}" style="min-width:28px"></td>
+      <td><select class="wn-sel" data-sid="${s.id}" data-field="weekday">${weekendDayOptions(weekendDayValue(s,'naje',rc))}</select></td>
+      <td><input class="wn-inp wn-focusable" data-sid="${s.id}" data-field="attend_time" value="${rc ? (rc.attend_time == null ? '' : rc.attend_time) : ((s.weekend_alt_yn&&s.weekend_alt_time)||s.weekend_attend_time||'')}" style="min-width:28px"></td>
       <td><select class="wn-sel wn-focusable" data-sid="${s.id}" data-field="attendance">${attSel}</select></td>
       <td><select class="wn-sel wn-focusable" data-sid="${s.id}" data-field="homework_done">${hwSel}</select></td>
       <td><input class="wn-inp wn-focusable" data-sid="${s.id}" data-field="score_first" value="${r.score_first||''}" style="min-width:26px"></td>
