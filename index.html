@@ -17853,8 +17853,8 @@ async function initMiddleNajeCheck() {
   var todayUTC = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
   var resultUTC = new Date(Date.UTC(todayUTC.getUTCFullYear(), todayUTC.getUTCMonth(), todayUTC.getUTCDate() - 1));
   var rd = resultUTC.getUTCDay();
-  if (rd === 6) resultUTC = new Date(Date.UTC(resultUTC.getUTCFullYear(), resultUTC.getUTCMonth(), resultUTC.getUTCDate() - 1));
-  if (rd === 0) resultUTC = new Date(Date.UTC(resultUTC.getUTCFullYear(), resultUTC.getUTCMonth(), resultUTC.getUTCDate() - 2));
+  if (rd === 5) resultUTC = new Date(Date.UTC(resultUTC.getUTCFullYear(), resultUTC.getUTCMonth(), resultUTC.getUTCDate() - 1));
+  if (rd === 6) resultUTC = new Date(Date.UTC(resultUTC.getUTCFullYear(), resultUTC.getUTCMonth(), resultUTC.getUTCDate() - 2));
 
   var _toYMD = function(d) {
     return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0') + '-' + String(d.getUTCDate()).padStart(2,'0');
@@ -22382,7 +22382,7 @@ async function saveWorkLog() {
           n_count:       nCount !== '' ? nCount : null,
           homework_done: hw,
           test_score:    score !== '' ? score : null,
-          note:          noteValue,
+          note:          note,
           individual_progress: indivProgress,
           individual_homework: indivHomework
         }, { onConflict: 'log_id,student_id' });
@@ -23006,6 +23006,47 @@ async function wlPrintCardImages(cardHtmls) {
   else { alert('팝업이 차단되었습니다. 팝업 허용 후 다시 시도해주세요.'); }
 }
 
+async function wlPrintCardsVector(cardHtmls) {
+  if (!cardHtmls || !cardHtmls.length) { alert('출력할 내용이 없습니다'); return; }
+  const land = (window._wlPrintOrient === 'landscape');
+  const pageW = land ? 277 : 190, pageH = land ? 190 : 277;   // A4 인쇄영역(mm, margin 10 제외)
+  const cards = cardHtmls.map(h => '<div class="wl-vp">' + h + '</div>').join('');
+  const css = '@page{size:A4 ' + (land ? 'landscape' : 'portrait') + ';margin:10mm}'
+    + '*{box-sizing:border-box}'
+    + 'html,body{margin:0;padding:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    + 'body{filter:grayscale(1)}'
+    + '.wl-vp{width:' + pageW + 'mm;height:' + pageH + 'mm;overflow:hidden;page-break-after:always;break-after:page}'
+    + '.wl-vp:last-child{page-break-after:auto;break-after:auto}'
+    + '.wl-vp>div{min-width:0!important;width:100%!important}'
+    + '@media print{button{display:none!important}}';
+  const script = 'window.onload=function(){'
+    + 'var ps=document.querySelectorAll(".wl-vp");'
+    + 'for(var k=0;k<ps.length;k++){'
+    + 'var p=ps[k],inner=p.firstElementChild; if(!inner) continue;'
+    + 'inner.style.transformOrigin="top left"; inner.style.transform="none";'
+    + 'var availW=p.clientWidth, availH=p.clientHeight;'
+    + 'var w=inner.scrollWidth, h=inner.scrollHeight;'
+    + 'var s=Math.min(availW/w, availH/h, 1);'
+    + 'inner.style.transform="scale("+s+")";'
+    + '}'
+    + 'setTimeout(function(){window.print();},350);'
+    + '};';
+  const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>업무일지 출력</title>'
+    + '<style>' + css + '</style></head><body>'
+    + cards
+    + '<scr' + 'ipt>' + script + '<' + '/scr' + 'ipt>'
+    + '</body></html>';
+  const win = window.open('', '_blank', 'width=1000,height=800');
+  if (win) { win.document.write(html); win.document.close(); }
+  else { alert('팝업이 차단되었습니다. 팝업 허용 후 다시 시도해주세요.'); }
+}
+
+// 출력 방식 디스패처 (vector=선명/HTML 벡터, raster=안정/이미지)
+async function wlPrintCards(cardHtmls) {
+  if (window._wlPrintMethod === 'vector') return wlPrintCardsVector(cardHtmls);
+  return wlPrintCardImages(cardHtmls);
+}
+
 async function wlPrintLogs(date, logs) {
   const dateLabel = wlFmtDateLabel(date);
   const htmls = [];
@@ -23015,7 +23056,7 @@ async function wlPrintLogs(date, logs) {
       .select('*, users(name,school,grade)').eq('log_id', log.id);
     htmls.push(buildWorkLogCardHTML(log, cls, stus || [], dateLabel, currentUser.name));
   }
-  await wlPrintCardImages(htmls);
+  await wlPrintCards(htmls);
 }
 
 // 빈 양식 카드 (학생 명단만, 나머지는 펜 기입용 빈 칸)
@@ -23084,7 +23125,7 @@ async function wlPrintBlankForms(date, classIds) {
       .lte('enrolled_at', date).order('name');
     htmls.push(buildBlankWorkLogCardHTML(cls, roster || [], dateLabel, currentUser.name));
   }
-  await wlPrintCardImages(htmls);
+  await wlPrintCards(htmls);
 }
 
 async function wlPrintSelected() {
@@ -23115,6 +23156,7 @@ function openWlPrintModal() {
   if (ex) ex.remove();
   window._wlPrintMode = 'saved';
   window._wlPrintOrient = 'portrait';
+  window._wlPrintMethod = 'raster';
   const modal = document.createElement('div');
   modal.id = 'wl-print-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
@@ -23145,6 +23187,13 @@ function openWlPrintModal() {
             style="flex:1;padding:7px;border:1.5px solid #c7d2fe;border-radius:8px;background:#1d4ed8;color:#fff;font-size:12px;font-weight:700;cursor:pointer">📄 세로</button>
           <button id="wl-pm-or-l" onclick="wlPrintSetOrient('landscape')"
             style="flex:1;padding:7px;border:1.5px solid #c7d2fe;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:12px;font-weight:700;cursor:pointer">📃 가로</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:10px">
+          <span style="font-size:12px;font-weight:600;color:#374151;flex-shrink:0">출력 방식</span>
+          <button id="wl-pm-mt-r" onclick="wlPrintSetMethod('raster')"
+            style="flex:1;padding:7px;border:1.5px solid #c7d2fe;border-radius:8px;background:#1d4ed8;color:#fff;font-size:12px;font-weight:700;cursor:pointer">🖼️ 이미지(안정)</button>
+          <button id="wl-pm-mt-v" onclick="wlPrintSetMethod('vector')"
+            style="flex:1;padding:7px;border:1.5px solid #c7d2fe;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:12px;font-weight:700;cursor:pointer">🔤 벡터(선명)</button>
         </div>
       </div>
       <div id="wl-print-preview" style="overflow-y:auto;flex:1;padding:12px 16px"></div>
@@ -23177,6 +23226,17 @@ function wlPrintModalSetMode(mode) {
 function wlPrintModalRender() {
   if (window._wlPrintMode === 'blank') wlPrintModalLoadClasses();
   else wlPrintModalLoadDate();
+}
+
+function wlPrintSetMethod(m) {
+  window._wlPrintMethod = m;
+  [['raster', document.getElementById('wl-pm-mt-r')], ['vector', document.getElementById('wl-pm-mt-v')]]
+    .forEach(([k, el]) => {
+      if (!el) return;
+      const on = (k === m);
+      el.style.background = on ? '#1d4ed8' : '#eef2ff';
+      el.style.color = on ? '#fff' : '#4338ca';
+    });
 }
 
 function wlPrintSetOrient(o) {
