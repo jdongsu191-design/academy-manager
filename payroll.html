@@ -78,13 +78,14 @@
   table.wl .ampm .am{background:#e0f2fe;color:#0369a1}
   table.wl .ampm .nx{font-size:10px;font-weight:800;padding:2px 5px;border-radius:5px;white-space:nowrap;background:#ede9fe;color:#6d28d9}
   table.wl .ampm .pm{background:#fff1e6;color:#c2410c}
-  table.wl td.dur{text-align:right;font-variant-numeric:tabular-nums;color:#374151;width:62px}
+  table.wl td.dur{text-align:center;font-variant-numeric:tabular-nums;color:#374151;width:62px}
   table.wl td.dur.z{color:#cbd5e1}
   table.wl tr:hover td{background:#fcfcfd}
   .mtcol-off table.wl .mt{display:none}
   table.wl th.mt,table.wl td.mt{background:#faf6fb}
   table.wl .mtedge{border-left:2px solid #d9bdd7}
   table.wl th.memohead{color:var(--ink);border-bottom:2px solid var(--line)}
+  .viewsel{font-size:12px;padding:4px 9px;border:1px solid var(--line);border-radius:7px;background:#fff;cursor:pointer;font-weight:600;color:var(--ink)}
   table.wl td.memo{white-space:normal;min-width:130px;background:#fffdf6}
   table.wl .memoinput{font:inherit;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:4px 7px;width:100%;background:#fff;box-sizing:border-box}
   table.wl .memoinput:focus{outline:none;border-color:var(--maroon);box-shadow:0 0 0 2px var(--maroon-l)}
@@ -282,12 +283,13 @@ function upsertLog(staffId, dateStr, field, val){
   l[field] = val || undefined;
 }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function onMemoChange(inp){ upsertLog(SEL, inp.getAttribute('data-d'), 'memo', inp.value); }
+function onMemoChange(inp){ upsertLog(SEL, inp.getAttribute('data-d'), inp.getAttribute('data-f'), inp.value); }
 
 /* ============================================================
    상태 + 렌더
    ============================================================ */
 var SEL = null;          // 선택 알바 id
+var VIEW = 'both';       // 표시 모드: both / normal / mentoring
 var CUR = '2026-01';     // 현재 보는 월
 
 function staffById(id){ return DB.staff.find(s=>s.id===id); }
@@ -305,7 +307,8 @@ function renderStaffList(){
   document.getElementById('staffCount').textContent = DB.staff.length + '명';
 }
 
-function selectStaff(id){ SEL = id; renderStaffList(); renderDetail(); }
+function selectStaff(id){ SEL = id; var _s=staffById(id); VIEW=(_s&&_s.has_mentoring)?'both':'normal'; renderStaffList(); renderDetail(); }
+function setView(v){ VIEW=v; renderDetail(); }
 function shiftMonth(d){
   var y=+CUR.slice(0,4), m=+CUR.slice(5,7)+d;
   if(m<1){m=12;y--;} if(m>12){m=1;y++;}
@@ -318,6 +321,11 @@ function renderDetail(){
   var panel = document.getElementById('detailPanel');
   if(!SEL){ body.innerHTML='<div class="empty"><div class="ic">👋</div>왼쪽에서 알바를 선택하세요.</div>'; return; }
   var s = staffById(SEL);
+  if(!s.has_mentoring && VIEW!=='normal') VIEW='normal';
+  var showN=(VIEW==='both'||VIEW==='normal');
+  var showM=(VIEW==='both'||VIEW==='mentoring') && s.has_mentoring;
+  var showMemo=(VIEW!=='both');
+  var memoField=(VIEW==='mentoring')?'memo_m':'memo_n';
   panel.classList.toggle('mtcol-off', !s.has_mentoring);
 
   var pc = payCalc(SEL, CUR);
@@ -334,13 +342,16 @@ function renderDetail(){
     rows +=
       '<tr id="row-'+ds+'" class="'+(dow===0?'sun':dow===6?'sat':'')+'">' +
         '<td class="day">'+d+'<span class="dow">'+DOW[dow]+'</span></td>' +
-        '<td>'+timeCell(ds,'n_in',l.n_in)+'</td>' +
-        '<td>'+timeCell(ds,'n_out',l.n_out)+'</td>' +
-        '<td class="dur dur-n '+(nd?'':'z')+'">'+m2hm(nd)+'</td>' +
-        '<td class="mt mtedge">'+timeCell(ds,'m_in',l.m_in)+'</td>' +
-        '<td class="mt">'+timeCell(ds,'m_out',l.m_out)+'</td>' +
-        '<td class="mt dur dur-m '+(md?'':'z')+'">'+m2hm(md)+'</td>' +
-        '<td class="memo"><input class="memoinput" data-d="'+ds+'" value="'+esc(l.memo||'')+'" onchange="onMemoChange(this)" placeholder="메모"></td>' +
+        (showN ?
+          '<td>'+timeCell(ds,'n_in',l.n_in)+'</td>' +
+          '<td>'+timeCell(ds,'n_out',l.n_out)+'</td>' +
+          '<td class="dur dur-n '+(nd?'':'z')+'">'+m2hm(nd)+'</td>' : '') +
+        (showM ?
+          '<td class="mt mtedge">'+timeCell(ds,'m_in',l.m_in)+'</td>' +
+          '<td class="mt">'+timeCell(ds,'m_out',l.m_out)+'</td>' +
+          '<td class="mt dur dur-m '+(md?'':'z')+'">'+m2hm(md)+'</td>' : '') +
+        (showMemo ?
+          '<td class="memo"><input class="memoinput" data-d="'+ds+'" data-f="'+memoField+'" value="'+esc(l[memoField]||'')+'" onchange="onMemoChange(this)" placeholder="메모"></td>' : '') +
       '</tr>';
   }
 
@@ -375,12 +386,26 @@ function renderDetail(){
       '<tbody>'+rateRows+'</tbody></table>' +
     '</div>' +
 
-    '<div style="margin:16px 0 6px"><h2 style="margin:0;font-size:13px;font-weight:800">근무 입력 — '+CUR.replace('-',' / ')+'</h2></div>' +
+    '<div style="display:flex;align-items:center;gap:10px;margin:16px 0 6px">' +
+      '<h2 style="margin:0;font-size:13px;font-weight:800">근무 입력 — '+CUR.replace('-',' / ')+'</h2>' +
+      (s.has_mentoring ? '<select class="viewsel" onchange="setView(this.value)" style="margin-left:auto">' +
+        '<option value="both"'+(VIEW==='both'?' selected':'')+'>일반+멘토링</option>' +
+        '<option value="normal"'+(VIEW==='normal'?' selected':'')+'>일반만</option>' +
+        '<option value="mentoring"'+(VIEW==='mentoring'?' selected':'')+'>멘토링만</option>' +
+      '</select>' : '') +
+    '</div>' +
     (pc.hasRate?'':'<p class="hint" style="color:var(--warn)">⚠ 이 달에 적용할 시급이 없습니다. 시급 이력에서 시작월을 등록하세요.</p>') +
     '<div class="wlwrap"><table class="wl">' +
       '<thead>' +
-        '<tr><th rowspan="2" class="grp">날짜</th><th colspan="3" class="grp">일반</th><th colspan="3" class="grp mt mtedge">멘토링</th><th rowspan="2" class="grp memohead">특이사항</th></tr>' +
-        '<tr><th>출근</th><th>퇴근</th><th>시간</th><th class="mt mtedge">출근</th><th class="mt">퇴근</th><th class="mt">시간</th></tr>' +
+        '<tr><th rowspan="2" class="grp">날짜</th>' +
+          (showN?'<th colspan="3" class="grp">일반</th>':'') +
+          (showM?'<th colspan="3" class="grp mt mtedge">멘토링</th>':'') +
+          (showMemo?'<th rowspan="2" class="grp memohead">특이사항</th>':'') +
+        '</tr>' +
+        '<tr>' +
+          (showN?'<th>출근</th><th>퇴근</th><th>시간</th>':'') +
+          (showM?'<th class="mt mtedge">출근</th><th class="mt">퇴근</th><th class="mt">시간</th>':'') +
+        '</tr>' +
       '</thead><tbody>'+rows+'</tbody>' +
     '</table></div>' +
     '<p class="hint">시간은 24시간제로 입력합니다. 퇴근이 출근보다 이르면 자정을 넘긴 것으로 보고 자동 계산됩니다(예: 16:00~00:25 → 8:25).</p>' +
