@@ -116,6 +116,7 @@
   .mbox .mf{padding:13px 18px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
   @media(max-width:820px){ main{grid-template-columns:1fr} }
 </style>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <header class="top">
@@ -148,6 +149,7 @@
     <div class="mh">알바 등록</div>
     <div class="mc">
       <div class="fld"><label>이름</label><input id="as_name" placeholder="예: 홍길동"></div>
+      <div class="fld"><label>분원</label><input id="as_branch" placeholder="예: 본원 / 2관 (동명이인 구분)"></div>
       <label class="chk"><input type="checkbox" id="as_mt"> 멘토링 업무 포함 (시급 별도)</label>
       <div class="fld"><label>첫 시급 — 적용 시작월</label><input type="month" id="as_ym" value="2026-01"></div>
       <div class="fld"><label>일반 시급 (원/시간)</label><input type="number" id="as_rn" value="10800" step="100"></div>
@@ -178,46 +180,26 @@
 </div>
 
 <script>
+const SB_URL='https://qtpftloyumtffvgurvqv.supabase.co';
+const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF0cGZ0bG95dW10ZmZ2Z3VydnF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ2MDU2NDksImV4cCI6MjA5MDE4MTY0OX0.5rssFIhLWTzVp_FPpsJnlKsdl_SpnSHX1bzuXixnOos';
+const sb=supabase.createClient(SB_URL, SB_KEY);
 /* ============================================================
    MOCK DB  —  실제 Supabase 테이블(pt_staff / pt_rate / pt_log)과
    동일한 형태. 연동 단계에서 이 객체만 Supabase 호출로 교체.
    ============================================================ */
-const DB = {
-  staff: [
-    {id:'s1', name:'최지훈', has_mentoring:true,  active:true, sort:1},
-    {id:'s2', name:'최지혜', has_mentoring:false, active:true, sort:2},
-    {id:'s3', name:'김세희', has_mentoring:true,  active:true, sort:3},
-  ],
-  // ym = 적용 시작월. 변동점만 저장.
-  rates: [
-    {staff_id:'s1', ym:'2026-01', rn:10800, rm:12000},
-    {staff_id:'s1', ym:'2026-03', rn:11300, rm:12000},
-    {staff_id:'s2', ym:'2026-01', rn:10800, rm:null},
-    {staff_id:'s3', ym:'2026-01', rn:10800, rm:12000},
-    {staff_id:'s3', ym:'2026-02', rn:11800, rm:12000},
-  ],
-  // 일별 근무 (n=일반, m=멘토링). 근무시간은 저장 안 함 → 계산.
-  logs: [
-    // 최지훈 2026-01 (검증용: 일반 33:15 + 멘토링 20:15 = 53:30, 세전 602,100)
-    {staff_id:'s1', date:'2026-01-06', n_in:'17:30', n_out:'22:10'},
-    {staff_id:'s1', date:'2026-01-08', n_in:'17:20', n_out:'22:10'},
-    {staff_id:'s1', date:'2026-01-13', n_in:'17:20', n_out:'22:10'},
-    {staff_id:'s1', date:'2026-01-15', n_in:'17:25', n_out:'22:10'},
-    {staff_id:'s1', date:'2026-01-20', n_in:'17:30', n_out:'22:10'},
-    {staff_id:'s1', date:'2026-01-22', n_in:'17:30', n_out:'22:10', m_in:'15:15', m_out:'17:30'},
-    {staff_id:'s1', date:'2026-01-26', m_in:'08:22', m_out:'17:37'},
-    {staff_id:'s1', date:'2026-01-27', n_in:'17:20', n_out:'22:10'},
-    {staff_id:'s1', date:'2026-01-28', m_in:'08:26', m_out:'15:05'},
-    {staff_id:'s1', date:'2026-01-29', m_in:'12:54', m_out:'15:00'},
-    // 김세희 2026-01 (자정 넘김 케이스: 16:00~0:25 = 8:25)
-    {staff_id:'s3', date:'2026-01-01', n_in:'09:00', n_out:'16:00'},
-    {staff_id:'s3', date:'2026-01-03', n_in:'16:00', n_out:'00:25'},
-    {staff_id:'s3', date:'2026-01-10', n_in:'16:00', n_out:'00:10', m_in:'09:30', m_out:'10:50'},
-    {staff_id:'s3', date:'2026-01-31', n_in:'16:00', n_out:'00:05'},
-    // 최지혜 2026-06
-    {staff_id:'s2', date:'2026-06-11', n_in:'19:34', n_out:'20:50'},
-  ],
-};
+const DB = { staff:[], rates:[], logs:[] };
+
+// Supabase에서 전체 로드 → 로컬 캐시(렌더는 캐시 기반 동기 유지)
+async function loadAll(){
+  var st = await sb.from('pt_staff').select('*').order('sort');
+  var ra = await sb.from('pt_rate').select('*');
+  var lo = await sb.from('pt_log').select('*');
+  var err = (st.error||ra.error||lo.error);
+  if(err){ alert('데이터 로드 실패: '+(err.message||err)); return; }
+  DB.staff = st.data || [];
+  DB.rates = (ra.data||[]).map(function(r){ return {staff_id:r.staff_id, ym:r.ym, rn:r.rate_normal, rm:r.rate_mentoring}; });
+  DB.logs  = (lo.data||[]).map(function(l){ return {staff_id:l.staff_id, date:l.work_date, n_in:l.n_in, n_out:l.n_out, m_in:l.m_in, m_out:l.m_out, memo_n:l.memo_n, memo_m:l.memo_m}; });
+}
 
 /* ============================================================
    계산 유틸 (시트로 검증된 로직)
@@ -273,14 +255,18 @@ function daysInMonth(ym){
 function logOf(staffId, dateStr){
   return DB.logs.find(l => l.staff_id===staffId && l.date===dateStr) || null;
 }
-function upsertLog(staffId, dateStr, field, val){
+async function upsertLog(staffId, dateStr, field, val){
   var l = logOf(staffId, dateStr);
   if(!l){
     if(!val) return;
     l = {staff_id:staffId, date:dateStr};
     DB.logs.push(l);
   }
-  l[field] = val || undefined;
+  l[field] = val || undefined;   // 캐시 즉시 반영(렌더는 이 값 사용)
+  var payload = {staff_id:staffId, work_date:dateStr};
+  ['n_in','n_out','m_in','m_out','memo_n','memo_m'].forEach(function(k){ payload[k] = l[k] || null; });
+  var up = await sb.from('pt_log').upsert(payload, {onConflict:'staff_id,work_date'});
+  if(up.error) console.warn('근무 저장 실패:', up.error.message);
 }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function onMemoChange(inp){ upsertLog(SEL, inp.getAttribute('data-d'), inp.getAttribute('data-f'), inp.value); }
@@ -523,17 +509,24 @@ function openAddStaff(){
 document.getElementById('as_mt').addEventListener('change',function(){
   document.getElementById('as_rm_fld').style.display=this.checked?'flex':'none';
 });
-function addStaff(){
+async function addStaff(){
   var name=document.getElementById('as_name').value.trim();
   if(!name){ alert('이름을 입력하세요.'); return; }
+  var branch=document.getElementById('as_branch').value.trim() || null;
   var mt=document.getElementById('as_mt').checked;
-  var id='s'+(Date.now());
-  DB.staff.push({id, name, has_mentoring:mt, active:true, sort:(DB.staff.length+1)});
-  DB.rates.push({
-    staff_id:id, ym:document.getElementById('as_ym').value,
-    rn:+document.getElementById('as_rn').value,
-    rm: mt ? +document.getElementById('as_rm').value : null
-  });
+  var ym=document.getElementById('as_ym').value;
+  var rn=+document.getElementById('as_rn').value;
+  var rm= mt ? +document.getElementById('as_rm').value : null;
+  // 1) 직원 insert
+  var ins=await sb.from('pt_staff').insert({name:name, branch:branch, has_mentoring:mt, active:true, sort:(DB.staff.length+1)}).select().single();
+  if(ins.error){ alert('등록 실패: '+ins.error.message); return; }
+  var id=ins.data.id;
+  // 2) 첫 시급 insert
+  var rIns=await sb.from('pt_rate').insert({staff_id:id, ym:ym, rate_normal:rn, rate_mentoring:rm});
+  if(rIns.error){ alert('시급 등록 실패: '+rIns.error.message); }
+  // 3) 캐시 갱신
+  DB.staff.push(ins.data);
+  DB.rates.push({staff_id:id, ym:ym, rn:rn, rm:rm});
   closeModal('addStaffModal');
   renderStaffList(); selectStaff(id);
 }
@@ -548,13 +541,15 @@ function openAddRate(){
   document.getElementById('rt_rm_fld').style.display=s.has_mentoring?'flex':'none';
   document.getElementById('addRateModal').style.display='flex';
 }
-function addRate(){
+async function addRate(){
   var s=staffById(SEL);
   var ym=document.getElementById('rt_ym').value;
   var rn=+document.getElementById('rt_rn').value;
   var rm=s.has_mentoring?+document.getElementById('rt_rm').value:null;
+  var up=await sb.from('pt_rate').upsert({staff_id:SEL, ym:ym, rate_normal:rn, rate_mentoring:rm}, {onConflict:'staff_id,ym'});
+  if(up.error){ alert('시급 저장 실패: '+up.error.message); return; }
   var ex=DB.rates.find(r=>r.staff_id===SEL && r.ym===ym);
-  if(ex){ ex.rn=rn; ex.rm=rm; } else { DB.rates.push({staff_id:SEL, ym, rn, rm}); }
+  if(ex){ ex.rn=rn; ex.rm=rm; } else { DB.rates.push({staff_id:SEL, ym:ym, rn:rn, rm:rm}); }
   closeModal('addRateModal');
   renderDetail();
 }
@@ -565,8 +560,11 @@ function closeModal(id){ document.getElementById(id).style.display='none'; }
 });
 
 /* init */
-renderStaffList();
-selectStaff('s1');
+(async function(){
+  await loadAll();
+  renderStaffList();
+  if(DB.staff.length) selectStaff(DB.staff[0].id);
+})();
 </script>
 </body>
 </html>
