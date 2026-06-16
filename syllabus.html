@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 진도계획서 제작 [v2.6-sched-limit10]</title>
+<title>BMAPS · 진도계획서 제작 [v2.7-save-guard]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -166,6 +166,8 @@
   .saved-bar .sb-del:hover { background: #fbeef1; }
   .saved-bar .sb-new { padding: 6px 10px; border: 1px solid #c9d8e2; background: #fff; color: #2563eb; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
   .saved-bar .sb-new:hover { background: #eff6ff; }
+  .saved-bar .sb-new:disabled { background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; cursor: not-allowed; box-shadow: none; }
+  .saved-bar .sb-new:disabled:hover { background: #f1f5f9; }
 
   /* ===== 입력 폼 (1b) ===== */
   .fnote { font-size: 11.5px; color: #94a3b8; line-height: 1.6; margin-bottom: 12px; }
@@ -348,7 +350,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v2.6-sched-limit10</span>
+    <span class="tb-ver" id="syl-ver">v2.7-save-guard</span>
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
@@ -634,7 +636,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v2.6-sched-limit10';
+  window.SYLLABUS_VERSION = 'v2.7-save-guard';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -846,12 +848,14 @@
   async function sylLoadAndRenderForTarget(){
     var loadedCourses = await sylLoadCurrentMonthCourses();
     var startedBlank = !(loadedCourses && loadedCourses.length);
+    window._sylDbMonthCount = (loadedCourses && loadedCourses.length) ? loadedCourses.length : 0;
     sylDoc = { courses: startedBlank ? [sylBlankCourse()] : loadedCourses, active: 0 };
     sylSetActive(0);
     sylRenderTabs();
     rebindAndRender();
     if(typeof sylApplyLock === 'function') sylApplyLock();
     syllabusRefreshSavedList();
+    if(typeof sylUpdateNewBtnState==='function') sylUpdateNewBtnState();
     if(startedBlank) sylAutoApplyProfilePhoto();
   }
 
@@ -2625,6 +2629,20 @@
     var named = sylDoc.courses.filter(function(c){ return c.course && String(c.course).trim(); });
     if(!named.length){ alert('강좌명을 입력한 뒤 저장해주세요.'); return; }
 
+    // [저장 가드] DB에 저장된 강좌보다 줄어들면 명시적 확인 (데이터 손실 방지)
+    try {
+      var _gPeriod = (sylDoc.courses[0] && sylDoc.courses[0].period) || sylTargetPeriod();
+      var _gRes = await db.from('bmaps_syllabuses').select('courses').eq('teacher_id', tgt.id).eq('period', _gPeriod).maybeSingle();
+      if(_gRes && !_gRes.error && _gRes.data && Array.isArray(_gRes.data.courses)){
+        var _existNamed = _gRes.data.courses.filter(function(c){ return c && c.course && String(c.course).trim(); }).length;
+        if(named.length < _existNamed){
+          if(!confirm('"' + _gPeriod + '"에 이미 저장된 강좌 ' + _existNamed + '개가 ' + named.length + '개로 줄어듭니다.\n사라진 강좌는 복구할 수 없습니다. 그래도 덮어쓸까요?')){
+            return;
+          }
+        }
+      }
+    } catch(_gErr){ /* 가드 조회 실패해도 저장은 계속 (보조 안전장치) */ }
+
     window._sylSaving = true;
     sylSaveBusy(true, '⏳ 저장 중…');
     try {
@@ -2652,6 +2670,8 @@
       if(res.error) throw res.error;
 
       window._sylCurrentRecordId = res.data && res.data.id;   // 이후 불러오기/갱신용
+      window._sylDbMonthCount = cleanCourses.length;
+      if(typeof sylUpdateNewBtnState==='function') sylUpdateNewBtnState();
       sylSaveBusy(false, '✅ 저장 완료 (' + state.period + ')');
       syllabusRefreshSavedList();   // 목록 갱신(새 달이면 항목 추가)
     } catch(e){
@@ -2954,6 +2974,7 @@
       if(!courses.length){ alert('데이터 형식이 올바르지 않습니다.'); return; }
       window._sylCurrentRecordId = rec.id;
       sylDoc = { courses: courses, active: 0 };
+      window._sylDbMonthCount = courses.length;
       sylSetActive(0);
       // 불러온 레코드의 월로 작성 월 동기화 (드롭다운·작업 대상 일치)
       if(rec.period){
@@ -2967,6 +2988,7 @@
       }
       sylRenderTabs();
       rebindAndRender();   // 폼 재구성 + 렌더 (리스너 중복 없이)
+      if(typeof sylUpdateNewBtnState==='function') sylUpdateNewBtnState();
       var st = document.getElementById('syl-exp-status');
       if(st) st.textContent = '✅ 불러옴 (' + (rec.period || '') + ')';
       setTimeout(function(){ if(st && st.textContent.indexOf('불러옴')>=0) st.textContent=''; }, 3000);
@@ -2998,6 +3020,7 @@
 
   // 선택한 작성 월의 빈 진도계획서로 새로 시작
   function syllabusNewCurrentMonth(){
+    if((window._sylDbMonthCount||0) > 0){ alert('이 달(' + sylTargetPeriod() + ')에는 저장된 강좌 ' + window._sylDbMonthCount + '개가 있어요.\n새로 시작하려면 먼저 강좌를 모두 삭제하거나, 빈 다른 달을 선택하세요.\n\n이 달에 강좌를 더 넣으려면 화면의 [+ 강좌 추가] 버튼을 쓰세요.'); return; }
     if(!confirm('"' + sylTargetPeriod() + '" 빈 진도계획서로 새로 시작할까요?\n(저장하지 않은 변경은 사라집니다)')) return;
     window._sylCurrentRecordId = null;
     sylDoc = { courses: [sylBlankCourse()], active: 0 };
@@ -3005,6 +3028,20 @@
     sylRenderTabs();
     var sel = document.getElementById('syl-saved-list'); if(sel) sel.value='';
     rebindAndRender();
+  }
+
+  // 새로 작성 버튼 상태: 현재 월에 저장된 강좌가 있으면 비활성(데이터 보호)
+  function sylUpdateNewBtnState(){
+    var btn = document.getElementById('syl-new-btn');
+    if(!btn) return;
+    var n = window._sylDbMonthCount || 0;
+    if(n > 0){
+      btn.disabled = true;
+      btn.title = '이 달엔 저장된 강좌 ' + n + '개가 있어요. 새로 시작하려면 강좌를 먼저 삭제하세요. (강좌를 더하려면 + 강좌 추가)';
+    } else {
+      btn.disabled = false;
+      btn.title = '선택한 월의 빈 진도계획서로 새로 시작';
+    }
   }
 
   /* ============================================================
