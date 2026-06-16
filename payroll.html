@@ -129,6 +129,19 @@
   .stafffilter{display:flex;gap:6px;padding:10px 12px 12px;border-bottom:1px solid var(--line);margin-bottom:8px}
   .stafffilter select{flex:0 0 auto;max-width:46%;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:12px;background:#fff;color:var(--ink)}
   .stafffilter input{flex:1;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:12px}
+  /* 알바 로그인 / 본인 모드 */
+  body.staffmode aside.panel{display:none}
+  body.staffmode main{grid-template-columns:1fr}
+  .logoutbtn{margin-left:auto}
+  .loginback{position:fixed;inset:0;background:rgba(31,36,48,.55);display:none;align-items:center;justify-content:center;z-index:200}
+  .loginback.show{display:flex}
+  .loginbox{background:#fff;border-radius:14px;padding:24px;width:340px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+  .loginbox h2{margin:0 0 16px;font-size:18px;color:var(--ink)}
+  .loginbox select,.loginbox .pininput{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:15px;margin-bottom:10px;box-sizing:border-box}
+  .pininput{letter-spacing:8px;text-align:center;font-size:22px;font-weight:700}
+  .login-msg{font-size:13px;margin:6px 0 0;min-height:18px;color:var(--mut)}
+  .login-msg.err{color:#b91c1c}
+  .login-msg.ok{color:var(--maroon)}
 </style>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -137,6 +150,7 @@
   <h1>급여 관리</h1>
   <span class="badge">실데이터 연동</span>
   <span class="sp">관리자 · 알바 급여 관리</span>
+  <button class="btn gho logoutbtn" id="logoutBtn" style="display:none" onclick="staffLogout()">로그아웃</button>
 </header>
 
 <main>
@@ -161,6 +175,20 @@
     </div>
   </section>
 </main>
+
+<!-- 알바 로그인 게이트 -->
+<div class="loginback" id="staffLogin">
+  <div class="loginbox">
+    <h2>알바 로그인</h2>
+    <select id="login_staff" onchange="onLoginSelect()"><option value="">이름을 선택하세요</option></select>
+    <div id="login_pin_area" style="display:none">
+      <input class="pininput" id="login_pin" inputmode="numeric" maxlength="4" placeholder="PIN 4자리" autocomplete="off" onkeydown="if(event.key==='Enter')onLoginSubmit()">
+      <input class="pininput" id="login_pin2" inputmode="numeric" maxlength="4" placeholder="PIN 확인" autocomplete="off" style="display:none" onkeydown="if(event.key==='Enter')onLoginSubmit()">
+      <button class="btn pri" style="width:100%" onclick="onLoginSubmit()">확인</button>
+    </div>
+    <div class="login-msg" id="login_msg"></div>
+  </div>
+</div>
 
 <!-- 알바 등록 모달 -->
 <div class="mback" id="addStaffModal">
@@ -227,7 +255,7 @@ const DB = { staff:[], rates:[], logs:[], branches:[] };
 
 // Supabase에서 전체 로드 → 로컬 캐시(렌더는 캐시 기반 동기 유지)
 async function loadAll(){
-  var st = await sb.from('pt_staff').select('*').order('sort');
+  var st = await sb.from('pt_staff').select('id,name,branch_id,has_mentoring,active,sort').order('sort');
   var ra = await sb.from('pt_rate').select('*');
   var lo = await sb.from('pt_log').select('*');
   var br = await sb.from('pt_branch').select('*').order('sort');
@@ -313,6 +341,8 @@ function onMemoChange(inp){ upsertLog(SEL, inp.getAttribute('data-d'), inp.getAt
    상태 + 렌더
    ============================================================ */
 var SEL = null;          // 선택 알바 id
+var APP_MODE = 'admin';  // 'admin' | 'staff'
+var LOGIN_STAFF = null;  // 알바 로그인 시 본인 id
 var VIEW = 'both';       // 표시 모드: both / normal / mentoring
 var CUR = '2026-01';     // 현재 보는 월
 
@@ -351,6 +381,92 @@ async function deleteStaff(id){
   if(SEL===id) SEL=null;
   refreshBranchSelects(); renderStaffList();
   if(!SEL){ if(DB.staff.length) selectStaff(DB.staff[0].id); else renderDetail(); }
+}
+
+/* ===== 알바 PIN 로그인 (2a) ===== */
+async function getCurrentRole(){
+  try{
+    var sid=localStorage.getItem('savedUserId');
+    if(!sid) return null;
+    var r=await sb.from('users').select('role').eq('id',sid).single();
+    return (r.data&&r.data.role)||null;
+  }catch(e){ return null; }
+}
+async function sbRpc(fn,args){
+  try{ var r=await sb.rpc(fn,args); if(r.error) return {__error:r.error.message}; return r.data; }catch(e){ return {__error:String(e)}; }
+}
+var LOGIN_MODE='verify';
+function showStaffLogin(){
+  document.body.classList.add('staffmode');
+  document.getElementById('logoutBtn').style.display='none';
+  var sel=document.getElementById('login_staff');
+  sel.innerHTML='<option value="">이름을 선택하세요</option>'+
+    DB.staff.filter(function(s){return s.active;}).map(function(s){
+      return '<option value="'+s.id+'">'+esc(s.name)+(s.branch_id?' ('+esc(branchName(s.branch_id))+')':'')+'</option>';
+    }).join('');
+  document.getElementById('login_pin_area').style.display='none';
+  document.getElementById('login_pin').value='';
+  document.getElementById('login_pin2').value='';
+  var m=document.getElementById('login_msg'); m.textContent=''; m.className='login-msg';
+  document.getElementById('login_staff').value='';
+  document.getElementById('staffLogin').classList.add('show');
+}
+async function onLoginSelect(){
+  var id=document.getElementById('login_staff').value;
+  var area=document.getElementById('login_pin_area');
+  var msg=document.getElementById('login_msg');
+  var p2=document.getElementById('login_pin2');
+  msg.className='login-msg'; msg.textContent='';
+  document.getElementById('login_pin').value=''; p2.value='';
+  if(!id){ area.style.display='none'; return; }
+  var st=await sbRpc('pt_pin_status',{p_staff:id});
+  if(!st || st.__error){ msg.className='login-msg err'; msg.textContent='상태 조회 실패'; area.style.display='none'; return; }
+  if(st.locked){ area.style.display='none'; msg.className='login-msg err'; msg.textContent='5회 실패로 잠겼습니다. 관리자에게 문의하세요.'; return; }
+  area.style.display='block';
+  if(st.has_pin){
+    LOGIN_MODE='verify'; p2.style.display='none';
+    document.getElementById('login_pin').placeholder='PIN 4자리';
+    msg.textContent='PIN을 입력하세요.';
+  } else {
+    LOGIN_MODE='set'; p2.style.display='block';
+    document.getElementById('login_pin').placeholder='새 PIN 4자리';
+    msg.textContent='첫 로그인입니다. 사용할 PIN을 설정하세요.';
+  }
+  document.getElementById('login_pin').focus();
+}
+async function onLoginSubmit(){
+  var id=document.getElementById('login_staff').value;
+  var pin=document.getElementById('login_pin').value;
+  var msg=document.getElementById('login_msg');
+  msg.className='login-msg err';
+  if(!id){ msg.textContent='이름을 선택하세요.'; return; }
+  if(!/^[0-9]{4}$/.test(pin)){ msg.textContent='PIN은 4자리 숫자입니다.'; return; }
+  if(LOGIN_MODE==='set'){
+    var pin2=document.getElementById('login_pin2').value;
+    if(pin!==pin2){ msg.textContent='두 PIN이 일치하지 않습니다.'; return; }
+    var r=await sbRpc('pt_set_pin',{p_staff:id,p_pin:pin});
+    if(r && r.__error){ msg.textContent='PIN 설정 실패: '+r.__error; return; }
+    enterStaffMode(id); return;
+  }
+  var res=await sbRpc('pt_verify_pin',{p_staff:id,p_pin:pin});
+  if(res && res.result==='ok'){ enterStaffMode(id); return; }
+  if(res && res.result==='locked'){ msg.textContent='5회 실패로 잠겼습니다. 관리자에게 문의하세요.'; return; }
+  if(res && res.result==='fail'){ var left=5-(res.fail_count||0); msg.textContent='PIN이 틀립니다. (남은 시도 '+(left>0?left:0)+'회)'; document.getElementById('login_pin').value=''; document.getElementById('login_pin').focus(); return; }
+  msg.textContent='인증 실패';
+}
+function enterStaffMode(id){
+  LOGIN_STAFF=id; APP_MODE='staff';
+  document.getElementById('staffLogin').classList.remove('show');
+  document.body.classList.add('staffmode');
+  document.getElementById('logoutBtn').style.display='inline-flex';
+  var _s=staffById(id);
+  SEL=id; VIEW=(_s&&_s.has_mentoring)?'both':'normal';
+  renderDetail();
+}
+function staffLogout(){
+  LOGIN_STAFF=null; SEL=null; APP_MODE='staff';
+  document.getElementById('logoutBtn').style.display='none';
+  showStaffLogin();
 }
 function shiftMonth(d){
   var y=+CUR.slice(0,4), m=+CUR.slice(5,7)+d;
@@ -419,13 +535,13 @@ function renderDetail(){
         '<span class="mlabel">'+CUR.replace('-',' / ')+'</span>' +
         '<button onclick="shiftMonth(1)">›</button>' +
       '</div>' +
-      '<button class="btn gho del-staff" onclick="deleteStaff(\''+s.id+'\')" title="알바 삭제">삭제</button>' +
+      (APP_MODE==='admin' ? '<button class="btn gho del-staff" onclick="deleteStaff(\''+s.id+'\')" title="알바 삭제">삭제</button>' : '') +
     '</div>' +
 
     '<div class="rates">' +
       '<div style="display:flex;align-items:center;gap:8px;margin:14px 0 6px">' +
         '<h2 style="margin:0;font-size:13px;font-weight:800">시급 이력</h2>' +
-        '<button class="btn gho sm" onclick="openAddRate()" style="margin-left:auto">+ 시급 변경</button>' +
+        (APP_MODE==='admin' ? '<button class="btn gho sm" onclick="openAddRate()" style="margin-left:auto">+ 시급 변경</button>' : '') +
       '</div>' +
       '<table class="ratetable"><thead><tr><th>적용 시작월</th><th style="text-align:right">일반</th><th style="text-align:right">멘토링</th></tr></thead>' +
       '<tbody>'+rateRows+'</tbody></table>' +
@@ -691,8 +807,15 @@ async function setCurrentMonthKST(){
   await setCurrentMonthKST();
   await loadAll();
   refreshBranchSelects();
-  renderStaffList();
-  if(DB.staff.length) selectStaff(DB.staff[0].id);
+  var role = await getCurrentRole();
+  if(role==='admin'){
+    APP_MODE='admin';
+    renderStaffList();
+    if(DB.staff.length) selectStaff(DB.staff[0].id);
+  } else {
+    APP_MODE='staff';
+    showStaffLogin();
+  }
 })();
 </script>
 </body>
