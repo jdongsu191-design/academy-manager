@@ -115,6 +115,15 @@
   .chk{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
   .mbox .mf{padding:13px 18px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
   @media(max-width:820px){ main{grid-template-columns:1fr} }
+  /* 분원 관리 */
+  .brrow{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
+  .brrow .brnm{font-weight:600;font-size:13px;color:var(--ink)}
+  .brrow .brcnt{font-size:11px;color:var(--mut)}
+  .brrow .brsp{margin-left:auto}
+  .brrow button{font-size:11px;padding:3px 8px}
+  .staff .br{font-size:11px;color:var(--maroon);margin-left:6px;background:var(--maroon-l);padding:1px 6px;border-radius:6px}
+  .dnm-br{font-size:12px;color:var(--maroon);font-weight:600;margin-left:8px;background:var(--maroon-l);padding:2px 8px;border-radius:6px}
+  .mgrbtn{width:100%;margin-top:6px}
 </style>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -132,6 +141,7 @@
     <div class="pb">
       <div class="stafflist" id="stafflist"></div>
       <button class="btn pri addbtn" onclick="openAddStaff()">+ 알바 등록</button>
+      <button class="btn gho mgrbtn" onclick="openBranchMgr()">분원 관리</button>
     </div>
   </aside>
 
@@ -149,7 +159,7 @@
     <div class="mh">알바 등록</div>
     <div class="mc">
       <div class="fld"><label>이름</label><input id="as_name" placeholder="예: 홍길동"></div>
-      <div class="fld"><label>분원</label><input id="as_branch" placeholder="예: 본원 / 2관 (동명이인 구분)"></div>
+      <div class="fld"><label>분원</label><select id="as_branch"></select></div>
       <label class="chk"><input type="checkbox" id="as_mt"> 멘토링 업무 포함 (시급 별도)</label>
       <div class="fld"><label>첫 시급 — 적용 시작월</label><input type="month" id="as_ym" value="2026-01"></div>
       <div class="fld"><label>일반 시급 (원/시간)</label><input type="number" id="as_rn" value="10800" step="100"></div>
@@ -179,6 +189,23 @@
   </div>
 </div>
 
+<div class="mback" id="branchModal">
+  <div class="mbox">
+    <div class="mh">분원 관리</div>
+    <div class="mc">
+      <div id="branchList"></div>
+      <div class="fld" style="display:flex;gap:6px;align-items:flex-end;margin-top:8px">
+        <div style="flex:1"><label>새 분원 추가</label><input id="br_name" placeholder="예: 개봉 / 철산 / 청라"></div>
+        <button class="btn pri" onclick="addBranch()">추가</button>
+      </div>
+      <p class="hint">분원에 배정된 알바가 있으면 삭제할 수 없습니다.</p>
+    </div>
+    <div class="mf">
+      <button class="btn gho" onclick="closeModal('branchModal')">닫기</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const SB_URL='https://qtpftloyumtffvgurvqv.supabase.co';
 const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF0cGZ0bG95dW10ZmZ2Z3VydnF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ2MDU2NDksImV4cCI6MjA5MDE4MTY0OX0.5rssFIhLWTzVp_FPpsJnlKsdl_SpnSHX1bzuXixnOos';
@@ -187,18 +214,20 @@ const sb=supabase.createClient(SB_URL, SB_KEY);
    MOCK DB  —  실제 Supabase 테이블(pt_staff / pt_rate / pt_log)과
    동일한 형태. 연동 단계에서 이 객체만 Supabase 호출로 교체.
    ============================================================ */
-const DB = { staff:[], rates:[], logs:[] };
+const DB = { staff:[], rates:[], logs:[], branches:[] };
 
 // Supabase에서 전체 로드 → 로컬 캐시(렌더는 캐시 기반 동기 유지)
 async function loadAll(){
   var st = await sb.from('pt_staff').select('*').order('sort');
   var ra = await sb.from('pt_rate').select('*');
   var lo = await sb.from('pt_log').select('*');
-  var err = (st.error||ra.error||lo.error);
+  var br = await sb.from('pt_branch').select('*').order('sort');
+  var err = (st.error||ra.error||lo.error||br.error);
   if(err){ alert('데이터 로드 실패: '+(err.message||err)); return; }
   DB.staff = st.data || [];
   DB.rates = (ra.data||[]).map(function(r){ return {staff_id:r.staff_id, ym:r.ym, rn:r.rate_normal, rm:r.rate_mentoring}; });
   DB.logs  = (lo.data||[]).map(function(l){ return {staff_id:l.staff_id, date:l.work_date, n_in:l.n_in, n_out:l.n_out, m_in:l.m_in, m_out:l.m_out, memo_n:l.memo_n, memo_m:l.memo_m}; });
+  DB.branches = br.data || [];
 }
 
 /* ============================================================
@@ -287,6 +316,7 @@ function renderStaffList(){
     '<div class="staff '+(s.id===SEL?'sel':'')+' '+(s.active?'':'off')+'" onclick="selectStaff(\''+s.id+'\')">' +
       '<span class="dot"></span>' +
       '<span class="nm">'+s.name+'</span>' +
+      (s.branch_id?'<span class="br">'+esc(branchName(s.branch_id))+'</span>':'') +
       '<span class="ty">'+(s.has_mentoring?'일반+멘토링':'일반')+'</span>' +
     '</div>'
   ).join('');
@@ -355,6 +385,7 @@ function renderDetail(){
   body.innerHTML =
     '<div class="dhead">' +
       '<span class="dnm">'+s.name+'</span>' +
+      (s.branch_id?'<span class="dnm-br">'+esc(branchName(s.branch_id))+'</span>':'') +
       '<span class="tag '+(s.has_mentoring?'mt':'')+'">'+(s.has_mentoring?'일반+멘토링':'일반')+'</span>' +
       '<div class="monthnav">' +
         '<button onclick="shiftMonth(-1)">‹</button>' +
@@ -504,6 +535,7 @@ function openAddStaff(){
   document.getElementById('as_name').value='';
   document.getElementById('as_mt').checked=false;
   document.getElementById('as_rm_fld').style.display='none';
+  refreshBranchSelects();
   document.getElementById('addStaffModal').style.display='flex';
 }
 document.getElementById('as_mt').addEventListener('change',function(){
@@ -512,13 +544,13 @@ document.getElementById('as_mt').addEventListener('change',function(){
 async function addStaff(){
   var name=document.getElementById('as_name').value.trim();
   if(!name){ alert('이름을 입력하세요.'); return; }
-  var branch=document.getElementById('as_branch').value.trim() || null;
+  var branch_id=document.getElementById('as_branch').value || null;
   var mt=document.getElementById('as_mt').checked;
   var ym=document.getElementById('as_ym').value;
   var rn=+document.getElementById('as_rn').value;
   var rm= mt ? +document.getElementById('as_rm').value : null;
   // 1) 직원 insert
-  var ins=await sb.from('pt_staff').insert({name:name, branch:branch, has_mentoring:mt, active:true, sort:(DB.staff.length+1)}).select().single();
+  var ins=await sb.from('pt_staff').insert({name:name, branch_id:branch_id, has_mentoring:mt, active:true, sort:(DB.staff.length+1)}).select().single();
   if(ins.error){ alert('등록 실패: '+ins.error.message); return; }
   var id=ins.data.id;
   // 2) 첫 시급 insert
@@ -555,12 +587,78 @@ async function addRate(){
 }
 
 function closeModal(id){ document.getElementById(id).style.display='none'; }
+
+/* ===== 분원 마스터 (pt_branch) ===== */
+function branchName(id){ var b=DB.branches.find(function(x){return x.id===id;}); return b?b.name:''; }
+function branchOptions(sel){
+  return '<option value="">(분원 미지정)</option>' +
+    DB.branches.map(function(b){ return '<option value="'+b.id+'"'+(b.id===sel?' selected':'')+'>'+esc(b.name)+'</option>'; }).join('');
+}
+function refreshBranchSelects(){
+  var s=document.getElementById('as_branch');
+  if(s){ var cur=s.value; s.innerHTML=branchOptions(cur); }
+}
+function openBranchMgr(){ renderBranchList(); document.getElementById('branchModal').style.display='flex'; }
+function renderBranchList(){
+  var box=document.getElementById('branchList');
+  if(!DB.branches.length){ box.innerHTML='<p class="hint" style="margin:4px 0">등록된 분원이 없습니다. 아래에서 추가하세요.</p>'; return; }
+  box.innerHTML = DB.branches.map(function(b){
+    var cnt=DB.staff.filter(function(s){return s.branch_id===b.id;}).length;
+    return '<div class="brrow">'+
+      '<span class="brnm">'+esc(b.name)+'</span>'+
+      '<span class="brcnt">'+cnt+'명</span>'+
+      '<span class="brsp"></span>'+
+      '<button class="btn gho" onclick="editBranch(\''+b.id+'\')">수정</button>'+
+      '<button class="btn gho" onclick="deleteBranch(\''+b.id+'\')">삭제</button>'+
+    '</div>';
+  }).join('');
+}
+async function addBranch(){
+  var el=document.getElementById('br_name'); var name=el.value.trim();
+  if(!name){ alert('분원명을 입력하세요.'); return; }
+  if(DB.branches.some(function(b){return b.name===name;})){ alert('이미 같은 이름의 분원이 있습니다.'); return; }
+  var ins=await sb.from('pt_branch').insert({name:name, sort:(DB.branches.length+1)}).select().single();
+  if(ins.error){ alert('분원 추가 실패: '+ins.error.message); return; }
+  DB.branches.push(ins.data);
+  el.value='';
+  renderBranchList(); refreshBranchSelects();
+}
+async function editBranch(id){
+  var b=DB.branches.find(function(x){return x.id===id;}); if(!b) return;
+  var nn=prompt('분원명 수정', b.name); if(nn==null) return; nn=nn.trim();
+  if(!nn){ alert('분원명을 입력하세요.'); return; }
+  if(DB.branches.some(function(x){return x.id!==id && x.name===nn;})){ alert('이미 같은 이름의 분원이 있습니다.'); return; }
+  var up=await sb.from('pt_branch').update({name:nn}).eq('id',id);
+  if(up.error){ alert('수정 실패: '+up.error.message); return; }
+  b.name=nn;
+  renderBranchList(); refreshBranchSelects(); renderStaffList(); if(SEL) renderDetail();
+}
+async function deleteBranch(id){
+  var cnt=DB.staff.filter(function(s){return s.branch_id===id;}).length;
+  if(cnt>0){ alert('이 분원에 배정된 알바 '+cnt+'명이 있어 삭제할 수 없습니다.\n먼저 해당 알바의 분원을 변경하세요.'); return; }
+  var b=DB.branches.find(function(x){return x.id===id;}); if(!b) return;
+  if(!confirm('분원 "'+b.name+'"을(를) 삭제할까요?')) return;
+  var del=await sb.from('pt_branch').delete().eq('id',id);
+  if(del.error){ alert('삭제 실패: '+del.error.message); return; }
+  DB.branches=DB.branches.filter(function(x){return x.id!==id;});
+  renderBranchList(); refreshBranchSelects();
+}
+/* 서버(UTC) 시각 → KST 현재월 자동 */
+async function setCurrentMonthKST(){
+  try{
+    var r=await fetch(SB_URL+'/rest/v1/pt_branch?select=id&limit=1',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}});
+    var d=r.headers.get('date');
+    if(d){ var kst=new Date(new Date(d).getTime()+9*3600000); CUR=kst.toISOString().slice(0,7); }
+  }catch(e){ /* 실패 시 기본 CUR 유지 */ }
+}
+
 [...document.querySelectorAll('.mback')].forEach(m=>{
   m.addEventListener('click',e=>{ if(e.target===m) m.style.display='none'; });
 });
 
 /* init */
 (async function(){
+  await setCurrentMonthKST();
   await loadAll();
   renderStaffList();
   if(DB.staff.length) selectStaff(DB.staff[0].id);
