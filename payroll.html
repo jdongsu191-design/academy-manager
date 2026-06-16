@@ -142,6 +142,8 @@
   .login-msg{font-size:13px;margin:6px 0 0;min-height:18px;color:var(--mut)}
   .login-msg.err{color:#b91c1c}
   .login-msg.ok{color:var(--maroon)}
+  .pin-status{font-size:13px;padding:10px 12px;background:var(--bg);border-radius:8px;color:var(--ink);font-weight:600}
+  .pin-status .lock{color:#b91c1c}
 </style>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -239,6 +241,27 @@
     </div>
     <div class="mf">
       <button class="btn gho" onclick="closeModal('branchModal')">닫기</button>
+    </div>
+  </div>
+</div>
+
+<div class="mback" id="pinModal">
+  <div class="mbox">
+    <div class="mh">PIN 관리 — <span id="pin_staff_name"></span></div>
+    <div class="mc">
+      <div class="pin-status" id="pin_status">상태 조회 중…</div>
+      <div class="fld" style="display:flex;gap:6px;align-items:flex-end;margin-top:10px">
+        <div style="flex:1"><label>임시 PIN 부여 (4자리)</label><input id="pin_temp" inputmode="numeric" maxlength="4" placeholder="예: 0000" autocomplete="off"></div>
+        <button class="btn pri" onclick="adminSetPin()">부여</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px">
+        <button class="btn gho" onclick="adminResetPin()">PIN 초기화</button>
+        <button class="btn gho" onclick="adminUnlock()">잠금 해제</button>
+      </div>
+      <p class="hint">초기화하면 알바가 다음 로그인 때 새 PIN을 설정합니다. 임시 PIN은 알바에게 직접 전달하세요(저장은 해시).</p>
+    </div>
+    <div class="mf">
+      <button class="btn gho" onclick="closeModal('pinModal')">닫기</button>
     </div>
   </div>
 </div>
@@ -485,6 +508,47 @@ function startIdleWatch(){
     document.addEventListener(ev, resetIdle, {passive:true});
   });
 }
+
+/* ===== 관리자 PIN 관리 (2c) ===== */
+var PIN_TARGET=null;
+async function openPinModal(){
+  PIN_TARGET=SEL;
+  var s=staffById(SEL); if(!s) return;
+  document.getElementById('pin_staff_name').textContent=s.name;
+  document.getElementById('pin_temp').value='';
+  await refreshPinStatus();
+  document.getElementById('pinModal').style.display='flex';
+}
+async function refreshPinStatus(){
+  var el=document.getElementById('pin_status');
+  var st=await sbRpc('pt_pin_status',{p_staff:PIN_TARGET});
+  if(!st || st.__error){ el.textContent='상태 조회 실패'; return; }
+  var parts=[ st.has_pin ? 'PIN 설정됨' : 'PIN 미설정' ];
+  if(st.fail_count) parts.push('실패 '+st.fail_count+'회');
+  var html=parts.join(' · ');
+  if(st.locked){ html += ' · <span class="lock">🔒 잠김 ('+new Date(st.locked_until).toLocaleString('ko-KR')+'까지)</span>'; }
+  el.innerHTML=html;
+}
+async function adminSetPin(){
+  var pin=document.getElementById('pin_temp').value;
+  if(!/^[0-9]{4}$/.test(pin)){ alert('PIN은 4자리 숫자입니다.'); return; }
+  var r=await sbRpc('pt_admin_set_pin',{p_staff:PIN_TARGET,p_pin:pin});
+  if(r && r.__error){ alert('실패: '+r.__error); return; }
+  alert('임시 PIN을 부여했습니다: '+pin+'\n알바에게 전달하고, 첫 로그인 후 변경하도록 안내하세요.');
+  document.getElementById('pin_temp').value='';
+  await refreshPinStatus();
+}
+async function adminResetPin(){
+  if(!confirm('PIN을 초기화할까요?\n알바가 다음 로그인 때 새 PIN을 설정합니다.')) return;
+  var r=await sbRpc('pt_admin_reset_pin',{p_staff:PIN_TARGET});
+  if(r && r.__error){ alert('실패: '+r.__error); return; }
+  await refreshPinStatus();
+}
+async function adminUnlock(){
+  var r=await sbRpc('pt_admin_unlock',{p_staff:PIN_TARGET});
+  if(r && r.__error){ alert('실패: '+r.__error); return; }
+  await refreshPinStatus();
+}
 function shiftMonth(d){
   var y=+CUR.slice(0,4), m=+CUR.slice(5,7)+d;
   if(m<1){m=12;y--;} if(m>12){m=1;y++;}
@@ -552,6 +616,7 @@ function renderDetail(){
         '<span class="mlabel">'+CUR.replace('-',' / ')+'</span>' +
         '<button onclick="shiftMonth(1)">›</button>' +
       '</div>' +
+      (APP_MODE==='admin' ? '<button class="btn gho" onclick="openPinModal()" style="margin-left:8px">PIN 관리</button>' : '') +
       (APP_MODE==='admin' ? '<button class="btn gho del-staff" onclick="deleteStaff(\''+s.id+'\')" title="알바 삭제">삭제</button>' : '') +
     '</div>' +
 
