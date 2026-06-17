@@ -137,7 +137,7 @@
   .loginback.show{display:flex}
   .loginbox{background:#fff;border-radius:14px;padding:24px;width:340px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.25)}
   .loginbox h2{margin:0 0 16px;font-size:18px;color:var(--ink)}
-  .loginbox select,.loginbox .pininput{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:15px;margin-bottom:10px;box-sizing:border-box}
+  .loginbox select,.loginbox .pininput,.loginbox .logininput{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:15px;margin-bottom:10px;box-sizing:border-box}
   .pininput{letter-spacing:8px;text-align:center;font-size:22px;font-weight:700}
   .login-msg{font-size:13px;margin:6px 0 0;min-height:18px;color:var(--mut)}
   .login-msg.err{color:#b91c1c}
@@ -182,7 +182,9 @@
 <div class="loginback" id="staffLogin">
   <div class="loginbox">
     <h2>알바 로그인</h2>
-    <select id="login_staff" onchange="onLoginSelect()"><option value="">이름을 선택하세요</option></select>
+    <select id="login_branch" onchange="onLoginReset()"><option value="">분원 선택</option></select>
+    <input class="logininput" id="login_name" placeholder="이름 입력" autocomplete="off" oninput="onLoginReset()" onkeydown="if(event.key==='Enter')onLoginIdentify()">
+    <button class="btn pri" style="width:100%;margin-bottom:10px" onclick="onLoginIdentify()">확인</button>
     <div id="login_pin_area" style="display:none">
       <input class="pininput" id="login_pin" inputmode="numeric" maxlength="4" placeholder="PIN 4자리" autocomplete="off" onkeydown="if(event.key==='Enter')onLoginSubmit()">
       <input class="pininput" id="login_pin2" inputmode="numeric" maxlength="4" placeholder="PIN 확인" autocomplete="off" style="display:none" onkeydown="if(event.key==='Enter')onLoginSubmit()">
@@ -419,51 +421,86 @@ async function sbRpc(fn,args){
   try{ var r=await sb.rpc(fn,args); if(r.error) return {__error:r.error.message}; return r.data; }catch(e){ return {__error:String(e)}; }
 }
 var LOGIN_MODE='verify';
+var LOGIN_TARGET=null;   // 단일 후보 id
+var LOGIN_CANDS=[];      // 동명이인 후보 ids
 function showStaffLogin(){
   document.body.classList.add('staffmode');
   document.getElementById('logoutBtn').style.display='none';
-  var sel=document.getElementById('login_staff');
-  sel.innerHTML='<option value="">이름을 선택하세요</option>'+
-    DB.staff.filter(function(s){return s.active;}).map(function(s){
-      return '<option value="'+s.id+'">'+esc(s.name)+(s.branch_id?' ('+esc(branchName(s.branch_id))+')':'')+'</option>';
-    }).join('');
+  var bsel=document.getElementById('login_branch');
+  bsel.innerHTML='<option value="">분원 선택</option>'+
+    DB.branches.map(function(b){ return '<option value="'+b.id+'">'+esc(b.name)+'</option>'; }).join('');
+  bsel.value='';
+  document.getElementById('login_name').value='';
   document.getElementById('login_pin_area').style.display='none';
   document.getElementById('login_pin').value='';
   document.getElementById('login_pin2').value='';
   var m=document.getElementById('login_msg'); m.textContent=''; m.className='login-msg';
-  document.getElementById('login_staff').value='';
+  LOGIN_TARGET=null; LOGIN_CANDS=[];
   document.getElementById('staffLogin').classList.add('show');
 }
-async function onLoginSelect(){
-  var id=document.getElementById('login_staff').value;
+function onLoginReset(){
+  document.getElementById('login_pin_area').style.display='none';
+  document.getElementById('login_pin').value='';
+  document.getElementById('login_pin2').value='';
+  var m=document.getElementById('login_msg'); m.textContent=''; m.className='login-msg';
+  LOGIN_TARGET=null; LOGIN_CANDS=[];
+}
+async function onLoginIdentify(){
+  var bid=document.getElementById('login_branch').value;
+  var name=document.getElementById('login_name').value.trim();
   var area=document.getElementById('login_pin_area');
   var msg=document.getElementById('login_msg');
   var p2=document.getElementById('login_pin2');
   msg.className='login-msg'; msg.textContent='';
   document.getElementById('login_pin').value=''; p2.value='';
-  if(!id){ area.style.display='none'; return; }
-  var st=await sbRpc('pt_pin_status',{p_staff:id});
-  if(!st || st.__error){ msg.className='login-msg err'; msg.textContent='상태 조회 실패'; area.style.display='none'; return; }
-  if(st.locked){ area.style.display='none'; msg.className='login-msg err'; msg.textContent='5회 실패로 잠겼습니다. 관리자에게 문의하세요.'; return; }
-  area.style.display='block';
-  if(st.has_pin){
-    LOGIN_MODE='verify'; p2.style.display='none';
-    document.getElementById('login_pin').placeholder='PIN 4자리';
-    msg.textContent='PIN을 입력하세요.';
+  LOGIN_TARGET=null; LOGIN_CANDS=[];
+  if(!bid){ msg.className='login-msg err'; msg.textContent='분원을 선택하세요.'; area.style.display='none'; return; }
+  if(!name){ msg.className='login-msg err'; msg.textContent='이름을 입력하세요.'; area.style.display='none'; return; }
+  var q=await sb.from('pt_staff').select('id,name').eq('branch_id',bid).eq('name',name).eq('active',true);
+  var cands=(q.data||[]);
+  if(cands.length===0){ msg.className='login-msg err'; msg.textContent='해당 분원에 그 이름이 없습니다.'; area.style.display='none'; return; }
+  if(cands.length===1){
+    LOGIN_TARGET=cands[0].id;
+    var st=await sbRpc('pt_pin_status',{p_staff:LOGIN_TARGET});
+    if(!st || st.__error){ msg.className='login-msg err'; msg.textContent='상태 조회 실패'; area.style.display='none'; return; }
+    if(st.locked){ area.style.display='none'; msg.className='login-msg err'; msg.textContent='5회 실패로 잠겼습니다. 관리자에게 문의하세요.'; return; }
+    area.style.display='block';
+    if(st.has_pin){
+      LOGIN_MODE='verify'; p2.style.display='none';
+      document.getElementById('login_pin').placeholder='PIN 4자리';
+      msg.textContent='PIN을 입력하세요.';
+    } else {
+      LOGIN_MODE='set'; p2.style.display='block';
+      document.getElementById('login_pin').placeholder='새 PIN 4자리';
+      msg.textContent='첫 로그인입니다. 사용할 PIN을 설정하세요.';
+    }
+    document.getElementById('login_pin').focus();
   } else {
-    LOGIN_MODE='set'; p2.style.display='block';
-    document.getElementById('login_pin').placeholder='새 PIN 4자리';
-    msg.textContent='첫 로그인입니다. 사용할 PIN을 설정하세요.';
+    LOGIN_CANDS=cands.map(function(c){return c.id;});
+    LOGIN_MODE='multi'; p2.style.display='none';
+    area.style.display='block';
+    document.getElementById('login_pin').placeholder='PIN 4자리';
+    msg.className='login-msg';
+    msg.textContent='동명이인이 있습니다. 본인 PIN을 입력하세요. (미설정 시 관리자에게 PIN을 받아 입력)';
+    document.getElementById('login_pin').focus();
   }
-  document.getElementById('login_pin').focus();
 }
 async function onLoginSubmit(){
-  var id=document.getElementById('login_staff').value;
   var pin=document.getElementById('login_pin').value;
   var msg=document.getElementById('login_msg');
   msg.className='login-msg err';
-  if(!id){ msg.textContent='이름을 선택하세요.'; return; }
   if(!/^[0-9]{4}$/.test(pin)){ msg.textContent='PIN은 4자리 숫자입니다.'; return; }
+  if(LOGIN_MODE==='multi'){
+    for(var i=0;i<LOGIN_CANDS.length;i++){
+      var rm=await sbRpc('pt_verify_pin',{p_staff:LOGIN_CANDS[i],p_pin:pin});
+      if(rm && rm.result==='ok'){ enterStaffMode(LOGIN_CANDS[i]); return; }
+    }
+    msg.textContent='일치하는 PIN이 없습니다. (미설정이면 관리자에게 PIN을 받으세요)';
+    document.getElementById('login_pin').value=''; document.getElementById('login_pin').focus();
+    return;
+  }
+  var id=LOGIN_TARGET;
+  if(!id){ msg.textContent='분원과 이름을 확인하세요.'; return; }
   if(LOGIN_MODE==='set'){
     var pin2=document.getElementById('login_pin2').value;
     if(pin!==pin2){ msg.textContent='두 PIN이 일치하지 않습니다.'; return; }
