@@ -181,6 +181,21 @@
   .rf-inline { display:flex; align-items:center; gap:10px; flex:1; flex-wrap:wrap; }
   .rf-radio, .rf-check { display:flex; align-items:center; gap:5px; font-size:13px; font-weight:600; color:#334155; cursor:pointer; }
   .rf-check { margin-left:6px; padding-left:10px; border-left:1.5px solid #e2e8f0; }
+  /* 2단 레이아웃 + 학생 명단 */
+  .reg-2col { display:flex; gap:16px; align-items:flex-start; margin-bottom:24px; flex-wrap:wrap; }
+  .reg-form-col { flex:0 0 360px; max-width:100%; }
+  .reg-list-col { flex:1; min-width:300px; }
+  .reg-list-section { margin-bottom:0; }
+  .rl-filters { display:flex; gap:6px; margin-bottom:10px; }
+  .rl-fbtn { padding:6px 14px; border:1.5px solid #cbd5e1; border-radius:8px; background:#fff; color:#64748b; font-size:12.5px; font-weight:700; cursor:pointer; }
+  .rl-fbtn.active { background:#0369a1; color:#fff; border-color:#0369a1; }
+  .rl-list { max-height:520px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:10px; padding:6px; }
+  .rl-item { display:flex; align-items:center; gap:10px; padding:9px 11px; border-bottom:1px solid #f1f5f9; }
+  .rl-item:last-child { border-bottom:none; }
+  .rl-name { font-weight:700; font-size:13.5px; color:#0f172a; }
+  .rl-meta { font-size:12px; color:#64748b; margin-top:1px; }
+  .rl-badge { font-size:11px; font-weight:700; padding:2px 7px; border-radius:5px; }
+  .rl-wd { background:#fee2e2; color:#dc2626; }
   .reg-section { margin-bottom: 24px; }
   .reg-step-title { font-size: 15px; font-weight: 800; color: #0f172a; margin-bottom: 8px; }
   .reg-hint { font-size: 12.5px; color: #64748b; line-height: 1.6; margin-bottom: 10px; }
@@ -302,6 +317,8 @@
 
         <!-- [탭] 학생 등록 -->
         <div id="admin-tab-register">
+        <div class="reg-2col">
+        <div class="reg-form-col">
         <div class="reg-section" id="reg-form-section">
           <div class="reg-step-title">➕ 학생 추가</div>
           <div class="reg-hint">한 명씩 직접 추가합니다. 코드는 연락처 뒤 4자리로 자동 생성됩니다.</div>
@@ -327,6 +344,19 @@
             <button class="reg-btn reg-btn-clear" onclick="scFormReset()">지우기</button>
           </div>
           <div class="reg-hint" id="rf-msg" style="margin-top:8px"></div>
+        </div>
+        </div>
+        <div class="reg-list-col">
+          <div class="reg-section reg-list-section">
+            <div class="reg-step-title">📋 학생 명단</div>
+            <div class="rl-filters">
+              <button class="rl-fbtn active" data-filter="all" onclick="scListSetFilter('all')">전체</button>
+              <button class="rl-fbtn" data-filter="active" onclick="scListSetFilter('active')">재원</button>
+              <button class="rl-fbtn" data-filter="withdrawn" onclick="scListSetFilter('withdrawn')">퇴원</button>
+            </div>
+            <div class="rl-list" id="rl-list"><div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">불러오는 중...</div></div>
+          </div>
+        </div>
         </div>
         <div class="reg-section">
           <div class="reg-step-title">&#49;&#65039;&#8419; 데이터 붙여넣기</div>
@@ -429,6 +459,7 @@
     } else {
       reg.style.display = ""; wk.style.display = "none";
       rb.classList.add("active"); wb.classList.remove("active");
+      scListLoad();
     }
   }
 
@@ -1266,6 +1297,47 @@
     } finally {
       if(btn){ btn.disabled=false; btn.textContent='➕ 학생 추가'; }
     }
+  }
+
+  // [학생 명단] B-2: 로드/필터/렌더
+  var _scListData = [];
+  var _scListFilter = 'all';
+  async function scListLoad(){
+    var el=document.getElementById('rl-list');
+    try{
+      var res=await db.from('users')
+        .select('id,name,school,school_level,grade,phone,reading_room_class,reading_room_mentoring,reading_room_code,required_study_minutes,reading_room_withdrawn_at')
+        .eq('reading_room_yn',true).order('name');
+      if(res.error) throw res.error;
+      _scListData=res.data||[];
+      scListRender();
+    }catch(e){ console.error('명단 로드 실패:',e); if(el) el.innerHTML='<div style="padding:14px;color:#dc2626;font-size:13px">명단 로드 실패: '+scEsc(e.message||'')+'</div>'; }
+  }
+  function scListSetFilter(f){
+    _scListFilter=f;
+    document.querySelectorAll('.rl-fbtn').forEach(function(b){ b.classList.toggle('active', b.getAttribute('data-filter')===f); });
+    scListRender();
+  }
+  function scListRender(){
+    var el=document.getElementById('rl-list'); if(!el) return;
+    var list=_scListData.filter(function(s){
+      if(_scListFilter==='active') return !s.reading_room_withdrawn_at;
+      if(_scListFilter==='withdrawn') return !!s.reading_room_withdrawn_at;
+      return true;
+    });
+    if(!list.length){ el.innerHTML='<div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">학생이 없습니다</div>'; return; }
+    el.innerHTML=list.map(function(s){
+      var lv=s.school_level==='middle'?'중등':(s.school_level==='high'?'고등':(s.school_level==='both'?'중고등':''));
+      var cls=(s.reading_room_class||'').replace(/\s+/g,' ').trim();
+      var mt=s.reading_room_mentoring?' <span class="rl-badge" style="background:#ede9fe;color:#6d28d9">멘토링</span>':'';
+      var wd=s.reading_room_withdrawn_at?' <span class="rl-badge rl-wd">퇴원</span>':'';
+      var req=(s.required_study_minutes!=null)?(Math.floor(s.required_study_minutes/60)+'시간 '+(s.required_study_minutes%60)+'분'):'-';
+      return '<div class="rl-item"><div style="flex:1;min-width:0">'
+        +'<div class="rl-name">'+scEsc(s.name||'')+mt+wd+'</div>'
+        +'<div class="rl-meta">'+[lv,scEsc(s.school||''),scEsc(s.grade||''),cls].filter(Boolean).join(' · ')+'</div>'
+        +'<div class="rl-meta">코드 '+scEsc(s.reading_room_code||'-')+' · 의무 '+req+'</div>'
+      +'</div></div>';
+    }).join('');
   }
 
   async function scRegisterAll(){
