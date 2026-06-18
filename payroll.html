@@ -246,9 +246,18 @@
   <div class="mbox">
     <div class="mh">시급 변경 — <span id="rt_staff_name" style="color:var(--maroon)"></span></div>
     <div class="mc">
-      <div class="fld"><label>적용 시작월</label><input type="month" id="rt_ym" value="2026-01"></div>
+      <div class="fld"><label>적용 시작월</label><input type="month" id="rt_ym" value="2026-01" onchange="rtRefreshMentoring()"></div>
       <div class="fld"><label>일반 시급</label><input type="number" id="rt_rn" step="100"></div>
-      <div class="fld" id="rt_rm_fld"><label>멘토링 시급</label><input type="number" id="rt_rm" step="100"></div>
+      <div id="rt_mt_section">
+        <div class="fld" id="rt_mt_existing" style="display:none"><label>멘토링 시급 <span id="rt_mt_range" style="color:var(--mut);font-weight:400;font-size:11px"></span></label><input type="number" id="rt_rm" step="100"></div>
+        <div id="rt_mt_add" style="display:none">
+          <label class="chk"><input type="checkbox" id="rt_mt_addchk" onchange="rtToggleAdd()"> 멘토링 추가</label>
+          <div id="rt_mt_addfld" style="display:none">
+            <div class="fld"><label>멘토링 기간 (시작일 ~ 종료일)</label><div style="display:flex;gap:8px;align-items:center"><input type="date" id="rt_mt_start" style="flex:1"><span style="color:var(--mut)">~</span><input type="date" id="rt_mt_end" style="flex:1"></div></div>
+            <div class="fld"><label>멘토링 시급</label><input type="number" id="rt_mt_addrate" value="12000" step="100"></div>
+          </div>
+        </div>
+      </div>
       <p class="hint">이 시작월부터 다음 변경 전까지 적용됩니다.</p>
     </div>
     <div class="mf">
@@ -962,19 +971,53 @@ function openAddRate(){
   document.getElementById('rt_ym').value=CUR;
   var cur=rateFor(SEL,CUR);
   document.getElementById('rt_rn').value=cur?cur.rn:10800;
-  document.getElementById('rt_rm').value=cur&&cur.rm?cur.rm:12000;
-  document.getElementById('rt_rm_fld').style.display=s.has_mentoring?'flex':'none';
+  rtRefreshMentoring();
   document.getElementById('addRateModal').style.display='flex';
 }
+// 적용월 기준 멘토링 섹션 갱신: 걸치는 기간 있으면 시급변경(①), 없으면 추가(②)
+function rtRefreshMentoring(){
+  var ym=document.getElementById('rt_ym').value;
+  var m=mentoringActiveFor(SEL, ym);
+  var existing=document.getElementById('rt_mt_existing');
+  var addBox=document.getElementById('rt_mt_add');
+  if(m){
+    existing.style.display='flex'; addBox.style.display='none';
+    document.getElementById('rt_mt_range').textContent='('+m.start_date+' ~ '+m.end_date+')';
+    var mr=mentoringRateFor(SEL, ym);
+    document.getElementById('rt_rm').value=mr||12000;
+  } else {
+    existing.style.display='none'; addBox.style.display='block';
+    document.getElementById('rt_mt_addchk').checked=false;
+    document.getElementById('rt_mt_addfld').style.display='none';
+  }
+}
+function rtToggleAdd(){
+  document.getElementById('rt_mt_addfld').style.display=document.getElementById('rt_mt_addchk').checked?'block':'none';
+}
 async function addRate(){
-  var s=staffById(SEL);
   var ym=document.getElementById('rt_ym').value;
   var rn=+document.getElementById('rt_rn').value;
-  var rm=s.has_mentoring?+document.getElementById('rt_rm').value:null;
-  var up=await sb.from('pt_rate').upsert({staff_id:SEL, ym:ym, rate_normal:rn, rate_mentoring:rm}, {onConflict:'staff_id,ym'});
+  // 1) 일반 시급 (rate_mentoring은 더 이상 사용 안 함 → null 고정)
+  var up=await sb.from('pt_rate').upsert({staff_id:SEL, ym:ym, rate_normal:rn, rate_mentoring:null}, {onConflict:'staff_id,ym'});
   if(up.error){ alert('시급 저장 실패: '+up.error.message); return; }
-  var ex=DB.rates.find(r=>r.staff_id===SEL && r.ym===ym);
-  if(ex){ ex.rn=rn; ex.rm=rm; } else { DB.rates.push({staff_id:SEL, ym:ym, rn:rn, rm:rm}); }
+  // 2) 멘토링: 적용월이 기간에 걸치면 시급변경, 아니면(추가 체크 시) 새 기간 생성
+  var m=mentoringActiveFor(SEL, ym);
+  if(m){
+    var rm=+document.getElementById('rt_rm').value;
+    var mu=await sb.from('pt_mentoring_rate').upsert({mentoring_id:m.id, ym:ym, rate:rm}, {onConflict:'mentoring_id,ym'});
+    if(mu.error){ alert('멘토링 시급 저장 실패: '+mu.error.message); return; }
+  } else if(document.getElementById('rt_mt_addchk').checked){
+    var st=document.getElementById('rt_mt_start').value, en=document.getElementById('rt_mt_end').value;
+    if(!st||!en){ alert('멘토링 기간(시작일·종료일)을 입력하세요.'); return; }
+    if(en<st){ alert('멘토링 종료일이 시작일보다 빠를 수 없습니다.'); return; }
+    var ar=+document.getElementById('rt_mt_addrate').value;
+    var mi=await sb.from('pt_mentoring').insert({staff_id:SEL, start_date:st, end_date:en}).select('id,staff_id,start_date,end_date').single();
+    if(mi.error){ alert('멘토링 기간 추가 실패: '+mi.error.message); return; }
+    var mri=await sb.from('pt_mentoring_rate').insert({mentoring_id:mi.data.id, ym:st.slice(0,7), rate:ar});
+    if(mri.error){ alert('멘토링 시급 추가 실패: '+mri.error.message); return; }
+    await sb.from('pt_staff').update({has_mentoring:true}).eq('id',SEL);
+  }
+  await loadAll();
   closeModal('addRateModal');
   renderDetail();
 }
