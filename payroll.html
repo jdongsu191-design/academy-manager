@@ -304,7 +304,7 @@ const sb=supabase.createClient(SB_URL, SB_KEY);
    MOCK DB  —  실제 Supabase 테이블(pt_staff / pt_rate / pt_log)과
    동일한 형태. 연동 단계에서 이 객체만 Supabase 호출로 교체.
    ============================================================ */
-const DB = { staff:[], rates:[], logs:[], branches:[] };
+const DB = { staff:[], rates:[], logs:[], branches:[], mentorings:[], mentoringRates:[] };
 
 // Supabase에서 전체 로드 → 로컬 캐시(렌더는 캐시 기반 동기 유지)
 async function loadAll(){
@@ -312,12 +312,16 @@ async function loadAll(){
   var ra = await sb.from('pt_rate').select('*');
   var lo = await sb.from('pt_log').select('*');
   var br = await sb.from('pt_branch').select('*').order('sort');
-  var err = (st.error||ra.error||lo.error||br.error);
+  var mt = await sb.from('pt_mentoring').select('*');
+  var mtr = await sb.from('pt_mentoring_rate').select('*');
+  var err = (st.error||ra.error||lo.error||br.error||mt.error||mtr.error);
   if(err){ alert('데이터 로드 실패: '+(err.message||err)); return; }
   DB.staff = st.data || [];
   DB.rates = (ra.data||[]).map(function(r){ return {staff_id:r.staff_id, ym:r.ym, rn:r.rate_normal, rm:r.rate_mentoring}; });
   DB.logs  = (lo.data||[]).map(function(l){ return {staff_id:l.staff_id, date:l.work_date, n_in:l.n_in, n_out:l.n_out, m_in:l.m_in, m_out:l.m_out, memo_n:l.memo_n, memo_m:l.memo_m}; });
   DB.branches = br.data || [];
+  DB.mentorings = mt.data || [];
+  DB.mentoringRates = mtr.data || [];
 }
 
 /* ============================================================
@@ -353,6 +357,23 @@ function rateFor(staffId, ym){
   var rs = DB.rates.filter(r => r.staff_id===staffId && r.ym <= ym)
                    .sort((a,b)=> a.ym < b.ym ? 1 : -1);
   return rs[0] || null;
+}
+// 멘토링: 조회월(ym)이 걸치는 기간(start~end, 월 단위) 반환
+function mentoringActiveFor(staffId, ym){
+  return DB.mentorings.find(function(m){
+    return m.staff_id===staffId
+        && (m.start_date||'').slice(0,7) <= ym
+        && (m.end_date||'').slice(0,7) >= ym;
+  }) || null;
+}
+function isMentoringActive(staffId, ym){ return !!mentoringActiveFor(staffId, ym); }
+// 멘토링 시급: 활성 기간의 월별 시급 중 ym 이하 최신 (일반 시급과 동일 규칙)
+function mentoringRateFor(staffId, ym){
+  var m = mentoringActiveFor(staffId, ym);
+  if(!m) return 0;
+  var rs = DB.mentoringRates.filter(function(r){ return r.mentoring_id===m.id && r.ym <= ym; })
+                            .sort(function(a,b){ return a.ym < b.ym ? 1 : -1; });
+  return rs[0] ? rs[0].rate : 0;
 }
 // 월 집계 + 급여
 function payCalc(staffId, ym){
