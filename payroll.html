@@ -232,6 +232,7 @@
       <div class="fld"><label>첫 시급 — 적용 시작월</label><input type="month" id="as_ym" value="2026-01"></div>
       <div class="fld"><label>일반 시급 (원/시간)</label><input type="number" id="as_rn" value="10800" step="100"></div>
       <div class="fld" id="as_rm_fld" style="display:none"><label>멘토링 시급 (원/시간)</label><input type="number" id="as_rm" value="12000" step="100"></div>
+      <div class="fld" id="as_mt_period_fld" style="display:none"><label>멘토링 기간 (시작일 ~ 종료일)</label><div style="display:flex;gap:8px;align-items:center"><input type="date" id="as_mt_start" style="flex:1"><span style="color:var(--mut)">~</span><input type="date" id="as_mt_end" style="flex:1"></div></div>
     </div>
     <div class="mf">
       <button class="btn gho" onclick="closeModal('addStaffModal')">취소</button>
@@ -877,6 +878,9 @@ function openAddStaff(){
   document.getElementById('as_name').value='';
   document.getElementById('as_mt').checked=false;
   document.getElementById('as_rm_fld').style.display='none';
+  document.getElementById('as_mt_period_fld').style.display='none';
+  document.getElementById('as_mt_start').value='';
+  document.getElementById('as_mt_end').value='';
   document.getElementById('as_ym').value=CUR;
   document.getElementById('as_rn').value=10800;
   document.getElementById('as_rm').value=12000;
@@ -887,6 +891,7 @@ function openAddStaff(){
 }
 document.getElementById('as_mt').addEventListener('change',function(){
   document.getElementById('as_rm_fld').style.display=this.checked?'flex':'none';
+  document.getElementById('as_mt_period_fld').style.display=this.checked?'flex':'none';
 });
 async function addStaff(){
   var name=document.getElementById('as_name').value.trim();
@@ -896,16 +901,32 @@ async function addStaff(){
   var ym=document.getElementById('as_ym').value;
   var rn=+document.getElementById('as_rn').value;
   var rm= mt ? +document.getElementById('as_rm').value : null;
+  var mtStart = mt ? document.getElementById('as_mt_start').value : null;
+  var mtEnd   = mt ? document.getElementById('as_mt_end').value   : null;
+  if(mt){
+    if(!mtStart || !mtEnd){ alert('멘토링 기간(시작일·종료일)을 입력하세요.'); return; }
+    if(mtEnd < mtStart){ alert('멘토링 종료일이 시작일보다 빠를 수 없습니다.'); return; }
+  }
   // 1) 직원 insert
   var ins=await sb.from('pt_staff').insert({name:name, branch_id:branch_id, has_mentoring:mt, active:true, sort:(DB.staff.length+1)}).select('id,name,branch_id,has_mentoring,active,sort').single();
   if(ins.error){ alert('등록 실패: '+ins.error.message); return; }
   var id=ins.data.id;
-  // 2) 첫 시급 insert
-  var rIns=await sb.from('pt_rate').insert({staff_id:id, ym:ym, rate_normal:rn, rate_mentoring:rm});
+  // 2) 첫 시급 insert (일반 시급만 pt_rate; 멘토링 시급은 pt_mentoring_rate로 분리)
+  var rIns=await sb.from('pt_rate').insert({staff_id:id, ym:ym, rate_normal:rn, rate_mentoring:null});
   if(rIns.error){ alert('시급 등록 실패: '+rIns.error.message); }
+  // 2-1) 멘토링: 기간(pt_mentoring) + 시작월 시급(pt_mentoring_rate)
+  if(mt){
+    var mIns=await sb.from('pt_mentoring').insert({staff_id:id, start_date:mtStart, end_date:mtEnd}).select('id,staff_id,start_date,end_date').single();
+    if(mIns.error){ alert('멘토링 기간 등록 실패: '+mIns.error.message); }
+    else {
+      var mYm = mtStart.slice(0,7);
+      var mrIns=await sb.from('pt_mentoring_rate').insert({mentoring_id:mIns.data.id, ym:mYm, rate:rm});
+      if(mrIns.error){ alert('멘토링 시급 등록 실패: '+mrIns.error.message); }
+    }
+  }
   // 3) 캐시 갱신
   DB.staff.push(ins.data);
-  DB.rates.push({staff_id:id, ym:ym, rn:rn, rm:rm});
+  DB.rates.push({staff_id:id, ym:ym, rn:rn, rm:null});
   closeModal('addStaffModal');
   renderStaffList(); selectStaff(id);
 }
