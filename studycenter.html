@@ -196,6 +196,8 @@
   .rl-meta { font-size:12px; color:#64748b; margin-top:1px; }
   .rl-badge { font-size:11px; font-weight:700; padding:2px 7px; border-radius:5px; }
   .rl-wd { background:#fee2e2; color:#dc2626; }
+  .rl-edit { flex:0 0 auto; padding:5px 11px; border:1.5px solid #cbd5e1; border-radius:7px; background:#fff; color:#0369a1; font-size:12px; font-weight:700; cursor:pointer; }
+  .rl-edit:hover { background:#f0f9ff; }
   .reg-section { margin-bottom: 24px; }
   .reg-step-title { font-size: 15px; font-weight: 800; color: #0f172a; margin-bottom: 8px; }
   .reg-hint { font-size: 12.5px; color: #64748b; line-height: 1.6; margin-bottom: 10px; }
@@ -1242,11 +1244,38 @@
 
   // [전체 등록] 버튼 → Supabase insert
   // [학생 추가 폼] 초기화
+  var _scEditId = null;
   function scFormReset(){
+    _scEditId = null;
     var r0=document.querySelector('input[name="rf-class"][value="원생"]'); if(r0) r0.checked=true;
     var mt=document.getElementById('rf-mentoring'); if(mt) mt.checked=false;
     ['rf-name','rf-phone','rf-level','rf-school','rf-grade','rf-enrolled','rf-req-h','rf-req-m'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
     var msg=document.getElementById('rf-msg'); if(msg){ msg.textContent=''; msg.style.color=''; }
+    var btn=document.getElementById('rf-add-btn'); if(btn) btn.textContent='➕ 학생 추가';
+    var ttl=document.querySelector('#reg-form-section .reg-step-title'); if(ttl) ttl.textContent='➕ 학생 추가';
+  }
+  // [학생 수정] 명단 → 폼 로드
+  function scFormLoad(id){
+    var s=_scListData.find(function(x){ return x.id===id; });
+    if(!s) return;
+    _scEditId=id;
+    var isB=(s.reading_room_class||'').indexOf('비원생')>=0;
+    var rr=document.querySelector('input[name="rf-class"][value="'+(isB?'비원생':'원생')+'"]'); if(rr) rr.checked=true;
+    var mt=document.getElementById('rf-mentoring'); if(mt) mt.checked=!!s.reading_room_mentoring;
+    document.getElementById('rf-name').value=s.name||'';
+    document.getElementById('rf-phone').value=s.phone||'';
+    document.getElementById('rf-level').value=s.school_level||'';
+    document.getElementById('rf-school').value=s.school||'';
+    document.getElementById('rf-grade').value=s.grade||'';
+    document.getElementById('rf-enrolled').value=s.enrolled_at||'';
+    if(s.required_study_minutes!=null){
+      document.getElementById('rf-req-h').value=Math.floor(s.required_study_minutes/60);
+      document.getElementById('rf-req-m').value=s.required_study_minutes%60;
+    } else { document.getElementById('rf-req-h').value=''; document.getElementById('rf-req-m').value=''; }
+    var btn=document.getElementById('rf-add-btn'); if(btn) btn.textContent='💾 저장';
+    var ttl=document.querySelector('#reg-form-section .reg-step-title'); if(ttl) ttl.textContent='✏️ 학생 수정';
+    var msg=document.getElementById('rf-msg'); if(msg){ msg.textContent='수정 중: '+(s.name||''); msg.style.color='#0369a1'; }
+    var sec=document.getElementById('reg-form-section'); if(sec) sec.scrollIntoView({behavior:'smooth',block:'start'});
   }
   // [학생 추가 폼] 저장 (단일 insert, 코드 자동생성 재사용)
   async function scFormAdd(){
@@ -1277,6 +1306,15 @@
     var btn=document.getElementById('rf-add-btn');
     if(btn){ btn.disabled=true; btn.textContent='⏳ 추가 중...'; }
     try {
+      if(_scEditId){
+        var upd={ name:name, school:school||null, school_level:level||null, grade:grade||null, phone:phone||null, reading_room_class:classVal, reading_room_mentoring:mentoring, enrolled_at:enrolled||null, required_study_minutes:reqMin };
+        var ur=await db.from('users').update(upd).eq('id',_scEditId).select('id,name').maybeSingle();
+        if(ur.error) throw ur.error;
+        if(msg){ msg.textContent='✅ '+name+' 수정 완료'; msg.style.color='#16a34a'; }
+        scFormReset();
+        await scListLoad();
+        return;
+      }
       var rows=[{ name:name, phone:phone }];
       await scGenerateCodes(rows);
       if(rows[0].err || !rows[0].code){ showErr('코드 생성 실패: '+(rows[0].err||'')); return; }
@@ -1291,11 +1329,12 @@
       if(res.error) throw res.error;
       if(msg){ msg.textContent='✅ '+name+' 추가 완료 (코드 '+res.data.reading_room_code+')'; msg.style.color='#16a34a'; }
       scFormReset();
+      await scListLoad();
     } catch(e){
       console.error('학생 추가 실패:', e);
       showErr('추가 실패: '+(e.message||e));
     } finally {
-      if(btn){ btn.disabled=false; btn.textContent='➕ 학생 추가'; }
+      if(btn){ btn.disabled=false; btn.textContent=_scEditId?'💾 저장':'➕ 학생 추가'; }
     }
   }
 
@@ -1306,7 +1345,7 @@
     var el=document.getElementById('rl-list');
     try{
       var res=await db.from('users')
-        .select('id,name,school,school_level,grade,phone,reading_room_class,reading_room_mentoring,reading_room_code,required_study_minutes,reading_room_withdrawn_at')
+        .select('id,name,school,school_level,grade,phone,enrolled_at,reading_room_class,reading_room_mentoring,reading_room_code,required_study_minutes,reading_room_withdrawn_at')
         .eq('reading_room_yn',true).order('name');
       if(res.error) throw res.error;
       _scListData=res.data||[];
@@ -1336,7 +1375,9 @@
         +'<div class="rl-name">'+scEsc(s.name||'')+mt+wd+'</div>'
         +'<div class="rl-meta">'+[lv,scEsc(s.school||''),scEsc(s.grade||''),cls].filter(Boolean).join(' · ')+'</div>'
         +'<div class="rl-meta">코드 '+scEsc(s.reading_room_code||'-')+' · 의무 '+req+'</div>'
-      +'</div></div>';
+      +'</div>'
+        +'<button class="rl-edit" onclick="scFormLoad(\''+s.id+'\')">수정</button>'
+      +'</div>';
     }).join('');
   }
 
