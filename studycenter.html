@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.18-weekly-cumulative]</title>
+<title>BMAPS · 독서실 출결 [v0.19-required-history]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -280,7 +280,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.18-weekly-cumulative</span>
+    <span class="tb-ver" id="sc-ver">v0.19-required-history</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -463,7 +463,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.18-weekly-cumulative';
+  window.STUDYCENTER_VERSION = 'v0.19-required-history';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -502,6 +502,7 @@
   var _wkSelectedDay = 0;     // 0=월 ~ 6=일
   var _wkStudents = [];       // reading_room_yn 학생
   var _wkData = {};           // { studentId: { date: row } }
+  var _wkReqHistory = {};     // { studentId: [{effective_week_start, required_minutes}] }
 
   // Monday-start week calc
   function scWkMonday(dateStr){
@@ -572,6 +573,13 @@
         if(!_wkData[row.student_id]) _wkData[row.student_id] = {};
         _wkData[row.student_id][row.attend_date] = row;
       });
+      // 의무시간 이력 로드
+      var histRes = await db.from("reading_room_required_history").select("student_id,effective_week_start,required_minutes");
+      _wkReqHistory = {};
+      (histRes.data || []).forEach(function(h){
+        if(!_wkReqHistory[h.student_id]) _wkReqHistory[h.student_id] = [];
+        _wkReqHistory[h.student_id].push(h);
+      });
       scWkRenderDayTabs();
       scWkRenderTable();
     } catch(e){
@@ -615,6 +623,20 @@
     return h + "시간 " + String(m).padStart(2,"0") + "분";
   }
   // 일별 순공부분 (rrCalcDailyMinutes 동일)
+  // 해당 주(월요일)에 유효한 의무시간: 이력 중 effective_week_start <= monday 의 최근값, 없으면 users 현재값
+  function scWkEffectiveReq(sid, monday){
+    var hist = _wkReqHistory[sid] || [];
+    var best = null;
+    for(var i=0; i<hist.length; i++){
+      var h = hist[i];
+      if(h.effective_week_start <= monday){
+        if(!best || h.effective_week_start > best.effective_week_start) best = h;
+      }
+    }
+    if(best) return best.required_minutes;
+    var st = _wkStudents.find(function(s){ return s.id === sid; });
+    return st ? st.required_study_minutes : null;
+  }
   function scWkCalcDaily(row){
     if(!row || !row.check_in_time || !row.check_out_time) return null;
     var ci = scWkT2M(row.check_in_time), co = scWkT2M(row.check_out_time);
@@ -696,7 +718,7 @@
         }
         return cell(field, val);
       }
-      var reqMin = st.required_study_minutes;
+      var reqMin = scWkEffectiveReq(st.id, _wkWeekDates[0]);
       var net = row ? scWkCalcDaily(row) : null;
       // 주간 누적 순공부: 월요일(0)~선택 요일까지 합산
       var cumNet = 0;
@@ -954,6 +976,19 @@
     try {
       var res = await db.from("users").update({ required_study_minutes: min }).eq("id", sid);
       if(res.error) throw res.error;
+      // 의무시간 이력 기록 (이번 주 월요일부터 적용 / 과거 보존)
+      var _mon = _wkWeekDates[0];
+      if(min == null){
+        await db.from("reading_room_required_history").delete().eq("student_id", sid).eq("effective_week_start", _mon);
+        _wkReqHistory[sid] = (_wkReqHistory[sid] || []).filter(function(h){ return h.effective_week_start !== _mon; });
+      } else {
+        var _hr = await db.from("reading_room_required_history").upsert({ student_id: sid, effective_week_start: _mon, required_minutes: min }, { onConflict: "student_id,effective_week_start" }).select("*").maybeSingle();
+        if(!_hr.error && _hr.data){
+          if(!_wkReqHistory[sid]) _wkReqHistory[sid] = [];
+          _wkReqHistory[sid] = _wkReqHistory[sid].filter(function(h){ return h.effective_week_start !== _mon; });
+          _wkReqHistory[sid].push(_hr.data);
+        }
+      }
       // 메모리 반영
       var st = _wkStudents.find(function(x){ return x.id === sid; });
       if(st) st.required_study_minutes = min;
