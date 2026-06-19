@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>베스티안 스터디센터 · 실시간 학습 현황 [lobby v1.0]</title>
+<title>베스티안 스터디센터 · 실시간 학습 현황 [lobby v1.1-live]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <style>
@@ -71,6 +71,19 @@
   footer{margin-top:clamp(10px,1vw,18px); text-align:center; color:var(--ink-dim); font-size:clamp(11px,0.85vw,16px); font-weight:600;}
   .dot{display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--teal); margin-right:8px; vertical-align:middle; animation:pulse 1.9s ease-in-out infinite;}
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+  .live-strip{ margin-bottom:clamp(12px,1.4vw,24px); background:linear-gradient(100deg,rgba(244,120,54,0.17),rgba(244,120,54,0.05)); border:1px solid rgba(244,120,54,0.42); border-radius:18px; padding:clamp(12px,1.3vw,22px) clamp(14px,1.5vw,26px); }
+  .live-head{ display:flex; align-items:center; gap:10px; margin-bottom:clamp(8px,0.9vw,16px); }
+  .live-head .fire{ font-size:clamp(18px,1.6vw,30px); animation:flicker 1.5s ease-in-out infinite; }
+  .live-head .ttl{ font-size:clamp(17px,1.5vw,29px); font-weight:800; color:#ffb38a; letter-spacing:-0.01em; }
+  .live-head .cnt{ font-size:clamp(12px,0.95vw,18px); color:var(--ink-dim); font-weight:600; margin-left:auto; }
+  @keyframes flicker{ 0%,100%{opacity:1; transform:scale(1);} 50%{opacity:0.7; transform:scale(1.14);} }
+  .live-cards{ display:grid; grid-template-columns:repeat(3,1fr); gap:clamp(10px,1.1vw,20px); }
+  .live-card{ display:flex; align-items:center; gap:clamp(10px,1vw,18px); background:rgba(255,255,255,0.03); border:1px solid rgba(244,120,54,0.26); border-radius:14px; padding:clamp(10px,1vw,18px) clamp(12px,1.2vw,22px); }
+  .live-card .lrank{ width:clamp(34px,2.8vw,56px); height:clamp(34px,2.8vw,56px); border-radius:50%; flex-shrink:0; display:grid; place-items:center; font-weight:800; font-size:clamp(16px,1.4vw,27px); background:linear-gradient(150deg,#f7923e,#e2641f); color:#2a1300; box-shadow:0 0 16px rgba(244,120,54,0.3); }
+  .live-card .linfo{ min-width:0; flex:1; }
+  .live-card .lname{ font-size:clamp(14px,1.2vw,24px); font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink); }
+  .live-card .ltime{ font-size:clamp(19px,1.75vw,36px); font-weight:800; color:#ffd0a8; font-variant-numeric:tabular-nums; letter-spacing:0.01em; margin-top:2px; }
+  .live-empty{ color:var(--ink-dim); font-size:clamp(13px,1vw,20px); padding:6px 2px; }
 </style>
 </head>
 <body>
@@ -84,6 +97,10 @@
       <div class="time" id="clk-time">--:--:--</div>
     </div>
   </header>
+  <div class="live-strip" id="live-strip">
+    <div class="live-head"><span class="fire">🔥</span><span class="ttl">지금 공부 중</span><span class="cnt" id="live-cnt"></span></div>
+    <div class="live-cards" id="live-cards"></div>
+  </div>
   <div class="boards">
     <section class="board">
       <div class="board-head"><div class="board-title">어제의 학습왕</div><div class="board-range" id="rng-y">—</div></div>
@@ -127,6 +144,39 @@
   function mdw(d){ return (d.getMonth()+1)+'/'+d.getDate()+'('+WD[d.getDay()]+')'; }
   function fmtDur(min){ var h=Math.floor(min/60),m=min%60; return h+'시간 '+String(m).padStart(2,'0')+'분'; }
   function esc(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // ── 실시간 '지금 공부 중' 보드 ──
+  function t2s(t){ if(!t) return null; var p=String(t).split(':'); if(p.length<2) return null; return parseInt(p[0],10)*3600+parseInt(p[1],10)*60+(parseInt(p[2],10)||0); }
+  function fmtHMS(sec){ sec=Math.max(0,Math.floor(sec)); var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60; return h+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'); }
+  function nowSec(){ var n=new Date(); return n.getHours()*3600+n.getMinutes()*60+n.getSeconds(); }
+  function outSecs(row){
+    var s=0;
+    if(row.out_1_start&&row.out_1_end){ var a=t2s(row.out_1_start),b=t2s(row.out_1_end); if(row.out_1_end_is_next_day)b+=86400; if(b<a)b+=86400; s+=(b-a); }
+    if(row.out_2_start&&row.out_2_end){ var c=t2s(row.out_2_start),d=t2s(row.out_2_end); if(row.out_2_end_is_next_day)d+=86400; if(d<c)d+=86400; s+=(d-c); }
+    return s;
+  }
+  // 실시간 순공부(초): (현재-등원) - 완료외출 - 추가외출
+  function liveNet(it, ns){ var el=ns-it.ci; if(el<0) el+=86400; var net=el-it.out-it.extra; return net<0?0:net; }
+  function renderLive(list){
+    window.__live=list||[];
+    var cnt=document.getElementById('live-cnt');
+    if(cnt) cnt.textContent=window.__live.length?('현재 '+window.__live.length+'명'):'';
+    var cards=document.getElementById('live-cards'); if(!cards) return;
+    if(!window.__live.length){ cards.innerHTML='<div class="live-empty">현재 공부 중인 학생이 없습니다</div>'; return; }
+    var ns=nowSec(), h='';
+    window.__live.forEach(function(it,i){
+      h+='<div class="live-card">'
+        +'<div class="lrank">'+(i+1)+'</div>'
+        +'<div class="linfo"><div class="lname">'+esc(it.name)+'</div>'
+        +'<div class="ltime" id="live-time-'+i+'">'+fmtHMS(liveNet(it,ns))+'</div></div>'
+        +'</div>';
+    });
+    cards.innerHTML=h;
+  }
+  function liveTick(){
+    var list=window.__live||[], ns=nowSec();
+    list.forEach(function(it,i){ var el=document.getElementById('live-time-'+i); if(el) el.textContent=fmtHMS(liveNet(it,ns)); });
+  }
   function maskName(name){ name=String(name||''); if(name.length<=1) return name; return name[0]+'○'.repeat(name.length-1); }
   function label(s){ var p=[]; if(s.school)p.push(s.school); if(s.grade)p.push(s.grade+'학년'); p.push(maskName(s.name)); return p.join(' '); }
 
@@ -142,7 +192,7 @@
     return {yest,lastMon,lastSun,mStart,
       yestStr:ymd(yest), lastMonStr:ymd(lastMon), lastSunStr:ymd(lastSun),
       mStartStr:ymd(mStart), mEndStr:ymd(yest),
-      qStartStr:ymd(qStart), qEndStr:ymd(yest)};
+      qStartStr:ymd(qStart), qEndStr:ymd(today), todayStr:ymd(today)};
   }
 
   async function load(){
@@ -151,10 +201,11 @@
     if(us.error) throw us.error;
     var stu={}; (us.data||[]).forEach(function(s){ stu[s.id]=s; });
     var att=await db.from('reading_room_attendance')
-      .select('student_id,attend_date,check_in_time,check_out_time,check_out_is_next_day,out_1_start,out_1_end,out_1_end_is_next_day,out_2_start,out_2_end,out_2_end_is_next_day,extra_out_minutes')
+      .select('student_id,attend_date,check_in_time,check_out_time,check_out_is_next_day,out_1_start,out_1_end,out_1_end_is_next_day,out_2_start,out_2_end,out_2_end_is_next_day,extra_out_minutes,pending_out_start')
       .gte('attend_date',P.qStartStr).lte('attend_date',P.qEndStr);
     if(att.error) throw att.error;
-    var rows=(att.data||[]).filter(function(r){ return r.check_out_time; });
+    var raw=att.data||[];
+    var rows=raw.filter(function(r){ return r.check_out_time; });
     var yMap={},wMap={},mMap={};
     rows.forEach(function(r){
       var net=calcDaily(r); if(net==null) return; var d=r.attend_date;
@@ -167,7 +218,16 @@
         .filter(function(x){ return x.st; })
         .sort(function(a,b){ return b.total-a.total; }).slice(0,10);
     }
-    return {P, y:top10(yMap), w:top10(wMap), m:top10(mMap)};
+    var liveItems=[];
+    raw.forEach(function(r){
+      if(r.attend_date===P.todayStr && r.check_in_time && !r.check_out_time && !r.pending_out_start){
+        var st=stu[r.student_id]; if(!st) return;
+        liveItems.push({ name:label(st), ci:t2s(r.check_in_time), out:outSecs(r), extra:(r.extra_out_minutes||0)*60 });
+      }
+    });
+    var ns=nowSec();
+    liveItems.sort(function(a,b){ return liveNet(b,ns)-liveNet(a,ns); });
+    return {P, y:top10(yMap), w:top10(wMap), m:top10(mMap), live:liveItems.slice(0,3)};
   }
 
   function render(elId, list){
@@ -199,6 +259,7 @@
       document.getElementById('rng-w').textContent=md(data.P.lastMon)+' ~ '+md(data.P.lastSun);
       document.getElementById('rng-m').textContent=md(data.P.mStart)+' ~ '+md(data.P.yest);
       render('board-y',data.y); render('board-w',data.w); render('board-m',data.m);
+      renderLive(data.live);
       var now=new Date();
       document.getElementById('foot').textContent='마지막 갱신 '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0')+' · 60초마다 자동 갱신';
     }catch(e){
@@ -208,6 +269,7 @@
   }
 
   tick(); setInterval(tick,1000);
+  setInterval(liveTick,1000);
   refresh(); setInterval(refresh,60000);
 </script>
 </body>
