@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.22-noout-bizday]</title>
+<title>BMAPS · 독서실 출결 [v0.23-msg-export]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -177,6 +177,11 @@
   .wk-tbl .wk-req-save.saved { background: #1d4ed8; color: #fff; }
   .wk-tbl .wk-now-btn { font-size: 10px; padding: 2px 5px; border: 1px solid #bae6fd; background: #f0f9ff; color: #0369a1; border-radius: 4px; cursor: pointer; font-weight: 700; margin-left: 2px; }
   .wk-tbl .wk-now-btn:hover { background: #0369a1; color: #fff; }
+  .wk-tbl td.wk-name .wk-msg-wrap { margin-top: 5px; display: flex; gap: 4px; }
+  .wk-tbl .wk-msg-btn { font-size: 10px; padding: 2px 7px; border: 1px solid #c4b5fd; background: #f5f3ff; color: #6d28d9; border-radius: 4px; cursor: pointer; font-weight: 700; white-space: nowrap; }
+  .wk-tbl .wk-msg-btn:hover { background: #6d28d9; color: #fff; }
+  .wk-tbl .wk-msg-btn:disabled { opacity: 0.5; cursor: default; }
+  .wk-tbl .wk-msg-btn.copied { background: #16a34a; color: #fff; border-color: #16a34a; }
   .wk-tbl .wk-save-btn { padding: 5px 9px; border: 1px solid #16a34a; border-radius: 6px; background: #f0fdf4; color: #15803d; font-size: 11.5px; font-weight: 700; cursor: pointer; }
   .wk-tbl .wk-save-btn:hover { background: #16a34a; color: #fff; }
   .wk-tbl .wk-save-btn.saved { background: #15803d; color: #fff; }
@@ -282,7 +287,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.22-noout-bizday</span>
+    <span class="tb-ver" id="sc-ver">v0.23-msg-export</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -466,7 +471,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.22-noout-bizday';
+  window.STUDYCENTER_VERSION = 'v0.23-msg-export';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -749,7 +754,9 @@
         + '<td class="wk-name">'+scWkEsc(st.name)+warnBadge
           + '<div class="wk-sub">'+scWkEsc(((st.school||'')+' '+(st.grade||'')).trim())
           + (st.reading_room_code ? ' · <span class="wk-code">'+scWkEsc(st.reading_room_code)+'</span>' : '')
-          + '</div></td>'
+          + '</div>'
+          + '<div class="wk-msg-wrap"><button class="wk-msg-btn" onclick="scMsgLastWeek(\''+sid+'\',this)">지난주</button><button class="wk-msg-btn" onclick="scMsgThisWeek(\''+sid+'\',this)">이번주</button></div>'
+          + '</td>'
         + '<td class="wk-req-cell">'
           + '<span class="wk-req-group">'
           + '<input type="number" min="0" max="99" class="wk-req-h" data-sid="'+sid+'" value="'+(reqMin!=null?Math.floor(reqMin/60):"")+'" oninput="scWkReqEdit(this)" onkeydown="scWkReqKey(event,this,\'h\')" placeholder="0"><span class="wk-req-unit">시간</span>'
@@ -774,6 +781,134 @@
   }
 
   function scWkEsc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+  /* ── 멘트 발송 (카톡 복사용) ───────────────────────────── */
+  // 시각 → "H:MM" (시 앞자리 0 제거, 분 2자리)
+  function scMsgT(t){
+    if(!t) return "0:00";
+    var p = String(t).split(":");
+    if(p.length < 2) return "0:00";
+    return parseInt(p[0],10) + ":" + String(p[1]).padStart(2,"0");
+  }
+  // 날짜 "YYYY-MM-DD" → "MM/DD(요일)"
+  function scMsgMD(dateStr){
+    var d = new Date(dateStr + "T00:00:00");
+    var wd = ["일","월","화","수","목","금","토"][d.getDay()];
+    return String(d.getMonth()+1).padStart(2,"0") + "/" + String(d.getDate()).padStart(2,"0") + "(" + wd + ")";
+  }
+  // 지난주용: 특정 학생의 기간 출결 별도 조회 → { date: row }
+  async function scMsgLoadRange(sid, dates){
+    var map = {};
+    var res = await db.from("reading_room_attendance").select("*")
+      .eq("student_id", sid)
+      .gte("attend_date", dates[0]).lte("attend_date", dates[dates.length-1]);
+    if(res.error) throw res.error;
+    (res.data || []).forEach(function(row){ map[row.attend_date] = row; });
+    return map;
+  }
+  // 월요일 멘트: 지난주 월~일(7일) 요일별 상세 + 이행여부
+  function scMsgBuildMon(student, rowsByDate, reqMin, weekDates){
+    var hasReq = (reqMin != null && reqMin > 0);
+    var labels = ["월","화","수","목","금","토","일"];
+    var lines = [], totalNet = 0;
+    for(var i=0;i<7;i++){
+      var row = rowsByDate[weekDates[i]] || null;
+      var net = row ? scWkCalcDaily(row) : null;
+      var ci = (row && row.check_in_time) ? scMsgT(row.check_in_time) : "0:00";
+      var co = (row && row.check_out_time) ? scMsgT(row.check_out_time) : "0:00";
+      var dur = (net != null) ? net : 0;
+      totalNet += dur;
+      lines.push(labels[i] + " - " + ci + "~" + co + " (" + scWkFmtDur(dur) + ")");
+    }
+    var t = "안녕하세요 베스티안 수학학원입니다.\n";
+    t += student.name + " 학생 " + scMsgMD(weekDates[0]) + "~" + scMsgMD(weekDates[6]) + "학습 현황 안내드립니다.\n\n";
+    if(hasReq){ t += "▶ 의무시간: " + scWkFmtDur(reqMin) + " ◀\n\n"; }
+    t += lines.join("\n") + "\n\n";
+    t += "◇ 총 공부시간: " + scWkFmtDur(totalNet) + "\n";
+    if(hasReq){ t += "◇ 의무시간 " + (totalNet >= reqMin ? "이행 완료" : "미이행") + "\n"; }
+    t += "\n※ 요일별, 주별 총 공부시간은 외출시간을 제외한 순공부시간입니다.\n";
+    t += "※ 반복적인 " + (hasReq ? "의무 학습시간 미이행 및 " : "") + "스터디센터 규칙 미이행 시 퇴실 조치됩니다";
+    return t;
+  }
+  // 토요일 멘트: 금주 월~금(5일) 요약
+  function scMsgBuildSat(student, rowsByDate, reqMin, weekDates){
+    var hasReq = (reqMin != null && reqMin > 0);
+    var totalNet = 0;
+    for(var i=0;i<5;i++){   // 월~금만
+      var row = rowsByDate[weekDates[i]] || null;
+      var net = row ? scWkCalcDaily(row) : null;
+      if(net != null) totalNet += net;
+    }
+    var t = "안녕하세요 베스티안 스터디센터입니다. " + student.name + " 학생 스터디센터 학습시간 안내드립니다.\n\n";
+    if(hasReq){
+      var remain = reqMin - totalNet; if(remain < 0) remain = 0;
+      t += "■ 의무 학습시간: " + scWkFmtDur(reqMin) + "\n";
+      t += "■ " + scMsgMD(weekDates[0]) + "~" + scMsgMD(weekDates[4]) + " 학습 시간: " + scWkFmtDur(totalNet) + "\n";
+      t += "■ 남은 의무 학습시간: " + scWkFmtDur(remain) + "\n\n";
+      t += "언제나 학생을 위해 최선을 다하는 베스티안이 되겠습니다. 감사합니다.\n\n";
+      t += "※의무 학습시간은 " + scWkFmtDur(reqMin) + "이며, 남은 의무시간은 반드시 주말에 학습해야 합니다※\n";
+      t += "※반복적인 의무 학습시간 미이행 및 스터디센터 규칙 미이행 시 퇴실 조치됩니다※";
+    } else {
+      t += "■ " + scMsgMD(weekDates[0]) + "~" + scMsgMD(weekDates[4]) + " 학습 시간: " + scWkFmtDur(totalNet) + "\n\n";
+      t += "언제나 학생을 위해 최선을 다하는 베스티안이 되겠습니다. 감사합니다.";
+    }
+    return t;
+  }
+  // [지난주] 버튼: 보는 주의 직전 주 월~일
+  async function scMsgLastWeek(sid, btn){
+    if(!_wkWeekDates || !_wkWeekDates.length){ alert("주간 데이터가 로드되지 않았습니다."); return; }
+    var student = _wkStudents.find(function(s){ return s.id === sid; });
+    if(!student){ alert("학생 정보를 찾을 수 없습니다."); return; }
+    var d = new Date(_wkWeekDates[0] + "T00:00:00");
+    d.setDate(d.getDate() - 7);
+    var lastMon = scWkFmtDate(d);
+    var dates = scWkBuildWeek(lastMon);
+    var origText = btn ? btn.textContent : "";
+    if(btn){ btn.disabled = true; btn.textContent = "…"; }
+    try{
+      var rows = await scMsgLoadRange(sid, dates);
+      var reqMin = scWkEffectiveReq(sid, lastMon);
+      var msg = scMsgBuildMon(student, rows, reqMin, dates);
+      scMsgCopy(msg, btn, origText);
+    }catch(e){
+      if(btn){ btn.disabled = false; btn.textContent = origText; }
+      alert("멘트 생성 실패: " + (e.message || e));
+    }
+  }
+  // [이번주] 버튼: 보는 주 월~금 (로드된 _wkData 재사용)
+  function scMsgThisWeek(sid, btn){
+    if(!_wkWeekDates || !_wkWeekDates.length){ alert("주간 데이터가 로드되지 않았습니다."); return; }
+    var student = _wkStudents.find(function(s){ return s.id === sid; });
+    if(!student){ alert("학생 정보를 찾을 수 없습니다."); return; }
+    var rows = {}, sd = _wkData[sid] || {};
+    for(var dt in sd){ rows[dt] = sd[dt]; }
+    var reqMin = scWkEffectiveReq(sid, _wkWeekDates[0]);
+    var msg = scMsgBuildSat(student, rows, reqMin, _wkWeekDates);
+    scMsgCopy(msg, btn, btn ? btn.textContent : "");
+  }
+  // 클립보드 복사 + 버튼 피드백
+  function scMsgCopy(text, btn, origText){
+    function done(){
+      if(btn){
+        btn.disabled = false;
+        btn.classList.add("copied");
+        btn.textContent = "✓ 복사됨";
+        setTimeout(function(){ btn.classList.remove("copied"); btn.textContent = origText; }, 2000);
+      }
+    }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done, function(){ scMsgCopyFallback(text); done(); });
+    } else { scMsgCopyFallback(text); done(); }
+  }
+  function scMsgCopyFallback(text){
+    try{
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }catch(e){ console.error("복사 실패:", e); }
+  }
 
   // 셀 편집 → dirty 표시 + 메모리 반영
   var _wkXoutSid = null;
