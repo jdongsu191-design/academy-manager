@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.16-weekly-xout]</title>
+<title>BMAPS · 독서실 출결 [v0.17-bulksave-autocolon]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -113,6 +113,8 @@
   .wk-search:focus { border-color: #0369a1; }
   .wk-load-btn { padding: 8px 18px; background: #0369a1; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
   .wk-load-btn:hover { background: #075985; }
+  .wk-saveall-btn { background: #059669; }
+  .wk-saveall-btn:hover { background: #047857; }
   .wk-week-label { font-size: 12px; color: #0284c7; font-weight: 600; margin-bottom: 6px; }
   .wk-empty { text-align: center; color: #94a3b8; font-size: 14px; padding: 50px 20px; }
   /* 요일 탭 */
@@ -278,7 +280,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.16-weekly-xout</span>
+    <span class="tb-ver" id="sc-ver">v0.17-bulksave-autocolon</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -425,6 +427,7 @@
               <button class="wk-today-btn" onclick="scWkGoThisWeek()">이번주</button>
             </div>
             <input type="text" id="wk-search" class="wk-search" placeholder="학생 이름 검색..." oninput="scWkRenderTable()">
+            <button class="wk-load-btn wk-saveall-btn" id="wk-saveall-btn" onclick="scWkSaveAll()">&#128190; 전체 저장</button>
             <button class="wk-load-btn" onclick="scWkLoad()">&#128229; 불러오기</button>
             <button class="wk-load-btn wk-refresh-btn" onclick="scWkLoad()" title="현재 주차 데이터 새로고침">&#128260; 새로고침</button>
           </div>
@@ -460,7 +463,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.16-weekly-xout';
+  window.STUDYCENTER_VERSION = 'v0.17-bulksave-autocolon';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -683,7 +686,7 @@
       var pendingSlot = (row && row.pending_out_start) ? (!row.out_1_start ? 1 : (!row.out_2_start ? 2 : 0)) : 0;
       function cell(field, val){
         return '<input class="wk-t" data-sid="'+sid+'" data-field="'+field+'" value="'+scWkHm(val)+'" '
-          + 'oninput="scWkCellEdit(this)" placeholder="--:--">'
+          + 'oninput="scWkCellEdit(this)" onblur="scWkAutoColon(this)" placeholder="--:--">'
           + '<button class="wk-now-btn" onclick="scWkNow(\''+sid+'\',\''+field+'\')">지금</button>';
       }
       // 외출 시작칸: 해당 슬롯이 진행중 외출이면 읽기전용 표시(편집 input 미생성 → 복귀 정산 로직 무손상)
@@ -793,6 +796,35 @@
     scWkXoutClose();
   }
 
+  function scWkAutoColon(inp){
+    var v = (inp.value||"").trim();
+    if(!v || v.indexOf(":") >= 0) return;
+    var d = v.replace(/\D/g,"");
+    if(d.length === 3) d = "0" + d;
+    if(d.length === 4){
+      var hh = d.slice(0,2), mm = d.slice(2);
+      if(parseInt(hh,10) <= 23 && parseInt(mm,10) <= 59){ inp.value = hh + ":" + mm; }
+    }
+  }
+  async function scWkSaveAll(){
+    var dirtyInputs = document.querySelectorAll(".wk-t.dirty");
+    var sidSet = {};
+    dirtyInputs.forEach(function(i){ sidSet[i.getAttribute("data-sid")] = true; });
+    var sids = Object.keys(sidSet);
+    var btn = document.getElementById("wk-saveall-btn");
+    if(!sids.length){ alert("저장할 변경사항이 없습니다."); return; }
+    if(btn){ btn.textContent = "저장 중..."; btn.disabled = true; }
+    var okCount = 0;
+    for(var i=0; i<sids.length; i++){
+      try { await scWkSaveRow(sids[i], true); okCount++; }
+      catch(e){ console.error("전체저장 행 실패:", sids[i], e); }
+    }
+    scWkRenderTable();
+    if(btn){
+      btn.textContent = "✓ " + okCount + "명 저장됨"; btn.disabled = false;
+      setTimeout(function(){ var b=document.getElementById("wk-saveall-btn"); if(b) b.innerHTML = "&#128190; 전체 저장"; }, 2000);
+    }
+  }
   function scWkCellEdit(inp){
     inp.classList.add("dirty");
     var sid = inp.getAttribute("data-sid");
@@ -810,7 +842,7 @@
   }
 
   // [저장] 행 → upsert
-  async function scWkSaveRow(sid){
+  async function scWkSaveRow(sid, skipRender){
     var date = _wkWeekDates[_wkSelectedDay];
     var inputs = document.querySelectorAll('.wk-t[data-sid="'+sid+'"]');
     var patch = { student_id: sid, attend_date: date };
@@ -846,7 +878,7 @@
       _wkData[sid][date] = res.data;
       if(btn){ btn.textContent = "✓ 저장됨"; btn.classList.add("saved"); btn.disabled = false; }
       // dirty 해제 + 순공부/남은시간 갱신
-      scWkRenderTable();
+      if(!skipRender) scWkRenderTable();
     } catch(e){
       console.error("저장 실패:", e);
       alert("저장 실패: " + (e.message||e));
