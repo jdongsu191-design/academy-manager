@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.25-report]</title>
+<title>BMAPS · 독서실 출결 [v0.26-tp-kiosk]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -315,6 +315,17 @@
   .wk-tbl .wk-rpt-btn:hover{ background:#1f8a82; color:#fff; }
   .wk-tbl .wk-rpt-btn:disabled{ opacity:0.5; cursor:default; }
   .wk-tbl .wk-rpt-btn.copied{ background:#16a34a; color:#fff; border-color:#16a34a; }
+  /* ── 키오스크 시간선택 / 외출 모달 ── */
+  .ts-name,.os-name{ font-size:26px; font-weight:800; color:#1e3a5f; margin-bottom:2px; }
+  #kiosk-time-screen .ts-title,#kiosk-out-screen .ts-title{ font-size:15px; font-weight:700; color:#64748b; margin:14px 0 10px; }
+  .ts-grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .ts-grid button{ padding:14px 0; font-size:16px; font-weight:700; border:1.5px solid #cbd5e1; background:#fff; color:#334155; border-radius:10px; cursor:pointer; font-variant-numeric:tabular-nums; }
+  .ts-grid button:hover{ background:#f1f5f9; }
+  .ts-grid button.sel{ background:#2d5a86; border-color:#2d5a86; color:#fff; }
+  .ts-confirm{ width:100%; margin-top:18px; padding:15px; font-size:17px; font-weight:800; background:#0e9488; color:#fff; border:none; border-radius:12px; cursor:pointer; }
+  .ts-confirm:hover{ background:#0c7a73; }
+  .ts-back{ margin-top:10px; background:none; border:none; color:#94a3b8; font-size:14px; cursor:pointer; }
+  .os-subject{ width:100%; margin-top:8px; padding:12px; font-size:15px; border:1.5px solid #cbd5e1; border-radius:10px; box-sizing:border-box; }
 </style>
 </head>
 <body>
@@ -322,7 +333,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.25-report</span>
+    <span class="tb-ver" id="sc-ver">v0.26-tp-kiosk</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -372,6 +383,27 @@
           <div class="ac-btn-area" id="ac-btn-area"></div>
           <div class="ac-msg" id="ac-msg"></div>
           <button class="ac-back" onclick="scKioskReset()">← 돌아가기</button>
+        </div>
+
+        <!-- [키오스크 4] 시간 선택 (입실 예상하원 / 하원 예상등원 공용) -->
+        <div class="kiosk-card" id="kiosk-time-screen" style="display:none">
+          <div class="ts-name" id="ts-name">—</div>
+          <div class="ts-title" id="ts-title">예상 시간 선택</div>
+          <div class="ts-grid" id="ts-grid"></div>
+          <div class="ac-msg" id="ts-msg"></div>
+          <button class="ts-back" onclick="scShowActionBack()">← 취소</button>
+        </div>
+
+        <!-- [키오스크 5] 외출 (사유 + 예상복귀) -->
+        <div class="kiosk-card" id="kiosk-out-screen" style="display:none">
+          <div class="os-name" id="os-name">—</div>
+          <div class="ts-title">외출 사유 (학원은 과목 필수)</div>
+          <div class="ts-grid" id="os-reason"></div>
+          <div id="os-subject-wrap" style="display:none"><input class="os-subject" id="os-subject" placeholder="학원 과목 입력 (예: 수학)" autocomplete="off"></div>
+          <div class="ts-title">예상 복귀까지</div>
+          <div class="ts-grid" id="os-dur"></div>
+          <button class="ts-confirm" onclick="scConfirmOut()">⚡ 외출 완료</button>
+          <button class="ts-back" onclick="scShowActionBack()">← 취소</button>
         </div>
       </div>
     </div>
@@ -507,7 +539,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.25-report';
+  window.STUDYCENTER_VERSION = 'v0.26-tp-kiosk';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1376,6 +1408,8 @@
     _scActionRow = null;
     var cs = document.getElementById("kiosk-confirm-screen"); if(cs) cs.style.display = "none";
     var ac = document.getElementById("kiosk-action-screen"); if(ac) ac.style.display = "none";
+    var ts = document.getElementById("kiosk-time-screen"); if(ts) ts.style.display = "none";
+    var os = document.getElementById("kiosk-out-screen"); if(os) os.style.display = "none";
     var ds = document.getElementById("kiosk-code-screen"); if(ds) ds.style.display = "";
     var err = document.getElementById("kp-err"); if(err) err.textContent = "";
     scKpRender();
@@ -1442,10 +1476,10 @@
     statusEl.className = "ac-status " + cls[state];
     var h = "";
     if(state === "out_room"){
-      h = '<button class="ac-act-btn act-in" onclick="scActIn()">✅ 입실</button>';
+      h = '<button class="ac-act-btn act-in" onclick="scShowEnterTime()">✅ 입실</button>';
     } else if(state === "studying"){
-      h = '<button class="ac-act-btn act-out" onclick="scActOut()">⚡ 외출</button>'
-        + '<button class="ac-act-btn act-leave" onclick="scActLeave()">🏠 하원</button>';
+      h = '<button class="ac-act-btn act-out" onclick="scShowOutScreen()">⚡ 외출</button>'
+        + '<button class="ac-act-btn act-leave" onclick="scShowLeaveTime()">🏠 하원</button>';
     } else if(state === "outing"){
       var since = _scActionRow && _scActionRow.pending_out_start ? (" (" + String(_scActionRow.pending_out_start).slice(0,5) + " 나감)") : "";
       h = '<button class="ac-act-btn act-return" onclick="scActReturn()">↩️ 복귀</button>';
@@ -1465,22 +1499,16 @@
     return res.data;
   }
 
-  // [입실]
-  async function scActIn(){
+  // [입실] (예상 하원시각 포함)
+  async function scActIn(expCheckout){
+    scShowActionBack();
     try {
-      _scActionRow = await scRrUpsert({ check_in_time: scNowTime() });
+      _scActionRow = await scRrUpsert({ check_in_time: scNowTime(), expected_check_out: expCheckout || null });
       scActDone("입실", scNowTime());
     } catch(e){ scActError(e); }
   }
 
-  // [외출] → pending_out_start 설정 (DB에 진행중 외출 남음)
-  async function scActOut(){
-    try {
-      var now = scNowTime();
-      _scActionRow = await scRrUpsert({ pending_out_start: now, pending_out_is_next_day: false });
-      scActDone("외출", now);
-    } catch(e){ scActError(e); }
-  }
+  // [외출 진입] → 사유/복귀 선택 화면 (scShowOutScreen)으로 대체됨
 
   // [복귀] → pending~now 외출분 계산 → out_1/out_2/extra 정산 + pending 비우기
   async function scActReturn(){
@@ -1492,12 +1520,16 @@
         // 안전장치: pending 없으면 상태 재동기화
         await scShowAction(); return;
       }
-      var patch = { pending_out_start: null, pending_out_is_next_day: false };
+      var patch = { pending_out_start: null, pending_out_is_next_day: false, pending_out_reason: null, pending_out_expected_end: null };
       if(!row.out_1_start){
         patch.out_1_start = startT; patch.out_1_end = now;
+        patch.out_1_reason = row.pending_out_reason || null;
+        patch.out_1_expected_end = row.pending_out_expected_end || null;
         if(scTimeToMin(now) < scTimeToMin(startT)) patch.out_1_end_is_next_day = true;
       } else if(!row.out_2_start){
         patch.out_2_start = startT; patch.out_2_end = now;
+        patch.out_2_reason = row.pending_out_reason || null;
+        patch.out_2_expected_end = row.pending_out_expected_end || null;
         if(scTimeToMin(now) < scTimeToMin(startT)) patch.out_2_end_is_next_day = true;
       } else {
         // 3회⁺ → extra_out_minutes 누적
@@ -1510,14 +1542,22 @@
     } catch(e){ scActError(e); }
   }
 
-  // [하원]
-  async function scActLeave(){
+  // [하원] (다음날 예상등원 → 예약 행 생성)
+  async function scActLeave(expNextIn){
+    scShowActionBack();
     try {
       var row = _scActionRow || {};
       var now = scNowTime();
       var patch = { check_out_time: now };
       if(row.check_in_time && scTimeToMin(now) < scTimeToMin(row.check_in_time)) patch.check_out_is_next_day = true;
       _scActionRow = await scRrUpsert(patch);
+      if(expNextIn){
+        var nd = scRrNextDay(scRrToday());
+        await db.from("reading_room_attendance").upsert(
+          { student_id: _scKioskStudent.id, attend_date: nd, expected_check_in: expNextIn },
+          { onConflict: "student_id,attend_date" }
+        );
+      }
       scActDone("하원", now);
     } catch(e){ scActError(e); }
   }
@@ -1536,6 +1576,80 @@
     console.error("attendance save fail:", e);
     var msg = document.getElementById("ac-msg");
     if(msg) msg.textContent = "⚠️ 저장 실패. 다시 시도하거나 데스크에 문의하세요.";
+  }
+
+  /* ── 시간계획: 시간선택 / 외출 모달 + 액션 ── */
+  var SC_OUT_REASONS = ["점심","저녁","학원","병원","집"];
+  var SC_OUT_DURS = [{l:"30분",m:30},{l:"1시간",m:60},{l:"1시간 30분",m:90},{l:"2시간",m:120},{l:"2시간 30분",m:150},{l:"3시간",m:180}];
+  var _scOutReason = null, _scOutDurMin = null;
+
+  function scGenTimes(startMin, endMin){
+    var a = [];
+    for(var m=startMin; m<=endMin; m+=30){ var mm=((m%1440)+1440)%1440; a.push(String(Math.floor(mm/60)).padStart(2,"0")+":"+String(mm%60).padStart(2,"0")); }
+    return a;
+  }
+  function scRrNextDay(ds){ var d=new Date(ds+"T00:00:00"); d.setDate(d.getDate()+1); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+  function scAddMinToTime(t, addMin){ var base=scTimeToMin(t)+addMin; var mm=((base%1440)+1440)%1440; return String(Math.floor(mm/60)).padStart(2,"0")+":"+String(mm%60).padStart(2,"0")+":00"; }
+
+  function scShowActionBack(){
+    ["kiosk-time-screen","kiosk-out-screen"].forEach(function(c){ var e=document.getElementById(c); if(e) e.style.display="none"; });
+    var ac=document.getElementById("kiosk-action-screen"); if(ac) ac.style.display="";
+  }
+  // [입실] → 예상 하원시간 선택 화면
+  function scShowEnterTime(){
+    document.getElementById("kiosk-action-screen").style.display="none";
+    document.getElementById("ts-name").textContent=_scKioskStudent?_scKioskStudent.name:"";
+    document.getElementById("ts-title").textContent="오늘 예상 하원시간을 선택하세요";
+    var times=scGenTimes(20*60, 25*60+30);
+    document.getElementById("ts-grid").innerHTML=times.map(function(t){return '<button onclick="scActIn(\''+t+':00\')">'+t+'</button>';}).join("");
+    document.getElementById("ts-msg").textContent="";
+    document.getElementById("kiosk-time-screen").style.display="";
+  }
+  // [하원] → 다음날 예상 등원시간 선택 화면
+  function scShowLeaveTime(){
+    document.getElementById("kiosk-action-screen").style.display="none";
+    document.getElementById("ts-name").textContent=_scKioskStudent?_scKioskStudent.name:"";
+    document.getElementById("ts-title").textContent="다음날 예상 등원시간을 선택하세요";
+    var times=scGenTimes(8*60, 18*60+30);
+    document.getElementById("ts-grid").innerHTML=times.map(function(t){return '<button onclick="scActLeave(\''+t+':00\')">'+t+'</button>';}).join("");
+    document.getElementById("ts-msg").textContent="";
+    document.getElementById("kiosk-time-screen").style.display="";
+  }
+  // [외출] → 사유 + 예상복귀 화면
+  function scShowOutScreen(){
+    _scOutReason=null; _scOutDurMin=null;
+    document.getElementById("kiosk-action-screen").style.display="none";
+    document.getElementById("os-name").textContent=_scKioskStudent?_scKioskStudent.name:"";
+    document.getElementById("os-reason").innerHTML=SC_OUT_REASONS.map(function(r){return '<button onclick="scPickReason(this,\''+r+'\')">'+r+'</button>';}).join("");
+    document.getElementById("os-dur").innerHTML=SC_OUT_DURS.map(function(d){return '<button onclick="scPickDur(this,'+d.m+')">'+d.l+'</button>';}).join("");
+    document.getElementById("os-subject-wrap").style.display="none";
+    document.getElementById("os-subject").value="";
+    document.getElementById("kiosk-out-screen").style.display="";
+  }
+  function scPickReason(btn, r){
+    _scOutReason=r;
+    Array.prototype.forEach.call(btn.parentNode.children,function(b){ b.classList.remove("sel"); });
+    btn.classList.add("sel");
+    document.getElementById("os-subject-wrap").style.display=(r==="학원")?"":"none";
+  }
+  function scPickDur(btn, m){
+    _scOutDurMin=m;
+    Array.prototype.forEach.call(btn.parentNode.children,function(b){ b.classList.remove("sel"); });
+    btn.classList.add("sel");
+  }
+  // [외출 완료] → pending_out_start + 사유 + 예상복귀
+  async function scConfirmOut(){
+    if(!_scOutReason){ alert("외출 사유를 선택해주세요."); return; }
+    if(_scOutReason==="학원" && !document.getElementById("os-subject").value.trim()){ alert("학원 과목을 입력해주세요."); return; }
+    if(!_scOutDurMin){ alert("예상 복귀시간을 선택해주세요."); return; }
+    try{
+      var now=scNowTime();
+      var reason=(_scOutReason==="학원") ? ("학원("+document.getElementById("os-subject").value.trim()+")") : _scOutReason;
+      var expEnd=scAddMinToTime(now,_scOutDurMin);
+      _scActionRow = await scRrUpsert({ pending_out_start: now, pending_out_is_next_day:false, pending_out_reason:reason, pending_out_expected_end:expEnd });
+      scShowActionBack();
+      scActDone("외출", now);
+    }catch(e){ scShowActionBack(); scActError(e); }
   }
 
   /* ============================================================
