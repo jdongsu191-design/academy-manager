@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.30-desk-exp]</title>
+<title>BMAPS · 독서실 출결 [v0.31-desk-out]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -316,6 +316,12 @@
   .wk-tbl .wk-rpt-btn:disabled{ opacity:0.5; cursor:default; }
   .wk-tbl .wk-exp-btn{ font-size:10px; padding:2px 7px; border:1px solid #fdba74; background:#fff7ed; color:#c2410c; border-radius:4px; cursor:pointer; font-weight:700; white-space:nowrap; }
   .wk-tbl .wk-exp-btn:hover{ background:#c2410c; color:#fff; }
+  .wk-exp-sec{ font-size:12px; font-weight:700; color:#475569; margin:14px 0 8px; padding-top:12px; border-top:1px solid #e2e8f0; }
+  .wk-exp-out-block{ display:flex; align-items:center; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+  .wk-exp-out-lbl{ width:42px; font-size:12.5px; font-weight:600; color:#334155; }
+  .wk-exp-sel, .wk-exp-ret, .wk-exp-subj{ padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; font-family:inherit; }
+  .wk-exp-ret{ width:84px; }
+  .wk-exp-subj{ width:72px; }
   .wk-tbl .wk-rpt-btn.copied{ background:#16a34a; color:#fff; border-color:#16a34a; }
   /* ── 키오스크 시간선택 / 외출 모달 ── */
   .ts-name,.os-name{ font-size:26px; font-weight:800; color:#1e3a5f; margin-bottom:2px; }
@@ -395,7 +401,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.30-desk-exp</span>
+    <span class="tb-ver" id="sc-ver">v0.31-desk-out</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -636,7 +642,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.30-desk-exp';
+  window.STUDYCENTER_VERSION = 'v0.31-desk-out';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1503,6 +1509,8 @@
     if(outEl) outEl.value = (row && row.expected_check_out) ? scWkHm(row.expected_check_out) : "";
     if(inEl) inEl.value = "";
     if(msgEl){ msgEl.textContent=""; msgEl.classList.remove("err"); }
+    _scExpLoadOut(1, row?row.out_1_reason:"", row?row.out_1_expected_end:"");
+    _scExpLoadOut(2, row?row.out_2_reason:"", row?row.out_2_expected_end:"");
     var saveBtn=document.getElementById("wk-exp-save");
     if(saveBtn){ saveBtn.textContent="저장"; saveBtn.disabled=false; }
     document.getElementById("wk-exp-overlay").classList.add("open");
@@ -1521,13 +1529,50 @@
     if(ov) ov.classList.remove("open");
     _scExpSid=null; _scExpDate=null; _scExpNdExists=false;
   }
+  // 외출 사유 select 변경 → 학원이면 과목칸 표시
+  function scWkExpReasonChange(slot){
+    var sel=document.getElementById("wk-exp-r"+slot);
+    var subj=document.getElementById("wk-exp-subj"+slot);
+    if(subj) subj.style.display = (sel && sel.value==="학원") ? "" : "none";
+  }
+  // 외출 슬롯 로드: out_N_reason("학원(수학)"/"점심") + out_N_expected_end → UI
+  function _scExpLoadOut(slot, reason, expEnd){
+    var sel=document.getElementById("wk-exp-r"+slot);
+    var subj=document.getElementById("wk-exp-subj"+slot);
+    var ret=document.getElementById("wk-exp-ret"+slot);
+    var rsn="", sj="";
+    if(reason){
+      var m=String(reason).match(/^학원\((.*)\)$/);
+      if(m){ rsn="학원"; sj=m[1]; } else { rsn=reason; }
+    }
+    if(sel) sel.value=rsn;
+    if(subj){ subj.value=sj; subj.style.display=(rsn==="학원")?"":"none"; }
+    if(ret) ret.value = expEnd ? scWkHm(expEnd) : "";
+  }
+  // 외출 슬롯 수집: UI → {reason, expEnd}  (expEnd: null=빈칸 / undefined=형식오류 / "HH:MM:00")
+  function _scExpCollectOut(slot){
+    var sel=document.getElementById("wk-exp-r"+slot);
+    var subj=document.getElementById("wk-exp-subj"+slot);
+    var ret=document.getElementById("wk-exp-ret"+slot);
+    var rsn = sel ? sel.value : "";
+    var reason = null;
+    if(rsn==="학원"){
+      var sj = subj ? subj.value.trim() : "";
+      reason = sj ? ("학원("+sj+")") : "학원";
+    } else if(rsn){
+      reason = rsn;
+    }
+    var retV = scWkNorm(ret ? ret.value : "");
+    return { reason: reason, expEnd: retV };
+  }
   async function scWkExpSave(){
     var sid=_scExpSid, date=_scExpDate;
     if(!sid || !date) return;
     var outV = scWkNorm(document.getElementById("wk-exp-out").value);
     var inV  = scWkNorm(document.getElementById("wk-exp-in").value);
+    var o1=_scExpCollectOut(1), o2=_scExpCollectOut(2);
     var msgEl=document.getElementById("wk-exp-msg");
-    if(outV === undefined || inV === undefined){
+    if(outV === undefined || inV === undefined || o1.expEnd === undefined || o2.expEnd === undefined){
       if(msgEl){ msgEl.textContent="시간 형식이 올바르지 않습니다 (HH:MM)"; msgEl.classList.add("err"); }
       return;
     }
@@ -1535,10 +1580,14 @@
     if(btn){ btn.textContent="저장중..."; btn.disabled=true; }
     try {
       var curRow = (_wkData[sid]||{})[date] || null;
-      // 당일행: 예상하원 (입력값이 있거나, 당일행이 이미 있을 때만 — 불필요한 빈 행 생성 방지)
-      if(outV !== null || curRow){
+      // 당일행: 예상하원 + 외출1/2 사유·예상복귀 (입력값이 있거나, 당일행이 이미 있을 때만 — 빈 행 생성 방지)
+      var hasDay = (outV !== null) || o1.reason || o1.expEnd || o2.reason || o2.expEnd || curRow;
+      if(hasDay){
         var r1 = await db.from("reading_room_attendance").upsert(
-          { student_id: sid, attend_date: date, expected_check_out: outV },
+          { student_id: sid, attend_date: date,
+            expected_check_out: outV,
+            out_1_reason: o1.reason, out_1_expected_end: o1.expEnd,
+            out_2_reason: o2.reason, out_2_expected_end: o2.expEnd },
           { onConflict: "student_id,attend_date" }
         ).select("*").maybeSingle();
         if(r1.error) throw r1.error;
@@ -2454,6 +2503,19 @@
       <div class="wk-xout-frow"><label>예상하원</label><input type="text" id="wk-exp-out" placeholder="HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)"></div>
       <div class="wk-xout-frow"><label>예상등원</label><input type="text" id="wk-exp-in" placeholder="HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)"></div>
       <div class="wk-exp-note" style="font-size:11px;color:#94a3b8;margin:-4px 0 12px 74px;">※ 예상등원은 <b>다음날</b> 기준입니다</div>
+      <div class="wk-exp-sec">외출 사유 · 예상복귀</div>
+      <div class="wk-exp-out-block">
+        <span class="wk-exp-out-lbl">외출1</span>
+        <select class="wk-exp-sel" id="wk-exp-r1" onchange="scWkExpReasonChange(1)"><option value="">— 사유 —</option><option>점심</option><option>저녁</option><option>학원</option><option>병원</option><option>집</option></select>
+        <input type="text" class="wk-exp-subj" id="wk-exp-subj1" placeholder="과목" autocomplete="off" style="display:none">
+        <input type="text" class="wk-exp-ret" id="wk-exp-ret1" placeholder="복귀 HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)">
+      </div>
+      <div class="wk-exp-out-block">
+        <span class="wk-exp-out-lbl">외출2</span>
+        <select class="wk-exp-sel" id="wk-exp-r2" onchange="scWkExpReasonChange(2)"><option value="">— 사유 —</option><option>점심</option><option>저녁</option><option>학원</option><option>병원</option><option>집</option></select>
+        <input type="text" class="wk-exp-subj" id="wk-exp-subj2" placeholder="과목" autocomplete="off" style="display:none">
+        <input type="text" class="wk-exp-ret" id="wk-exp-ret2" placeholder="복귀 HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)">
+      </div>
       <div class="wk-xout-preview" id="wk-exp-msg"></div>
       <div class="wk-xout-btns">
         <button type="button" class="wk-xout-cancel" onclick="scWkExpClose()">닫기</button>
