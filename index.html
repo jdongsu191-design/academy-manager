@@ -5579,6 +5579,53 @@ function weekendDayValue(s, type, rec){
   if (yn === true && wd != null) return Number(wd);
   return def;
 }
+/* ── 주말 출석부 시간순 정렬 (기본요일 우선 → 다른요일 요일순→시간순) ── */
+function weekendTimeMin(t){
+  if(t==null||t==='') return 999999;
+  var m=String(t).match(/(\d{1,2})\s*[:시]?\s*(\d{0,2})/);
+  if(!m) return 999999;
+  var h=parseInt(m[1],10), mi=(m[2]!==''?parseInt(m[2],10):0);
+  if(h>=1 && h<=6) h+=12;   /* 12시간제 오후 추정: 1~6시는 오후(13~18시) */
+  return h*60+mi;
+}
+function weekendTimeValue(s, type, rec){
+  if(rec && rec.attend_time!=null && rec.attend_time!=='') return rec.attend_time;
+  var altYn, altTime, baseTime;
+  if(type==='naje'){ altYn=s.weekend_alt_yn; altTime=s.weekend_alt_time; baseTime=s.weekend_attend_time; }
+  else if(type==='potential'){ altYn=s.potential_alt_yn; altTime=s.potential_alt_time; baseTime=s.potential_attend_time; }
+  else { altYn=s.bety_alt_yn; altTime=s.bety_alt_time; baseTime=s.bety_attend_time; }
+  return (altYn===true && altTime) ? altTime : (baseTime||'');
+}
+function weekendSortStudents(students, type, carryMap, sortMode){
+  if(sortMode!=='time') return students;
+  var baseDay = (type==='bety') ? 0 : 6;
+  var cm = carryMap||{};
+  return students.slice().sort(function(a,b){
+    var ra=cm[a.id], rb=cm[b.id];
+    var da=weekendDayValue(a,type,ra), dbv=weekendDayValue(b,type,rb);
+    var ta=weekendTimeMin(weekendTimeValue(a,type,ra)), tb=weekendTimeMin(weekendTimeValue(b,type,rb));
+    var basa=(da===baseDay)?0:1, basb=(dbv===baseDay)?0:1;
+    if(basa!==basb) return basa-basb;
+    if(basa===0) return ta-tb;
+    if(da!==dbv) return da-dbv;
+    return ta-tb;
+  });
+}
+var _wnSortMode='name';
+function wnToggleSort(){ _wnSortMode=(_wnSortMode==='time')?'name':'time'; if(typeof wnRenderTable==='function') wnRenderTable(); }
+var _ptSortMode='name';
+function ptToggleSort(){ _ptSortMode=(_ptSortMode==='time')?'name':'time'; if(typeof ptRenderTable==='function') ptRenderTable(); }
+var _bySortMode='name';
+function byToggleSort(){ _bySortMode=(_bySortMode==='time')?'name':'time'; if(typeof byRenderTable==='function') byRenderTable(); }
+var _nsSortMode='name';
+function nsToggleSort(){ _nsSortMode=(_nsSortMode==='time')?'name':'time'; if(typeof nsRenderTable==='function') nsRenderTable(); }
+function nsSortByTime(students, dataMap, sortMode){
+  if(sortMode!=='time') return students;
+  var dm=dataMap||{};
+  return students.slice().sort(function(a,b){
+    return weekendTimeMin((dm[a.id]||{}).attend_time) - weekendTimeMin((dm[b.id]||{}).attend_time);
+  });
+}
 function weekendDayOptions(sel){
   var ORD=[1,2,3,4,5,6,0], NM=['\uC77C','\uC6D4','\uD654','\uC218','\uBAA9','\uAE08','\uD1A0'], h='';
   for (var i=0;i<ORD.length;i++){ var v=ORD[i]; h+='<option value="'+v+'"'+(v===sel?' selected':'')+'>'+NM[v]+'</option>'; }
@@ -5630,7 +5677,7 @@ function wnRenderTable() {
       <th style="text-align:left;padding-left:4px;min-width:44px">이름</th>
       <th style="min-width:36px">Lv</th>
       <th style="min-width:56px">요일</th>
-      <th style="min-width:36px">시간</th>
+      <th style="min-width:46px;cursor:pointer;user-select:none" onclick="wnToggleSort()" title="시간순 정렬 토글"><span style="text-decoration:underline dotted 2px #86efac">시간</span> ${_wnSortMode==='time'?'<span style="color:#fde047">⬇</span>':'⇅'}</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="wnBulkModal('attendance')" title="클릭: 일괄처리">
         <span style="text-decoration:underline dotted 2px #86efac">출석</span> ✦</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="wnBulkModal('homework')" title="클릭: 일괄처리">
@@ -5643,7 +5690,7 @@ function wnRenderTable() {
       <th style="min-width:44px">📬전송</th>
     </tr></thead><tbody>`;
 
-  _wnStudents.forEach((s, i) => {
+  weekendSortStudents(_wnStudents, 'naje', _wnCarry, _wnSortMode).forEach((s, i) => {
     var r       = _wnData[s.id] || {};
     var rc      = _wnCarry[s.id];   // 직전 회차(공란 포함) — 없으면 seed로 fallback
     var _wnWdCur = weekendDayValue(s,'naje',rc), _wnWdAlt = (_wnWdCur !== 6);
@@ -6006,7 +6053,7 @@ function weekendPrintAttendance(type){
   var COLOR       = type==='naje' ? '#166534' : type==='potential' ? '#5B21B6' : type==='naesin' ? '#0f766e' : '#b45309';
   var COLOR_DARK  = type==='naje' ? '#14532d' : type==='potential' ? '#3b0764' : type==='naesin' ? '#134e4a' : '#78350f';
   var COLOR_BG    = type==='naje' ? '#f0fdf4' : type==='potential' ? '#f5f3ff' : type==='naesin' ? '#f0fdfa' : '#fffbeb';
-  var COLOR_BORDER= type==='naje' ? '#bbf7d0' : type==='potential' ? '#ddd6fe' : type==='naesin' ? '#99f6e4' : '#fde68a';
+  var COLOR_BORDER= type==='naje' ? '#16a34a' : type==='potential' ? '#7c3aed' : type==='naesin' ? '#0d9488' : '#d97706';
   var TITLE_ICON  = type==='naje' ? '📅 주말 N제' : type==='potential' ? '🎯 포텐셜' : type==='naesin' ? '📘 내신대비' : '📝 베티모의고사';
   var TITLE_SUB   = type==='naje' ? '주말 N제 출결 결과' : type==='potential' ? '포텐셜 출결 결과' : type==='naesin' ? '내신대비 출결 결과' : '베티모의고사 출결 결과';
   var isAdmin = currentUser && currentUser.role === 'admin';
@@ -6801,7 +6848,7 @@ function ptRenderTable() {
       <th style="text-align:left;padding-left:6px;min-width:52px">이름</th>
       <th style="min-width:44px">레벨</th>
       <th style="min-width:56px">요일</th>
-      <th style="min-width:52px">시간</th>
+      <th style="min-width:60px;cursor:pointer;user-select:none" onclick="ptToggleSort()" title="시간순 정렬 토글"><span style="text-decoration:underline dotted 2px #c4b5fd">시간</span> ${_ptSortMode==='time'?'<span style="color:#fde047">⬇</span>':'⇅'}</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="ptBulkModal('attendance')" title="클릭: 일괄처리"><span style="text-decoration:underline dotted 2px #c4b5fd">출결</span> ✦</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="ptBulkModal('wrong_done')" title="클릭: 일괄처리"><span style="text-decoration:underline dotted 2px #c4b5fd">오답</span> ✦</th>
       <th style="min-width:44px">정오답</th>
@@ -6812,7 +6859,7 @@ function ptRenderTable() {
       <th style="min-width:44px">📬전송</th>
     </tr></thead><tbody>`;
 
-  _ptStudents.forEach(s => {
+  weekendSortStudents(_ptStudents, 'potential', _ptCarry, _ptSortMode).forEach(s => {
     var r       = _ptData[s.id] || {};
     var rc      = _ptCarry[s.id];   // 직전 회차(공란 포함) — 없으면 seed로 fallback
     var _ptWdCur = weekendDayValue(s,'potential',rc), _ptWdAlt = (_ptWdCur !== 6);
@@ -8505,7 +8552,7 @@ function byRenderTable() {
       <th style="text-align:left;padding-left:6px;min-width:52px">이름</th>
       <th style="min-width:70px">레벨</th>
       <th style="min-width:56px">요일</th>
-      <th style="min-width:52px">시간</th>
+      <th style="min-width:60px;cursor:pointer;user-select:none" onclick="byToggleSort()" title="시간순 정렬 토글"><span style="text-decoration:underline dotted 2px #fcd34d">시간</span> ${_bySortMode==='time'?'<span style="color:#fde047">⬇</span>':'⇅'}</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="byBulkModal('attendance')" title="클릭: 일괄처리"><span style="text-decoration:underline dotted 2px #fde68a">출결</span> ✦</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="byBulkModal('wrong_done')" title="클릭: 일괄처리"><span style="text-decoration:underline dotted 2px #fde68a">오답</span> ✦</th>
       <th style="min-width:50px">점수</th>
@@ -8515,7 +8562,7 @@ function byRenderTable() {
       <th style="min-width:44px">📬전송</th>
     </tr></thead><tbody>`;
 
-  _byStudents.forEach(s => {
+  weekendSortStudents(_byStudents, 'bety', _byCarry, _bySortMode).forEach(s => {
     var r       = _byData[s.id] || {};
     var rc      = _byCarry[s.id];   // 직전 회차(공란 포함) — 없으면 seed로 fallback
     var _byWdCur = weekendDayValue(s,'bety',rc), _byWdAlt = (_byWdCur !== 0);
@@ -9635,7 +9682,7 @@ function nsRenderTable() {
     + '<th style="text-align:left;padding-left:8px;min-width:60px">학교</th>'
     + '<th style="min-width:36px">학년</th>'
     + '<th style="text-align:left;padding-left:6px;min-width:52px">이름</th>'
-    + '<th style="min-width:60px">시간</th>'
+    + '<th style="min-width:68px;cursor:pointer;user-select:none" onclick="nsToggleSort()" title="시간순 정렬 토글"><span style="text-decoration:underline dotted 2px #5eead4">시간</span> ' + (_nsSortMode==='time'?'<span style="color:#0d9488">⬇</span>':'⇅') + '</th>'
     + '<th style="min-width:60px">출결</th>'
     + '<th style="min-width:60px">결과</th>'
     + '<th style="text-align:left;padding-left:6px;min-width:90px">비고</th>'
@@ -9652,7 +9699,7 @@ function nsRenderTable() {
     });
   }
 
-  _nsStudents.forEach(function(s) {
+  nsSortByTime(_nsStudents, _nsData, _nsSortMode).forEach(function(s) {
     var r = _nsData[s.id] || {};
     var curAtt    = (r.id && r.attendance) ? r.attendance : '';
     var curResult = r.result || '';
@@ -9904,7 +9951,7 @@ async function nsGenerateImage() {
     var COLOR        = '#0f766e';
     var COLOR_DARK   = '#065f46';
     var COLOR_BG     = '#f0fdfa';
-    var COLOR_BORDER = '#99f6e4';
+    var COLOR_BORDER = '#0d9488';
 
     var rows = _nsStudents.map((s, i) => {
       var att    = fv(s.id, 'attendance');
