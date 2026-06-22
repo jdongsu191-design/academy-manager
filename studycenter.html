@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.27-tp-tab]</title>
+<title>BMAPS · 독서실 출결 [v0.28-tp-student]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -369,6 +369,22 @@
   .tp-body tr.late .tp-ctime{ background:#fde8e8; color:#b91c1c; } .tp-body tr.late .tp-cell{ background:#fef5f5; }
   .tp-body tr.cur .tp-ctime{ background:#dbeafe; color:#1e40af; } .tp-body tr.cur .tp-cell{ background:#eff5ff; }
   .tpB td.b-name{ font-weight:800; color:#4c1d95; } .tpB .tp-cell{ font-size:13px; }
+  .tp-maintab{ display:flex; padding:12px 0 0; }
+  .tp-maintab button{ flex:1; padding:8px 0; font-size:13.5px; font-weight:700; border:none; background:#f1f4f8; color:#8a96a6; cursor:pointer; }
+  .tp-maintab button:first-child{ border-radius:8px 0 0 8px; }
+  .tp-maintab button:last-child{ border-radius:0 8px 8px 0; }
+  .tp-maintab button.on{ background:#2d5a86; color:#fff; }
+  #tp-student-view{ padding:14px 0 0; overflow-x:auto; }
+  .tpS{ width:100%; border-collapse:collapse; font-size:13px; }
+  .tpS th{ background:#475569; color:#fff; font-size:12px; font-weight:800; padding:8px 6px; text-align:center; border:1px solid #5a6678; line-height:1.25; }
+  .tpS td{ padding:7px 8px; border:1px solid #e2e8f0; text-align:center; vertical-align:middle; }
+  .tpS td.s-name{ font-weight:800; color:#1e3a5f; text-align:left; white-space:nowrap; }
+  .tpS tr:nth-child(even) td{ background:#f8fafc; }
+  .tpS .s-time{ font-variant-numeric:tabular-nums; color:#334155; font-weight:600; }
+  .tpS .s-rsn{ font-size:10.5px; color:#0e7c74; font-weight:600; }
+  .tpS .s-multi{ display:block; line-height:1.55; }
+  .tpS .s-none{ color:#cbd5e1; }
+  .tpS .s-empty{ text-align:center; color:#94a3b8; padding:20px; }
 </style>
 </head>
 <body>
@@ -376,7 +392,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.27-tp-tab</span>
+    <span class="tb-ver" id="sc-ver">v0.28-tp-student</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -566,6 +582,14 @@
               <span class="tp-t">⏱ 시간 계획</span>
               <div class="tp-head-r"><span class="tp-now" id="tp-now">—</span><button class="tp-refresh" onclick="scTpGoNow()">🔄 현재</button></div>
             </div>
+            <div class="tp-maintab">
+              <button id="tp-main-student" onclick="scTpMain('student')">👤 학생 기준</button>
+              <button id="tp-main-time" class="on" onclick="scTpMain('time')">🕐 시간 기준</button>
+            </div>
+            <div id="tp-student-view" style="display:none">
+              <table class="tpS"><thead><tr><th>이름</th><th>등원</th><th>예상<br>하원</th><th>실제<br>하원</th><th>외출출발 (사유)</th><th>예상<br>복귀</th><th>실제<br>복귀</th></tr></thead><tbody id="tp-tbS"></tbody></table>
+            </div>
+            <div id="tp-time-view">
             <div class="tp-subtab">
               <button id="tp-tab-a" class="on" onclick="scTpView('A')">🚶 외출 · 복귀</button>
               <button id="tp-tab-b" onclick="scTpView('B')">🌅 등원 · 하원 점검</button>
@@ -579,6 +603,7 @@
             <div class="tp-body">
               <table class="tpA" id="tp-viewA"><thead><tr><th class="c-time">시각</th><th class="c-out">🚶 외출 (출발·사유)</th><th class="c-ret">🔙 복귀 (예정/실제)</th></tr></thead><tbody id="tp-tbA"></tbody></table>
               <table class="tpB" id="tp-viewB" style="display:none"><thead><tr><th class="c-time">예상등원</th><th>이름</th><th>실제등원</th><th>예상하원</th><th>실제하원</th></tr></thead><tbody id="tp-tbB"></tbody></table>
+            </div>
             </div>
           </div>
         </div>
@@ -608,7 +633,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.27-tp-tab';
+  window.STUDYCENTER_VERSION = 'v0.28-tp-student';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -640,7 +665,7 @@
   ============================================================ */
   var TP_START=8*60, TP_END=25*60+30, TP_SLOT=30, TP_PAGE_MIN=240;
   var TP_PAGES=[]; (function(){ for(var s=TP_START;s<TP_END;s+=TP_PAGE_MIN) TP_PAGES.push([s,Math.min(s+TP_PAGE_MIN,TP_END)]); })();
-  var _tpView="A", _tpPageA=0, _tpPageB=0, _tpData=null;
+  var _tpView="A", _tpMain="time", _tpPageA=0, _tpPageB=0, _tpData=null;
 
   function tpNowMin(){ var d=new Date(); var v=d.getHours()*60+d.getMinutes(); if(v<TP_START-60)v+=1440; return v; }
   function tpFmt(m){ m=((m%1440)+1440)%1440; return String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0"); }
@@ -650,7 +675,11 @@
   function tpCurPage(){ var n=tpNowMin(); for(var i=0;i<TP_PAGES.length;i++){ if(n>=TP_PAGES[i][0]&&n<TP_PAGES[i][1]) return i; } return n<TP_START?0:TP_PAGES.length-1; }
 
   async function scTpInit(){
-    _tpView="A"; _tpPageA=tpCurPage(); _tpPageB=tpCurPage();
+    _tpMain="time"; _tpView="A"; _tpPageA=tpCurPage(); _tpPageB=tpCurPage();
+    document.getElementById("tp-main-student").classList.remove("on");
+    document.getElementById("tp-main-time").classList.add("on");
+    document.getElementById("tp-student-view").style.display="none";
+    document.getElementById("tp-time-view").style.display="";
     document.getElementById("tp-tab-a").classList.add("on");
     document.getElementById("tp-tab-b").classList.remove("on");
     document.getElementById("tp-viewA").style.display="";
@@ -767,7 +796,42 @@
     var cp=tpCurPage();
     if(_tpView==="A")_tpPageA=cp; else _tpPageB=cp;
     await scTpLoad();
-    scTpRender();
+    if(_tpMain==="student") scTpRenderStudent(); else scTpRender();
+  }
+  function scTpMain(v){
+    _tpMain=v;
+    document.getElementById("tp-main-student").classList.toggle("on",v==="student");
+    document.getElementById("tp-main-time").classList.toggle("on",v==="time");
+    document.getElementById("tp-student-view").style.display=(v==="student")?"":"none";
+    document.getElementById("tp-time-view").style.display=(v==="time")?"":"none";
+    if(v==="student") scTpRenderStudent(); else scTpRender();
+  }
+  function scTpRenderStudent(){
+    if(!_tpData) return;
+    var rows=(_tpData.rows||[]).slice();
+    rows.sort(function(a,b){ return tpName(a.student_id).localeCompare(tpName(b.student_id),"ko"); });
+    var hm=function(t){ return t?String(t).slice(0,5):""; };
+    var none='<span class="s-none">—</span>';
+    if(!rows.length){ document.getElementById("tp-tbS").innerHTML='<tr><td colspan="7" class="s-empty">오늘 독서실 출결 기록이 없습니다.</td></tr>'; return; }
+    var multi=function(arr){ return arr.length?arr.map(function(x){return '<span class="s-multi">'+x+'</span>';}).join(""):none; };
+    var html=rows.map(function(r){
+      var outs=[], expRets=[], actRets=[];
+      [[r.out_1_start,r.out_1_reason,r.out_1_expected_end,r.out_1_end],
+       [r.out_2_start,r.out_2_reason,r.out_2_expected_end,r.out_2_end]].forEach(function(o){
+        if(o[0]){ outs.push(hm(o[0])+(o[1]?'<span class="s-rsn"> '+o[1]+'</span>':'')); expRets.push(o[2]?hm(o[2]):'—'); actRets.push(o[3]?hm(o[3]):'—'); }
+      });
+      if(r.pending_out_start){ outs.push(hm(r.pending_out_start)+(r.pending_out_reason?'<span class="s-rsn"> '+r.pending_out_reason+'</span>':'')); expRets.push(r.pending_out_expected_end?hm(r.pending_out_expected_end):'—'); actRets.push('외출중'); }
+      return '<tr>'
+        +'<td class="s-name">'+tpName(r.student_id)+'</td>'
+        +'<td class="s-time">'+(r.check_in_time?hm(r.check_in_time):none)+'</td>'
+        +'<td class="s-time">'+(r.expected_check_out?hm(r.expected_check_out):none)+'</td>'
+        +'<td class="s-time">'+(r.check_out_time?hm(r.check_out_time):none)+'</td>'
+        +'<td>'+multi(outs)+'</td>'
+        +'<td class="s-time">'+multi(expRets)+'</td>'
+        +'<td class="s-time">'+multi(actRets)+'</td>'
+        +'</tr>';
+    }).join("");
+    document.getElementById("tp-tbS").innerHTML=html;
   }
 
   /* ============================================================
