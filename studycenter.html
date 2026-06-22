@@ -1,0 +1,2369 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>BMAPS · 독서실 출결 [v0.29-tp-expin]</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  button { touch-action: manipulation; }
+  body { font-family: 'Pretendard', 'Noto Sans KR', -apple-system, sans-serif; background: #0f172a; color: #1e293b; touch-action: manipulation; -webkit-text-size-adjust: 100%; }
+
+  /* ===== 키오스크 셸 ===== */
+  .sc-app { min-height: 100vh; display: flex; flex-direction: column; }
+
+  /* 상단 바 (관리자에게만 의미, 키오스크에선 최소화) */
+  .sc-topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: linear-gradient(135deg, #075985, #0369a1); color: #fff;
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  }
+  .sc-topbar .tb-title { font-size: 15px; font-weight: 800; letter-spacing: 0.3px; }
+  .sc-topbar .tb-ver { font-size: 10.5px; background: rgba(255,255,255,0.18); padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .sc-topbar .tb-spacer { flex: 1; }
+  .sc-topbar .tb-mode-btn {
+    font-size: 12px; font-weight: 700; color: #fff; background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  }
+  .sc-topbar .tb-mode-btn:hover { background: rgba(255,255,255,0.28); }
+
+  /* 본문 영역 */
+  .sc-body { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
+
+  /* 화면 모드 (kiosk / admin) — display 토글 */
+  .sc-screen { display: none; width: 100%; }
+  .sc-screen.active { display: block; }
+
+  /* 키오스크 기본 화면 (Phase 0 placeholder) */
+  .kiosk-wrap { max-width: 480px; margin: 0 auto; text-align: center; }
+  .kiosk-card {
+    background: #fff; border-radius: 24px; padding: 40px 28px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  }
+  .kiosk-title { font-size: 26px; font-weight: 800; color: #075985; margin-bottom: 8px; }
+  .kiosk-sub { font-size: 14px; color: #64748b; margin-bottom: 24px; }
+  .kiosk-placeholder { font-size: 14px; color: #94a3b8; padding: 40px 0; }
+  /* 키오스크 키패드 */
+  .kp-display { font-size: 38px; font-weight: 800; letter-spacing: 10px; color: #0f172a; min-height: 56px; padding: 8px 0 16px; font-family: "SF Mono","Menlo","Consolas",monospace; }
+  .kp-display .kp-placeholder { color: #cbd5e1; letter-spacing: 10px; }
+  .kp-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 8px auto 0; max-width: 320px; }
+  .kp-key { aspect-ratio: 1.4 / 1; font-size: 26px; font-weight: 700; color: #1e293b; background: #f1f5f9; border: none; border-radius: 14px; cursor: pointer; transition: background 0.12s, transform 0.05s; -webkit-tap-highlight-color: transparent; }
+  .kp-key:hover { background: #e2e8f0; }
+  .kp-key:active { background: #cbd5e1; transform: scale(0.96); }
+  .kp-key.kp-del { background: #fef2f2; color: #dc2626; font-size: 24px; }
+  .kp-key.kp-del:hover { background: #fee2e2; }
+  .kp-key.kp-enter { background: #16a34a; color: #fff; font-size: 28px; }
+  .kp-key.kp-enter:hover { background: #15803d; }
+  .kp-err { min-height: 22px; margin-top: 14px; font-size: 14px; color: #dc2626; font-weight: 700; }
+  /* 본인 확인 화면 */
+  .cf-label { font-size: 15px; color: #64748b; margin-bottom: 18px; }
+  .cf-name { font-size: 40px; font-weight: 800; color: #0369a1; margin-bottom: 10px; }
+  .cf-info { font-size: 17px; color: #475569; margin-bottom: 32px; }
+  .cf-btn-row { display: flex; gap: 12px; }
+  .cf-btn { flex: 1; padding: 20px; font-size: 19px; font-weight: 800; border: none; border-radius: 16px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .cf-btn:active { transform: scale(0.97); }
+  .cf-yes { background: #16a34a; color: #fff; }
+  .cf-yes:hover { background: #15803d; }
+  .cf-no { background: #f1f5f9; color: #64748b; border: 1.5px solid #cbd5e1; }
+  .cf-no:hover { background: #e2e8f0; }
+  /* 동작 화면 (입실/외출/복귀/하원) */
+  .ac-name { font-size: 30px; font-weight: 800; color: #0369a1; margin-bottom: 6px; }
+  .ac-status { font-size: 16px; font-weight: 700; margin-bottom: 26px; padding: 8px 16px; border-radius: 999px; display: inline-block; }
+  .ac-status.st-out-room { background: #f1f5f9; color: #64748b; }
+  .ac-status.st-studying { background: #dcfce7; color: #15803d; }
+  .ac-status.st-outing { background: #fef3c7; color: #b45309; }
+  .ac-status.st-done { background: #e0e7ff; color: #4338ca; }
+  .ac-btn-area { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  .ac-act-btn { padding: 22px; font-size: 22px; font-weight: 800; border: none; border-radius: 16px; cursor: pointer; color: #fff; -webkit-tap-highlight-color: transparent; }
+  .ac-act-btn:active { transform: scale(0.97); }
+  .ac-act-btn.act-in { background: #16a34a; }
+  .ac-act-btn.act-in:hover { background: #15803d; }
+  .ac-act-btn.act-out { background: #f59e0b; }
+  .ac-act-btn.act-out:hover { background: #d97706; }
+  .ac-act-btn.act-return { background: #0ea5e9; }
+  .ac-act-btn.act-return:hover { background: #0284c7; }
+  .ac-act-btn.act-leave { background: #ef4444; }
+  .ac-act-btn.act-leave:hover { background: #dc2626; }
+  .ac-msg { min-height: 24px; font-size: 14px; color: #475569; margin-bottom: 10px; }
+  .ac-back { background: none; border: none; color: #94a3b8; font-size: 13px; text-decoration: underline; cursor: pointer; padding: 6px; }
+
+  /* 관리자 화면 (Phase 0 placeholder) */
+  .admin-wrap { max-width: min(1340px, 96vw); margin: 0 auto; width: 100%; background: #fff; border-radius: 16px; padding: 16px 20px; min-height: 60vh; }
+  /* 관리자 화면은 카드 대신 전체 화면 사용(키오스크는 기존 중앙정렬 유지) */
+  .sc-body:has(#sc-admin.active) { padding: 0; align-items: stretch; justify-content: stretch; }
+  #sc-admin.active { display: flex; flex-direction: column; }
+  .sc-body:has(#sc-admin.active) .admin-wrap { max-width: none; width: 100%; margin: 0; border-radius: 0; min-height: 0; flex: 1 1 auto; padding: 16px 22px; }
+  .admin-title { font-size: 17px; font-weight: 800; color: #075985; margin-bottom: 2px; }
+  .admin-sub { font-size: 12px; color: #64748b; margin-bottom: 10px; }
+  /* 관리자 탭 */
+  .admin-tabs { display: flex; gap: 6px; margin-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
+  .admin-tab { padding: 10px 20px; border: none; background: none; color: #94a3b8; font-size: 14px; font-weight: 700; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; }
+  .admin-tab:hover { color: #0369a1; }
+  .admin-tab.active { color: #0369a1; border-bottom-color: #0369a1; }
+  /* 주간 출결 필터 */
+  .wk-filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .wk-week-nav { display: inline-flex; gap: 4px; align-items: center; }
+  .wk-nav-btn { padding: 8px 11px; border: 1.5px solid #bae6fd; border-radius: 8px; background: #fff; color: #0369a1; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .wk-nav-btn:hover { background: #f0f9ff; }
+  .wk-date { padding: 8px 10px; border: 1.5px solid #bae6fd; border-radius: 8px; font-size: 14px; outline: none; width: 140px; }
+  .wk-today-btn { padding: 8px 14px; border: 1.5px solid #0369a1; border-radius: 8px; background: #0369a1; color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .wk-search { padding: 8px 12px; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 14px; outline: none; width: 200px; }
+  .wk-search:focus { border-color: #0369a1; }
+  .wk-load-btn { padding: 8px 18px; background: #0369a1; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .wk-load-btn:hover { background: #075985; }
+  .wk-saveall-btn { background: #059669; }
+  .wk-saveall-btn:hover { background: #047857; }
+  .wk-week-label { font-size: 12px; color: #0284c7; font-weight: 600; margin-bottom: 6px; }
+  .wk-biz-notice { margin: 0 0 10px; padding: 8px 12px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; font-size: 12.5px; color: #92400e; line-height: 1.5; }
+  .wk-biz-notice b { color: #b45309; }
+  .wk-msg-notice { margin: 0 0 10px; padding: 8px 12px; background: #f5f3ff; border: 1px solid #c4b5fd; border-radius: 8px; font-size: 12.5px; color: #6d28d9; line-height: 1.5; }
+  .wk-msg-notice b { color: #5b21b6; }
+  .wk-empty { text-align: center; color: #94a3b8; font-size: 14px; padding: 50px 20px; }
+  /* 요일 탭 */
+  .wk-day-tabs { display: flex; gap: 5px; background: #f1f5f9; padding: 4px; border-radius: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .wk-day-tab { flex: 1; min-width: 70px; padding: 5px 4px; border: 1.5px solid transparent; border-radius: 9px; background: #fff; color: #475569; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .wk-day-tab:hover { background: #e0f2fe; color: #0369a1; }
+  .wk-day-tab .wd-day { font-size: 13px; font-weight: 700; }
+  .wk-day-tab .wd-date { font-size: 10px; color: #94a3b8; }
+  .wk-day-tab.weekend { color: #a16207; }
+  .wk-day-tab.sunday { color: #dc2626; }
+  .wk-day-tab.today { background: #fef9c3; border-color: #facc15; color: #854d0e; }
+  .wk-day-tab.active { background: #0369a1; color: #fff; border-color: #0369a1; }
+  .wk-day-tab.active .wd-date { color: #bae6fd; }
+  /* 주간 테이블 */
+  .wk-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; background: #fff; }
+  .wk-tbl th { background: #0369a1; color: #fff; padding: 7px 6px; text-align: center; font-weight: 700; white-space: nowrap; border: 1px solid #0284c7; position: sticky; top: 0; z-index: 3; }
+  .wk-tbl th.th-total { background: #b45309; }
+  .wk-tbl th.th-remain { background: #b91c1c; }
+  .wk-tbl td { padding: 6px 4px; border: 1px solid #e2e8f0; text-align: center; vertical-align: middle; }
+  .wk-tbl tr:nth-child(even) td { background: #f8fafc; }
+  .wk-tbl td.wk-name { text-align: left; padding-left: 10px; font-weight: 700; color: #1e293b; white-space: nowrap; background: #f1f5f9 !important; min-width: 100px; }
+  .wk-tbl td.wk-total { background: #fef3c7 !important; font-weight: 700; min-width: 72px; }
+  .wk-tbl td.wk-remain { background: #fee2e2 !important; font-weight: 700; min-width: 72px; }
+  .wk-tbl td.wk-remain.ok { background: #dcfce7 !important; color: #166534; }
+  .wk-tbl input.wk-t { width: 64px; border: 1.5px solid #cbd5e1; background: #fff; padding: 5px 3px; font-size: 13px; text-align: center; outline: none; font-family: "SF Mono","Menlo","Consolas",monospace; border-radius: 5px; font-weight: 600; }
+  .wk-tbl input.wk-t:focus { border-color: #0369a1; box-shadow: 0 0 0 2px rgba(3,105,161,0.15); }
+  .wk-tbl input.wk-t.dirty { background: #fef9c3; border-color: #facc15; }
+  .wk-tbl input.wk-extra { width: 48px; }
+  .wk-xout-wrap { display:flex; align-items:center; gap:3px; justify-content:center; }
+  .wk-xout-btn { width:22px; height:22px; padding:0; border:1px solid #cbd5e1; background:#f8fafc; border-radius:5px; cursor:pointer; font-size:11px; line-height:1; color:#0f766e; flex-shrink:0; }
+  .wk-xout-btn:hover { background:#e0f2fe; border-color:#0ea5e9; }
+  .wk-xout-overlay { position:fixed; inset:0; background:rgba(15,23,42,.45); display:none; align-items:center; justify-content:center; z-index:9999; }
+  .wk-xout-overlay.open { display:flex; }
+  .wk-xout-card { background:#fff; border-radius:14px; padding:22px 24px; width:330px; box-shadow:0 18px 50px rgba(0,0,0,.25); font-family:inherit; }
+  .wk-xout-card h3 { margin:0 0 4px; font-size:16px; color:#0f172a; }
+  .wk-xout-sub { font-size:12px; color:#64748b; margin-bottom:14px; }
+  .wk-xout-cur { background:#f0fdfa; border:1px solid #99f6e4; border-radius:8px; padding:8px 10px; font-size:13px; color:#0f766e; margin-bottom:14px; }
+  .wk-xout-cur b { font-size:15px; }
+  .wk-xout-frow { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .wk-xout-frow label { width:64px; font-size:13px; font-weight:600; color:#334155; }
+  .wk-xout-frow input { flex:1; padding:8px 10px; border:1px solid #cbd5e1; border-radius:7px; font-size:14px; font-family:inherit; }
+  .wk-xout-preview { font-size:13px; color:#0369a1; min-height:18px; margin:2px 0 14px; font-weight:600; }
+  .wk-xout-preview.err { color:#dc2626; }
+  .wk-xout-btns { display:flex; gap:8px; justify-content:flex-end; }
+  .wk-xout-btns button { padding:8px 16px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; border:none; font-family:inherit; }
+  .wk-xout-add { background:#0d9488; color:#fff; }
+  .wk-xout-add:disabled { background:#cbd5e1; cursor:not-allowed; }
+  .wk-xout-cancel { background:#f1f5f9; color:#475569; }
+  .wk-tbl td.wk-req-cell { background: #eff6ff !important; min-width: 150px; white-space: nowrap; }
+  .wk-req-group { display: inline-flex; align-items: center; gap: 2px; }
+  .wk-tbl input.wk-req-h, .wk-tbl input.wk-req-m { width: 38px; border: 1.5px solid #bfdbfe; background: #fff; padding: 5px 4px; font-size: 13px; text-align: center; outline: none; border-radius: 5px; font-weight: 700; color: #1d4ed8; -moz-appearance: textfield; }
+  .wk-tbl input.wk-req-h::-webkit-outer-spin-button, .wk-tbl input.wk-req-h::-webkit-inner-spin-button, .wk-tbl input.wk-req-m::-webkit-outer-spin-button, .wk-tbl input.wk-req-m::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .wk-tbl input.wk-req-h:focus, .wk-tbl input.wk-req-m:focus { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+  .wk-tbl input.wk-req-h.dirty, .wk-tbl input.wk-req-m.dirty { background: #fef9c3; border-color: #facc15; }
+  .wk-req-unit { font-size: 11px; color: #64748b; font-weight: 600; margin-right: 2px; }
+  .wk-tbl .wk-req-save { padding: 4px 7px; border: 1px solid #2563eb; border-radius: 5px; background: #eff6ff; color: #1d4ed8; font-size: 11px; font-weight: 700; cursor: pointer; margin-left: 3px; }
+  .wk-tbl .wk-req-save:hover { background: #2563eb; color: #fff; }
+  .wk-tbl .wk-req-save.saved { background: #1d4ed8; color: #fff; }
+  .wk-tbl .wk-now-btn { font-size: 10px; padding: 2px 5px; border: 1px solid #bae6fd; background: #f0f9ff; color: #0369a1; border-radius: 4px; cursor: pointer; font-weight: 700; margin-left: 2px; }
+  .wk-tbl .wk-now-btn:hover { background: #0369a1; color: #fff; }
+  .wk-tbl td.wk-name .wk-msg-wrap { margin-top: 5px; display: flex; gap: 4px; }
+  .wk-tbl .wk-msg-btn { font-size: 10px; padding: 2px 7px; border: 1px solid #c4b5fd; background: #f5f3ff; color: #6d28d9; border-radius: 4px; cursor: pointer; font-weight: 700; white-space: nowrap; }
+  .wk-tbl .wk-msg-btn:hover { background: #6d28d9; color: #fff; }
+  .wk-tbl .wk-msg-btn:disabled { opacity: 0.5; cursor: default; }
+  .wk-tbl .wk-msg-btn.copied { background: #16a34a; color: #fff; border-color: #16a34a; }
+  .wk-tbl .wk-save-btn { padding: 5px 9px; border: 1px solid #16a34a; border-radius: 6px; background: #f0fdf4; color: #15803d; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+  .wk-tbl .wk-save-btn:hover { background: #16a34a; color: #fff; }
+  .wk-tbl .wk-save-btn.saved { background: #15803d; color: #fff; }
+  .wk-tbl tr.wk-warn td { background: #ffe4cc !important; }
+  .wk-tbl tr.wk-warn td.wk-name { }
+  .wk-tbl .wk-warn-badge { font-size: 10px; color: #c2410c; font-weight: 700; margin-left: 4px; }
+  .wk-table-scroll { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 280px); border: 1px solid #e2e8f0; border-radius: 10px; }
+  .wk-tbl thead th { box-shadow: 0 1px 0 #0284c7; }
+  .wk-tbl th.th-no, .wk-tbl td.wk-no { width: 38px; min-width: 38px; }
+  .wk-tbl td.wk-no { background: #f1f5f9 !important; color: #94a3b8; font-weight: 700; font-size: 12px; }
+  .wk-tbl tr.wk-warn td.wk-no { box-shadow: inset 3px 0 0 #f97316; }
+  .wk-tbl td.wk-name .wk-sub { font-size: 10.5px; font-weight: 600; color: #64748b; margin-top: 2px; white-space: nowrap; }
+  .wk-tbl td.wk-name .wk-sub .wk-code { display: inline-block; background: #e0f2fe; color: #075985; border-radius: 4px; padding: 0 5px; font-weight: 700; letter-spacing: 0.5px; }
+  .wk-tbl .wk-pending { display: inline-block; background: #fff7ed; border: 1.5px solid #fdba74; border-radius: 6px; padding: 3px 7px; color: #c2410c; font-weight: 700; font-size: 12px; line-height: 1.2; }
+  .wk-tbl .wk-pending .wk-pending-lbl { font-size: 9px; font-weight: 700; color: #ea580c; margin-top: 1px; }
+  .wk-refresh-btn { background: #0891b2 !important; }
+  .wk-refresh-btn:hover { background: #0e7490 !important; }
+  /* 일괄 등록 UI */
+  /* 학생 추가 폼 */
+  .rf-grid { display:flex; flex-direction:column; gap:10px; margin-bottom:6px; }
+  .rf-row { display:flex; align-items:center; gap:12px; }
+  .rf-label { width:64px; flex-shrink:0; font-size:13px; font-weight:700; color:#334155; }
+  .rf-input { flex:0 1 240px; max-width:240px; padding:9px 12px; border:1.5px solid #cbd5e1; border-radius:9px; font-size:13px; outline:none; box-sizing:border-box; }
+  .rf-input:focus { border-color:#0369a1; }
+  .rf-num { flex:none; width:70px; max-width:70px; }
+  .rf-inline { display:flex; align-items:center; gap:10px; flex:1; flex-wrap:wrap; }
+  .rf-radio, .rf-check { display:flex; align-items:center; gap:5px; font-size:13px; font-weight:600; color:#334155; cursor:pointer; }
+  .rf-check { margin-left:6px; padding-left:10px; border-left:1.5px solid #e2e8f0; }
+  /* 2단 레이아웃 + 학생 명단 */
+  .reg-2col { display:flex; gap:16px; align-items:flex-start; margin-bottom:24px; flex-wrap:wrap; }
+  .reg-form-col { flex:0 0 360px; max-width:100%; }
+  .reg-list-col { flex:1; min-width:300px; }
+  .reg-list-section { margin-bottom:0; }
+  .rl-filters { display:flex; gap:6px; margin-bottom:10px; }
+  .rl-fbtn { padding:6px 14px; border:1.5px solid #cbd5e1; border-radius:8px; background:#fff; color:#64748b; font-size:12.5px; font-weight:700; cursor:pointer; }
+  .rl-fbtn.active { background:#0369a1; color:#fff; border-color:#0369a1; }
+  .rl-list { max-height:520px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:10px; padding:6px; }
+  .rl-item { display:flex; align-items:center; gap:10px; padding:9px 11px; border-bottom:1px solid #f1f5f9; }
+  .rl-item:last-child { border-bottom:none; }
+  .rl-name { font-weight:700; font-size:13.5px; color:#0f172a; }
+  .rl-meta { font-size:12px; color:#64748b; margin-top:1px; }
+  .rl-badge { font-size:11px; font-weight:700; padding:2px 7px; border-radius:5px; }
+  .rl-wd { background:#fee2e2; color:#dc2626; }
+  .rl-edit { flex:0 0 auto; padding:5px 11px; border:1.5px solid #cbd5e1; border-radius:7px; background:#fff; color:#0369a1; font-size:12px; font-weight:700; cursor:pointer; }
+  .rl-edit:hover { background:#f0f9ff; }
+  .rl-actions { display:flex; gap:5px; flex-shrink:0; flex-wrap:wrap; align-items:center; }
+  .rl-wd-btn { padding:5px 11px; border:1.5px solid #fcd34d; border-radius:7px; background:#fffbeb; color:#b45309; font-size:12px; font-weight:700; cursor:pointer; }
+  .rl-wd-btn:hover { background:#fef3c7; }
+  .rl-restore { padding:5px 11px; border:1.5px solid #86efac; border-radius:7px; background:#f0fdf4; color:#15803d; font-size:12px; font-weight:700; cursor:pointer; }
+  .rl-del { padding:5px 11px; border:1.5px solid #fca5a5; border-radius:7px; background:#fef2f2; color:#dc2626; font-size:12px; font-weight:700; cursor:pointer; }
+  .reg-section { margin-bottom: 24px; }
+  .reg-step-title { font-size: 15px; font-weight: 800; color: #0f172a; margin-bottom: 8px; }
+  .reg-hint { font-size: 12.5px; color: #64748b; line-height: 1.6; margin-bottom: 10px; }
+  .reg-textarea { width: 100%; min-height: 140px; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 10px; font-size: 13px; font-family: "SF Mono","Menlo","Consolas",monospace; line-height: 1.6; outline: none; resize: vertical; box-sizing: border-box; }
+  .reg-textarea:focus { border-color: #0369a1; }
+  .reg-btn-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .reg-btn { padding: 10px 18px; border: none; border-radius: 9px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .reg-btn-parse { background: #0369a1; color: #fff; }
+  .reg-btn-parse:hover { background: #075985; }
+  .reg-btn-clear { background: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; }
+  .reg-btn-clear:hover { background: #e2e8f0; }
+  .reg-btn-save { background: #16a34a; color: #fff; }
+  .reg-btn-save:hover { background: #15803d; }
+  .reg-btn-save:disabled { background: #94a3b8; cursor: not-allowed; }
+  .reg-btn-copy { background: #7c3aed; color: #fff; }
+  .reg-btn-copy:hover { background: #6d28d9; }
+  .reg-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 4px; }
+  .reg-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .reg-tbl th { background: #0369a1; color: #fff; padding: 8px 10px; text-align: left; font-weight: 700; white-space: nowrap; }
+  .reg-tbl td { padding: 7px 10px; border-top: 1px solid #eef2f6; white-space: nowrap; }
+  .reg-tbl tr:nth-child(even) td { background: #f8fafc; }
+  .reg-tbl .code-cell { font-family: "SF Mono","Menlo","Consolas",monospace; font-weight: 700; color: #0369a1; }
+  .reg-tbl .code-5 { color: #b45309; }
+  .reg-tbl .err-cell { color: #dc2626; font-weight: 700; }
+  .reg-tbl .warn-row td { background: #fef2f2 !important; }
+
+  /* 인증 차단 오버레이 (관리자 모드 진입 시) */
+  .sc-blocker {
+    position: fixed; inset: 0; z-index: 200; display: none;
+    background: rgba(15,23,42,0.96); flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center;
+  }
+  .sc-blocker.show { display: flex; }
+  .sc-blocker .bk-card { background: #fff; border-radius: 18px; padding: 32px 28px; max-width: 380px; width: 100%; }
+  .sc-blocker .bk-title { font-size: 18px; font-weight: 800; color: #0f172a; margin-bottom: 8px; }
+  .sc-blocker .bk-msg { font-size: 13.5px; color: #64748b; line-height: 1.6; margin-bottom: 18px; }
+  .sc-blocker input {
+    width: 100%; padding: 11px 14px; border: 1.5px solid #cbd5e1; border-radius: 10px;
+    font-size: 14px; outline: none; margin-bottom: 10px;
+  }
+  .sc-blocker input:focus { border-color: #0369a1; }
+  .sc-blocker button {
+    width: 100%; padding: 11px; background: #0369a1; color: #fff; border: none;
+    border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer;
+  }
+  .sc-blocker button:hover { background: #075985; }
+  .sc-blocker .bk-err { font-size: 12.5px; color: #dc2626; min-height: 18px; margin-bottom: 6px; }
+  .sc-blocker .bk-back { background: none; color: #94a3b8; font-size: 12px; margin-top: 8px; text-decoration: underline; cursor: pointer; padding: 4px; width: auto; }
+  /* ── 주간 학습 리포트 카드 (이미지 생성용) ── */
+  .rpt-card{ width:470px; background:#fff; font-family:'Pretendard',system-ui,sans-serif; }
+  .rpt-card .rpt-head{ background:linear-gradient(135deg,#1e3a5f 0%,#2d5a86 100%); color:#fff; padding:26px 30px 22px; }
+  .rpt-card .acad{ font-size:15px; font-weight:600; letter-spacing:0.02em; opacity:0.9; }
+  .rpt-card .ttl{ font-size:26px; font-weight:800; margin-top:3px; letter-spacing:-0.01em; }
+  .rpt-card .rpt-body{ padding:26px 30px 28px; }
+  .rpt-card .rpt-top{ display:flex; align-items:flex-end; justify-content:space-between; }
+  .rpt-card .rpt-student{ font-size:23px; font-weight:800; color:#1a202c; }
+  .rpt-card .rpt-period{ font-size:13.5px; color:#8a96a6; font-weight:600; }
+  .rpt-card .rpt-duty{ display:flex; align-items:center; gap:12px; margin:20px 0 6px; padding:15px 18px; background:#f1f6fb; border-radius:14px; }
+  .rpt-card .rpt-duty .rlabel{ font-size:14px; color:#54616f; font-weight:600; }
+  .rpt-card .rpt-duty .rval{ font-size:20px; font-weight:800; color:#2d5a86; margin-left:auto; }
+  .rpt-card .rpt-badge{ font-size:13px; font-weight:800; padding:6px 13px; border-radius:20px; white-space:nowrap; }
+  .rpt-card .rpt-badge.ok{ background:#cdf2d8; color:#1f7a44; }
+  .rpt-card .rpt-badge.no{ background:#fcd9d9; color:#b13030; }
+  .rpt-card .rpt-sec{ font-size:13px; font-weight:700; color:#8a96a6; letter-spacing:0.02em; margin:22px 0 14px; }
+  .rpt-card .rpt-day{ display:grid; grid-template-columns:26px 1fr 86px; align-items:center; gap:12px; margin-bottom:11px; }
+  .rpt-card .rpt-day .rd{ font-size:15px; font-weight:800; color:#54616f; text-align:center; }
+  .rpt-card .rpt-day .rbarcol{ display:flex; flex-direction:column; gap:3px; }
+  .rpt-card .rpt-day .rbarwrap{ background:#eef2f7; border-radius:7px; height:20px; overflow:hidden; }
+  .rpt-card .rpt-day .rbar{ height:100%; background:linear-gradient(90deg,#3ac0b8,#2f9e96); border-radius:7px; }
+  .rpt-card .rpt-day .rio{ font-size:11px; color:#aab4c2; font-weight:600; font-variant-numeric:tabular-nums; }
+  .rpt-card .rpt-day .rt{ font-size:13.5px; color:#2d3748; font-weight:700; text-align:right; font-variant-numeric:tabular-nums; }
+  .rpt-card .rpt-day.rzero .rt{ color:#bcc5d0; }
+  .rpt-card .rpt-total{ display:flex; align-items:center; justify-content:space-between; margin-top:22px; padding:19px 22px; background:linear-gradient(135deg,#2d5a86,#1e3a5f); border-radius:16px; color:#fff; }
+  .rpt-card .rpt-total .rlabel{ font-size:15px; font-weight:600; opacity:0.92; }
+  .rpt-card .rpt-total .rval{ font-size:27px; font-weight:800; letter-spacing:-0.01em; }
+  .rpt-card .rpt-note{ margin-top:18px; font-size:11px; color:#aab4c2; line-height:1.7; }
+  .wk-tbl .wk-rpt-btn{ font-size:10px; padding:2px 7px; border:1px solid #5ec4bc; background:#effbfa; color:#1f8a82; border-radius:4px; cursor:pointer; font-weight:700; white-space:nowrap; }
+  .wk-tbl .wk-rpt-btn:hover{ background:#1f8a82; color:#fff; }
+  .wk-tbl .wk-rpt-btn:disabled{ opacity:0.5; cursor:default; }
+  .wk-tbl .wk-rpt-btn.copied{ background:#16a34a; color:#fff; border-color:#16a34a; }
+  /* ── 키오스크 시간선택 / 외출 모달 ── */
+  .ts-name,.os-name{ font-size:26px; font-weight:800; color:#1e3a5f; margin-bottom:2px; }
+  #kiosk-time-screen .ts-title,#kiosk-out-screen .ts-title{ font-size:15px; font-weight:700; color:#64748b; margin:14px 0 10px; }
+  .ts-grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .ts-grid button{ padding:14px 0; font-size:16px; font-weight:700; border:1.5px solid #cbd5e1; background:#fff; color:#334155; border-radius:10px; cursor:pointer; font-variant-numeric:tabular-nums; }
+  .ts-grid button:hover{ background:#f1f5f9; }
+  .ts-grid button.sel{ background:#2d5a86; border-color:#2d5a86; color:#fff; }
+  .ts-confirm{ width:100%; margin-top:18px; padding:15px; font-size:17px; font-weight:800; background:#0e9488; color:#fff; border:none; border-radius:12px; cursor:pointer; }
+  .ts-confirm:hover{ background:#0c7a73; }
+  .ts-back{ margin-top:10px; background:none; border:none; color:#94a3b8; font-size:14px; cursor:pointer; }
+  .os-subject{ width:100%; margin-top:8px; padding:12px; font-size:15px; border:1.5px solid #cbd5e1; border-radius:10px; box-sizing:border-box; }
+  /* ── 시간 계획 탭 ── */
+  .tp-box{ max-width:760px; }
+  .tp-head{ background:linear-gradient(135deg,#1e3a5f,#2d5a86); color:#fff; padding:14px 20px; display:flex; align-items:center; justify-content:space-between; border-radius:12px 12px 0 0; }
+  .tp-head .tp-t{ font-size:17px; font-weight:800; }
+  .tp-head-r{ display:flex; align-items:center; gap:10px; }
+  .tp-now{ font-size:13.5px; font-weight:700; opacity:0.94; }
+  .tp-refresh{ font-size:12px; font-weight:700; padding:5px 10px; border:1px solid rgba(255,255,255,0.4); background:rgba(255,255,255,0.15); color:#fff; border-radius:7px; cursor:pointer; }
+  .tp-refresh:hover{ background:rgba(255,255,255,0.28); }
+  .tp-subtab{ display:flex; gap:8px; padding:12px 0 0; }
+  .tp-subtab button{ font-size:13px; font-weight:700; padding:7px 15px; border:1.5px solid #e2e8f0; background:#fff; color:#64748b; border-radius:20px; cursor:pointer; }
+  .tp-subtab button.on{ background:#0e9488; border-color:#0e9488; color:#fff; }
+  .tp-subtab button#tp-tab-b.on{ background:#6d28d9; border-color:#6d28d9; }
+  .tp-pager{ display:flex; align-items:center; justify-content:space-between; padding:12px 0 0; gap:10px; }
+  .tp-pager button{ font-size:13px; font-weight:700; padding:8px 14px; border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:9px; cursor:pointer; }
+  .tp-pager button:disabled{ opacity:0.35; cursor:default; }
+  .tp-range{ font-size:16px; font-weight:800; color:#1e3a5f; text-align:center; }
+  .tp-range small{ display:block; font-size:11px; font-weight:700; color:#94a3b8; }
+  .tp-dots{ display:flex; justify-content:center; gap:6px; padding:9px 0 0; }
+  .tp-dots .dot{ width:8px; height:8px; border-radius:50%; background:#d4dbe4; }
+  .tp-dots .dot.on{ background:#2d5a86; width:22px; border-radius:5px; }
+  .tp-dots .dot.has{ background:#9db4cc; }
+  .tp-body{ padding:12px 0 0; }
+  .tp-body table{ width:100%; border-collapse:collapse; }
+  .tp-body th{ font-size:12.5px; font-weight:800; color:#fff; padding:9px 10px; text-align:left; }
+  .tpA th.c-time{ width:72px; background:#475569; border-radius:7px 0 0 0; }
+  .tpA th.c-out{ background:#64748b; }
+  .tpA th.c-ret{ background:#0e9488; border-radius:0 7px 0 0; }
+  .tpB th{ background:#6d28d9; }
+  .tpB th.c-time{ width:78px; border-radius:7px 0 0 0; }
+  .tpB th:last-child{ border-radius:0 7px 0 0; }
+  .tp-body td{ padding:0; border-bottom:1px solid #eef2f6; }
+  .tp-cell{ padding:8px 10px; min-height:36px; display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+  .tp-ctime{ font-weight:800; color:#334155; font-variant-numeric:tabular-nums; background:#f8fafc; font-size:14px; }
+  .tp-stud{ font-weight:700; font-size:13.5px; }
+  .tp-stud.out{ color:#475569; } .tp-stud.ret{ color:#0e7c74; }
+  .tp-rsn{ font-size:10.5px; font-weight:600; opacity:0.85; }
+  .tp-flag{ font-size:10.5px; font-weight:800; color:#fff; padding:2px 7px; border-radius:9px; }
+  .tp-flag.red{ background:#dc2626; } .tp-flag.green{ background:#16a34a; } .tp-flag.blue{ background:#2563eb; } .tp-flag.orange{ background:#ea580c; } .tp-flag.gray{ background:#94a3b8; }
+  .tp-sep{ color:#cbd5e1; }
+  .tp-body tr.empty .tp-ctime{ color:#b8c2cf; background:#fcfdfe; } .tp-body tr.empty .tp-cell{ background:#fcfdfe; }
+  .tp-body tr.late .tp-ctime{ background:#fde8e8; color:#b91c1c; } .tp-body tr.late .tp-cell{ background:#fef5f5; }
+  .tp-body tr.cur .tp-ctime{ background:#dbeafe; color:#1e40af; } .tp-body tr.cur .tp-cell{ background:#eff5ff; }
+  .tpB td.b-name{ font-weight:800; color:#4c1d95; } .tpB .tp-cell{ font-size:13px; }
+  .tp-maintab{ display:flex; padding:12px 0 0; }
+  .tp-maintab button{ flex:1; padding:8px 0; font-size:13.5px; font-weight:700; border:none; background:#f1f4f8; color:#8a96a6; cursor:pointer; }
+  .tp-maintab button:first-child{ border-radius:8px 0 0 8px; }
+  .tp-maintab button:last-child{ border-radius:0 8px 8px 0; }
+  .tp-maintab button.on{ background:#2d5a86; color:#fff; }
+  #tp-student-view{ padding:14px 0 0; overflow-x:auto; }
+  .tpS{ width:100%; border-collapse:collapse; font-size:13px; }
+  .tpS th{ background:#475569; color:#fff; font-size:12px; font-weight:800; padding:8px 6px; text-align:center; border:1px solid #5a6678; line-height:1.25; }
+  .tpS td{ padding:7px 8px; border:1px solid #e2e8f0; text-align:center; vertical-align:middle; }
+  .tpS td.s-name{ font-weight:800; color:#1e3a5f; text-align:left; white-space:nowrap; }
+  .tpS tr:nth-child(even) td{ background:#f8fafc; }
+  .tpS .s-time{ font-variant-numeric:tabular-nums; color:#334155; font-weight:600; }
+  .tpS .s-rsn{ font-size:10.5px; color:#0e7c74; font-weight:600; }
+  .tpS .s-multi{ display:block; line-height:1.55; }
+  .tpS .s-none{ color:#cbd5e1; }
+  .tpS .s-expin{ font-size:11.5px; color:#94a3b8; font-weight:700; font-variant-numeric:tabular-nums; }
+  .tpS .s-empty{ text-align:center; color:#94a3b8; padding:20px; }
+</style>
+</head>
+<body>
+<div class="sc-app">
+  <!-- 상단 바 -->
+  <div class="sc-topbar">
+    <span class="tb-title">🏫 독서실 출결</span>
+    <span class="tb-ver" id="sc-ver">v0.29-tp-expin</span>
+    <span class="tb-spacer"></span>
+    <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
+    <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
+  </div>
+
+  <div class="sc-body">
+    <!-- 키오스크 화면 -->
+    <div class="sc-screen active" id="sc-kiosk">
+      <div class="kiosk-wrap">
+        <!-- [키오스크 1] 코드 입력 화면 -->
+        <div class="kiosk-card" id="kiosk-code-screen">
+          <div class="kiosk-title">독서실 출결</div>
+          <div class="kiosk-sub">학생 코드를 입력해주세요</div>
+          <div class="kp-display" id="kp-display"><span class="kp-placeholder">····</span></div>
+          <div class="kp-pad">
+            <button class="kp-key" onclick="scKpPress('1')">1</button>
+            <button class="kp-key" onclick="scKpPress('2')">2</button>
+            <button class="kp-key" onclick="scKpPress('3')">3</button>
+            <button class="kp-key" onclick="scKpPress('4')">4</button>
+            <button class="kp-key" onclick="scKpPress('5')">5</button>
+            <button class="kp-key" onclick="scKpPress('6')">6</button>
+            <button class="kp-key" onclick="scKpPress('7')">7</button>
+            <button class="kp-key" onclick="scKpPress('8')">8</button>
+            <button class="kp-key" onclick="scKpPress('9')">9</button>
+            <button class="kp-key kp-del" onclick="scKpDelete()">⌫</button>
+            <button class="kp-key" onclick="scKpPress('0')">0</button>
+            <button class="kp-key kp-enter" onclick="scKpSubmit()">✓</button>
+          </div>
+          <div class="kp-err" id="kp-err"></div>
+        </div>
+
+        <!-- [키오스크 2] 본인 확인 화면 -->
+        <div class="kiosk-card" id="kiosk-confirm-screen" style="display:none">
+          <div class="cf-label">본인이 맞나요?</div>
+          <div class="cf-name" id="cf-name">—</div>
+          <div class="cf-info" id="cf-info">—</div>
+          <div class="cf-btn-row">
+            <button class="cf-btn cf-yes" onclick="scConfirmYes()">네, 맞아요</button>
+            <button class="cf-btn cf-no" onclick="scConfirmNo()">아니에요</button>
+          </div>
+        </div>
+
+        <!-- [키오스크 3] 동작 화면 (입실/외출/복귀/하원) -->
+        <div class="kiosk-card" id="kiosk-action-screen" style="display:none">
+          <div class="ac-name" id="ac-name">—</div>
+          <div class="ac-status" id="ac-status">—</div>
+          <div class="ac-btn-area" id="ac-btn-area"></div>
+          <div class="ac-msg" id="ac-msg"></div>
+          <button class="ac-back" onclick="scKioskReset()">← 돌아가기</button>
+        </div>
+
+        <!-- [키오스크 4] 시간 선택 (입실 예상하원 / 하원 예상등원 공용) -->
+        <div class="kiosk-card" id="kiosk-time-screen" style="display:none">
+          <div class="ts-name" id="ts-name">—</div>
+          <div class="ts-title" id="ts-title">예상 시간 선택</div>
+          <div class="ts-grid" id="ts-grid"></div>
+          <div class="ac-msg" id="ts-msg"></div>
+          <button class="ts-back" onclick="scShowActionBack()">← 취소</button>
+        </div>
+
+        <!-- [키오스크 5] 외출 (사유 + 예상복귀) -->
+        <div class="kiosk-card" id="kiosk-out-screen" style="display:none">
+          <div class="os-name" id="os-name">—</div>
+          <div class="ts-title">외출 사유 (학원은 과목 필수)</div>
+          <div class="ts-grid" id="os-reason"></div>
+          <div id="os-subject-wrap" style="display:none"><input class="os-subject" id="os-subject" placeholder="학원 과목 입력 (예: 수학)" autocomplete="off"></div>
+          <div class="ts-title">예상 복귀까지</div>
+          <div class="ts-grid" id="os-dur"></div>
+          <button class="ts-confirm" onclick="scConfirmOut()">⚡ 외출 완료</button>
+          <button class="ts-back" onclick="scShowActionBack()">← 취소</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 관리자 화면 -->
+    <div class="sc-screen" id="sc-admin">
+      <div class="admin-wrap">
+        <div class="admin-title">⚙️ 독서실 관리</div>
+        <div class="admin-sub">독서실 관리 (관리자 전용)</div>
+        <div class="admin-tabs">
+          <button class="admin-tab active" id="admin-tab-btn-register" onclick="scAdminTab('register')">&#128203; 학생 등록</button>
+          <button class="admin-tab" id="admin-tab-btn-weekly" onclick="scAdminTab('weekly')">&#127979; 주간 출결</button>
+          <button class="admin-tab" id="admin-tab-btn-timeplan" onclick="scAdminTab('timeplan')">&#9201; 시간 계획</button>
+        </div>
+
+        <!-- [탭] 학생 등록 -->
+        <div id="admin-tab-register">
+        <div class="reg-2col">
+        <div class="reg-form-col">
+        <div class="reg-section" id="reg-form-section">
+          <div class="reg-step-title">➕ 학생 추가</div>
+          <div class="reg-hint">한 명씩 직접 추가합니다. 코드는 연락처 뒤 4자리로 자동 생성됩니다.</div>
+          <div class="rf-grid">
+            <div class="rf-row">
+              <label class="rf-label">반선택</label>
+              <div class="rf-inline">
+                <label class="rf-radio"><input type="radio" name="rf-class" value="원생" checked> 원생</label>
+                <label class="rf-radio"><input type="radio" name="rf-class" value="비원생"> 비원생</label>
+                <label class="rf-check"><input type="checkbox" id="rf-mentoring"> 멘토링</label>
+              </div>
+            </div>
+            <div class="rf-row"><label class="rf-label">이름</label><input id="rf-name" class="rf-input" placeholder="학생 이름"></div>
+            <div class="rf-row"><label class="rf-label">연락처</label><input id="rf-phone" class="rf-input" placeholder="010-1234-5678"></div>
+            <div class="rf-row"><label class="rf-label">학교급</label><select id="rf-level" class="rf-input"><option value="">선택</option><option value="middle">중등</option><option value="high">고등</option></select></div>
+            <div class="rf-row"><label class="rf-label">학교</label><input id="rf-school" class="rf-input" placeholder="예: 청라고"></div>
+            <div class="rf-row"><label class="rf-label">학년</label><select id="rf-grade" class="rf-input"><option value="">학년 선택</option><option value="1">1학년</option><option value="2">2학년</option><option value="3">3학년</option></select></div>
+            <div class="rf-row"><label class="rf-label">입학일</label><input id="rf-enrolled" class="rf-input" type="date"></div>
+            <div class="rf-row"><label class="rf-label">의무시간</label><div class="rf-inline"><input id="rf-req-h" class="rf-input rf-num" type="number" min="0" placeholder="시간">시간 <input id="rf-req-m" class="rf-input rf-num" type="number" min="0" max="59" placeholder="분">분</div></div>
+          </div>
+          <div class="reg-btn-row">
+            <button class="reg-btn reg-btn-save" id="rf-add-btn" onclick="scFormAdd()">➕ 학생 추가</button>
+            <button class="reg-btn reg-btn-clear" onclick="scFormReset()">지우기</button>
+          </div>
+          <div class="reg-hint" id="rf-msg" style="margin-top:8px"></div>
+        </div>
+        </div>
+        <div class="reg-list-col">
+          <div class="reg-section reg-list-section">
+            <div class="reg-step-title">📋 학생 명단</div>
+            <div class="rl-filters">
+              <button class="rl-fbtn active" data-filter="all" onclick="scListSetFilter('all')">전체</button>
+              <button class="rl-fbtn" data-filter="active" onclick="scListSetFilter('active')">재원</button>
+              <button class="rl-fbtn" data-filter="withdrawn" onclick="scListSetFilter('withdrawn')">퇴원</button>
+            </div>
+            <div class="rl-list" id="rl-list"><div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">불러오는 중...</div></div>
+          </div>
+        </div>
+        </div>
+        <div class="reg-section">
+          <div class="reg-step-title">&#49;&#65039;&#8419; 데이터 붙여넣기</div>
+          <div class="reg-hint">엑셀/시트에서 <b>학교 / 학년 / 이름 / 반명 / 핸드폰</b> 순서로 복사해 아래에 붙여넣으세요. (탭 또는 여러 칸 구분)</div>
+          <textarea id="reg-paste" class="reg-textarea" placeholder="예시:&#10;개봉고&#9;1학년&#9;고준수&#9;독서실 원생&#9;010-1234-5678&#10;개봉고&#9;2학년&#9;김철수&#9;독서실 비원생&#9;010-9876-5432"></textarea>
+          <div class="reg-btn-row">
+            <button class="reg-btn reg-btn-parse" onclick="scParsePaste()">&#128269; 미리보기</button>
+            <button class="reg-btn reg-btn-clear" onclick="scClearPaste()">지우기</button>
+          </div>
+        </div>
+
+        <div class="reg-section" id="reg-preview-section" style="display:none">
+          <div class="reg-step-title">&#50;&#65039;&#8419; 미리보기 · 코드 확인</div>
+          <div class="reg-hint" id="reg-preview-summary"></div>
+          <div class="reg-table-wrap" id="reg-preview-wrap"></div>
+          <div class="reg-btn-row">
+            <button class="reg-btn reg-btn-save" id="reg-save-btn" onclick="scRegisterAll()">&#128190; 전체 등록</button>
+          </div>
+        </div>
+
+        <div class="reg-section" id="reg-result-section" style="display:none">
+          <div class="reg-step-title">&#51;&#65039;&#8419; 등록 완료 · 코드 공지</div>
+          <div class="reg-hint" id="reg-result-summary"></div>
+          <div class="reg-table-wrap" id="reg-result-wrap"></div>
+          <div class="reg-btn-row">
+            <button class="reg-btn reg-btn-copy" onclick="scCopyCodes()">&#128203; 코드 전체 복사 (카톡 공지용)</button>
+          </div>
+        </div>
+        </div>
+        <!-- /admin-tab-register -->
+
+        <!-- [탭] 주간 출결 -->
+        <div id="admin-tab-weekly" style="display:none">
+          <div class="wk-filter">
+            <div class="wk-week-nav">
+              <button class="wk-nav-btn" onclick="scWkShiftWeek(-1)" title="이전주">&#8592;</button>
+              <input type="date" id="wk-week-start" class="wk-date" onchange="scWkOnWeekChange()">
+              <button class="wk-nav-btn" onclick="scWkShiftWeek(1)" title="다음주">&#8594;</button>
+              <button class="wk-today-btn" onclick="scWkGoThisWeek()">이번주</button>
+            </div>
+            <input type="text" id="wk-search" class="wk-search" placeholder="학생 이름 검색..." oninput="scWkRenderTable()">
+            <button class="wk-load-btn wk-saveall-btn" id="wk-saveall-btn" onclick="scWkSaveAll()">&#128190; 전체 저장</button>
+            <button class="wk-load-btn" onclick="scWkLoad()">&#128229; 불러오기</button>
+            <button class="wk-load-btn wk-refresh-btn" onclick="scWkLoad()" title="현재 주차 데이터 새로고침">&#128260; 새로고침</button>
+          </div>
+          <div class="wk-week-label" id="wk-week-label"></div>
+          <div class="wk-biz-notice">&#8505;&#65039; 독서실 영업일은 <b>익일 새벽 1시 10분</b>까지입니다 · 00:00~01:09 입실·기록은 <b>전날</b>로 집계됩니다 (오늘은 01:10부터 시작)</div>
+          <div class="wk-msg-notice">&#128172; 이름 아래 <b>[지난주]</b>·<b>[이번주]</b> 버튼은 학생별 카톡 멘트를 만들어 클립보드에 복사합니다 · <b>지난주</b> = 보는 주의 <b>직전 주 월~일</b> 집계(월요일 발송용) · <b>이번주</b> = 보는 주의 <b>월~금</b> 집계(토요일 발송용)</div>
+          <div id="wk-day-tabs"></div>
+          <div id="wk-table-wrap">
+            <div class="wk-empty">주차를 선택하고 [불러오기]를 눌러주세요</div>
+          </div>
+        </div>
+        <!-- /admin-tab-weekly -->
+
+        <!-- [탭] 시간 계획 -->
+        <div id="admin-tab-timeplan" style="display:none">
+          <div class="tp-box">
+            <div class="tp-head">
+              <span class="tp-t">⏱ 시간 계획</span>
+              <div class="tp-head-r"><span class="tp-now" id="tp-now">—</span><button class="tp-refresh" onclick="scTpGoNow()">🔄 현재</button></div>
+            </div>
+            <div class="tp-maintab">
+              <button id="tp-main-student" onclick="scTpMain('student')">👤 학생 기준</button>
+              <button id="tp-main-time" class="on" onclick="scTpMain('time')">🕐 시간 기준</button>
+            </div>
+            <div id="tp-student-view" style="display:none">
+              <table class="tpS"><thead><tr><th>이름</th><th>등원</th><th>예상<br>하원</th><th>실제<br>하원</th><th>외출출발 (사유)</th><th>예상<br>복귀</th><th>실제<br>복귀</th></tr></thead><tbody id="tp-tbS"></tbody></table>
+            </div>
+            <div id="tp-time-view">
+            <div class="tp-subtab">
+              <button id="tp-tab-a" class="on" onclick="scTpView('A')">🚶 외출 · 복귀</button>
+              <button id="tp-tab-b" onclick="scTpView('B')">🌅 등원 · 하원 점검</button>
+            </div>
+            <div class="tp-pager">
+              <button id="tp-prev" onclick="scTpPage(-1)">◀ 이전</button>
+              <div class="tp-range" id="tp-range">—</div>
+              <button id="tp-next" onclick="scTpPage(1)">다음 ▶</button>
+            </div>
+            <div class="tp-dots" id="tp-dots"></div>
+            <div class="tp-body">
+              <table class="tpA" id="tp-viewA"><thead><tr><th class="c-time">시각</th><th class="c-out">🚶 외출 (출발·사유)</th><th class="c-ret">🔙 복귀 (예정/실제)</th></tr></thead><tbody id="tp-tbA"></tbody></table>
+              <table class="tpB" id="tp-viewB" style="display:none"><thead><tr><th class="c-time">예상등원</th><th>이름</th><th>실제등원</th><th>예상하원</th><th>실제하원</th></tr></thead><tbody id="tp-tbB"></tbody></table>
+            </div>
+            </div>
+          </div>
+        </div>
+        <!-- /admin-tab-timeplan -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 관리자 인증 차단 오버레이 -->
+<div class="sc-blocker" id="sc-blocker">
+  <div class="bk-card">
+    <div class="bk-title">🔒 관리자 인증</div>
+    <div class="bk-msg">독서실 관리 기능은 관리자만 사용할 수 있습니다.<br>BMAPS 관리자 계정으로 로그인되어 있어야 합니다.</div>
+    <div class="bk-err" id="sc-auth-err"></div>
+    <button onclick="scCheckAdminAuth()">관리자 확인</button>
+    <button class="bk-back" onclick="scCloseBlocker()">← 키오스크로 돌아가기</button>
+  </div>
+</div>
+
+<script>
+  /* ============================================================
+     [SUPABASE] BMAPS 공유 인스턴스
+  ============================================================ */
+  const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  window.STUDYCENTER_VERSION = 'v0.29-tp-expin';
+  console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
+
+  /* ============================================================
+     [STATE] 전역 상태
+  ============================================================ */
+  var scCurrentUser = null;   // 관리자 인증된 사용자 (kiosk는 인증 불필요)
+
+  /* ============================================================
+     [MODE] 화면 전환 — 키오스크(무인, 기본) ↔ 관리자(인증 필요)
+  ============================================================ */
+  /* ============================================================
+     [ADMIN TABS] 관리자 화면 탭 전환
+  ============================================================ */
+  function scAdminTab(tab){
+    var panels={register:"admin-tab-register", weekly:"admin-tab-weekly", timeplan:"admin-tab-timeplan"};
+    var btns={register:"admin-tab-btn-register", weekly:"admin-tab-btn-weekly", timeplan:"admin-tab-btn-timeplan"};
+    Object.keys(panels).forEach(function(k){
+      var p=document.getElementById(panels[k]); if(p) p.style.display=(k===tab?"":"none");
+      var b=document.getElementById(btns[k]); if(b){ if(k===tab) b.classList.add("active"); else b.classList.remove("active"); }
+    });
+    if(tab==="weekly"){ if(!_wkInited){ scWkGoThisWeek(); _wkInited=true; } }
+    else if(tab==="timeplan"){ scTpInit(); }
+    else { scListLoad(); }
+  }
+
+  /* ============================================================
+     [TIMEPLAN] 시간 계획 — 표 A(외출·복귀) / 표 B(등원·하원 점검)
+     30분 슬롯 · 4시간 페이지 · 현재 시간대 자동
+  ============================================================ */
+  var TP_START=8*60, TP_END=25*60+30, TP_SLOT=30, TP_PAGE_MIN=240;
+  var TP_PAGES=[]; (function(){ for(var s=TP_START;s<TP_END;s+=TP_PAGE_MIN) TP_PAGES.push([s,Math.min(s+TP_PAGE_MIN,TP_END)]); })();
+  var _tpView="A", _tpMain="time", _tpPageA=0, _tpPageB=0, _tpData=null;
+
+  function tpNowMin(){ var d=new Date(); var v=d.getHours()*60+d.getMinutes(); if(v<TP_START-60)v+=1440; return v; }
+  function tpFmt(m){ m=((m%1440)+1440)%1440; return String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0"); }
+  function tpTag(s){ return s<720?"오전":s<1080?"오후":s<1440?"저녁·마감":"심야"; }
+  function tpToMin(t){ if(!t)return null; var p=String(t).split(":"); var v=parseInt(p[0],10)*60+parseInt(p[1],10); if(v<TP_START-60)v+=1440; return v; }
+  function tpSlotOf(min){ return Math.floor(min/TP_SLOT)*TP_SLOT; }
+  function tpCurPage(){ var n=tpNowMin(); for(var i=0;i<TP_PAGES.length;i++){ if(n>=TP_PAGES[i][0]&&n<TP_PAGES[i][1]) return i; } return n<TP_START?0:TP_PAGES.length-1; }
+
+  async function scTpInit(){
+    _tpMain="time"; _tpView="A"; _tpPageA=tpCurPage(); _tpPageB=tpCurPage();
+    document.getElementById("tp-main-student").classList.remove("on");
+    document.getElementById("tp-main-time").classList.add("on");
+    document.getElementById("tp-student-view").style.display="none";
+    document.getElementById("tp-time-view").style.display="";
+    document.getElementById("tp-tab-a").classList.add("on");
+    document.getElementById("tp-tab-b").classList.remove("on");
+    document.getElementById("tp-viewA").style.display="";
+    document.getElementById("tp-viewB").style.display="none";
+    await scTpLoad();
+    scTpRender();
+  }
+  async function scTpLoad(){
+    var today=scRrToday();
+    var res=await db.from("reading_room_attendance").select("*").eq("attend_date",today);
+    var rows=res.data||[];
+    var ids=rows.map(function(r){return r.student_id;});
+    var smap={};
+    if(ids.length){ var sres=await db.from("users").select("id,name").in("id",ids); (sres.data||[]).forEach(function(u){smap[u.id]=u.name;}); }
+    _tpData={today:today, rows:rows, smap:smap};
+  }
+  function tpName(id){ return (_tpData && _tpData.smap[id]) || "?"; }
+
+  function tpBuildA(){
+    var ev={};
+    function add(min,side,obj){ if(min==null)return; var sm=tpSlotOf(min); ev[sm]=ev[sm]||{out:[],ret:[]}; ev[sm][side].push(obj); }
+    (_tpData.rows||[]).forEach(function(r){
+      var nm=tpName(r.student_id);
+      [[r.out_1_start,r.out_1_end,r.out_1_reason],[r.out_2_start,r.out_2_end,r.out_2_reason]].forEach(function(o){
+        if(o[0]){ add(tpToMin(o[0]),"out",{n:nm,r:o[2]}); if(o[1]) add(tpToMin(o[1]),"ret",{n:nm,done:true}); }
+      });
+      if(r.pending_out_start){
+        add(tpToMin(r.pending_out_start),"out",{n:nm,r:r.pending_out_reason});
+        if(r.pending_out_expected_end) add(tpToMin(r.pending_out_expected_end),"ret",{n:nm,exp:true});
+      }
+    });
+    return ev;
+  }
+  function tpBuildB(){
+    var by={};
+    (_tpData.rows||[]).forEach(function(r){
+      if(!r.expected_check_in) return;
+      var sm=tpSlotOf(tpToMin(r.expected_check_in));
+      by[sm]=by[sm]||[];
+      by[sm].push({ n:tpName(r.student_id), expIn:r.expected_check_in, actIn:r.check_in_time, expOut:r.expected_check_out, actOut:r.check_out_time });
+    });
+    return by;
+  }
+  function tpDiffFlag(expIn, actIn){
+    var now=tpNowMin();
+    if(!actIn) return (tpToMin(expIn)<now)?'<span class="tp-flag red">미등원</span>':'<span class="tp-flag gray">대기</span>';
+    var d=tpToMin(actIn)-tpToMin(expIn);
+    if(Math.abs(d)<=5) return '<span class="tp-flag green">정시</span>';
+    if(d>5) return '<span class="tp-flag orange">지각 '+d+'분</span>';
+    return '<span class="tp-flag blue">일찍 '+(-d)+'분</span>';
+  }
+  function tpRenderPager(D, page){
+    var p=TP_PAGES[page];
+    document.getElementById("tp-range").innerHTML=tpFmt(p[0])+" ~ "+tpFmt(p[1])+"<small>"+tpTag(p[0])+"</small>";
+    document.getElementById("tp-prev").disabled=(page===0);
+    document.getElementById("tp-next").disabled=(page===TP_PAGES.length-1);
+    function has(pp){ for(var k in D){ var m=+k; if(m>=pp[0]&&m<pp[1]) return true; } return false; }
+    document.getElementById("tp-dots").innerHTML=TP_PAGES.map(function(pp,i){ return '<span class="dot '+(i===page?"on":(has(pp)?"has":""))+'"></span>'; }).join("");
+  }
+  function tpRenderA(){
+    var ev=tpBuildA(); var p=TP_PAGES[_tpPageA]; var now=tpNowMin(); var html="";
+    for(var m=p[0];m<p[1];m+=TP_SLOT){
+      var d=ev[m]||{out:[],ret:[]};
+      var has=d.out.length||d.ret.length;
+      var cur=(now>=m&&now<m+TP_SLOT);
+      var lateRet=d.ret.some(function(x){return x.exp;})&&(m<now);
+      var cls=lateRet?"late":cur?"cur":has?"":"empty";
+      var outH=d.out.map(function(x){return '<span class="tp-stud out">'+x.n+(x.r?'<span class="tp-rsn">('+x.r+')</span>':'')+'</span>';}).join('<span class="tp-sep">·</span> ');
+      var retH=d.ret.map(function(x){ var f=x.done?'<span class="tp-flag green">복귀완료</span>':(m<now?'<span class="tp-flag red">미복귀</span>':'<span class="tp-flag gray">예정</span>'); return '<span class="tp-stud ret">'+x.n+'</span>'+f; }).join('<span class="tp-sep">·</span> ');
+      html+='<tr class="'+cls+'"><td><div class="tp-cell tp-ctime">'+tpFmt(m)+'</div></td><td><div class="tp-cell">'+outH+'</div></td><td><div class="tp-cell">'+retH+'</div></td></tr>';
+    }
+    document.getElementById("tp-tbA").innerHTML=html;
+    tpRenderPager(ev,_tpPageA);
+  }
+  function tpRenderB(){
+    var by=tpBuildB(); var p=TP_PAGES[_tpPageB]; var now=tpNowMin(); var html="";
+    for(var m=p[0];m<p[1];m+=TP_SLOT){
+      var arr=by[m]||[];
+      var cur=(now>=m&&now<m+TP_SLOT);
+      if(!arr.length){ html+='<tr class="empty"><td><div class="tp-cell tp-ctime">'+tpFmt(m)+'</div></td><td colspan="4"><div class="tp-cell"></div></td></tr>'; continue; }
+      arr.forEach(function(x,i){
+        html+='<tr class="'+(cur?"cur":"")+'">'
+          +'<td><div class="tp-cell tp-ctime">'+(i===0?tpFmt(m):"")+'</div></td>'
+          +'<td class="b-name"><div class="tp-cell">'+x.n+'</div></td>'
+          +'<td><div class="tp-cell">'+(x.actIn?String(x.actIn).slice(0,5):"—")+' '+tpDiffFlag(x.expIn,x.actIn)+'</div></td>'
+          +'<td><div class="tp-cell">'+(x.expOut?String(x.expOut).slice(0,5):"—")+'</div></td>'
+          +'<td><div class="tp-cell">'+(x.actOut?String(x.actOut).slice(0,5):'<span class="tp-rsn">재실중</span>')+'</div></td></tr>';
+      });
+    }
+    document.getElementById("tp-tbB").innerHTML=html;
+    tpRenderPager(by,_tpPageB);
+  }
+  function scTpRender(){
+    if(!_tpData) return;
+    var d=new Date();
+    var wd=["일","월","화","수","목","금","토"][d.getDay()];
+    document.getElementById("tp-now").textContent=(d.getMonth()+1)+"/"+d.getDate()+"("+wd+") · 현재 "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+    if(_tpView==="A") tpRenderA(); else tpRenderB();
+  }
+  function scTpView(v){
+    _tpView=v;
+    document.getElementById("tp-tab-a").classList.toggle("on",v==="A");
+    document.getElementById("tp-tab-b").classList.toggle("on",v==="B");
+    document.getElementById("tp-viewA").style.display=(v==="A")?"":"none";
+    document.getElementById("tp-viewB").style.display=(v==="B")?"":"none";
+    scTpRender();
+  }
+  function scTpPage(delta){
+    if(_tpView==="A"){ _tpPageA=Math.max(0,Math.min(TP_PAGES.length-1,_tpPageA+delta)); }
+    else{ _tpPageB=Math.max(0,Math.min(TP_PAGES.length-1,_tpPageB+delta)); }
+    scTpRender();
+  }
+  async function scTpGoNow(){
+    var cp=tpCurPage();
+    if(_tpView==="A")_tpPageA=cp; else _tpPageB=cp;
+    await scTpLoad();
+    if(_tpMain==="student") scTpRenderStudent(); else scTpRender();
+  }
+  function scTpMain(v){
+    _tpMain=v;
+    document.getElementById("tp-main-student").classList.toggle("on",v==="student");
+    document.getElementById("tp-main-time").classList.toggle("on",v==="time");
+    document.getElementById("tp-student-view").style.display=(v==="student")?"":"none";
+    document.getElementById("tp-time-view").style.display=(v==="time")?"":"none";
+    if(v==="student") scTpRenderStudent(); else scTpRender();
+  }
+  function scTpRenderStudent(){
+    if(!_tpData) return;
+    var rows=(_tpData.rows||[]).slice();
+    rows.sort(function(a,b){ return tpName(a.student_id).localeCompare(tpName(b.student_id),"ko"); });
+    var hm=function(t){ return t?String(t).slice(0,5):""; };
+    var none='<span class="s-none">—</span>';
+    if(!rows.length){ document.getElementById("tp-tbS").innerHTML='<tr><td colspan="7" class="s-empty">오늘 독서실 출결 기록이 없습니다.</td></tr>'; return; }
+    var multi=function(arr){ return arr.length?arr.map(function(x){return '<span class="s-multi">'+x+'</span>';}).join(""):none; };
+    var html=rows.map(function(r){
+      var outs=[], expRets=[], actRets=[];
+      [[r.out_1_start,r.out_1_reason,r.out_1_expected_end,r.out_1_end],
+       [r.out_2_start,r.out_2_reason,r.out_2_expected_end,r.out_2_end]].forEach(function(o){
+        if(o[0]){ outs.push(hm(o[0])+(o[1]?'<span class="s-rsn"> '+o[1]+'</span>':'')); expRets.push(o[2]?hm(o[2]):'—'); actRets.push(o[3]?hm(o[3]):'—'); }
+      });
+      if(r.pending_out_start){ outs.push(hm(r.pending_out_start)+(r.pending_out_reason?'<span class="s-rsn"> '+r.pending_out_reason+'</span>':'')); expRets.push(r.pending_out_expected_end?hm(r.pending_out_expected_end):'—'); actRets.push('외출중'); }
+      var inCell = r.check_in_time ? ('<span class="s-time">'+hm(r.check_in_time)+'</span>')
+                 : (r.expected_check_in ? ('<span class="s-expin">예정 '+hm(r.expected_check_in)+'</span>') : none);
+      return '<tr>'
+        +'<td class="s-name">'+tpName(r.student_id)+'</td>'
+        +'<td>'+inCell+'</td>'
+        +'<td class="s-time">'+(r.expected_check_out?hm(r.expected_check_out):none)+'</td>'
+        +'<td class="s-time">'+(r.check_out_time?hm(r.check_out_time):none)+'</td>'
+        +'<td>'+multi(outs)+'</td>'
+        +'<td class="s-time">'+multi(expRets)+'</td>'
+        +'<td class="s-time">'+multi(actRets)+'</td>'
+        +'</tr>';
+    }).join("");
+    document.getElementById("tp-tbS").innerHTML=html;
+  }
+
+  /* ============================================================
+     [WEEKLY] 데스크 주간 출결 조회·보정 (요일 탭)
+     계산은 운영본 rrCalcDailyMinutes와 동일: (하원-등원) - 외출1 - 외출2 - extra.
+  ============================================================ */
+  var _wkInited = false;
+  var _wkWeekDates = [];      // 7일 YYYY-MM-DD
+  var _wkSelectedDay = 0;     // 0=월 ~ 6=일
+  var _wkStudents = [];       // reading_room_yn 학생
+  var _wkData = {};           // { studentId: { date: row } }
+  var _wkReqHistory = {};     // { studentId: [{effective_week_start, required_minutes}] }
+
+  // Monday-start week calc
+  function scWkMonday(dateStr){
+    var d = new Date(dateStr + "T00:00:00");
+    var day = d.getDay();   // 0=일 ~ 6=토
+    var diff = (day === 0) ? -6 : (1 - day);   // 월요일로
+    d.setDate(d.getDate() + diff);
+    return scWkFmtDate(d);
+  }
+  function scWkFmtDate(d){
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+  }
+  function scWkBuildWeek(mondayStr){
+    var dates = [];
+    var base = new Date(mondayStr + "T00:00:00");
+    for(var i=0;i<7;i++){
+      var d = new Date(base); d.setDate(base.getDate()+i);
+      dates.push(scWkFmtDate(d));
+    }
+    return dates;
+  }
+
+  function scWkGoThisWeek(){
+    var today = scRrToday();
+    var monday = scWkMonday(today);
+    document.getElementById("wk-week-start").value = monday;
+    // 오늘 요일 선택
+    var dow = new Date(today + "T00:00:00").getDay();
+    _wkSelectedDay = (dow === 0) ? 6 : (dow - 1);
+    scWkLoad();
+  }
+  function scWkShiftWeek(delta){
+    var cur = document.getElementById("wk-week-start").value;
+    if(!cur) cur = scWkFmtDate(new Date());
+    var d = new Date(cur + "T00:00:00");
+    d.setDate(d.getDate() + delta*7);
+    document.getElementById("wk-week-start").value = scWkMonday(scWkFmtDate(d));
+    scWkLoad();
+  }
+  function scWkOnWeekChange(){
+    var v = document.getElementById("wk-week-start").value;
+    if(v) document.getElementById("wk-week-start").value = scWkMonday(v);
+    scWkLoad();
+  }
+
+  // 주간 데이터 불러오기
+  async function scWkLoad(){
+    var monday = document.getElementById("wk-week-start").value;
+    if(!monday){ monday = scWkMonday(scWkFmtDate(new Date())); document.getElementById("wk-week-start").value = monday; }
+    _wkWeekDates = scWkBuildWeek(monday);
+    var lbl = document.getElementById("wk-week-label");
+    if(lbl) lbl.textContent = _wkWeekDates[0] + " ~ " + _wkWeekDates[6];
+    var wrap = document.getElementById("wk-table-wrap");
+    if(wrap) wrap.innerHTML = '<div class="wk-empty">\ubd88\ub7ec\uc624\ub294 \uc911...</div>';
+    try {
+      // reading_room 학생
+      var stuRes = await db.from("users")
+        .select("id, name, school, grade, reading_room_code, reading_room_class, required_study_minutes, status, deleted_at")
+        .eq("reading_room_yn", true).order("name");
+      if(stuRes.error) throw stuRes.error;
+      _wkStudents = (stuRes.data || []).filter(function(u){ return u.status !== "inactive" && !u.deleted_at; });
+      // 주간 출결
+      var attRes = await db.from("reading_room_attendance").select("*")
+        .gte("attend_date", _wkWeekDates[0]).lte("attend_date", _wkWeekDates[6]);
+      if(attRes.error) throw attRes.error;
+      _wkData = {};
+      (attRes.data || []).forEach(function(row){
+        if(!_wkData[row.student_id]) _wkData[row.student_id] = {};
+        _wkData[row.student_id][row.attend_date] = row;
+      });
+      // 의무시간 이력 로드
+      var histRes = await db.from("reading_room_required_history").select("student_id,effective_week_start,required_minutes");
+      _wkReqHistory = {};
+      (histRes.data || []).forEach(function(h){
+        if(!_wkReqHistory[h.student_id]) _wkReqHistory[h.student_id] = [];
+        _wkReqHistory[h.student_id].push(h);
+      });
+      scWkRenderDayTabs();
+      scWkRenderTable();
+    } catch(e){
+      console.error("주간 출결 로드 실패:", e);
+      if(wrap) wrap.innerHTML = '<div class="wk-empty">\ubd88\ub7ec\uc624\uae30 \uc2e4\ud328: ' + (e.message||e) + '</div>';
+    }
+  }
+
+  function scWkRenderDayTabs(){
+    var box = document.getElementById("wk-day-tabs");
+    if(!box) return;
+    var dayNames = ["월","화","수","목","금","토","일"];
+    var today = scRrToday();
+    var h = '<div class="wk-day-tabs">';
+    for(var i=0;i<7;i++){
+      var dateStr = _wkWeekDates[i];
+      var dd = dateStr.split("-");
+      var k = "wk-day-tab";
+      if(i===5) k += " weekend";
+      if(i===6) k += " sunday";
+      if(dateStr === today) k += " today";
+      if(i === _wkSelectedDay) k += " active";
+      h += '<div class="' + k + '" onclick="scWkSelectDay(' + i + ')">'
+        + '<span class="wd-day">' + dayNames[i] + '</span>'
+        + '<span class="wd-date">' + dd[1] + "/" + dd[2] + '</span></div>';
+    }
+    h += "</div>";
+    box.innerHTML = h;
+  }
+  function scWkSelectDay(i){
+    _wkSelectedDay = i;
+    scWkRenderDayTabs();
+    scWkRenderTable();
+  }
+
+  // 시간 변환 헬퍼 (운영본 동일)
+  function scWkT2M(t){ if(!t) return null; var pp=String(t).split(":"); if(pp.length<2) return null; return parseInt(pp[0],10)*60+parseInt(pp[1],10); }
+  function scWkFmtDur(min){
+    if(min == null || isNaN(min)) return "-";
+    var h = Math.floor(min/60), m = min%60;
+    return h + "시간 " + String(m).padStart(2,"0") + "분";
+  }
+  // 일별 순공부분 (rrCalcDailyMinutes 동일)
+  // 해당 주(월요일)에 유효한 의무시간: 이력 중 effective_week_start <= monday 의 최근값, 없으면 users 현재값
+  function scWkEffectiveReq(sid, monday){
+    var hist = _wkReqHistory[sid] || [];
+    var best = null;
+    for(var i=0; i<hist.length; i++){
+      var h = hist[i];
+      if(h.effective_week_start <= monday){
+        if(!best || h.effective_week_start > best.effective_week_start) best = h;
+      }
+    }
+    if(best) return best.required_minutes;
+    var st = _wkStudents.find(function(s){ return s.id === sid; });
+    return st ? st.required_study_minutes : null;
+  }
+  function scWkCalcDaily(row){
+    if(!row || !row.check_in_time || !row.check_out_time) return null;
+    var ci = scWkT2M(row.check_in_time), co = scWkT2M(row.check_out_time);
+    if(row.check_out_is_next_day) co += 1440;
+    if(co < ci) co += 1440;
+    var total = co - ci;
+    if(row.out_1_start && row.out_1_end){
+      var s1 = scWkT2M(row.out_1_start), e1 = scWkT2M(row.out_1_end);
+      if(row.out_1_end_is_next_day) e1 += 1440; if(e1 < s1) e1 += 1440;
+      total -= (e1 - s1);
+    }
+    if(row.out_2_start && row.out_2_end){
+      var s2 = scWkT2M(row.out_2_start), e2 = scWkT2M(row.out_2_end);
+      if(row.out_2_end_is_next_day) e2 += 1440; if(e2 < s2) e2 += 1440;
+      total -= (e2 - s2);
+    }
+    total -= (row.extra_out_minutes || 0);
+    return Math.max(0, total);
+  }
+
+  // 일별 상태 판정 (데스크용): 미하원/미복귀 = 확인필요
+  function scWkRowState(row, attendDate){
+    if(!row) return "none";
+    if(row.pending_out_start) return "warn_outing";   // 외출 후 미복귀 (즉시)
+    if(row.check_in_time && !row.check_out_time){      // 등원 후 미하원
+      // 영업일 종료(출결일 익일 01:10) 전에는 '진행 중'으로 보고 경고하지 않음
+      if(attendDate){
+        var _th = new Date(attendDate + "T01:10:00");
+        _th.setDate(_th.getDate() + 1);   // 출결일 익일 01:10
+        return (new Date() >= _th) ? "warn_noout" : "ok";
+      }
+      return "warn_noout";   // 날짜 미지정 시 기존 동작
+    }
+    return "ok";
+  }
+
+  // HH:MM:SS → HH:MM (input 표시용)
+  function scWkHm(t){ if(!t) return ""; return String(t).slice(0,5); }
+  // input 값 → HH:MM:00 (저장용). 빈값=null
+  function scWkNorm(v){
+    v = (v||"").trim();
+    if(!v) return null;
+    var m = v.match(/^(\d{1,2}):(\d{2})$/);
+    if(!m) return undefined;   // 잘못된 형식
+    var hh = parseInt(m[1],10), mm = parseInt(m[2],10);
+    if(hh>23 || mm>59) return undefined;
+    return String(hh).padStart(2,"0") + ":" + String(mm).padStart(2,"0") + ":00";
+  }
+
+  function scWkRenderTable(){
+    var wrap = document.getElementById("wk-table-wrap");
+    if(!wrap) return;
+    if(!_wkStudents.length){ wrap.innerHTML = '<div class="wk-empty">\ub3c5\uc11c\uc2e4 \uc774\uc6a9 \ud559\uc0dd\uc774 \uc5c6\uc2b5\ub2c8\ub2e4</div>'; return; }
+    if(!_wkWeekDates.length){ wrap.innerHTML = '<div class="wk-empty">\uc8fc\ucc28 \uc815\ubcf4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4</div>'; return; }
+    var date = _wkWeekDates[_wkSelectedDay];
+    // 검색 필터
+    var q = (document.getElementById("wk-search") ? document.getElementById("wk-search").value : "").trim().toLowerCase();
+    var stus = _wkStudents.filter(function(st){ return !q || (st.name||"").toLowerCase().indexOf(q) !== -1; });
+
+    var h = '<div class="wk-table-scroll"><table class="wk-tbl"><thead><tr>'
+      + '<th class="th-no">No.</th>'
+      + "<th>이름</th><th>필수</th><th>등원</th>"
+      + "<th>외출1 시작</th><th>외출1 종료</th>"
+      + "<th>외출2 시작</th><th>외출2 종료</th>"
+      + "<th>추가외출(분)</th><th>하원</th>"
+      + '<th class="th-total">순공부</th><th class="th-remain">남은시간</th><th>저장</th></tr></thead><tbody>';
+
+    stus.forEach(function(st, idx){
+      var row = (_wkData[st.id] && _wkData[st.id][date]) ? _wkData[st.id][date] : null;
+      var rs = scWkRowState(row, date);
+      var warnCls = (rs === "warn_noout" || rs === "warn_outing") ? ' class="wk-warn"' : '';
+      var warnBadge = "";
+      if(rs === "warn_noout") warnBadge = '<span class="wk-warn-badge">⚠ 미하원</span>';
+      else if(rs === "warn_outing") warnBadge = '<span class="wk-warn-badge">⚠ 외출중 '+scWkHm(row.pending_out_start)+'~</span>';
+      var sid = st.id;
+      // 진행중 외출(pending)이 정산될 슬롯: out_1 비었으면 1, 아니면 out_2 비었으면 2, 둘 다 차면 0(추가외출)
+      var pendingSlot = (row && row.pending_out_start) ? (!row.out_1_start ? 1 : (!row.out_2_start ? 2 : 0)) : 0;
+      function cell(field, val){
+        return '<input class="wk-t" data-sid="'+sid+'" data-field="'+field+'" value="'+scWkHm(val)+'" '
+          + 'oninput="scWkAutoColonLive(this);scWkCellEdit(this)" onblur="scWkAutoColon(this)" maxlength="5" placeholder="--:--">'
+          + '<button class="wk-now-btn" onclick="scWkNow(\''+sid+'\',\''+field+'\')">지금</button>';
+      }
+      // 외출 시작칸: 해당 슬롯이 진행중 외출이면 읽기전용 표시(편집 input 미생성 → 복귀 정산 로직 무손상)
+      function outStartCell(slot, field, val){
+        if(row && row.pending_out_start && pendingSlot === slot){
+          return '<div class="wk-pending">🚶 '+scWkHm(row.pending_out_start)+'<div class="wk-pending-lbl">외출중</div></div>';
+        }
+        return cell(field, val);
+      }
+      var reqMin = scWkEffectiveReq(st.id, _wkWeekDates[0]);
+      var net = row ? scWkCalcDaily(row) : null;
+      // 주간 누적 순공부: 월요일(0)~선택 요일까지 합산
+      var cumNet = 0;
+      for(var _di = 0; _di <= _wkSelectedDay; _di++){
+        var _dRow = (_wkData[st.id] || {})[_wkWeekDates[_di]] || null;
+        var _dN = _dRow ? scWkCalcDaily(_dRow) : null;
+        if(_dN != null) cumNet += _dN;
+      }
+      var remainHtml = "-", remainCls = "wk-remain";
+      if(reqMin != null){
+        var remain = reqMin - cumNet;
+        if(remain <= 0){ remainCls += " ok"; remainHtml = "충족 +" + scWkFmtDur(-remain); }
+        else remainHtml = scWkFmtDur(remain);
+      }
+      h += '<tr'+warnCls+'>'
+        + '<td class="wk-no">'+(idx+1)+'</td>'
+        + '<td class="wk-name">'+scWkEsc(st.name)+warnBadge
+          + '<div class="wk-sub">'+scWkEsc(((st.school||'')+' '+(st.grade||'')).trim())
+          + (st.reading_room_code ? ' · <span class="wk-code">'+scWkEsc(st.reading_room_code)+'</span>' : '')
+          + '</div>'
+          + '<div class="wk-msg-wrap"><button class="wk-msg-btn" onclick="scMsgLastWeek(\''+sid+'\',this)">지난주</button><button class="wk-msg-btn" onclick="scMsgThisWeek(\''+sid+'\',this)">이번주</button><button class="wk-rpt-btn" onclick="scRptLastWeek(\''+sid+'\',this)">리포트</button></div>'
+          + '</td>'
+        + '<td class="wk-req-cell">'
+          + '<span class="wk-req-group">'
+          + '<input type="number" min="0" max="99" class="wk-req-h" data-sid="'+sid+'" value="'+(reqMin!=null?Math.floor(reqMin/60):"")+'" oninput="scWkReqEdit(this)" onkeydown="scWkReqKey(event,this,\'h\')" placeholder="0"><span class="wk-req-unit">시간</span>'
+          + '<input type="number" min="0" max="59" class="wk-req-m" data-sid="'+sid+'" value="'+(reqMin!=null?(reqMin%60):"")+'" oninput="scWkReqEdit(this)" onkeydown="scWkReqKey(event,this,\'m\')" placeholder="0"><span class="wk-req-unit">분</span>'
+          + '<button class="wk-req-save" data-sid="'+sid+'" onclick="scWkSaveReq(\''+sid+'\')">저장</button>'
+          + '</span>'
+          + '</td>'
+        + '<td>'+cell("check_in_time", row?row.check_in_time:"")+'</td>'
+        + '<td>'+outStartCell(1, "out_1_start", row?row.out_1_start:"")+'</td>'
+        + '<td>'+cell("out_1_end", row?row.out_1_end:"")+'</td>'
+        + '<td>'+outStartCell(2, "out_2_start", row?row.out_2_start:"")+'</td>'
+        + '<td>'+cell("out_2_end", row?row.out_2_end:"")+'</td>'
+        + '<td><div class="wk-xout-wrap"><input class="wk-t wk-extra" data-sid="'+sid+'" data-field="extra_out_minutes" value="'+(row&&row.extra_out_minutes?row.extra_out_minutes:"")+'" oninput="scWkCellEdit(this)" placeholder="0"><button type="button" class="wk-xout-btn" onclick="scWkXoutOpen(\''+sid+'\')" title="외출·복귀 시각으로 추가">➕</button></div></td>'
+        + '<td>'+cell("check_out_time", row?row.check_out_time:"")+'</td>'
+        + '<td class="wk-total">'+(net!=null?scWkFmtDur(net):"-")+'</td>'
+        + '<td class="'+remainCls+'">'+remainHtml+'</td>'
+        + '<td><button class="wk-save-btn" data-sid="'+sid+'" onclick="scWkSaveRow(\''+sid+'\')">저장</button></td>'
+        + '</tr>';
+    });
+    h += "</tbody></table></div>";
+    wrap.innerHTML = h;
+  }
+
+  function scWkEsc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+  /* ── 주간 학습 리포트 (이미지 생성·복사) ───────────────── */
+  function scRptBuildCard(student, rowsByDate, reqMin, weekDates){
+    var hasReq = (reqMin != null && reqMin > 0);
+    var labels = ["월","화","수","목","금","토","일"];
+    var days = [], maxNet = 1, total = 0;
+    for(var i=0;i<7;i++){
+      var row = rowsByDate[weekDates[i]] || null;
+      var net = row ? scWkCalcDaily(row) : null;
+      var dur = (net != null) ? net : 0;
+      var ci = (row && row.check_in_time) ? scMsgT(row.check_in_time) : "0:00";
+      var co = (row && row.check_out_time) ? scMsgT(row.check_out_time) : "0:00";
+      days.push({label:labels[i], dur:dur, ci:ci, co:co});
+      total += dur; if(dur > maxNet) maxNet = dur;
+    }
+    var dayHtml = days.map(function(d){
+      var pct = Math.round(d.dur / maxNet * 100);
+      var zero = (d.dur === 0) ? " rzero" : "";
+      return '<div class="rpt-day'+zero+'"><span class="rd">'+d.label+'</span>'
+        + '<div class="rbarcol"><div class="rbarwrap"><div class="rbar" style="width:'+pct+'%"></div></div>'
+        + '<span class="rio">'+d.ci+' ~ '+d.co+'</span></div>'
+        + '<span class="rt">'+scWkFmtDur(d.dur)+'</span></div>';
+    }).join("");
+    var dutyHtml = hasReq
+      ? '<div class="rpt-duty"><span class="rlabel">의무 학습시간</span><span class="rval">'+scWkFmtDur(reqMin)+'</span><span class="rpt-badge '+(total>=reqMin?"ok":"no")+'">'+(total>=reqMin?"이행 완료":"미이행")+'</span></div>'
+      : "";
+    var noteHtml = "※ 외출시간을 제외한 순공부시간입니다.<br>※ 반복적인 "+(hasReq?"의무 학습시간 미이행 및 ":"")+"스터디센터 규칙 미이행 시 퇴실 조치됩니다.";
+    return '<div class="rpt-card">'
+      + '<div class="rpt-head"><div class="acad">베스티안 수학학원</div><div class="ttl">주간 학습 리포트</div></div>'
+      + '<div class="rpt-body">'
+      + '<div class="rpt-top"><span class="rpt-student">'+scWkEsc(student.name)+' 학생</span><span class="rpt-period">'+scMsgMD(weekDates[0])+' ~ '+scMsgMD(weekDates[6])+'</span></div>'
+      + dutyHtml
+      + '<div class="rpt-sec">요일별 순공부 시간</div>'
+      + dayHtml
+      + '<div class="rpt-total"><span class="rlabel">총 공부시간</span><span class="rval">'+scWkFmtDur(total)+'</span></div>'
+      + '<div class="rpt-note">'+noteHtml+'</div>'
+      + '</div></div>';
+  }
+  // [리포트] 버튼: 지난주 카드 이미지 생성 → 클립보드 복사 (실패 시 다운로드)
+  async function scRptLastWeek(sid, btn){
+    if(!_wkWeekDates || !_wkWeekDates.length){ alert("주간 데이터가 로드되지 않았습니다."); return; }
+    var student = _wkStudents.find(function(s){ return s.id === sid; });
+    if(!student){ alert("학생 정보를 찾을 수 없습니다."); return; }
+    if(typeof html2canvas !== "function"){ alert("이미지 라이브러리를 불러오지 못했습니다. 새로고침 후 다시 시도해주세요."); return; }
+    var d = new Date(_wkWeekDates[0] + "T00:00:00");
+    d.setDate(d.getDate() - 7);
+    var lastMon = scWkFmtDate(d);
+    var dates = scWkBuildWeek(lastMon);
+    var origText = btn ? btn.textContent : "";
+    if(btn){ btn.disabled = true; btn.textContent = "생성중…"; }
+    var holder = null;
+    try{
+      var rows = await scMsgLoadRange(sid, dates);
+      var reqMin = scWkEffectiveReq(sid, lastMon);
+      holder = document.createElement("div");
+      holder.style.cssText = "position:fixed; left:-9999px; top:0; z-index:-1;";
+      holder.innerHTML = scRptBuildCard(student, rows, reqMin, dates);
+      document.body.appendChild(holder);
+      var card = holder.querySelector(".rpt-card");
+      var canvas = await html2canvas(card, { scale:2, backgroundColor:"#ffffff", logging:false, useCORS:true });
+      if(holder && holder.parentNode){ document.body.removeChild(holder); holder = null; }
+      canvas.toBlob(async function(blob){
+        try{
+          if(!blob) throw new Error("blob 생성 실패");
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+          if(btn){ btn.classList.add("copied"); btn.textContent = "✓ 복사됨"; setTimeout(function(){ btn.classList.remove("copied"); btn.textContent = origText; btn.disabled = false; }, 2000); }
+        }catch(e){
+          var a = document.createElement("a"); a.href = canvas.toDataURL("image/png"); a.download = student.name + "_주간리포트.png"; a.click();
+          if(btn){ btn.textContent = "↓ 저장됨"; setTimeout(function(){ btn.textContent = origText; btn.disabled = false; }, 2000); }
+        }
+      }, "image/png");
+    }catch(e){
+      if(holder && holder.parentNode){ document.body.removeChild(holder); }
+      if(btn){ btn.disabled = false; btn.textContent = origText; }
+      alert("리포트 생성 실패: " + (e.message || e));
+    }
+  }
+
+  /* ── 멘트 발송 (카톡 복사용) ───────────────────────────── */
+  // 시각 → "H:MM" (시 앞자리 0 제거, 분 2자리)
+  function scMsgT(t){
+    if(!t) return "0:00";
+    var p = String(t).split(":");
+    if(p.length < 2) return "0:00";
+    return parseInt(p[0],10) + ":" + String(p[1]).padStart(2,"0");
+  }
+  // 날짜 "YYYY-MM-DD" → "MM/DD(요일)"
+  function scMsgMD(dateStr){
+    var d = new Date(dateStr + "T00:00:00");
+    var wd = ["일","월","화","수","목","금","토"][d.getDay()];
+    return String(d.getMonth()+1).padStart(2,"0") + "/" + String(d.getDate()).padStart(2,"0") + "(" + wd + ")";
+  }
+  // 지난주용: 특정 학생의 기간 출결 별도 조회 → { date: row }
+  async function scMsgLoadRange(sid, dates){
+    var map = {};
+    var res = await db.from("reading_room_attendance").select("*")
+      .eq("student_id", sid)
+      .gte("attend_date", dates[0]).lte("attend_date", dates[dates.length-1]);
+    if(res.error) throw res.error;
+    (res.data || []).forEach(function(row){ map[row.attend_date] = row; });
+    return map;
+  }
+  // 월요일 멘트: 지난주 월~일(7일) 요일별 상세 + 이행여부
+  function scMsgBuildMon(student, rowsByDate, reqMin, weekDates){
+    var hasReq = (reqMin != null && reqMin > 0);
+    var labels = ["월","화","수","목","금","토","일"];
+    var lines = [], totalNet = 0;
+    for(var i=0;i<7;i++){
+      var row = rowsByDate[weekDates[i]] || null;
+      var net = row ? scWkCalcDaily(row) : null;
+      var ci = (row && row.check_in_time) ? scMsgT(row.check_in_time) : "0:00";
+      var co = (row && row.check_out_time) ? scMsgT(row.check_out_time) : "0:00";
+      var dur = (net != null) ? net : 0;
+      totalNet += dur;
+      lines.push(labels[i] + " - " + ci + "~" + co + " (" + scWkFmtDur(dur) + ")");
+    }
+    var t = "안녕하세요 베스티안 수학학원입니다.\n";
+    t += student.name + " 학생 " + scMsgMD(weekDates[0]) + "~" + scMsgMD(weekDates[6]) + "학습 현황 안내드립니다.\n\n";
+    if(hasReq){ t += "▶ 의무시간: " + scWkFmtDur(reqMin) + " ◀\n\n"; }
+    t += lines.join("\n") + "\n\n";
+    t += "◇ 총 공부시간: " + scWkFmtDur(totalNet) + "\n";
+    if(hasReq){ t += "◇ 의무시간 " + (totalNet >= reqMin ? "이행 완료" : "미이행") + "\n"; }
+    t += "\n※ 요일별, 주별 총 공부시간은 외출시간을 제외한 순공부시간입니다.\n";
+    t += "※ 반복적인 " + (hasReq ? "의무 학습시간 미이행 및 " : "") + "스터디센터 규칙 미이행 시 퇴실 조치됩니다";
+    return t;
+  }
+  // 토요일 멘트: 금주 월~금(5일) 요약
+  function scMsgBuildSat(student, rowsByDate, reqMin, weekDates){
+    var hasReq = (reqMin != null && reqMin > 0);
+    var totalNet = 0;
+    for(var i=0;i<5;i++){   // 월~금만
+      var row = rowsByDate[weekDates[i]] || null;
+      var net = row ? scWkCalcDaily(row) : null;
+      if(net != null) totalNet += net;
+    }
+    var t = "안녕하세요 베스티안 스터디센터입니다. " + student.name + " 학생 스터디센터 학습시간 안내드립니다.\n\n";
+    if(hasReq){
+      var remain = reqMin - totalNet; if(remain < 0) remain = 0;
+      t += "■ 의무 학습시간: " + scWkFmtDur(reqMin) + "\n";
+      t += "■ " + scMsgMD(weekDates[0]) + "~" + scMsgMD(weekDates[4]) + " 학습 시간: " + scWkFmtDur(totalNet) + "\n";
+      t += "■ 남은 의무 학습시간: " + scWkFmtDur(remain) + "\n\n";
+      t += "언제나 학생을 위해 최선을 다하는 베스티안이 되겠습니다. 감사합니다.\n\n";
+      t += "※의무 학습시간은 " + scWkFmtDur(reqMin) + "이며, 남은 의무시간은 반드시 주말에 학습해야 합니다※\n";
+      t += "※반복적인 의무 학습시간 미이행 및 스터디센터 규칙 미이행 시 퇴실 조치됩니다※";
+    } else {
+      t += "■ " + scMsgMD(weekDates[0]) + "~" + scMsgMD(weekDates[4]) + " 학습 시간: " + scWkFmtDur(totalNet) + "\n\n";
+      t += "언제나 학생을 위해 최선을 다하는 베스티안이 되겠습니다. 감사합니다.";
+    }
+    return t;
+  }
+  // [지난주] 버튼: 보는 주의 직전 주 월~일
+  async function scMsgLastWeek(sid, btn){
+    if(!_wkWeekDates || !_wkWeekDates.length){ alert("주간 데이터가 로드되지 않았습니다."); return; }
+    var student = _wkStudents.find(function(s){ return s.id === sid; });
+    if(!student){ alert("학생 정보를 찾을 수 없습니다."); return; }
+    var d = new Date(_wkWeekDates[0] + "T00:00:00");
+    d.setDate(d.getDate() - 7);
+    var lastMon = scWkFmtDate(d);
+    var dates = scWkBuildWeek(lastMon);
+    var origText = btn ? btn.textContent : "";
+    if(btn){ btn.disabled = true; btn.textContent = "…"; }
+    try{
+      var rows = await scMsgLoadRange(sid, dates);
+      var reqMin = scWkEffectiveReq(sid, lastMon);
+      var msg = scMsgBuildMon(student, rows, reqMin, dates);
+      scMsgCopy(msg, btn, origText);
+    }catch(e){
+      if(btn){ btn.disabled = false; btn.textContent = origText; }
+      alert("멘트 생성 실패: " + (e.message || e));
+    }
+  }
+  // [이번주] 버튼: 보는 주 월~금 (로드된 _wkData 재사용)
+  function scMsgThisWeek(sid, btn){
+    if(!_wkWeekDates || !_wkWeekDates.length){ alert("주간 데이터가 로드되지 않았습니다."); return; }
+    var student = _wkStudents.find(function(s){ return s.id === sid; });
+    if(!student){ alert("학생 정보를 찾을 수 없습니다."); return; }
+    var rows = {}, sd = _wkData[sid] || {};
+    for(var dt in sd){ rows[dt] = sd[dt]; }
+    var reqMin = scWkEffectiveReq(sid, _wkWeekDates[0]);
+    var msg = scMsgBuildSat(student, rows, reqMin, _wkWeekDates);
+    scMsgCopy(msg, btn, btn ? btn.textContent : "");
+  }
+  // 클립보드 복사 + 버튼 피드백
+  function scMsgCopy(text, btn, origText){
+    function done(){
+      if(btn){
+        btn.disabled = false;
+        btn.classList.add("copied");
+        btn.textContent = "✓ 복사됨";
+        setTimeout(function(){ btn.classList.remove("copied"); btn.textContent = origText; }, 2000);
+      }
+    }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done, function(){ scMsgCopyFallback(text); done(); });
+    } else { scMsgCopyFallback(text); done(); }
+  }
+  function scMsgCopyFallback(text){
+    try{
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }catch(e){ console.error("복사 실패:", e); }
+  }
+
+  // 셀 편집 → dirty 표시 + 메모리 반영
+  var _wkXoutSid = null;
+  function scWkXoutFindName(sid){
+    var s = _wkStudents.find(function(x){ return x.id === sid; });
+    return s ? (s.name||"") : "";
+  }
+  function scWkXoutOpen(sid){
+    _wkXoutSid = sid;
+    var inp = document.querySelector('.wk-extra[data-sid="'+sid+'"]');
+    var cur = inp ? (parseInt(inp.value,10)||0) : 0;
+    document.getElementById("wk-xout-name").textContent = scWkXoutFindName(sid) || "학생";
+    document.getElementById("wk-xout-cur").textContent = cur;
+    document.getElementById("wk-xout-go").value = "";
+    document.getElementById("wk-xout-back").value = "";
+    var pv = document.getElementById("wk-xout-preview");
+    pv.textContent = ""; pv.classList.remove("err");
+    document.getElementById("wk-xout-add").disabled = true;
+    document.getElementById("wk-xout-overlay").classList.add("open");
+  }
+  function scWkXoutClose(){
+    _wkXoutSid = null;
+    document.getElementById("wk-xout-overlay").classList.remove("open");
+  }
+  function scWkXoutDiff(){
+    var gn = scWkNorm(document.getElementById("wk-xout-go").value);
+    var bn = scWkNorm(document.getElementById("wk-xout-back").value);
+    if(gn===null || bn===null) return { ok:false, msg:"" };
+    if(gn===undefined || bn===undefined) return { ok:false, msg:"시간 형식 오류 (HH:MM)" };
+    var gM = scWkT2M(gn), bM = scWkT2M(bn);
+    if(gM===null || bM===null) return { ok:false, msg:"시간 형식 오류 (HH:MM)" };
+    var diff = bM - gM;
+    if(diff <= 0) return { ok:false, msg:"복귀가 외출보다 늦어야 합니다" };
+    return { ok:true, diff:diff };
+  }
+  function scWkXoutCalc(){
+    var r = scWkXoutDiff();
+    var pv = document.getElementById("wk-xout-preview");
+    var add = document.getElementById("wk-xout-add");
+    if(r.ok){
+      var inp = document.querySelector('.wk-extra[data-sid="'+_wkXoutSid+'"]');
+      var cur = inp ? (parseInt(inp.value,10)||0) : 0;
+      pv.classList.remove("err");
+      pv.textContent = "+ " + r.diff + "분  →  누적 " + (cur + r.diff) + "분";
+      add.disabled = false;
+    } else {
+      if(r.msg){ pv.classList.add("err"); } else { pv.classList.remove("err"); }
+      pv.textContent = r.msg || "";
+      add.disabled = true;
+    }
+  }
+  function scWkXoutAdd(){
+    var r = scWkXoutDiff();
+    if(!r.ok) return;
+    var inp = document.querySelector('.wk-extra[data-sid="'+_wkXoutSid+'"]');
+    if(!inp){ scWkXoutClose(); return; }
+    var cur = parseInt(inp.value,10)||0;
+    inp.value = cur + r.diff;
+    scWkCellEdit(inp);
+    scWkXoutClose();
+  }
+
+  // 입력 중 실시간: 숫자 4자리가 채워지면 즉시 HH:MM (유효 시각일 때만)
+  function scWkAutoColonLive(inp){
+    var v = inp.value || "";
+    if(v.indexOf(":") >= 0) return;
+    var raw = v.replace(/\D/g,"");
+    if(raw.length === 4){
+      var hh = raw.slice(0,2), mm = raw.slice(2);
+      if(parseInt(hh,10) <= 23 && parseInt(mm,10) <= 59){ inp.value = hh + ":" + mm; }
+    }
+  }
+  function scWkAutoColon(inp){
+    var v = (inp.value||"").trim();
+    if(!v || v.indexOf(":") >= 0) return;
+    var d = v.replace(/\D/g,"");
+    if(d.length === 3) d = "0" + d;
+    if(d.length === 4){
+      var hh = d.slice(0,2), mm = d.slice(2);
+      if(parseInt(hh,10) <= 23 && parseInt(mm,10) <= 59){ inp.value = hh + ":" + mm; }
+    }
+  }
+  async function scWkSaveAll(){
+    var dirtyInputs = document.querySelectorAll(".wk-t.dirty");
+    var sidSet = {};
+    dirtyInputs.forEach(function(i){ sidSet[i.getAttribute("data-sid")] = true; });
+    var sids = Object.keys(sidSet);
+    var btn = document.getElementById("wk-saveall-btn");
+    if(!sids.length){ alert("저장할 변경사항이 없습니다."); return; }
+    if(btn){ btn.textContent = "저장 중..."; btn.disabled = true; }
+    var okCount = 0;
+    for(var i=0; i<sids.length; i++){
+      try { await scWkSaveRow(sids[i], true); okCount++; }
+      catch(e){ console.error("전체저장 행 실패:", sids[i], e); }
+    }
+    scWkRenderTable();
+    if(btn){
+      btn.textContent = "✓ " + okCount + "명 저장됨"; btn.disabled = false;
+      setTimeout(function(){ var b=document.getElementById("wk-saveall-btn"); if(b) b.innerHTML = "&#128190; 전체 저장"; }, 2000);
+    }
+  }
+  function scWkCellEdit(inp){
+    inp.classList.add("dirty");
+    var sid = inp.getAttribute("data-sid");
+    var btn = document.querySelector('.wk-save-btn[data-sid="'+sid+'"]');
+    if(btn){ btn.classList.remove("saved"); btn.textContent = "저장"; }
+  }
+
+  // [지금] 현재 시각 입력
+  function scWkNow(sid, field){
+    var inp = document.querySelector('.wk-t[data-sid="'+sid+'"][data-field="'+field+'"]');
+    if(!inp) return;
+    var d = new Date();
+    inp.value = String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+    scWkCellEdit(inp);
+  }
+
+  // [저장] 행 → upsert
+  async function scWkSaveRow(sid, skipRender){
+    var date = _wkWeekDates[_wkSelectedDay];
+    var inputs = document.querySelectorAll('.wk-t[data-sid="'+sid+'"]');
+    var patch = { student_id: sid, attend_date: date };
+    var bad = false;
+    inputs.forEach(function(inp){
+      var field = inp.getAttribute("data-field");
+      if(field === "extra_out_minutes"){
+        var v = (inp.value||"").trim();
+        patch[field] = v ? parseInt(v,10) : 0;
+        if(v && isNaN(patch[field])) bad = true;
+      } else {
+        var norm = scWkNorm(inp.value);
+        if(norm === undefined){ bad = true; inp.style.borderColor = "#dc2626"; }
+        else patch[field] = norm;
+      }
+    });
+    if(bad){ alert("시간 형식이 올바르지 않은 칸이 있습니다. (HH:MM)"); return; }
+    // 자정 넘김 재계산 (종료<시작 → next_day)
+    function nd(startF, endF, ndF){
+      var sM = scWkT2M(patch[startF]), eM = scWkT2M(patch[endF]);
+      patch[ndF] = (sM!=null && eM!=null && eM < sM);
+    }
+    nd("out_1_start","out_1_end","out_1_end_is_next_day");
+    nd("out_2_start","out_2_end","out_2_end_is_next_day");
+    var ciM = scWkT2M(patch.check_in_time), coM = scWkT2M(patch.check_out_time);
+    patch.check_out_is_next_day = (ciM!=null && coM!=null && coM < ciM);
+    var btn = document.querySelector('.wk-save-btn[data-sid="'+sid+'"]');
+    if(btn){ btn.textContent = "저장중..."; btn.disabled = true; }
+    try {
+      var res = await db.from("reading_room_attendance").upsert(patch, { onConflict: "student_id,attend_date" }).select("*").maybeSingle();
+      if(res.error) throw res.error;
+      if(!_wkData[sid]) _wkData[sid] = {};
+      _wkData[sid][date] = res.data;
+      if(btn){ btn.textContent = "✓ 저장됨"; btn.classList.add("saved"); btn.disabled = false; }
+      // dirty 해제 + 순공부/남은시간 갱신
+      if(!skipRender) scWkRenderTable();
+    } catch(e){
+      console.error("저장 실패:", e);
+      alert("저장 실패: " + (e.message||e));
+      if(btn){ btn.textContent = "저장"; btn.disabled = false; }
+    }
+  }
+
+  /* ============================================================
+     [WEEKLY-REQ] 필수 공부시간 설정 (학생 속성, 모든 날짜 공통)
+     입력: "8시간 30분" / "8시간" / "30분" / "510"(분) → users.required_study_minutes
+  ============================================================ */
+
+  function scWkReqEdit(inp){
+    inp.classList.add("dirty");
+    var sid = inp.getAttribute("data-sid");
+    var btn = document.querySelector('.wk-req-save[data-sid="'+sid+'"]');
+    if(btn){ btn.classList.remove("saved"); btn.textContent = "저장"; }
+  }
+
+  // 필수시간 칸 Enter 이동: 시간→분, 분→다음 행 시간
+  function scWkReqKey(e, inp, which){
+    if(e.key !== "Enter") return;
+    e.preventDefault();
+    var sid = inp.getAttribute("data-sid");
+    if(which === "h"){
+      // 같은 행의 분 칸으로
+      var m = document.querySelector('.wk-req-m[data-sid="'+sid+'"]');
+      if(m){ m.focus(); m.select(); }
+    } else {
+      // 다음 행의 시간 칸으로 (DOM 순서 = 학생 순서)
+      var hs = Array.prototype.slice.call(document.querySelectorAll(".wk-req-h"));
+      var curH = document.querySelector('.wk-req-h[data-sid="'+sid+'"]');
+      var idx = hs.indexOf(curH);
+      if(idx >= 0 && idx < hs.length - 1){
+        var next = hs[idx+1];
+        next.focus(); next.select();
+      } else {
+        // 마지막 행이면 포컬스 해제
+        inp.blur();
+      }
+    }
+  }
+
+  // [저장] 필수시간 → users.required_study_minutes
+  async function scWkSaveReq(sid){
+    var hInp = document.querySelector('.wk-req-h[data-sid="'+sid+'"]');
+    var mInp = document.querySelector('.wk-req-m[data-sid="'+sid+'"]');
+    if(!hInp || !mInp) return;
+    var hVal = (hInp.value||"").trim();
+    var mVal = (mInp.value||"").trim();
+    // 둘 다 비었으면 미설정(null)
+    var min;
+    if(hVal === "" && mVal === ""){
+      min = null;
+    } else {
+      var h = hVal === "" ? 0 : parseInt(hVal,10);
+      var m = mVal === "" ? 0 : parseInt(mVal,10);
+      if(isNaN(h) || isNaN(m) || h < 0 || m < 0 || m > 59){
+        alert("시간/분을 확인하세요. (분은 0~59)");
+        return;
+      }
+      min = h*60 + m;
+    }
+    var btn = document.querySelector('.wk-req-save[data-sid="'+sid+'"]');
+    if(btn){ btn.textContent = "저장중..."; btn.disabled = true; }
+    try {
+      var res = await db.from("users").update({ required_study_minutes: min }).eq("id", sid);
+      if(res.error) throw res.error;
+      // 의무시간 이력 기록 (이번 주 월요일부터 적용 / 과거 보존)
+      var _mon = _wkWeekDates[0];
+      if(min == null){
+        await db.from("reading_room_required_history").delete().eq("student_id", sid).eq("effective_week_start", _mon);
+        _wkReqHistory[sid] = (_wkReqHistory[sid] || []).filter(function(h){ return h.effective_week_start !== _mon; });
+      } else {
+        var _hr = await db.from("reading_room_required_history").upsert({ student_id: sid, effective_week_start: _mon, required_minutes: min }, { onConflict: "student_id,effective_week_start" }).select("*").maybeSingle();
+        if(!_hr.error && _hr.data){
+          if(!_wkReqHistory[sid]) _wkReqHistory[sid] = [];
+          _wkReqHistory[sid] = _wkReqHistory[sid].filter(function(h){ return h.effective_week_start !== _mon; });
+          _wkReqHistory[sid].push(_hr.data);
+        }
+      }
+      // 메모리 반영
+      var st = _wkStudents.find(function(x){ return x.id === sid; });
+      if(st) st.required_study_minutes = min;
+      if(btn){ btn.textContent = "✓"; btn.classList.add("saved"); btn.disabled = false; }
+      // 남은시간 재계산 위해 테이블 재렌더
+      scWkRenderTable();
+    } catch(e){
+      console.error("필수시간 저장 실패:", e);
+      alert("저장 실패: " + (e.message||e));
+      if(btn){ btn.textContent = "저장"; btn.disabled = false; }
+    }
+  }
+
+  /* ============================================================
+     [KIOSK] 코드 입력 + 본인 확인 (Phase 2)
+     숫자 키패드로 코드 입력 → reading_room_code 조회 → 이름·학교·학년 본인 확인.
+     // code is 4-digit default, 5-digit on collision. input max 5.
+  ============================================================ */
+  var _scKpValue = "";          // 현재 입력 중인 코드
+  var _scKioskStudent = null;   // 본인 확인 대상 학생
+  var SC_KP_MAX = 5;            // 코드 최대 자릿수(5자리 승격 대응)
+
+  function scKpRender(){
+    var el = document.getElementById("kp-display");
+    if(!el) return;
+    if(!_scKpValue){
+      el.innerHTML = '<span class="kp-placeholder">\u00b7\u00b7\u00b7\u00b7</span>';
+    } else {
+      el.textContent = _scKpValue;
+    }
+  }
+
+  function scKpPress(d){
+    var err = document.getElementById("kp-err"); if(err) err.textContent = "";
+    if(_scKpValue.length >= SC_KP_MAX) return;
+    _scKpValue += d;
+    scKpRender();
+  }
+
+  function scKpDelete(){
+    var err = document.getElementById("kp-err"); if(err) err.textContent = "";
+    _scKpValue = _scKpValue.slice(0, -1);
+    scKpRender();
+  }
+
+  function scKpClear(){
+    _scKpValue = "";
+    scKpRender();
+  }
+
+  // [확인] 버튼 → 코드로 학생 조회
+  async function scKpSubmit(){
+    var err = document.getElementById("kp-err");
+    var code = _scKpValue.trim();
+    if(code.length < 4){
+      if(err) err.textContent = "코드는 4자리 이상입니다.";
+      return;
+    }
+    if(err) err.textContent = "확인 중...";
+    try {
+      // reading_room_code 정확 매칭 (탈퇴/삭제 제외)
+      var res = await db.from("users")
+        .select("id, name, school, grade, reading_room_code, reading_room_class, required_study_minutes, status, deleted_at")
+        .eq("reading_room_code", code)
+        .eq("reading_room_yn", true);
+      if(res.error) throw res.error;
+      var rows = (res.data || []).filter(function(u){ return u.status !== "inactive" && !u.deleted_at; });
+      if(rows.length === 0){
+        if(err) err.textContent = "해당 코드의 학생을 찾을 수 없습니다.";
+        return;
+      }
+      if(rows.length > 1){
+        // 이론상 reading_room_code는 고유해야 함. 혹시 중복이면 안전하게 안내.
+        if(err) err.textContent = "코드가 중복됩니다. 데스크에 문의하세요.";
+        return;
+      }
+      // 본인 확인 화면으로
+      _scKioskStudent = rows[0];
+      scShowConfirm(rows[0]);
+      if(err) err.textContent = "";
+    } catch(e){
+      console.error("코드 조회 실패:", e);
+      if(err) err.textContent = "조회 오류. 다시 시도해주세요.";
+    }
+  }
+
+  // 본인 확인 화면 표시
+  function scShowConfirm(stu){
+    document.getElementById("kiosk-code-screen").style.display = "none";
+    document.getElementById("kiosk-confirm-screen").style.display = "";
+    document.getElementById("cf-name").textContent = stu.name || "(이름없음)";
+    var info = [];
+    if(stu.school) info.push(stu.school);
+    if(stu.grade) info.push(stu.grade);
+    if(stu.reading_room_class) info.push(stu.reading_room_class);
+    document.getElementById("cf-info").textContent = info.length ? info.join(" · ") : "—";
+  }
+
+  // [네, 맞아요] → (Phase 3에서 상태머신 동작 화면으로 연결)
+  async function scConfirmYes(){
+    if(!_scKioskStudent) return;
+    document.getElementById("kiosk-confirm-screen").style.display = "none";
+    document.getElementById("kiosk-action-screen").style.display = "";
+    await scShowAction();
+  }
+
+  // [아니에요] → 코드 입력으로 복귀
+  function scConfirmNo(){
+    scKioskReset();
+  }
+
+  // 키오스크 초기화 (코드 입력 화면으로)
+  function scKioskReset(){
+    _scKpValue = "";
+    _scKioskStudent = null;
+    _scActionRow = null;
+    var cs = document.getElementById("kiosk-confirm-screen"); if(cs) cs.style.display = "none";
+    var ac = document.getElementById("kiosk-action-screen"); if(ac) ac.style.display = "none";
+    var ts = document.getElementById("kiosk-time-screen"); if(ts) ts.style.display = "none";
+    var os = document.getElementById("kiosk-out-screen"); if(os) os.style.display = "none";
+    var ds = document.getElementById("kiosk-code-screen"); if(ds) ds.style.display = "";
+    var err = document.getElementById("kp-err"); if(err) err.textContent = "";
+    scKpRender();
+  }
+
+  /* ============================================================
+     [ATTENDANCE] state machine + reading_room_attendance (Phase 3)
+     State inferred from today row. Outing uses pending_out_start (DB-backed)
+     so in-progress outing survives screen reset / other students.
+     On return: settle into out_1 -> out_2 -> extra_out_minutes (legacy calc compatible).
+     Next-day: end < start adds is_next_day flag.
+  ============================================================ */
+  var _scActionRow = null;
+
+  function scRrToday(){
+    var d = new Date();
+    // 독서실 영업일: 01:10:00부터 당일 (00:00~01:09:59는 전날로 집계)
+    var _h = d.getHours(), _m = d.getMinutes();
+    if(_h < 1 || (_h === 1 && _m < 10)){ d.setDate(d.getDate() - 1); }
+    var m = String(d.getMonth()+1).padStart(2,"0");
+    var day = String(d.getDate()).padStart(2,"0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+  function scNowTime(){
+    var d = new Date();
+    return String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0") + ":00";
+  }
+  function scTimeToMin(t){
+    if(!t) return null;
+    var p = String(t).split(":");
+    if(p.length < 2) return null;
+    return parseInt(p[0],10)*60 + parseInt(p[1],10);
+  }
+
+  async function scRrLoadToday(studentId){
+    try {
+      var res = await db.from("reading_room_attendance").select("*")
+        .eq("student_id", studentId).eq("attend_date", scRrToday()).maybeSingle();
+      if(res.error) throw res.error;
+      return res.data || null;
+    } catch(e){ console.error("today row load fail:", e); return null; }
+  }
+
+  // out_room / studying / outing / done
+  function scRrDetectState(row){
+    if(!row || !row.check_in_time) return "out_room";
+    if(row.check_out_time) return "done";
+    if(row.pending_out_start) return "outing";   // DB-backed in-progress outing
+    return "studying";
+  }
+
+  async function scShowAction(){
+    var stu = _scKioskStudent;
+    if(!stu) return;
+    document.getElementById("ac-name").textContent = stu.name || "";
+    var msg = document.getElementById("ac-msg"); if(msg) msg.textContent = "";
+    _scActionRow = await scRrLoadToday(stu.id);
+    var state = scRrDetectState(_scActionRow);
+    var statusEl = document.getElementById("ac-status");
+    var area = document.getElementById("ac-btn-area");
+    var labels = { out_room: "— 미입실", studying: "공부중", outing: "외출중", done: "하원 완료" };
+    var cls = { out_room: "st-out-room", studying: "st-studying", outing: "st-outing", done: "st-done" };
+    statusEl.textContent = labels[state];
+    statusEl.className = "ac-status " + cls[state];
+    var h = "";
+    if(state === "out_room"){
+      h = '<button class="ac-act-btn act-in" onclick="scShowEnterTime()">✅ 입실</button>';
+    } else if(state === "studying"){
+      h = '<button class="ac-act-btn act-out" onclick="scShowOutScreen()">⚡ 외출</button>'
+        + '<button class="ac-act-btn act-leave" onclick="scShowLeaveTime()">🏠 하원</button>';
+    } else if(state === "outing"){
+      var since = _scActionRow && _scActionRow.pending_out_start ? (" (" + String(_scActionRow.pending_out_start).slice(0,5) + " 나감)") : "";
+      h = '<button class="ac-act-btn act-return" onclick="scActReturn()">↩️ 복귀</button>';
+      if(msg) msg.textContent = "외출 중입니다" + since;
+    } else if(state === "done"){
+      if(msg) msg.textContent = "오늘은 이미 하원했습니다. 다시 이용하려면 데스크에 문의하세요.";
+    }
+    area.innerHTML = h;
+  }
+
+  async function scRrUpsert(patch){
+    var stu = _scKioskStudent;
+    var payload = Object.assign({ student_id: stu.id, attend_date: scRrToday() }, patch);
+    var res = await db.from("reading_room_attendance")
+      .upsert(payload, { onConflict: "student_id,attend_date" }).select("*").maybeSingle();
+    if(res.error) throw res.error;
+    return res.data;
+  }
+
+  // [입실] (예상 하원시각 포함)
+  async function scActIn(expCheckout){
+    scShowActionBack();
+    try {
+      _scActionRow = await scRrUpsert({ check_in_time: scNowTime(), expected_check_out: expCheckout || null });
+      scActDone("입실", scNowTime());
+    } catch(e){ scActError(e); }
+  }
+
+  // [외출 진입] → 사유/복귀 선택 화면 (scShowOutScreen)으로 대체됨
+
+  // [복귀] → pending~now 외출분 계산 → out_1/out_2/extra 정산 + pending 비우기
+  async function scActReturn(){
+    try {
+      var row = _scActionRow || {};
+      var now = scNowTime();
+      var startT = row.pending_out_start;
+      if(!startT){
+        // 안전장치: pending 없으면 상태 재동기화
+        await scShowAction(); return;
+      }
+      var patch = { pending_out_start: null, pending_out_is_next_day: false, pending_out_reason: null, pending_out_expected_end: null };
+      if(!row.out_1_start){
+        patch.out_1_start = startT; patch.out_1_end = now;
+        patch.out_1_reason = row.pending_out_reason || null;
+        patch.out_1_expected_end = row.pending_out_expected_end || null;
+        if(scTimeToMin(now) < scTimeToMin(startT)) patch.out_1_end_is_next_day = true;
+      } else if(!row.out_2_start){
+        patch.out_2_start = startT; patch.out_2_end = now;
+        patch.out_2_reason = row.pending_out_reason || null;
+        patch.out_2_expected_end = row.pending_out_expected_end || null;
+        if(scTimeToMin(now) < scTimeToMin(startT)) patch.out_2_end_is_next_day = true;
+      } else {
+        // 3회⁺ → extra_out_minutes 누적
+        var diff = scTimeToMin(now) - scTimeToMin(startT);
+        if(diff < 0) diff += 24*60;   // 자정 방어
+        patch.extra_out_minutes = (row.extra_out_minutes || 0) + diff;
+      }
+      _scActionRow = await scRrUpsert(patch);
+      scActDone("복귀", now);
+    } catch(e){ scActError(e); }
+  }
+
+  // [하원] (다음날 예상등원 → 예약 행 생성)
+  async function scActLeave(expNextIn){
+    scShowActionBack();
+    try {
+      var row = _scActionRow || {};
+      var now = scNowTime();
+      var patch = { check_out_time: now };
+      if(row.check_in_time && scTimeToMin(now) < scTimeToMin(row.check_in_time)) patch.check_out_is_next_day = true;
+      _scActionRow = await scRrUpsert(patch);
+      if(expNextIn){
+        var nd = scRrNextDay(scRrToday());
+        await db.from("reading_room_attendance").upsert(
+          { student_id: _scKioskStudent.id, attend_date: nd, expected_check_in: expNextIn },
+          { onConflict: "student_id,attend_date" }
+        );
+      }
+      scActDone("하원", now);
+    } catch(e){ scActError(e); }
+  }
+
+  function scActDone(label, time){
+    var hhmm = String(time).slice(0,5);
+    var msg = document.getElementById("ac-msg");
+    var name = _scKioskStudent ? _scKioskStudent.name : "";
+    if(msg) msg.textContent = "✅ " + name + "님 " + label + " 처리됨 (" + hhmm + ")";
+    var area = document.getElementById("ac-btn-area"); if(area) area.innerHTML = "";
+    var statusEl = document.getElementById("ac-status"); if(statusEl) statusEl.textContent = label + " 완료!";
+    setTimeout(function(){ scKioskReset(); }, 2000);
+  }
+
+  function scActError(e){
+    console.error("attendance save fail:", e);
+    var msg = document.getElementById("ac-msg");
+    if(msg) msg.textContent = "⚠️ 저장 실패. 다시 시도하거나 데스크에 문의하세요.";
+  }
+
+  /* ── 시간계획: 시간선택 / 외출 모달 + 액션 ── */
+  var SC_OUT_REASONS = ["점심","저녁","학원","병원","집"];
+  var SC_OUT_DURS = [{l:"30분",m:30},{l:"1시간",m:60},{l:"1시간 30분",m:90},{l:"2시간",m:120},{l:"2시간 30분",m:150},{l:"3시간",m:180}];
+  var _scOutReason = null, _scOutDurMin = null;
+
+  function scGenTimes(startMin, endMin){
+    var a = [];
+    for(var m=startMin; m<=endMin; m+=30){ var mm=((m%1440)+1440)%1440; a.push(String(Math.floor(mm/60)).padStart(2,"0")+":"+String(mm%60).padStart(2,"0")); }
+    return a;
+  }
+  function scRrNextDay(ds){ var d=new Date(ds+"T00:00:00"); d.setDate(d.getDate()+1); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+  function scAddMinToTime(t, addMin){ var base=scTimeToMin(t)+addMin; var mm=((base%1440)+1440)%1440; return String(Math.floor(mm/60)).padStart(2,"0")+":"+String(mm%60).padStart(2,"0")+":00"; }
+
+  function scShowActionBack(){
+    ["kiosk-time-screen","kiosk-out-screen"].forEach(function(c){ var e=document.getElementById(c); if(e) e.style.display="none"; });
+    var ac=document.getElementById("kiosk-action-screen"); if(ac) ac.style.display="";
+  }
+  // [입실] → 예상 하원시간 선택 화면
+  function scShowEnterTime(){
+    document.getElementById("kiosk-action-screen").style.display="none";
+    document.getElementById("ts-name").textContent=_scKioskStudent?_scKioskStudent.name:"";
+    document.getElementById("ts-title").textContent="오늘 예상 하원시간을 선택하세요";
+    var times=scGenTimes(20*60, 25*60+30);
+    document.getElementById("ts-grid").innerHTML=times.map(function(t){return '<button onclick="scActIn(\''+t+':00\')">'+t+'</button>';}).join("");
+    document.getElementById("ts-msg").textContent="";
+    document.getElementById("kiosk-time-screen").style.display="";
+  }
+  // [하원] → 다음날 예상 등원시간 선택 화면
+  function scShowLeaveTime(){
+    document.getElementById("kiosk-action-screen").style.display="none";
+    document.getElementById("ts-name").textContent=_scKioskStudent?_scKioskStudent.name:"";
+    document.getElementById("ts-title").textContent="다음날 예상 등원시간을 선택하세요";
+    var times=scGenTimes(8*60, 18*60+30);
+    document.getElementById("ts-grid").innerHTML=times.map(function(t){return '<button onclick="scActLeave(\''+t+':00\')">'+t+'</button>';}).join("");
+    document.getElementById("ts-msg").textContent="";
+    document.getElementById("kiosk-time-screen").style.display="";
+  }
+  // [외출] → 사유 + 예상복귀 화면
+  function scShowOutScreen(){
+    _scOutReason=null; _scOutDurMin=null;
+    document.getElementById("kiosk-action-screen").style.display="none";
+    document.getElementById("os-name").textContent=_scKioskStudent?_scKioskStudent.name:"";
+    document.getElementById("os-reason").innerHTML=SC_OUT_REASONS.map(function(r){return '<button onclick="scPickReason(this,\''+r+'\')">'+r+'</button>';}).join("");
+    document.getElementById("os-dur").innerHTML=SC_OUT_DURS.map(function(d){return '<button onclick="scPickDur(this,'+d.m+')">'+d.l+'</button>';}).join("");
+    document.getElementById("os-subject-wrap").style.display="none";
+    document.getElementById("os-subject").value="";
+    document.getElementById("kiosk-out-screen").style.display="";
+  }
+  function scPickReason(btn, r){
+    _scOutReason=r;
+    Array.prototype.forEach.call(btn.parentNode.children,function(b){ b.classList.remove("sel"); });
+    btn.classList.add("sel");
+    document.getElementById("os-subject-wrap").style.display=(r==="학원")?"":"none";
+  }
+  function scPickDur(btn, m){
+    _scOutDurMin=m;
+    Array.prototype.forEach.call(btn.parentNode.children,function(b){ b.classList.remove("sel"); });
+    btn.classList.add("sel");
+  }
+  // [외출 완료] → pending_out_start + 사유 + 예상복귀
+  async function scConfirmOut(){
+    if(!_scOutReason){ alert("외출 사유를 선택해주세요."); return; }
+    if(_scOutReason==="학원" && !document.getElementById("os-subject").value.trim()){ alert("학원 과목을 입력해주세요."); return; }
+    if(!_scOutDurMin){ alert("예상 복귀시간을 선택해주세요."); return; }
+    try{
+      var now=scNowTime();
+      var reason=(_scOutReason==="학원") ? ("학원("+document.getElementById("os-subject").value.trim()+")") : _scOutReason;
+      var expEnd=scAddMinToTime(now,_scOutDurMin);
+      _scActionRow = await scRrUpsert({ pending_out_start: now, pending_out_is_next_day:false, pending_out_reason:reason, pending_out_expected_end:expEnd });
+      scShowActionBack();
+      scActDone("외출", now);
+    }catch(e){ scShowActionBack(); scActError(e); }
+  }
+
+  /* ============================================================
+     [REGISTER] 독서실 학생 일괄 등록 (Phase 1)
+     붙여넣기: 학교 / 학년 / 이름 / 반명 / 핸드폰
+     코드: 핸드폰 숫자 듷4자리, 충돌 시 이름 가나다순 후순위 5자리 승격.
+  ============================================================ */
+  var _scParsedRows = [];   // 미리보기 단계 데이터 [{school,grade,name,rrClass,phone,code,is5,err}]
+  var _scResultRows = [];   // 등록 완료 데이터 [{name, code}]
+
+  // 핸드폰 → 숫자만 추출
+  function scPhoneDigits(phone){
+    return String(phone || "").replace(/[^0-9]/g, "");
+  }
+  // 숫자만 추출한 핸드폰 → 듷4자리 (4자리 미만이면 null)
+  function scLast4(phone){
+    var d = scPhoneDigits(phone);
+    if(d.length < 4) return null;
+    return d.slice(-4);
+  }
+  // HTML escape
+  function scEsc(v){
+    return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  // 붙여넣기 텍스트 파싱 → 행 배열. 탭 우선, 없으면 2칸+ 공백 구분.
+  function scSplitCells(line){
+    if(line.indexOf("\t") !== -1) return line.split("\t");
+    return line.split(/\s{2,}/);   // 2칸 이상 공백
+  }
+
+  // 기존 DB 코드 + 이번 배치를 합쳐 충돌 없는 코드 생성
+  async function scGenerateCodes(rows){
+    // 기존 DB의 모든 reading_room_code 수집 (충돌 방지)
+    var existing = {};
+    try {
+      var res = await db.from("users").select("reading_room_code").not("reading_room_code","is",null);
+      (res.data || []).forEach(function(u){ if(u.reading_room_code) existing[u.reading_room_code] = true; });
+    } catch(e){ console.warn("기존 코드 조회 실패(무시 진행):", e); }
+
+    // 듷4자리별 그룹핑 (이번 배치 내)
+    var byLast4 = {};
+    rows.forEach(function(r){
+      r.last4 = scLast4(r.phone);
+      if(r.last4 == null){ r.err = "핸드폰 오류"; r.code = null; return; }
+      if(!byLast4[r.last4]) byLast4[r.last4] = [];
+      byLast4[r.last4].push(r);
+    });
+
+    Object.keys(byLast4).forEach(function(last4){
+      var group = byLast4[last4];
+      // 이름 가나다순 정렬 (후순위가 5자리)
+      group.sort(function(a,b){ return (a.name||"").localeCompare(b.name||"", "ko"); });
+      // 기존 DB에 이미 같은 4자리가 있으면 첫번째도 승격 필요
+      var baseConflict = !!existing[last4];
+      group.forEach(function(r, idx){
+        var needBump = baseConflict || idx > 0;
+        if(!needBump){
+          r.code = last4; r.is5 = false;
+        } else {
+          // 5자리 승격: last4 + suffix, 이미 쓰인 코드 피해 증가
+          var suffix = 1;
+          var cand = last4 + suffix;
+          while(existing[cand]){ suffix++; cand = last4 + suffix; }
+          r.code = cand; r.is5 = true;
+        }
+        existing[r.code] = true;   // 이번 배치 내에서도 충돌 방지
+      });
+    });
+    return rows;
+  }
+
+  // [미리보기] 버튼
+  async function scParsePaste(){
+    var ta = document.getElementById("reg-paste");
+    var raw = (ta && ta.value || "").trim();
+    if(!raw){ alert("붙여넣은 데이터가 없습니다."); return; }
+    var lines = raw.split(/\r?\n/).filter(function(l){ return l.trim(); });
+    var rows = lines.map(function(line){
+      var c = scSplitCells(line).map(function(x){ return (x||"").trim(); });
+      // 학교/학년/이름/반명/핸드폰
+      return {
+        school: c[0] || "", grade: c[1] || "", name: c[2] || "",
+        rrClass: c[3] || "", phone: c[4] || "",
+        code: null, is5: false, err: ""
+      };
+    });
+    // 필수값(이름/핸드폰) 검증
+    rows.forEach(function(r){
+      if(!r.name) r.err = "이름 없음";
+      else if(scLast4(r.phone) == null) r.err = "핸드폰 오류";
+    });
+    // 코드 생성 (오류 없는 행만)
+    var valid = rows.filter(function(r){ return !r.err; });
+    await scGenerateCodes(valid);
+    _scParsedRows = rows;
+    scRenderPreview();
+  }
+
+  function scRenderPreview(){
+    var sec = document.getElementById("reg-preview-section");
+    var wrap = document.getElementById("reg-preview-wrap");
+    var sum = document.getElementById("reg-preview-summary");
+    if(!_scParsedRows.length){ sec.style.display = "none"; return; }
+    var okCount = _scParsedRows.filter(function(r){ return !r.err; }).length;
+    var errCount = _scParsedRows.length - okCount;
+    var fiveCount = _scParsedRows.filter(function(r){ return r.is5; }).length;
+    sum.innerHTML = "총 " + _scParsedRows.length + "명 · 정상 <b style=\"color:#16a34a\">" + okCount + "</b>명"
+      + (errCount ? " · 오류 <b style=\"color:#dc2626\">" + errCount + "</b>명" : "")
+      + (fiveCount ? " · 5자리 코드 <b style=\"color:#b45309\">" + fiveCount + "</b>명(충돌)" : "");
+    var h = "<table class=\"reg-tbl\"><thead><tr><th>#</th><th>이름</th><th>학교</th><th>학년</th><th>반명</th><th>핸드폰</th><th>코드</th></tr></thead><tbody>";
+    _scParsedRows.forEach(function(r, i){
+      var codeCell = r.err
+        ? "<span class=\"err-cell\">" + scEsc(r.err) + "</span>"
+        : "<span class=\"code-cell" + (r.is5 ? " code-5" : "") + "\">" + scEsc(r.code) + "</span>";
+      h += "<tr" + (r.err ? " class=\"warn-row\"" : "") + ">"
+        + "<td>" + (i+1) + "</td>"
+        + "<td><b>" + scEsc(r.name) + "</b></td>"
+        + "<td>" + scEsc(r.school) + "</td>"
+        + "<td>" + scEsc(r.grade) + "</td>"
+        + "<td>" + scEsc(r.rrClass) + "</td>"
+        + "<td>" + scEsc(r.phone) + "</td>"
+        + "<td>" + codeCell + "</td></tr>";
+    });
+    h += "</tbody></table>";
+    wrap.innerHTML = h;
+    sec.style.display = "";
+    document.getElementById("reg-result-section").style.display = "none";
+  }
+
+  function scClearPaste(){
+    var ta = document.getElementById("reg-paste"); if(ta) ta.value = "";
+    _scParsedRows = [];
+    document.getElementById("reg-preview-section").style.display = "none";
+    document.getElementById("reg-result-section").style.display = "none";
+  }
+
+  // [전체 등록] 버튼 → Supabase insert
+  // [학생 추가 폼] 초기화
+  var _scEditId = null;
+  function scFormReset(){
+    _scEditId = null;
+    var r0=document.querySelector('input[name="rf-class"][value="원생"]'); if(r0) r0.checked=true;
+    var mt=document.getElementById('rf-mentoring'); if(mt) mt.checked=false;
+    ['rf-name','rf-phone','rf-level','rf-school','rf-grade','rf-enrolled','rf-req-h','rf-req-m'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+    var msg=document.getElementById('rf-msg'); if(msg){ msg.textContent=''; msg.style.color=''; }
+    var btn=document.getElementById('rf-add-btn'); if(btn) btn.textContent='➕ 학생 추가';
+    var ttl=document.querySelector('#reg-form-section .reg-step-title'); if(ttl) ttl.textContent='➕ 학생 추가';
+  }
+  // [학생 수정] 명단 → 폼 로드
+  function scFormLoad(id){
+    var s=_scListData.find(function(x){ return x.id===id; });
+    if(!s) return;
+    _scEditId=id;
+    var isB=(s.reading_room_class||'').indexOf('비원생')>=0;
+    var rr=document.querySelector('input[name="rf-class"][value="'+(isB?'비원생':'원생')+'"]'); if(rr) rr.checked=true;
+    var mt=document.getElementById('rf-mentoring'); if(mt) mt.checked=!!s.reading_room_mentoring;
+    document.getElementById('rf-name').value=s.name||'';
+    document.getElementById('rf-phone').value=s.phone||'';
+    document.getElementById('rf-level').value=s.school_level||'';
+    document.getElementById('rf-school').value=s.school||'';
+    var _gn=(s.grade||'').match(/\d/); document.getElementById('rf-grade').value=_gn?_gn[0]:'';
+    document.getElementById('rf-enrolled').value=s.enrolled_at||'';
+    if(s.required_study_minutes!=null){
+      document.getElementById('rf-req-h').value=Math.floor(s.required_study_minutes/60);
+      document.getElementById('rf-req-m').value=s.required_study_minutes%60;
+    } else { document.getElementById('rf-req-h').value=''; document.getElementById('rf-req-m').value=''; }
+    var btn=document.getElementById('rf-add-btn'); if(btn) btn.textContent='💾 저장';
+    var ttl=document.querySelector('#reg-form-section .reg-step-title'); if(ttl) ttl.textContent='✏️ 학생 수정';
+    var msg=document.getElementById('rf-msg'); if(msg){ msg.textContent='수정 중: '+(s.name||''); msg.style.color='#0369a1'; }
+    var nm=document.getElementById('rf-name'); if(nm) nm.focus({preventScroll:true});
+  }
+  // [학생 추가 폼] 저장 (단일 insert, 코드 자동생성 재사용)
+  async function scFormAdd(){
+    var name=(document.getElementById('rf-name').value||'').trim();
+    var phone=(document.getElementById('rf-phone').value||'').trim();
+    var level=(document.getElementById('rf-level').value||'').trim();
+    var school=(document.getElementById('rf-school').value||'').trim();
+    var grade=(document.getElementById('rf-grade').value||'').trim();
+    var enrolled=(document.getElementById('rf-enrolled').value||'').trim();
+    var rfClass=document.querySelector('input[name="rf-class"]:checked');
+    var classVal=(rfClass && rfClass.value==='비원생') ? '독서실   비원생' : '독서실   원생';
+    var mentoring=document.getElementById('rf-mentoring').checked;
+    var hVal=(document.getElementById('rf-req-h').value||'').trim();
+    var mVal=(document.getElementById('rf-req-m').value||'').trim();
+    var msg=document.getElementById('rf-msg');
+    function showErr(t){ if(msg){ msg.textContent='⚠️ '+t; msg.style.color='#dc2626'; } }
+    if(!name){ showErr('이름을 입력하세요.'); return; }
+    var d4=scLast4(phone);
+    if(d4==null){ showErr('연락처를 정확히 입력하세요 (숫자 4자리 이상).'); return; }
+    var reqMin;
+    if(hVal===''&&mVal===''){ reqMin=null; }
+    else {
+      var h=hVal===''?0:parseInt(hVal,10);
+      var m=mVal===''?0:parseInt(mVal,10);
+      if(isNaN(h)||isNaN(m)||h<0||m<0||m>59){ showErr('의무시간을 확인하세요 (분은 0~59).'); return; }
+      reqMin=h*60+m;
+    }
+    var btn=document.getElementById('rf-add-btn');
+    if(btn){ btn.disabled=true; btn.textContent='⏳ 추가 중...'; }
+    try {
+      if(_scEditId){
+        var upd={ name:name, school:school||null, school_level:level||null, grade:grade||null, phone:phone||null, reading_room_class:classVal, reading_room_mentoring:mentoring, enrolled_at:enrolled||null, required_study_minutes:reqMin };
+        var ur=await db.from('users').update(upd).eq('id',_scEditId).select('id,name').maybeSingle();
+        if(ur.error) throw ur.error;
+        if(msg){ msg.textContent='✅ '+name+' 수정 완료'; msg.style.color='#16a34a'; }
+        scFormReset();
+        await scListLoad();
+        return;
+      }
+      var rows=[{ name:name, phone:phone }];
+      await scGenerateCodes(rows);
+      if(rows[0].err || !rows[0].code){ showErr('코드 생성 실패: '+(rows[0].err||'')); return; }
+      var payload={
+        name:name, school:school||null, school_level:level||null, grade:grade||null, phone:phone||null,
+        reading_room_class:classVal, reading_room_mentoring:mentoring,
+        reading_room_code:rows[0].code, reading_room_yn:true,
+        enrolled_at:enrolled||null, required_study_minutes:reqMin,
+        role:'student', status:'active'
+      };
+      var res=await db.from('users').insert(payload).select('id,name,reading_room_code').maybeSingle();
+      if(res.error) throw res.error;
+      if(msg){ msg.textContent='✅ '+name+' 추가 완료 (코드 '+res.data.reading_room_code+')'; msg.style.color='#16a34a'; }
+      scFormReset();
+      await scListLoad();
+    } catch(e){
+      console.error('학생 추가 실패:', e);
+      showErr('추가 실패: '+(e.message||e));
+    } finally {
+      if(btn){ btn.disabled=false; btn.textContent=_scEditId?'💾 저장':'➕ 학생 추가'; }
+    }
+  }
+
+  // [학생 명단] B-2: 로드/필터/렌더
+  var _scListData = [];
+  var _scListFilter = 'all';
+  async function scListLoad(){
+    var el=document.getElementById('rl-list');
+    try{
+      var res=await db.from('users')
+        .select('id,name,school,school_level,grade,phone,enrolled_at,reading_room_class,reading_room_mentoring,reading_room_code,required_study_minutes,reading_room_withdrawn_at')
+        .eq('reading_room_yn',true).order('name');
+      if(res.error) throw res.error;
+      _scListData=res.data||[];
+      scListRender();
+    }catch(e){ console.error('명단 로드 실패:',e); if(el) el.innerHTML='<div style="padding:14px;color:#dc2626;font-size:13px">명단 로드 실패: '+scEsc(e.message||'')+'</div>'; }
+  }
+  function scListSetFilter(f){
+    _scListFilter=f;
+    document.querySelectorAll('.rl-fbtn').forEach(function(b){ b.classList.toggle('active', b.getAttribute('data-filter')===f); });
+    scListRender();
+  }
+  function scListRender(){
+    var el=document.getElementById('rl-list'); if(!el) return;
+    var list=_scListData.filter(function(s){
+      if(_scListFilter==='active') return !s.reading_room_withdrawn_at;
+      if(_scListFilter==='withdrawn') return !!s.reading_room_withdrawn_at;
+      return true;
+    });
+    if(!list.length){ el.innerHTML='<div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">학생이 없습니다</div>'; return; }
+    el.innerHTML=list.map(function(s){
+      var lv=s.school_level==='middle'?'중등':(s.school_level==='high'?'고등':(s.school_level==='both'?'중고등':''));
+      var cls=(s.reading_room_class||'').replace(/\s+/g,' ').trim();
+      var mt=s.reading_room_mentoring?' <span class="rl-badge" style="background:#ede9fe;color:#6d28d9">멘토링</span>':'';
+      var wd=s.reading_room_withdrawn_at?' <span class="rl-badge rl-wd">퇴원</span>':'';
+      var req=(s.required_study_minutes!=null)?(Math.floor(s.required_study_minutes/60)+'시간 '+(s.required_study_minutes%60)+'분'):'-';
+      return '<div class="rl-item"><div style="flex:1;min-width:0">'
+        +'<div class="rl-name">'+scEsc(s.name||'')+mt+wd+'</div>'
+        +'<div class="rl-meta">'+[lv,scEsc(s.school||''),scEsc(s.grade||''),cls].filter(Boolean).join(' · ')+'</div>'
+        +'<div class="rl-meta">코드 '+scEsc(s.reading_room_code||'-')+' · 의무 '+req+'</div>'
+      +'</div>'
+        +'<div class="rl-actions">'
+          +'<button class="rl-edit" onclick="scFormLoad(\''+s.id+'\')">수정</button>'
+          +(s.reading_room_withdrawn_at
+            ? '<button class="rl-restore" onclick="scRestore(\''+s.id+'\')">복원</button><button class="rl-del" onclick="scDelete(\''+s.id+'\')">삭제</button>'
+            : '<button class="rl-wd-btn" onclick="scWithdraw(\''+s.id+'\')">퇴원</button>')
+        +'</div>'
+      +'</div>';
+    }).join('');
+  }
+
+  // [B-4] 퇴원/복원/삭제
+  async function scWithdraw(id){
+    var s=_scListData.find(function(x){ return x.id===id; });
+    if(!s) return;
+    if(!confirm((s.name||'')+' 학생을 퇴원 처리할까요?\n([퇴원] 필터에서 계속 보이며, 복원할 수 있습니다.)')) return;
+    try{
+      var res=await db.from('users').update({ reading_room_withdrawn_at: scRrToday() }).eq('id',id);
+      if(res.error) throw res.error;
+      await scListLoad();
+    }catch(e){ console.error('퇴원 실패:',e); alert('퇴원 처리 실패: '+(e.message||e)); }
+  }
+  async function scRestore(id){
+    var s=_scListData.find(function(x){ return x.id===id; });
+    if(!s) return;
+    if(!confirm((s.name||'')+' 학생의 퇴원을 취소(복원)할까요?')) return;
+    try{
+      var res=await db.from('users').update({ reading_room_withdrawn_at: null }).eq('id',id);
+      if(res.error) throw res.error;
+      await scListLoad();
+    }catch(e){ console.error('복원 실패:',e); alert('복원 실패: '+(e.message||e)); }
+  }
+  async function scDelete(id){
+    var s=_scListData.find(function(x){ return x.id===id; });
+    if(!s) return;
+    if(!s.reading_room_withdrawn_at){ alert('퇴원 학생만 삭제할 수 있습니다. 먼저 퇴원 처리하세요.'); return; }
+    if(!confirm((s.name||'')+' 학생을 명단에서 삭제할까요?\n(독서실 명단에서 제외됩니다. 레코드는 보존되어 추후 복구할 수 있습니다.)')) return;
+    try{
+      var res=await db.from('users').update({ reading_room_yn: false }).eq('id',id);
+      if(res.error) throw res.error;
+      await scListLoad();
+    }catch(e){ console.error('삭제 실패:',e); alert('삭제 실패: '+(e.message||e)); }
+  }
+
+  async function scRegisterAll(){
+    var valid = _scParsedRows.filter(function(r){ return !r.err && r.code; });
+    if(!valid.length){ alert("등록할 정상 데이터가 없습니다."); return; }
+    if(!confirm(valid.length + "명을 독서실 학생으로 등록합니다.\n계속하시겠습니까?")) return;
+    var btn = document.getElementById("reg-save-btn");
+    if(btn){ btn.disabled = true; btn.textContent = "⏳ 등록 중..."; }
+    try {
+      var payload = valid.map(function(r){
+        return {
+          name: r.name, school: r.school || null, grade: r.grade || null,
+          phone: r.phone || null, reading_room_class: r.rrClass || null,
+          reading_room_code: r.code, reading_room_yn: true,
+          role: "student", status: "active"
+        };
+      });
+      var res = await db.from("users").insert(payload).select("id, name, reading_room_code");
+      if(res.error) throw res.error;
+      _scResultRows = (res.data || []).map(function(u){ return { name: u.name, code: u.reading_room_code }; });
+      scRenderResult();
+      if(btn){ btn.disabled = false; btn.textContent = "💾 전체 등록"; }
+    } catch(e){
+      console.error("등록 실패:", e);
+      alert("등록 실패: " + (e.message || e));
+      if(btn){ btn.disabled = false; btn.textContent = "💾 전체 등록"; }
+    }
+  }
+
+  function scRenderResult(){
+    var sec = document.getElementById("reg-result-section");
+    var wrap = document.getElementById("reg-result-wrap");
+    var sum = document.getElementById("reg-result-summary");
+    sum.innerHTML = "✅ <b style=\"color:#16a34a\">" + _scResultRows.length + "명</b> 등록 완료! 아래 코드를 복사해 공지하세요.";
+    var h = "<table class=\"reg-tbl\"><thead><tr><th>이름</th><th>코드</th></tr></thead><tbody>";
+    _scResultRows.forEach(function(r){
+      h += "<tr><td><b>" + scEsc(r.name) + "</b></td><td><span class=\"code-cell\">" + scEsc(r.code) + "</span></td></tr>";
+    });
+    h += "</tbody></table>";
+    wrap.innerHTML = h;
+    sec.style.display = "";
+    document.getElementById("reg-preview-section").style.display = "none";
+  }
+
+  // [코드 전체 복사] 카톡 공지용 텍스트
+  async function scCopyCodes(){
+    if(!_scResultRows.length){ alert("복사할 코드가 없습니다."); return; }
+    var text = _scResultRows.map(function(r){ return r.name + ": " + r.code; }).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("✅ 코드 " + _scResultRows.length + "개를 복사했습니다!\n카톡에 붙여넣기 하세요.");
+    } catch(e){
+      alert("복사 실패. 수동으로 복사하세요:\n\n" + text);
+    }
+  }
+
+  function scShowKiosk(){
+    document.getElementById('sc-kiosk').classList.add('active');
+    document.getElementById('sc-admin').classList.remove('active');
+    document.getElementById('sc-mode-kiosk').style.display = 'none';
+    document.getElementById('sc-mode-admin').style.display = '';
+  }
+
+  function scShowAdmin(){
+    document.getElementById('sc-admin').classList.add('active');
+    document.getElementById('sc-kiosk').classList.remove('active');
+    document.getElementById('sc-mode-kiosk').style.display = '';
+    document.getElementById('sc-mode-admin').style.display = 'none';
+    scAdminTab('weekly');   // 관리자 진입 시 주간출결 우선 표시
+  }
+
+  // 관리 버튼 클릭 → 인증 차단 오버레이 표시
+  function scRequestAdmin(){
+    var errEl = document.getElementById('sc-auth-err');
+    if(errEl) errEl.textContent = '';
+    document.getElementById('sc-blocker').classList.add('show');
+  }
+
+  function scCloseBlocker(){
+    document.getElementById('sc-blocker').classList.remove('show');
+  }
+
+  /* ============================================================
+     [AUTH] 관리자 인증 — localStorage savedUserId → users → role
+     키오스크는 인증 불필요. 관리 모드 진입 시에만 검사.
+  ============================================================ */
+  async function scCheckAdminAuth(){
+    var errEl = document.getElementById('sc-auth-err');
+    if(errEl) errEl.textContent = '확인 중...';
+    try {
+      var savedId = localStorage.getItem('savedUserId');
+      if(!savedId){
+        if(errEl) errEl.textContent = 'BMAPS에 먼저 로그인해주세요.';
+        return;
+      }
+      var res = await db.from('users').select('id, name, role').eq('id', savedId).maybeSingle();
+      if(res.error || !res.data){
+        if(errEl) errEl.textContent = '사용자 정보를 찾을 수 없습니다.';
+        return;
+      }
+      if(res.data.role !== 'admin'){
+        if(errEl) errEl.textContent = '관리자 권한이 없는 계정입니다.';
+        return;
+      }
+      // 인증 성공
+      scCurrentUser = res.data;
+      scCloseBlocker();
+      scShowAdmin();
+    } catch(e){
+      if(errEl) errEl.textContent = '인증 오류: ' + (e.message || e);
+    }
+  }
+
+  /* ============================================================
+     [INIT]
+  ============================================================ */
+  window.addEventListener('DOMContentLoaded', function(){
+    // 기본은 키오스크 모드 (학생 무인용)
+    scShowKiosk();
+  });
+</script>
+  <div class="wk-xout-overlay" id="wk-xout-overlay" onclick="if(event.target===this)scWkXoutClose()">
+    <div class="wk-xout-card">
+      <h3>외출·복귀 추가</h3>
+      <div class="wk-xout-sub" id="wk-xout-name">학생</div>
+      <div class="wk-xout-cur">현재 추가외출 누적 <b id="wk-xout-cur">0</b> 분</div>
+      <div class="wk-xout-frow"><label>외출 시각</label><input type="text" id="wk-xout-go" placeholder="HH:MM" maxlength="5" oninput="scWkXoutCalc()"></div>
+      <div class="wk-xout-frow"><label>복귀 시각</label><input type="text" id="wk-xout-back" placeholder="HH:MM" maxlength="5" oninput="scWkXoutCalc()"></div>
+      <div class="wk-xout-preview" id="wk-xout-preview"></div>
+      <div class="wk-xout-btns">
+        <button type="button" class="wk-xout-cancel" onclick="scWkXoutClose()">닫기</button>
+        <button type="button" class="wk-xout-add" id="wk-xout-add" onclick="scWkXoutAdd()" disabled>추가</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
