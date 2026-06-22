@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.33-tp-group]</title>
+<title>BMAPS · 독서실 출결 [v0.34-tp-remind]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -403,6 +403,9 @@
   .tpU td.s-name{ text-align:center; white-space:nowrap; }
   .tpU td.u-expcell{ vertical-align:middle; background:#f8fafc; }
   .tpU td.u-expcell .s-time{ font-weight:700; }
+  .tpU td.u-outing{ background:#fff7ed; box-shadow:inset 0 0 0 2px #f97316; }
+  .s-outing{ color:#c2410c; font-weight:800; }
+  .tp-flag.u-overdue{ box-shadow:0 0 0 2px #fecaca; }
 </style>
 </head>
 <body>
@@ -410,7 +413,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.33-tp-group</span>
+    <span class="tb-ver" id="sc-ver">v0.34-tp-remind</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -638,7 +641,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.33-tp-group';
+  window.STUDYCENTER_VERSION = 'v0.34-tp-remind';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -662,6 +665,31 @@
     if(tab==="weekly"){ if(!_wkInited){ scWkGoThisWeek(); _wkInited=true; } }
     else if(tab==="timeplan"){ scTpInit(); }
     else { scListLoad(); }
+  }
+
+  /* ============================================================
+     [REMIND] 30분마다 시간 계획 확인 알람
+     · 정시(매시 00분·30분) 기준 스케줄
+     · 주간출결 또는 시간계획 탭이 실제 화면에 보일 때만 표시
+  ============================================================ */
+  function scRemindShow(){ var o=document.getElementById('sc-remind-overlay'); if(o) o.style.display='flex'; }
+  function scRemindClose(){ var o=document.getElementById('sc-remind-overlay'); if(o) o.style.display='none'; }
+  function scRemindPlanTabVisible(){
+    var w=document.getElementById('admin-tab-weekly');
+    var t=document.getElementById('admin-tab-timeplan');
+    return (!!w && w.offsetParent!==null) || (!!t && t.offsetParent!==null);
+  }
+  function scRemindTick(){ if(scRemindPlanTabVisible()) scRemindShow(); }
+  var _scRemindStarted=false;
+  function scRemindStart(){
+    if(_scRemindStarted) return; _scRemindStarted=true;
+    var now=new Date();
+    var sToNext=(((now.getMinutes()<30?30:60)-now.getMinutes())*60 - now.getSeconds());
+    if(sToNext<=0) sToNext=1;
+    setTimeout(function(){
+      scRemindTick();
+      setInterval(scRemindTick, 30*60*1000);
+    }, sToNext*1000);
   }
 
   /* ============================================================
@@ -721,7 +749,7 @@
   }
   function tpDiffFlag(expIn, actIn){
     var now=tpNowMin();
-    if(!actIn) return (tpToMin(expIn)<now)?'<span class="tp-flag red">미등원</span>':'<span class="tp-flag gray">대기</span>';
+    if(!actIn) return (tpToMin(expIn)<now)?'<span class="tp-flag red u-overdue">등원 전</span>':'<span class="tp-flag gray">등원 전</span>';
     var d=tpToMin(actIn)-tpToMin(expIn);
     if(Math.abs(d)<=5) return '<span class="tp-flag green">정시</span>';
     if(d>5) return '<span class="tp-flag orange">지각 '+d+'분</span>';
@@ -846,12 +874,12 @@
     if(!rows.length){ tbody.innerHTML='<tr><td colspan="8" class="s-empty">오늘 독서실 출결 기록이 없습니다.</td></tr>'; return; }
     var multi=function(arr){ return arr.length?arr.map(function(x){return '<span class="s-multi">'+x+'</span>';}).join(""):none; };
     function rowCells(r){
-      var outs=[], expRets=[], actRets=[];
+      var outs=[], expRets=[], actRets=[], hasOuting=false;
       [[r.out_1_start,r.out_1_reason,r.out_1_expected_end,r.out_1_end],
        [r.out_2_start,r.out_2_reason,r.out_2_expected_end,r.out_2_end]].forEach(function(o){
         if(o[0]){ outs.push(hm(o[0])+(o[1]?'<span class="s-rsn"> '+o[1]+'</span>':'')); expRets.push(o[2]?hm(o[2]):'—'); actRets.push(o[3]?hm(o[3]):'—'); }
       });
-      if(r.pending_out_start){ outs.push(hm(r.pending_out_start)+(r.pending_out_reason?'<span class="s-rsn"> '+r.pending_out_reason+'</span>':'')); expRets.push(r.pending_out_expected_end?hm(r.pending_out_expected_end):'—'); actRets.push('외출중'); }
+      if(r.pending_out_start){ outs.push(hm(r.pending_out_start)+(r.pending_out_reason?'<span class="s-rsn"> '+r.pending_out_reason+'</span>':'')); expRets.push(r.pending_out_expected_end?hm(r.pending_out_expected_end):'—'); actRets.push('<b class="s-outing">외출중</b>'); hasOuting=true; }
       var actInCell;
       if(r.check_in_time){ actInCell = '<span class="s-time">'+hm(r.check_in_time)+'</span>' + (r.expected_check_in ? (' '+tpDiffFlag(r.expected_check_in, r.check_in_time)) : ''); }
       else if(r.expected_check_in){ actInCell = tpDiffFlag(r.expected_check_in, null); }
@@ -864,7 +892,7 @@
         +'<td>'+actInCell+'</td>'
         +'<td>'+multi(outs)+'</td>'
         +'<td class="s-time">'+multi(expRets)+'</td>'
-        +'<td class="s-time">'+multi(actRets)+'</td>'
+        +'<td class="s-time'+(hasOuting?' u-outing':'')+'">'+multi(actRets)+'</td>'
         +'<td class="s-time">'+(r.expected_check_out?hm(r.expected_check_out):none)+'</td>'
         +'<td>'+actOutCell+'</td>';
     }
@@ -2467,6 +2495,7 @@
     document.getElementById('sc-mode-kiosk').style.display = '';
     document.getElementById('sc-mode-admin').style.display = 'none';
     scAdminTab('weekly');   // 관리자 진입 시 주간출결 우선 표시
+    scRemindStart();        // 30분 시간계획 확인 알람 시작
   }
 
   // 관리 버튼 클릭 → 인증 차단 오버레이 표시
@@ -2558,6 +2587,15 @@
         <button type="button" class="wk-xout-cancel" onclick="scWkExpClose()">닫기</button>
         <button type="button" class="wk-xout-add" id="wk-exp-save" onclick="scWkExpSave()">저장</button>
       </div>
+    </div>
+  </div>
+  <!-- [REMIND] 30분 시간계획 확인 알람 -->
+  <div id="sc-remind-overlay" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,.55); z-index:99999; align-items:center; justify-content:center;">
+    <div style="background:#fff; padding:30px 34px; border-radius:16px; text-align:center; box-shadow:0 14px 50px rgba(0,0,0,.35); max-width:380px; margin:16px;">
+      <div style="font-size:44px; line-height:1;">⏰</div>
+      <div style="font-size:19px; font-weight:800; margin:12px 0 8px; color:#0f172a;">시간 계획 확인</div>
+      <div style="color:#475569; font-size:14px; margin-bottom:20px; line-height:1.6;">30분이 지났습니다.<br>학생들의 등원·외출·하원 시간 계획을<br>확인해주세요.</div>
+      <button onclick="scRemindClose()" style="background:#0369a1; color:#fff; border:none; padding:11px 32px; border-radius:9px; font-weight:800; font-size:14px; cursor:pointer;">확인했습니다</button>
     </div>
   </div>
 </body>
