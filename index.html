@@ -4096,7 +4096,8 @@ function buildAdminSidebar() {
         { btnId:'amenu-exam-list',     tabId:'admin-exam-list',     label:'내신 분석표' }
       ])}
       ${accordionId('amenu-reading-room-group', 'amenu-reading-room-toggle', '🏫', '독서실', [
-        { btnId:'amenu-rr-weekly', tabId:'admin-rr-weekly', label:'주간 출결 입력' }
+        { btnId:'amenu-rr-attend', label:'출결관리',    onclick:"window.open('/studycenter.html','_blank')" },
+        { btnId:'amenu-rr-lobby',  label:'로비 현황판', onclick:"window.open('/lobby.html','_blank')" }
       ])}
     </div>
   `;
@@ -4142,7 +4143,7 @@ function accordion(groupId, icon, label, items) {
 }
 function accordionId(groupId, toggleId, icon, label, items) {
   const submenuItems = items.map(it =>
-    `<button class="menu-item" id="${it.btnId}" onclick="switchPanelAdmin('${it.tabId}',this)">
+    `<button class="menu-item" id="${it.btnId}" onclick="${it.onclick || ("switchPanelAdmin('"+it.tabId+"',this)")}">
       <span class="mi-label">${_esc(it.label)}</span>
     </button>`
   ).join('');
@@ -4292,7 +4293,7 @@ var DESK_PERM_TO_MENUS = {
   'weekend_msg':   [{btnId:'amenu-weekend-msg',       parent:'amenu-weekend-group'}],
   'students':      [{btnId:'amenu-accounts',          parent:null}],
   'classes':       [{btnId:'amenu-accounts',          parent:null}],
-  'reading_room':  [{btnId:'amenu-rr-weekly',         parent:'amenu-reading-room-group'}],
+  'reading_room':  [{btnId:'amenu-rr-attend', parent:'amenu-reading-room-group'},{btnId:'amenu-rr-lobby', parent:'amenu-reading-room-group'}],
   'exam_view':     [{btnId:'amenu-exam-list',         parent:'amenu-naesin-group'}],
   'lp_view':       [{btnId:'amenu-lp-view',           parent:null}],
 };
@@ -4355,7 +4356,7 @@ function applyDeskFilter() {
 
   // 2) 아코디언 그룹 내 모든 자식 일단 숨김
   var allChildren = ['amenu-weekend-naje','amenu-weekend-potential','amenu-weekend-bety','amenu-weekend-naesin','amenu-weekend-msg',
-                     'amenu-rr-weekly','amenu-exam-score','amenu-exam-list'];
+                     'amenu-rr-attend','amenu-rr-lobby','amenu-exam-score','amenu-exam-list'];
   allChildren.forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -4411,7 +4412,7 @@ function restoreAdminSidebar() {
     if (el) el.style.display = '';
   });
   ['amenu-weekend-naje','amenu-weekend-potential','amenu-weekend-bety','amenu-weekend-naesin','amenu-weekend-msg',
-   'amenu-rr-weekly','amenu-exam-score','amenu-exam-list'].forEach(function(id) {
+   'amenu-rr-attend','amenu-rr-lobby','amenu-exam-score','amenu-exam-list'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.style.display = '';
   });
@@ -5578,6 +5579,38 @@ function weekendDayValue(s, type, rec){
   if (yn === true && wd != null) return Number(wd);
   return def;
 }
+/* ── 주말 출석부 시간순 정렬 (기본요일 우선 → 다른요일 요일순→시간순) ── */
+function weekendTimeMin(t){
+  if(t==null||t==='') return 999999;
+  var m=String(t).match(/(\d{1,2})\s*[:시]?\s*(\d{0,2})/);
+  if(!m) return 999999;
+  return parseInt(m[1],10)*60 + (m[2]!==''?parseInt(m[2],10):0);
+}
+function weekendTimeValue(s, type, rec){
+  if(rec && rec.attend_time!=null && rec.attend_time!=='') return rec.attend_time;
+  var altYn, altTime, baseTime;
+  if(type==='naje'){ altYn=s.weekend_alt_yn; altTime=s.weekend_alt_time; baseTime=s.weekend_attend_time; }
+  else if(type==='potential'){ altYn=s.potential_alt_yn; altTime=s.potential_alt_time; baseTime=s.potential_attend_time; }
+  else { altYn=s.bety_alt_yn; altTime=s.bety_alt_time; baseTime=s.bety_attend_time; }
+  return (altYn===true && altTime) ? altTime : (baseTime||'');
+}
+function weekendSortStudents(students, type, carryMap, sortMode){
+  if(sortMode!=='time') return students;
+  var baseDay = (type==='bety') ? 0 : 6;
+  var cm = carryMap||{};
+  return students.slice().sort(function(a,b){
+    var ra=cm[a.id], rb=cm[b.id];
+    var da=weekendDayValue(a,type,ra), dbv=weekendDayValue(b,type,rb);
+    var ta=weekendTimeMin(weekendTimeValue(a,type,ra)), tb=weekendTimeMin(weekendTimeValue(b,type,rb));
+    var basa=(da===baseDay)?0:1, basb=(dbv===baseDay)?0:1;
+    if(basa!==basb) return basa-basb;
+    if(basa===0) return ta-tb;
+    if(da!==dbv) return da-dbv;
+    return ta-tb;
+  });
+}
+var _wnSortMode='name';
+function wnToggleSort(){ _wnSortMode=(_wnSortMode==='time')?'name':'time'; if(typeof wnRenderTable==='function') wnRenderTable(); }
 function weekendDayOptions(sel){
   var ORD=[1,2,3,4,5,6,0], NM=['\uC77C','\uC6D4','\uD654','\uC218','\uBAA9','\uAE08','\uD1A0'], h='';
   for (var i=0;i<ORD.length;i++){ var v=ORD[i]; h+='<option value="'+v+'"'+(v===sel?' selected':'')+'>'+NM[v]+'</option>'; }
@@ -5629,7 +5662,7 @@ function wnRenderTable() {
       <th style="text-align:left;padding-left:4px;min-width:44px">이름</th>
       <th style="min-width:36px">Lv</th>
       <th style="min-width:56px">요일</th>
-      <th style="min-width:36px">시간</th>
+      <th style="min-width:46px;cursor:pointer;user-select:none" onclick="wnToggleSort()" title="시간순 정렬 토글"><span style="text-decoration:underline dotted 2px #86efac">시간</span> ${_wnSortMode==='time'?'<span style="color:#fde047">⬇</span>':'⇅'}</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="wnBulkModal('attendance')" title="클릭: 일괄처리">
         <span style="text-decoration:underline dotted 2px #86efac">출석</span> ✦</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="wnBulkModal('homework')" title="클릭: 일괄처리">
@@ -5642,7 +5675,7 @@ function wnRenderTable() {
       <th style="min-width:44px">📬전송</th>
     </tr></thead><tbody>`;
 
-  _wnStudents.forEach((s, i) => {
+  weekendSortStudents(_wnStudents, 'naje', _wnCarry, _wnSortMode).forEach((s, i) => {
     var r       = _wnData[s.id] || {};
     var rc      = _wnCarry[s.id];   // 직전 회차(공란 포함) — 없으면 seed로 fallback
     var _wnWdCur = weekendDayValue(s,'naje',rc), _wnWdAlt = (_wnWdCur !== 6);
