@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.29-tp-expin]</title>
+<title>BMAPS · 독서실 출결 [v0.30-desk-exp]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -314,6 +314,8 @@
   .wk-tbl .wk-rpt-btn{ font-size:10px; padding:2px 7px; border:1px solid #5ec4bc; background:#effbfa; color:#1f8a82; border-radius:4px; cursor:pointer; font-weight:700; white-space:nowrap; }
   .wk-tbl .wk-rpt-btn:hover{ background:#1f8a82; color:#fff; }
   .wk-tbl .wk-rpt-btn:disabled{ opacity:0.5; cursor:default; }
+  .wk-tbl .wk-exp-btn{ font-size:10px; padding:2px 7px; border:1px solid #fdba74; background:#fff7ed; color:#c2410c; border-radius:4px; cursor:pointer; font-weight:700; white-space:nowrap; }
+  .wk-tbl .wk-exp-btn:hover{ background:#c2410c; color:#fff; }
   .wk-tbl .wk-rpt-btn.copied{ background:#16a34a; color:#fff; border-color:#16a34a; }
   /* ── 키오스크 시간선택 / 외출 모달 ── */
   .ts-name,.os-name{ font-size:26px; font-weight:800; color:#1e3a5f; margin-bottom:2px; }
@@ -393,7 +395,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.29-tp-expin</span>
+    <span class="tb-ver" id="sc-ver">v0.30-desk-exp</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -634,7 +636,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.29-tp-expin';
+  window.STUDYCENTER_VERSION = 'v0.30-desk-exp';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1091,7 +1093,7 @@
           + '<div class="wk-sub">'+scWkEsc(((st.school||'')+' '+(st.grade||'')).trim())
           + (st.reading_room_code ? ' · <span class="wk-code">'+scWkEsc(st.reading_room_code)+'</span>' : '')
           + '</div>'
-          + '<div class="wk-msg-wrap"><button class="wk-msg-btn" onclick="scMsgLastWeek(\''+sid+'\',this)">지난주</button><button class="wk-msg-btn" onclick="scMsgThisWeek(\''+sid+'\',this)">이번주</button><button class="wk-rpt-btn" onclick="scRptLastWeek(\''+sid+'\',this)">리포트</button></div>'
+          + '<div class="wk-msg-wrap"><button class="wk-msg-btn" onclick="scMsgLastWeek(\''+sid+'\',this)">지난주</button><button class="wk-msg-btn" onclick="scMsgThisWeek(\''+sid+'\',this)">이번주</button><button class="wk-rpt-btn" onclick="scRptLastWeek(\''+sid+'\',this)">리포트</button><button class="wk-exp-btn" onclick="scWkExpOpen(\''+sid+'\')">🕐 예상</button></div>'
           + '</td>'
         + '<td class="wk-req-cell">'
           + '<span class="wk-req-group">'
@@ -1481,6 +1483,86 @@
       console.error("저장 실패:", e);
       alert("저장 실패: " + (e.message||e));
       if(btn){ btn.textContent = "저장"; btn.disabled = false; }
+    }
+  }
+
+  /* ── [TP1] 데스크 예상시간 입력 모달 (예상하원=당일행 / 예상등원=다음날행) ── */
+  var _scExpSid=null, _scExpDate=null, _scExpNdExists=false;
+  async function scWkExpOpen(sid){
+    var date = _wkWeekDates[_wkSelectedDay];
+    if(!date) return;
+    var st=null;
+    for(var i=0;i<_wkStudents.length;i++){ if(_wkStudents[i].id===sid){ st=_wkStudents[i]; break; } }
+    var row = (_wkData[sid] && _wkData[sid][date]) ? _wkData[sid][date] : null;
+    _scExpSid=sid; _scExpDate=date; _scExpNdExists=false;
+    var nameEl=document.getElementById("wk-exp-name");
+    var outEl=document.getElementById("wk-exp-out");
+    var inEl=document.getElementById("wk-exp-in");
+    var msgEl=document.getElementById("wk-exp-msg");
+    if(nameEl) nameEl.textContent = (st?st.name:"") + " · " + scWkFmtDate(date);
+    if(outEl) outEl.value = (row && row.expected_check_out) ? scWkHm(row.expected_check_out) : "";
+    if(inEl) inEl.value = "";
+    if(msgEl){ msgEl.textContent=""; msgEl.classList.remove("err"); }
+    var saveBtn=document.getElementById("wk-exp-save");
+    if(saveBtn){ saveBtn.textContent="저장"; saveBtn.disabled=false; }
+    document.getElementById("wk-exp-overlay").classList.add("open");
+    // 다음날 예상등원 기존값 조회 (다음날 행이 주간 로드 범위 밖일 수 있어 직접 조회)
+    try {
+      var nd = scRrNextDay(date);
+      var res = await db.from("reading_room_attendance").select("id,expected_check_in").eq("student_id",sid).eq("attend_date",nd).maybeSingle();
+      if(res.data){
+        _scExpNdExists = !!res.data.id;
+        if(inEl && res.data.expected_check_in) inEl.value = scWkHm(res.data.expected_check_in);
+      }
+    } catch(e){ /* 조회 실패해도 입력은 가능 */ }
+  }
+  function scWkExpClose(){
+    var ov=document.getElementById("wk-exp-overlay");
+    if(ov) ov.classList.remove("open");
+    _scExpSid=null; _scExpDate=null; _scExpNdExists=false;
+  }
+  async function scWkExpSave(){
+    var sid=_scExpSid, date=_scExpDate;
+    if(!sid || !date) return;
+    var outV = scWkNorm(document.getElementById("wk-exp-out").value);
+    var inV  = scWkNorm(document.getElementById("wk-exp-in").value);
+    var msgEl=document.getElementById("wk-exp-msg");
+    if(outV === undefined || inV === undefined){
+      if(msgEl){ msgEl.textContent="시간 형식이 올바르지 않습니다 (HH:MM)"; msgEl.classList.add("err"); }
+      return;
+    }
+    var btn=document.getElementById("wk-exp-save");
+    if(btn){ btn.textContent="저장중..."; btn.disabled=true; }
+    try {
+      var curRow = (_wkData[sid]||{})[date] || null;
+      // 당일행: 예상하원 (입력값이 있거나, 당일행이 이미 있을 때만 — 불필요한 빈 행 생성 방지)
+      if(outV !== null || curRow){
+        var r1 = await db.from("reading_room_attendance").upsert(
+          { student_id: sid, attend_date: date, expected_check_out: outV },
+          { onConflict: "student_id,attend_date" }
+        ).select("*").maybeSingle();
+        if(r1.error) throw r1.error;
+        if(!_wkData[sid]) _wkData[sid]={};
+        if(r1.data) _wkData[sid][date]=r1.data;
+      }
+      // 다음날행: 예상등원 (입력값이 있거나, 다음날행이 이미 있을 때만)
+      var nd = scRrNextDay(date);
+      if(inV !== null || _scExpNdExists){
+        var r2 = await db.from("reading_room_attendance").upsert(
+          { student_id: sid, attend_date: nd, expected_check_in: inV },
+          { onConflict: "student_id,attend_date" }
+        ).select("*").maybeSingle();
+        if(r2.error) throw r2.error;
+        if(_wkData[sid] && r2.data) _wkData[sid][nd]=r2.data;
+      }
+      scWkRenderTable();
+      if(msgEl){ msgEl.textContent="✓ 저장되었습니다"; msgEl.classList.remove("err"); }
+      if(btn){ btn.textContent="✓ 저장됨"; }
+      setTimeout(function(){ scWkExpClose(); }, 900);
+    } catch(e){
+      console.error("예상시간 저장 실패:", e);
+      if(msgEl){ msgEl.textContent="저장 실패: " + (e.message||e); msgEl.classList.add("err"); }
+      if(btn){ btn.textContent="저장"; btn.disabled=false; }
     }
   }
 
@@ -2362,6 +2444,20 @@
       <div class="wk-xout-btns">
         <button type="button" class="wk-xout-cancel" onclick="scWkXoutClose()">닫기</button>
         <button type="button" class="wk-xout-add" id="wk-xout-add" onclick="scWkXoutAdd()" disabled>추가</button>
+      </div>
+    </div>
+  </div>
+  <div class="wk-xout-overlay" id="wk-exp-overlay" onclick="if(event.target===this)scWkExpClose()">
+    <div class="wk-xout-card">
+      <h3>예상 시간 입력</h3>
+      <div class="wk-xout-sub" id="wk-exp-name">학생</div>
+      <div class="wk-xout-frow"><label>예상하원</label><input type="text" id="wk-exp-out" placeholder="HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)"></div>
+      <div class="wk-xout-frow"><label>예상등원</label><input type="text" id="wk-exp-in" placeholder="HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)"></div>
+      <div class="wk-exp-note" style="font-size:11px;color:#94a3b8;margin:-4px 0 12px 74px;">※ 예상등원은 <b>다음날</b> 기준입니다</div>
+      <div class="wk-xout-preview" id="wk-exp-msg"></div>
+      <div class="wk-xout-btns">
+        <button type="button" class="wk-xout-cancel" onclick="scWkExpClose()">닫기</button>
+        <button type="button" class="wk-xout-add" id="wk-exp-save" onclick="scWkExpSave()">저장</button>
       </div>
     </div>
   </div>
