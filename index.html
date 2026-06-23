@@ -6662,6 +6662,16 @@ async function initPotential() {
   // 선생님: 선생님 선택 필터 숨김 (포텐셜은 분원 공동관리 → 분원 전체 자동 조회)
   var ptTfWrap = document.getElementById('pt-teacher-filter-wrap');
   if (ptTfWrap) ptTfWrap.style.display = ((currentUser?.role) === 'teacher') ? 'none' : '';
+  // 관리자 전용 일괄설정 카드: 비관리자에겐 숨김 + 잔재 제거
+  // (역할 전환(logout→login, 비-리로드) 시 admin 포텐셜 화면 잔재 방지)
+  if ((currentUser?.role) !== 'admin') {
+    var _ptSc = document.getElementById('pt-setup-card');
+    if (_ptSc) _ptSc.style.display = 'none';
+    var _ptSbw = document.getElementById('pt-setup-branch-wrap');
+    if (_ptSbw) _ptSbw.style.display = 'none';
+    var _ptStw = document.getElementById('pt-setup-table-wrap');
+    if (_ptStw) _ptStw.innerHTML = '';
+  }
 
   // 날짜 기본값: 가장 가까운 토요일
   var dateEl = document.getElementById('pt-date');
@@ -6955,6 +6965,8 @@ function ptSetupApplyPaste() {
 async function ptSetupSave() {
   var levelEls = document.querySelectorAll('.pt-setup-level');
   if (!levelEls.length) { alert('먼저 학생을 불러오세요'); return; }
+  var date = document.getElementById('pt-date')?.value || '';
+  if (!date) { alert('먼저 상단에서 적용할 날짜를 선택하세요'); return; }
   try {
     var updates = [];
     levelEls.forEach(el => {
@@ -6962,20 +6974,44 @@ async function ptSetupSave() {
       var timeEl = document.querySelector(`.pt-setup-time[data-sid="${sid}"]`);
       updates.push({ id: sid, potential_level: el.value.trim()||null, potential_attend_time: timeEl?.value.trim()||null });
     });
+    var ids = updates.map(u => u.id);
+
+    // ① users seed 갱신 (세션 기록이 없는 날짜용 기본값)
     var ok = 0, fail = 0;
     await Promise.all(updates.map(async u => {
       var { error } = await db.from('users').update({ potential_level: u.potential_level, potential_attend_time: u.potential_attend_time }).eq('id', u.id);
       if (error) fail++; else ok++;
     }));
-    // 메모리 캐시 갱신 (로드돼 있으면)
+
+    // ② 선택 날짜(date)의 weekend_potential 기록에 level/attend_time 반영
+    //    - 기존 행: 해당 두 컬럼만 UPDATE (출결·점수·정오답 등 보존)
+    //    - 없는 행: 최소 컬럼만 INSERT (다른 컬럼 null) → carry forward-fill 시작점
+    var { data: existRows } = await db.from('weekend_potential')
+      .select('student_id').eq('session_date', date).in('student_id', ids);
+    var existSet = new Set((existRows || []).map(r => r.student_id));
+    var toInsert = updates.filter(u => !existSet.has(u.id))
+      .map(u => ({ student_id: u.id, session_date: date, level: u.potential_level, attend_time: u.potential_attend_time }));
+    var toUpdate = updates.filter(u => existSet.has(u.id));
+    if (toInsert.length) {
+      var { error: ie } = await db.from('weekend_potential').insert(toInsert);
+      if (ie) throw ie;
+    }
+    await Promise.all(toUpdate.map(async u => {
+      await db.from('weekend_potential')
+        .update({ level: u.potential_level, attend_time: u.potential_attend_time })
+        .eq('student_id', u.id).eq('session_date', date);
+    }));
+
+    // 메모리 캐시 갱신 (seed)
     if (typeof _ptStudents !== 'undefined') {
       updates.forEach(u => {
         var ps = _ptStudents.find(s => s.id === u.id);
         if (ps) { ps.potential_level = u.potential_level; ps.potential_attend_time = u.potential_attend_time; }
       });
     }
-    alert(`✅ ${ok}명 저장 완료${fail ? ` (실패 ${fail}건)` : ''}`);
-    if (typeof ptRenderTable === 'function') ptRenderTable();
+    alert(`✅ ${ok}명 저장 완료 (${date}부터 적용)${fail ? ` / 기본값 실패 ${fail}건` : ''}`);
+    // 일일표 갱신: carry 재구성을 위해 전체 재로드
+    if (typeof ptLoadData === 'function') await ptLoadData();
   } catch(e) { console.error('[ptSetupSave]', e); alert('저장 오류: ' + e.message); }
 }
 
