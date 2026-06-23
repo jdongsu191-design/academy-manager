@@ -1489,6 +1489,31 @@
       </div>
 
       <div class="panel" id="panel-weekend-potential">
+        <!-- 레벨·시간 일괄 설정 카드 (관리자 전용) -->
+        <div id="pt-setup-card" style="display:none;margin-bottom:12px">
+          <div class="card" style="border:1.5px solid #c4b5fd;background:#f5f3ff">
+            <div style="font-size:13px;font-weight:700;color:#5b21b6;margin-bottom:10px">🛠️ 레벨 · 시간 일괄 설정</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+              <div id="pt-setup-branch-wrap" style="display:none;flex:1;min-width:120px">
+                <select id="pt-setup-branch" onchange="ptSetupLoadTeachers(this.value)"
+                  style="width:100%;padding:7px 10px;border:1.5px solid #c4b5fd;border-radius:7px;font-size:13px;outline:none">
+                  <option value="">전체 분원</option>
+                </select>
+              </div>
+              <div style="flex:1;min-width:120px">
+                <select id="pt-setup-teacher" onchange="ptSetupLoad()"
+                  style="width:100%;padding:7px 10px;border:1.5px solid #c4b5fd;border-radius:7px;font-size:13px;outline:none">
+                  <option value="">선생님 선택</option>
+                </select>
+              </div>
+              <button onclick="ptSetupLoad()"
+                style="padding:7px 16px;background:#5b21b6;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">
+                조회
+              </button>
+            </div>
+            <div id="pt-setup-table-wrap"></div>
+          </div>
+        </div>
         <!-- ── 상단 컨트롤 ── -->
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px">
           <!-- 날짜 -->
@@ -6835,6 +6860,125 @@ async function ptLoadData() {
   }
 }
 
+/* ── 포텐셜 레벨/시간 일괄 등록 (관리자) ── */
+async function ptSetupLoadTeachers(branchId) {
+  var sel = document.getElementById('pt-setup-teacher');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">선생님 선택</option>';
+  try {
+    var q = db.from('users').select('id,name').eq('role','teacher').eq('status','active').order('name');
+    if (branchId) q = q.eq('branch_id', branchId);
+    var { data } = await q;
+    (data||[]).forEach(t => { sel.innerHTML += `<option value="${t.id}">${_esc(t.name)} T</option>`; });
+  } catch(e) { console.error('[ptSetupLoadTeachers]', e); }
+}
+
+async function ptSetupLoad() {
+  var branchId  = document.getElementById('pt-setup-branch')?.value  || '';
+  var teacherId = document.getElementById('pt-setup-teacher')?.value || '';
+  var wrap = document.getElementById('pt-setup-table-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="text-align:center;padding:12px;color:#9ca3af">불러오는 중...</div>';
+  try {
+    var today = _localYMD(new Date());
+    var q = db.from('users').select('id,name,school,grade,teacher_id,potential_level,potential_attend_time')
+      .eq('role','student').eq('status','active').eq('potential_yn', true).lte('enrolled_at', today);
+    if (teacherId) {
+      q = q.eq('teacher_id', teacherId);
+    } else if (branchId) {
+      var { data: ts } = await db.from('users').select('id').eq('role','teacher').eq('branch_id', branchId);
+      var tids = (ts||[]).map(t => t.id);
+      if (!tids.length) { wrap.innerHTML = '<div style="text-align:center;padding:12px;color:#9ca3af">해당 분원에 학생 없음</div>'; return; }
+      q = q.in('teacher_id', tids);
+    }
+    var { data: studs } = await q.order('name');
+    if (!studs?.length) { wrap.innerHTML = '<div style="text-align:center;padding:12px;color:#9ca3af">포텐셜 참여 학생이 없습니다</div>'; return; }
+    var rows = studs.map((s, i) => `<tr style="background:${i%2===0?'#fff':'#f5f3ff'}">
+      <td style="padding:6px 10px;font-size:12px;color:#6b7280;white-space:nowrap">${s.school||''} ${s.grade||''}</td>
+      <td style="padding:6px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap">${_esc(s.name)}</td>
+      <td style="padding:5px 6px"><input type="text" class="pt-setup-level" data-sid="${s.id}" value="${s.potential_level||''}" placeholder="레벨" style="width:80px;padding:5px 6px;border:1.5px solid #c4b5fd;border-radius:6px;font-size:12px;text-align:center;outline:none"></td>
+      <td style="padding:5px 6px"><input type="text" class="pt-setup-time" data-sid="${s.id}" value="${s.potential_attend_time||''}" placeholder="14:00" style="width:70px;padding:5px 6px;border:1.5px solid #c4b5fd;border-radius:6px;font-size:12px;text-align:center;outline:none"></td>
+    </tr>`).join('');
+    wrap.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:#5b21b6">
+        <th style="padding:6px 10px;color:#fff;text-align:left;font-size:11px">학교/학년</th>
+        <th style="padding:6px 10px;color:#fff;text-align:left;font-size:11px">이름</th>
+        <th style="padding:6px 10px;color:#fff;text-align:center;font-size:11px">레벨</th>
+        <th style="padding:6px 10px;color:#fff;text-align:center;font-size:11px">시간</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+      <div style="margin-top:12px;border:1.5px solid #c4b5fd;border-radius:10px;padding:12px;background:#f5f3ff">
+        <div style="font-size:12px;font-weight:700;color:#5b21b6;margin-bottom:6px">📋 붙여넣기 일괄 입력</div>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:6px">형식: 학교+학년 이름 레벨 시간 (탭/공백 구분, 여러 줄 가능)<br>예) 하안중3 이선예 B1 13:00</div>
+        <textarea id="pt-setup-paste" rows="5" placeholder="여기에 붙여넣기 (Ctrl+V)..." style="width:100%;padding:8px;border:1.5px solid #c4b5fd;border-radius:8px;font-size:12px;box-sizing:border-box;resize:vertical;outline:none;font-family:monospace"></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+          <button onclick="ptSetupApplyPaste()" style="padding:7px 16px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">⚡ 적용</button>
+          <span id="pt-setup-paste-result" style="font-size:12px;color:#6b7280"></span>
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;justify-content:flex-end">
+        <button onclick="ptSetupSave()" style="padding:8px 20px;background:#5b21b6;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">💾 일괄 저장</button>
+      </div>`;
+  } catch(e) { console.error('[ptSetupLoad]', e); wrap.innerHTML = '<div style="text-align:center;padding:12px;color:#dc2626">조회 실패</div>'; }
+}
+
+function ptSetupApplyPaste() {
+  var ta     = document.getElementById('pt-setup-paste');
+  var result = document.getElementById('pt-setup-paste-result');
+  if (!ta || !result) return;
+  var text = ta.value.trim();
+  if (!text) { result.textContent = '내용이 없습니다'; return; }
+  var lines   = text.split('\n').map(l => l.trim()).filter(Boolean);
+  var matched = 0;
+  lines.forEach(line => {
+    var parts = line.split(/[\t ]+/);
+    var nameIdx = parts.findIndex(p => /^[가-힣]{2,4}$/.test(p));
+    if (nameIdx < 0) return;
+    var name  = parts[nameIdx];
+    var after = parts.slice(nameIdx + 1);
+    var tm = after.find(p => /^\d{1,2}:\d{2}$/.test(p)) || null;
+    var lv = after.find(p => p && !/^\d{1,2}:\d{2}$/.test(p)) || null;
+    var allRows = document.querySelectorAll('#pt-setup-table-wrap tbody tr');
+    allRows.forEach(row => {
+      var nameCell = row.cells[1]?.textContent?.trim();
+      if (nameCell === name) {
+        if (lv !== null) { var inp = row.querySelector('.pt-setup-level'); if (inp) inp.value = lv; }
+        if (tm !== null) { var t = row.querySelector('.pt-setup-time'); if (t) t.value = tm; }
+        matched++;
+      }
+    });
+  });
+  result.textContent = matched + '명 적용됨';
+  result.style.color = matched > 0 ? '#16a34a' : '#dc2626';
+  ta.value = '';
+}
+
+async function ptSetupSave() {
+  var levelEls = document.querySelectorAll('.pt-setup-level');
+  if (!levelEls.length) { alert('먼저 학생을 불러오세요'); return; }
+  try {
+    var updates = [];
+    levelEls.forEach(el => {
+      var sid    = el.dataset.sid;
+      var timeEl = document.querySelector(`.pt-setup-time[data-sid="${sid}"]`);
+      updates.push({ id: sid, potential_level: el.value.trim()||null, potential_attend_time: timeEl?.value.trim()||null });
+    });
+    var ok = 0, fail = 0;
+    await Promise.all(updates.map(async u => {
+      var { error } = await db.from('users').update({ potential_level: u.potential_level, potential_attend_time: u.potential_attend_time }).eq('id', u.id);
+      if (error) fail++; else ok++;
+    }));
+    // 메모리 캐시 갱신 (로드돼 있으면)
+    if (typeof _ptStudents !== 'undefined') {
+      updates.forEach(u => {
+        var ps = _ptStudents.find(s => s.id === u.id);
+        if (ps) { ps.potential_level = u.potential_level; ps.potential_attend_time = u.potential_attend_time; }
+      });
+    }
+    alert(`✅ ${ok}명 저장 완료${fail ? ` (실패 ${fail}건)` : ''}`);
+    if (typeof ptRenderTable === 'function') ptRenderTable();
+  } catch(e) { console.error('[ptSetupSave]', e); alert('저장 오류: ' + e.message); }
+}
+
 /* ── 테이블 렌더링 ───────────────────────────────────────── */
 function ptRenderTable() {
   var wrap = document.getElementById('pt-table-wrap');
@@ -8331,6 +8475,18 @@ async function initAdminWeekendPotential() {
     }
     if (scoreBtn)  scoreBtn.style.display  = '';
     if (reportBtn) reportBtn.style.display = '';
+    var ptSetupCard = document.getElementById('pt-setup-card');
+    if (ptSetupCard) ptSetupCard.style.display = '';
+    var ptSetupBranchWrap = document.getElementById('pt-setup-branch-wrap');
+    if (ptSetupBranchWrap) ptSetupBranchWrap.style.display = '';
+    var ptSetupBranch = document.getElementById('pt-setup-branch');
+    if (ptSetupBranch && ptSetupBranch.options.length <= 1) {
+      try {
+        var { data: ptBrs } = await db.from('branches').select('id,name').eq('active',true).order('name');
+        (ptBrs||[]).forEach(b => { ptSetupBranch.innerHTML += `<option value="${b.id}">${_esc(b.name)}</option>`; });
+      } catch(e) { console.error('[initAdminWeekendPotential] setup 분원', e); }
+    }
+    await ptSetupLoadTeachers('');
     } else if (currentUser?.role === 'desk') {
     // 데스크: 리포트 버튼만 표시
     if (reportBtn) reportBtn.style.display = '';
