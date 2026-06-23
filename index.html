@@ -6606,7 +6606,7 @@ async function initAdminWeekendNaje() {
    ─ Realtime 완전 미사용
 ============================================================ */
 
-var _ptFields = ['attendance','wrong_done','score','result','note','attend_time','level','weekday'];
+var _ptFields = ['attendance','homework','wrong_done','score','result','note','attend_time','level','weekday'];
 
 /* ── 초기화 ─────────────────────────────────────────────── */
 async function initPotential() {
@@ -6832,6 +6832,7 @@ function ptRenderTable() {
   var ATT_OPTS  = [{v:'',l:''},{v:'present',l:'출석'},{v:'late',l:'지각'},{v:'absent',l:'결석'}];
   var RES_OPTS  = [{v:'',l:''},{v:'A',l:'A'},{v:'C',l:'C'},{v:'F',l:'F'}];
   var WRG_OPTS  = [{v:'',l:''},{v:'true',l:'완료'},{v:'false',l:'미완료'}];
+  var HW_OPTS   = [{v:'',l:''},{v:'완료',l:'완료'},{v:'일부완료',l:'일부완료'},{v:'미완료',l:'미완료'}];
 
   var html = `<style>
     .pt-tbl{width:100%;border-collapse:collapse;font-size:12px}
@@ -6853,6 +6854,7 @@ function ptRenderTable() {
       <th style="min-width:56px">요일</th>
       <th style="min-width:60px;cursor:pointer;user-select:none" onclick="ptToggleSort()" title="시간순 정렬 토글"><span style="text-decoration:underline dotted 2px #c4b5fd">시간</span> ${_ptSortMode==='time'?'<span style="color:#fde047">⬇</span>':'⇅'}</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="ptBulkModal('attendance')" title="클릭: 일괄처리"><span style="text-decoration:underline dotted 2px #c4b5fd">출결</span> ✦</th>
+      <th style="min-width:52px;cursor:pointer;user-select:none" onclick="ptBulkModal('homework')" title="클릭: 일괄처리"><span style="text-decoration:underline dotted 2px #c4b5fd">숙제</span> ✦</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="ptBulkModal('wrong_done')" title="클릭: 일괄처리"><span style="text-decoration:underline dotted 2px #c4b5fd">오답</span> ✦</th>
       <th style="min-width:44px">정오답</th>
       <th style="min-width:44px">점수</th>
@@ -6870,6 +6872,7 @@ function ptRenderTable() {
     var curAtt  = (r.id && r.attendance) ? r.attendance : '';
     var curRes  = r.result || '';
     var curWrg  = r.id ? (r.wrong_done===true?'true':r.wrong_done===false?'false':'') : '';
+    var curHw   = r.id ? (r.homework||'') : '';
     // level/attend_time: 당일 DB값 있으면 우선, 없으면 이력 적용된 users값
     var curLv   = rc ? (rc.level == null ? '' : rc.level) : (s.potential_level || '');
     var curTime = rc ? (rc.attend_time == null ? '' : rc.attend_time) : ((s.potential_alt_yn && s.potential_alt_time) || s.potential_attend_time || '');
@@ -6878,6 +6881,7 @@ function ptRenderTable() {
     var attSel  = ATT_OPTS.map(o => `<option value="${o.v}"${curAtt===o.v?' selected':''}>${o.l}</option>`).join('');
     var resSel  = RES_OPTS.map(o => `<option value="${o.v}"${curRes===o.v?' selected':''}>${o.l}</option>`).join('');
     var wrgSel  = WRG_OPTS.map(o => `<option value="${o.v}"${curWrg===o.v?' selected':''}>${o.l}</option>`).join('');
+    var hwSel  = HW_OPTS.map(o => `<option value="${o.v}"${curHw===o.v?' selected':''}>${o.l}</option>`).join('');
 
     html += `<tr id="pt-row-${s.id}"${isSent?' style="background:#dcfce7"':''}>
       <td style="text-align:left;padding-left:8px;color:#6b7280;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.school||''}</td>
@@ -6887,6 +6891,7 @@ function ptRenderTable() {
       <td${_ptWdAlt?' class="wd-alt"':''}><select class="pt-sel${_ptWdAlt?' wd-alt':''}" data-sid="${s.id}" data-field="weekday">${weekendDayOptions(_ptWdCur)}</select></td>
       <td><input class="pt-inp pt-focusable" data-sid="${s.id}" data-field="attend_time" value="${curTime}" placeholder="14:00"></td>
       <td><select class="pt-sel pt-focusable" data-sid="${s.id}" data-field="attendance">${attSel}</select></td>
+      <td><select class="pt-sel pt-focusable" data-sid="${s.id}" data-field="homework">${hwSel}</select></td>
       <td><select class="pt-sel pt-focusable" data-sid="${s.id}" data-field="wrong_done">${wrgSel}</select></td>
       <td><button onclick="ptOpenAnswerModal('${s.id}')"
         style="padding:5px 6px;border:1px solid #c4b5fd;border-radius:5px;background:#f5f3ff;color:#5b21b6;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;width:100%">정오답</button></td>
@@ -6909,7 +6914,7 @@ function ptRenderTable() {
 /* ── 키보드 네비게이션 ────────────────────────────────────── */
 function ptInitKeyNav() {
   var focusables = Array.from(document.querySelectorAll('.pt-focusable'));
-  var cols = 7; // level, attend_time, attendance, wrong_done, score, result, note
+  var cols = 8; // level, attend_time, attendance, homework, wrong_done, score, result, note
   focusables.forEach((el, idx) => {
     var colIdx   = idx % cols;
     var isSelect = el.tagName === 'SELECT';
@@ -6932,9 +6937,12 @@ function ptInitKeyNav() {
 function ptBulkModal(field) {
   document.getElementById('pt-bulk-modal')?.remove();
   var isAtt   = field === 'attendance';
+  var isHw    = field === 'homework';
   var COLOR   = '#5b21b6';
   var options = isAtt
     ? [{v:'present',l:'출석',c:'#16a34a',bg:'#f0fdf4'},{v:'late',l:'지각',c:'#d97706',bg:'#fffbeb'},{v:'absent',l:'결석',c:'#dc2626',bg:'#fef2f2'},{v:'',l:'초기화',c:'#6b7280',bg:'#f5f6fa'}]
+    : isHw
+    ? [{v:'완료',l:'완료',c:'#16a34a',bg:'#f0fdf4'},{v:'일부완료',l:'일부완료',c:'#d97706',bg:'#fffbeb'},{v:'미완료',l:'미완료',c:'#dc2626',bg:'#fef2f2'},{v:'',l:'초기화',c:'#6b7280',bg:'#f5f6fa'}]
     : [{v:'true',l:'완료',c:'#16a34a',bg:'#f0fdf4'},{v:'false',l:'미완료',c:'#dc2626',bg:'#fef2f2'},{v:'',l:'초기화',c:'#6b7280',bg:'#f5f6fa'}];
   var optHtml = options.map(o =>
     `<button onclick="ptBulkApply('${field}','${o.v}')"
@@ -6945,7 +6953,7 @@ function ptBulkModal(field) {
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
   modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:28px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-      <div style="font-size:17px;font-weight:800;color:${COLOR}">${isAtt?'📋 출결':'✏️ 오답'} 일괄 처리</div>
+      <div style="font-size:17px;font-weight:800;color:${COLOR}">${isAtt?'📋 출결':isHw?'📝 숙제':'✏️ 오답'} 일괄 처리</div>
       <button onclick="document.getElementById('pt-bulk-modal').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#9ca3af">&times;</button>
     </div>
     <div style="font-size:12px;color:#6b7280;margin-bottom:20px">현재 표시된 <strong style="color:${COLOR}">${_ptStudents.length}명</strong> 전원에게 적용됩니다</div>
@@ -6964,8 +6972,11 @@ function ptBulkApply(field, value) {
     el.dispatchEvent(new Event('change', { bubbles: true }));
   });
   var isAtt = field === 'attendance';
+  var isHw  = field === 'homework';
   var label = isAtt
     ? (value==='present'?'출석':value==='late'?'지각':value==='absent'?'결석':'초기화')
+    : isHw
+    ? (value || '초기화')
     : (value==='true'?'완료':value==='false'?'미완료':'초기화');
   document.getElementById('pt-bulk-modal')?.remove();
   var toast = document.createElement('div');
@@ -6999,6 +7010,7 @@ async function ptSaveAll() {
         attend_time: fv('attend_time') || null,
         weekday:     fv('weekday')     || null,
         attendance:  fv('attendance')  || null,
+        homework:    fv('homework')    || null,
         wrong_done:  wrongVal === 'true' ? true : wrongVal === 'false' ? false : null,
         // score: 소수점 1자리 반올림 후 parseFloat (NaN → null)
         score:       scoreVal !== '' ? (parseFloat(parseFloat(scoreVal).toFixed(1)) || null) : null,
