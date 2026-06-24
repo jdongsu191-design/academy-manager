@@ -905,6 +905,10 @@
               style="display:none;width:100%;padding:9px;border:none;border-radius:8px;background:#16a34a;color:#fff;font-size:13px;font-weight:700;cursor:pointer">
               📋 선택 업무일지 이미지 생성
             </button>
+            <button id="wl-save-selected-btn" onclick="wlGenerateSelectedImage('save')"
+              style="display:none;width:100%;padding:9px;border:none;border-radius:8px;background:#0ea5e9;color:#fff;font-size:13px;font-weight:700;cursor:pointer;margin-top:6px">
+              💾 선택 업무일지 저장
+            </button>
             <button id="wl-print-selected-btn" onclick="wlPrintSelected()"
               style="display:none;width:100%;padding:9px;border:none;border-radius:8px;background:#1d4ed8;color:#fff;font-size:13px;font-weight:700;cursor:pointer;margin-top:6px">
               🖨️ 선택 업무일지 출력
@@ -23334,6 +23338,11 @@ function wlUpdateGenBtn() {
     pbtn.style.display = checked > 0 ? 'block' : 'none';
     pbtn.textContent   = checked > 0 ? `🖨️ 선택된 ${checked}개 업무일지 출력` : '🖨️ 선택 업무일지 출력';
   }
+  const sbtn = document.getElementById('wl-save-selected-btn');
+  if (sbtn) {
+    sbtn.style.display = checked > 0 ? 'block' : 'none';
+    sbtn.textContent   = checked > 0 ? `💾 선택된 ${checked}개 업무일지 저장` : '💾 선택 업무일지 저장';
+  }
 }
 
 function buildWorkLogCardHTML(log, cls, stus, dateLabel, teacherName) {
@@ -23441,11 +23450,20 @@ function buildWorkLogCardHTML(log, cls, stus, dateLabel, teacherName) {
   </div>`;
 }
 
-async function wlGenerateSelectedImage() {
+async function wlGenerateSelectedImage(mode) {
+  const _isSave = (mode === 'save');
   const checked = Array.from(document.querySelectorAll('.wl-log-check:checked'));
   if (!checked.length) { alert('업무일지를 선택하세요'); return; }
   const selectedIds = checked.map(c => c.dataset.logId);
-  const btn = document.getElementById('wl-gen-selected-btn');
+  const _date0 = document.getElementById('wl-date')?.value || '';
+  const _fname = `${_date0}_${currentUser.name}_업무일지.png`;
+  let _saveHandle = null;
+  if (_isSave && window.showSaveFilePicker) {
+    try {
+      _saveHandle = await window.showSaveFilePicker({ suggestedName: _fname, types: [{ description: 'PNG 이미지', accept: { 'image/png': ['.png'] } }] });
+    } catch(err) { if (err && err.name === 'AbortError') return; _saveHandle = null; }
+  }
+  const btn = document.getElementById(_isSave ? 'wl-save-selected-btn' : 'wl-gen-selected-btn');
   if (btn) { btn.textContent = '⏳ 생성 중...'; btn.disabled = true; }
 
   try {
@@ -23496,15 +23514,23 @@ async function wlGenerateSelectedImage() {
 
     await new Promise(resolve => {
       merged.toBlob(async blob => {
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-          alert(`✅ ${logs.length}개 업무일지 이미지가 복사됐습니다!`);
-        } catch(e) {
-          const a = document.createElement('a');
-          a.href     = merged.toDataURL('image/png');
-          a.download = `업무일지_${date.replace(/-/g,'')}.png`;
-          a.click();
-          alert('📋 클립보드 미지원 환경입니다. 이미지를 저장했습니다.');
+        if (_isSave) {
+          try {
+            if (_saveHandle) { const w = await _saveHandle.createWritable(); await w.write(blob); await w.close(); }
+            else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = _fname; a.click(); URL.revokeObjectURL(a.href); }
+            alert(`📥 ${logs.length}개 업무일지를 저장했습니다.`);
+          } catch(e2) { alert('저장 실패: ' + (e2.message || e2)); }
+        } else {
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+            alert(`✅ ${logs.length}개 업무일지 이미지가 복사됐습니다!`);
+          } catch(e) {
+            const a = document.createElement('a');
+            a.href     = merged.toDataURL('image/png');
+            a.download = `업무일지_${date.replace(/-/g,'')}.png`;
+            a.click();
+            alert('📋 클립보드 미지원 환경입니다. 이미지를 저장했습니다.');
+          }
         }
         resolve();
       }, 'image/png');
@@ -23512,7 +23538,7 @@ async function wlGenerateSelectedImage() {
   } catch(e) {
     alert('오류: ' + (e.message || e));
   } finally {
-    if (btn) { btn.textContent = '📋 선택 업무일지 이미지 생성'; btn.disabled = false; }
+    if (btn) { btn.disabled = false; }
     wlUpdateGenBtn();
   }
 }
@@ -24400,7 +24426,7 @@ async function copyWorkLogImage(mode) {
     const target = renderEl.firstElementChild;
     const canvas = await html2canvas(target, { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false });
 
-    const _fname = `업무일지_${clsName}_${date}.png`;
+    const _fname = `${date}_${currentUser.name}_업무일지.png`;
     const _dl = () => { const a = document.createElement('a'); a.href = canvas.toDataURL('image/png'); a.download = _fname; a.click(); };
     await new Promise((resolve) => {
       canvas.toBlob(async blob => {
