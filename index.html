@@ -12478,26 +12478,36 @@ async function initAdminMonthlyReport() {
   mrInitYearSelect('mr-year');
   mrInitMonthSelect('mr-month');
 
+  // [VICE] 부원장: 담당 분원만 노출 (단일 분원이면 잠금)
+  var _viceBr = (typeof getViceAllowedBranchIds === 'function') ? getViceAllowedBranchIds() : [];
+
   // 분원 드롭다운 — 매번 재구성 (운영파일 방식)
   var branchSel = document.getElementById('mr-branch');
   if (branchSel) {
+    branchSel.disabled = false;
     branchSel.innerHTML = '<option value="">전체 분원</option>';
-    (_allBranches || []).filter(function(b){ return b.active !== false; }).forEach(function(b) {
-      branchSel.innerHTML += '<option value="' + b.id + '">' + b.name + '</option>';
-    });
+    (_allBranches || []).filter(function(b){ return b.active !== false; })
+      .filter(function(b){ return !_viceBr.length || _viceBr.indexOf(b.id) !== -1; })
+      .forEach(function(b) {
+        branchSel.innerHTML += '<option value="' + b.id + '">' + b.name + '</option>';
+      });
+    if (_viceBr.length === 1) { branchSel.value = _viceBr[0]; branchSel.disabled = true; }
   }
   mrFilterTeachers();
 }
 
 function mrFilterTeachers() {
   var branchId = (document.getElementById('mr-branch') || {}).value || '';
+  var _viceBr = (typeof getViceAllowedBranchIds === 'function') ? getViceAllowedBranchIds() : [];
   var tSel = document.getElementById('mr-teacher');
   if (!tSel) return;
   tSel.innerHTML = '<option value="">전체 선생님</option>';
   (allUsers || [])
     .filter(function(u){
-      return u.role === 'teacher' && u.status === 'active' && !u.deleted_at
-        && (!branchId || u.branch_id === branchId);
+      if (!(u.role === 'teacher' && u.status === 'active' && !u.deleted_at)) return false;
+      if (branchId) return u.branch_id === branchId;
+      if (_viceBr.length) return _viceBr.indexOf(u.branch_id) !== -1;
+      return true;
     })
     .sort(function(a, b){ return a.name.localeCompare(b.name, 'ko'); })
     .forEach(function(t) {
@@ -12518,28 +12528,45 @@ async function generateMonthlyReport() {
   if (btn) { btn.textContent = '⏳ 조회 중...'; btn.disabled = true; }
 
   try {
+    var _viceBr = (typeof getViceAllowedBranchIds === 'function') ? getViceAllowedBranchIds() : [];
+    var _isVice = _viceBr.length > 0;
+
     var tQuery = db.from('users')
       .select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
     if (branchId)  tQuery = tQuery.eq('branch_id', branchId);
     if (teacherId) tQuery = tQuery.eq('id', teacherId);
+    if (_isVice && !branchId) tQuery = tQuery.in('branch_id', _viceBr);   // [VICE] E: 담당 분원 선생님만
     var { data: teachers } = await tQuery;
     if (!teachers || !teachers.length) { alert('선생님이 없습니다'); return; }
 
-    var [classRes, studentRes, newStudentRes, transferRes, histRes] = await Promise.all([
-      db.from('classes').select('id,name,teacher_id').eq('active', true),
-      db.from('users')
+    var _allowTids = teachers.map(function(t){ return t.id; });   // [VICE] 격리 기준 선생님 id
+
+    var _qClasses = db.from('classes').select('id,name,teacher_id').eq('active', true);
+    var _qStudents = db.from('users')
         .select('id,name,school,grade,teacher_id,class_id,status,enrolled_at,withdrawn_at,last_class_date,naje_steps,withdraw_reason')
         .eq('role','student')
-        .or('status.eq.active,and(status.eq.inactive,last_class_date.gte.'+monthStart+'),and(status.eq.inactive,and(last_class_date.is.null,withdrawn_at.gte.'+monthStart+'))'),
-      db.from('users')
+        .or('status.eq.active,and(status.eq.inactive,last_class_date.gte.'+monthStart+'),and(status.eq.inactive,and(last_class_date.is.null,withdrawn_at.gte.'+monthStart+'))');
+    var _qNew = db.from('users')
         .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_steps')
-        .eq('role','student').neq('status','cancelled').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd),
-      db.from('transfer_requests')
+        .eq('role','student').neq('status','cancelled').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
+    var _qTransfer = db.from('transfer_requests')
         .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
         .eq('status','done')
-        .gte('transfer_date', monthStart),   // 상한 제거: 조회월 이후 전반까지 로드(과거 시점 소속 복원용)
-      db.from('student_class_history')
-        .select('student_id, from_teacher_id, from_class_name, changed_date')
+        .gte('transfer_date', monthStart);
+    var _qHist = db.from('student_class_history')
+        .select('student_id, from_teacher_id, from_class_name, changed_date');
+
+    if (_isVice) {   // [VICE] F: 데이터 적재도 담당 선생님 기준으로 완전 격리
+      var _idCsv = _allowTids.join(',');
+      _qClasses  = _qClasses.in('teacher_id', _allowTids);
+      _qStudents = _qStudents.in('teacher_id', _allowTids);
+      _qNew      = _qNew.in('teacher_id', _allowTids);
+      _qTransfer = _qTransfer.or('from_teacher_id.in.('+_idCsv+'),to_teacher_id.in.('+_idCsv+')');
+      _qHist     = _qHist.or('from_teacher_id.in.('+_idCsv+'),to_teacher_id.in.('+_idCsv+')');
+    }
+
+    var [classRes, studentRes, newStudentRes, transferRes, histRes] = await Promise.all([
+      _qClasses, _qStudents, _qNew, _qTransfer, _qHist
     ]);
 
     _mrData = {
