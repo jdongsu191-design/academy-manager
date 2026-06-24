@@ -885,6 +885,8 @@
               style="flex:1;min-width:80px;background:#eef2ff;border-color:#a5b4fc;color:#4338ca;font-weight:700">🖨️ 출력하기</button>
             <button class="btn" id="wl-copy-btn" onclick="copyWorkLogImage()"
               style="display:none;flex:1;min-width:120px;background:#25D366;color:#fff;border-color:#25D366;font-weight:700">📊 이미지 복사</button>
+            <button class="btn" id="wl-save-img-btn" onclick="copyWorkLogImage('save')"
+              style="display:none;flex:1;min-width:120px;background:#0ea5e9;color:#fff;border-color:#0ea5e9;font-weight:700">💾 이미지 파일 저장</button>
           </div>
         </div>
 
@@ -22647,6 +22649,7 @@ function initWorkLog() {
   if (mainEl)  mainEl.style.display  = hasClass ? 'block' : 'none';
   if (emptyEl) emptyEl.style.display = hasClass ? 'none'  : 'block';
   if (copyBtn) copyBtn.style.display = hasClass ? '' : 'none';
+  { let _sb=document.getElementById('wl-save-img-btn'); if(_sb) _sb.style.display = hasClass ? '' : 'none'; }
 
   wlLoadDayLogs();
   if (hasClass) loadWorkLog();
@@ -22669,11 +22672,13 @@ function wlOnClassChange() {
     if (mainEl)  mainEl.style.display  = 'none';
     if (emptyEl) emptyEl.style.display = 'block';
     if (copyBtn) copyBtn.style.display = 'none';
+    { let _sb=document.getElementById('wl-save-img-btn'); if(_sb) _sb.style.display = 'none'; }
     return;
   }
   if (mainEl)  mainEl.style.display  = 'block';
   if (emptyEl) emptyEl.style.display = 'none';
   if (copyBtn) copyBtn.style.display = '';
+  { let _sb=document.getElementById('wl-save-img-btn'); if(_sb) _sb.style.display = ''; }
   loadWorkLog();
   wlLoadDayLogs();
 }
@@ -22918,6 +22923,7 @@ async function wlOpenLogFromList(logId, classId) {
     sel.value = classId;
     const copyBtn = document.getElementById('wl-copy-btn');
     if (copyBtn) copyBtn.style.display = '';
+    { let _sb=document.getElementById('wl-save-img-btn'); if(_sb) _sb.style.display = ''; }
   }
   await loadWorkLog();
   await wlLoadDayLogs();
@@ -24095,6 +24101,7 @@ async function wlApplyLoadedData() {
     classSelect.value = log.class_id;
     const copyBtn = document.getElementById('wl-copy-btn');
     if (copyBtn) copyBtn.style.display = '';
+    { let _sb=document.getElementById('wl-save-img-btn'); if(_sb) _sb.style.display = ''; }
   }
 
   // 날짜 미설정이면 오늘 날짜
@@ -24265,12 +24272,14 @@ function addDirectTempStudent() {
   closeModal('addTempStudent');
 }
 
-async function copyWorkLogImage() {
+async function copyWorkLogImage(mode) {
   if (!wlCurrentLogId) {
     alert('먼저 저장해주세요.');
     return;
   }
-  const btn = document.getElementById('wl-copy-btn');
+  const _isSave = (mode === 'save');
+  const _btnLabel = _isSave ? '💾 이미지 파일 저장' : '📊 이미지 복사';
+  const btn = document.getElementById(_isSave ? 'wl-save-img-btn' : 'wl-copy-btn');
   if (btn) { btn.textContent = '⏳ 생성 중...'; btn.disabled = true; }
 
   try {
@@ -24391,18 +24400,26 @@ async function copyWorkLogImage() {
     const target = renderEl.firstElementChild;
     const canvas = await html2canvas(target, { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false });
 
-    // toBlob → Promise 래핑
+    const _fname = `업무일지_${clsName}_${date}.png`;
+    const _dl = () => { const a = document.createElement('a'); a.href = canvas.toDataURL('image/png'); a.download = _fname; a.click(); };
     await new Promise((resolve) => {
       canvas.toBlob(async blob => {
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-          alert('✅ 업무일지 이미지가 복사됐습니다!');
-        } catch(e) {
-          const a = document.createElement('a');
-          a.href     = canvas.toDataURL('image/png');
-          a.download = `업무일지_${clsName}_${date}.png`;
-          a.click();
-          alert('📋 클립보드 복사 미지원 환경입니다. 이미지를 저장했습니다.');
+        if (_isSave) {
+          try {
+            if (window.showSaveFilePicker) {
+              const handle = await window.showSaveFilePicker({ suggestedName: _fname, types: [{ description: 'PNG 이미지', accept: { 'image/png': ['.png'] } }] });
+              const w = await handle.createWritable();
+              await w.write(blob); await w.close();
+              alert('📥 이미지를 저장했습니다.');
+            } else { _dl(); alert('📥 이미지를 저장했습니다.'); }
+          } catch(err) {
+            if (!(err && err.name === 'AbortError')) { try { _dl(); alert('📥 이미지를 저장했습니다.'); } catch(e2) { alert('저장 실패: ' + (e2.message || e2)); } }
+          }
+        } else {
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+            alert('✅ 업무일지 이미지가 복사됐습니다!');
+          } catch(e) { _dl(); alert('📋 클립보드 복사 미지원 환경입니다. 이미지를 저장했습니다.'); }
         }
         resolve();
       }, 'image/png');
@@ -24410,7 +24427,7 @@ async function copyWorkLogImage() {
   } catch(e) {
     alert('이미지 생성 오류: ' + (e.message || e));
   } finally {
-    if (btn) { btn.textContent = '📊 이미지 복사'; btn.disabled = false; }
+    if (btn) { btn.textContent = _btnLabel; btn.disabled = false; }
   }
 }
 
