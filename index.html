@@ -6752,6 +6752,22 @@ async function initPotential() {
   // 선생님: 선생님 선택 필터 숨김 (포텐셜은 분원 공동관리 → 분원 전체 자동 조회)
   var ptTfWrap = document.getElementById('pt-teacher-filter-wrap');
   if (ptTfWrap) ptTfWrap.style.display = ((currentUser?.role) === 'teacher') ? 'none' : '';
+  // 부원장: 분원 드롭다운(내 담당 기본 / 전체 / 배정분원) 표시
+  if ((currentUser?.role) === 'vice_director') {
+    var _vbw = document.getElementById('pt-branch-wrap');
+    if (_vbw) _vbw.style.display = '';
+    var _vbs = document.getElementById('pt-branch-select');
+    if (_vbs) {
+      var _vbrs = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+      var _vopt = '<option value="__mine__">내 담당</option><option value="">전체</option>';
+      _vbrs.forEach(function(bid){
+        var _bb = (_allBranches||[]).find(function(x){ return x.id === bid; });
+        if (_bb) _vopt += '<option value="' + _bb.id + '">' + (typeof _esc==='function'?_esc(_bb.name):_bb.name) + '</option>';
+      });
+      _vbs.innerHTML = _vopt;
+      _vbs.value = '__mine__';
+    }
+  }
   // 관리자 전용 일괄설정 카드: 비관리자에겐 숨김 + 잔재 제거
   // (역할 전환(logout→login, 비-리로드) 시 admin 포텐셜 화면 잔재 방지)
   if ((currentUser?.role) !== 'admin') {
@@ -6772,8 +6788,12 @@ async function initPotential() {
     dateEl.value = _localYMD(sat);
   }
   try {
-    await ptLoadFilters();
-    await ptLoadData();
+    if ((currentUser?.role) === 'vice_director') {
+      await ptLoadFilters(document.getElementById('pt-branch-select')?.value || '__mine__');
+    } else {
+      await ptLoadFilters();
+      await ptLoadData();
+    }
   } catch(e) { console.error('[initPotential]', e); }
 }
 
@@ -6790,10 +6810,24 @@ async function ptLoadFilters(branchId) {
     if      (role === 'teacher') { if (currentUser.branch_id) q = q.eq('branch_id', currentUser.branch_id); }
     else if (role === 'desk')    { var bids = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : []; if (branchId && bids.indexOf(branchId) !== -1) q = q.eq('branch_id', branchId); else if (bids.length) q = q.in('branch_id', bids); }
     else if (role === 'admin' && branchId) { q = q.eq('branch_id', branchId); }
+    else if (role === 'vice_director') {
+      var _vbr = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+      if (branchId === '__mine__') { q = q.eq('id', currentUser.id); }
+      else if (branchId && _vbr.indexOf(branchId) !== -1) { q = q.eq('branch_id', branchId); }
+      else if (_vbr.length) { q = q.in('branch_id', _vbr); }
+      else { q = q.eq('id', currentUser.id); }
+    }
     var { data: teachers } = await q;
     _ptAllTeachers = teachers || [];
     if (role === 'teacher' && !_ptAllTeachers.find(t => t.id === currentUser.id)) {
       _ptAllTeachers.unshift({ id: currentUser.id, name: currentUser.name, branch_id: currentUser.branch_id || null });
+    }
+    if (role === 'vice_director') {
+      var _vbr2 = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+      var _inclSelf = (branchId === '__mine__') || (!_vbr2.length) || (!branchId && _vbr2.indexOf(currentUser.branch_id) !== -1) || (branchId === currentUser.branch_id);
+      if (_inclSelf && !_ptAllTeachers.find(t => t.id === currentUser.id)) {
+        _ptAllTeachers.unshift({ id: currentUser.id, name: (currentUser.name||'') + ' (나)', branch_id: currentUser.branch_id || null });
+      }
     }
     ptRenderTeacherCheckboxes();
     if (branchId !== undefined) await ptLoad();
