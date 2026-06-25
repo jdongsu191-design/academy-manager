@@ -3864,7 +3864,7 @@ async function doLogin() {
       errEl.textContent = '관리자 계정이 아닙니다.';
       return;
     }
-    if (_loginRole === 'teacher' && data.role !== 'teacher') {
+    if (_loginRole === 'teacher' && data.role !== 'teacher' && data.role !== 'vice_director') {
       errEl.textContent = '선생님 계정이 아닙니다.';
       return;
     }
@@ -4041,12 +4041,11 @@ function renderSidebar() {
   const sb   = document.getElementById('sidebar');
   sb.innerHTML = '';
 
-  if (role === 'teacher') {
+  if (role === 'teacher' || role === 'vice_director') {
     sb.innerHTML = buildTeacherSidebar();
-  } else if (role === 'admin' || role === 'desk' || role === 'vice_director') {
+  } else if (role === 'admin' || role === 'desk') {
     sb.innerHTML = buildAdminSidebar();
     if (role === 'desk') applyDeskFilter();
-    else if (role === 'vice_director') applyViceFilter();
   }
 }
 
@@ -4064,7 +4063,7 @@ function buildTeacherSidebar() {
         <input type="file" id="profilePhotoInput" accept="image/*" style="display:none" onchange="uploadProfilePhoto(event)">
         <div style="flex:1;min-width:0">
           <div style="font-size:13px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${currentUser.name}</div>
-          <div style="font-size:11px;color:var(--text-sub)">선생님</div>
+          <div style="font-size:11px;color:var(--text-sub)">${currentUser.role === 'vice_director' ? '부원장' : '선생님'}</div>
         </div>
       </div>
       <button onclick="openChangePwModal()" style="width:100%;margin-top:10px;padding:7px;border:1.5px solid var(--border);border-radius:8px;background:#fff;color:var(--text-sub);font-size:12px;font-weight:600;cursor:pointer">🔑 비밀번호 변경</button>
@@ -4083,7 +4082,9 @@ function buildTeacherSidebar() {
         { id:'weekend-naesin',    label:'내신대비' },
         { id:'weekend-bety',      label:'베티모의고사' }
       ])}
-      ${menuItem('teacher-monthly-report', '📊', '월별 수강인원', 'switchPanel')}
+      ${(currentUser.role === 'vice_director' && currentUser.permissions && currentUser.permissions.monthly_report)
+        ? menuItem('admin-monthly-report', '📊', '월별 수강인원', 'switchPanel')
+        : menuItem('teacher-monthly-report', '📊', '월별 수강인원', 'switchPanel')}
       <button class="menu-item" id="tmenu-syllabus" onclick="openSyllabusPage()">
         <span class="mi-icon">📑</span>
         <span class="mi-label">진도계획서</span>
@@ -4321,8 +4322,7 @@ function enterFirstPanel() {
       }
     }
   } else if (role === 'vice_director') {
-    var _vt = getViceFirstTab();
-    if (_vt) switchPanel(_vt.tabId, document.getElementById(_vt.btnId));
+    switchPanel('students', document.getElementById('tmenu-students'));
   }
 }
 
@@ -19438,13 +19438,28 @@ async function loadAppData() {
     if (role === 'teacher') {
       await loadTeacherData();
       await loadTransferRequests();
-    } else if (role === 'admin' || role === 'desk' || role === 'vice_director') {
+    } else if (role === 'vice_director') {
+      await loadTeacherData();
+      await loadTransferRequests();
+      await loadViceReportRefs();
+    } else if (role === 'admin' || role === 'desk') {
       await loadAdminData();
     }
   } catch(e) {
     console.error('[loadAppData]', e);
     alert('데이터를 불러오는 중 오류가 발생했습니다.\n네트워크 상태를 확인하고 새로고침해주세요.');
   }
+}
+
+async function loadViceReportRefs() {
+  // 부원장: 선생님 데이터 외에 '월별 수강인원(분원 전체)'용 보조 데이터 적재
+  // (allUsers/_allBranches만 채움 — classes/students 등 선생님 전역은 건드리지 않음)
+  try {
+    var uRes = await fetchAllRows(db.from('users').select('*').in('role',['teacher','student','admin','desk']).order('name'));
+    var bRes = await db.from('branches').select('*').order('name');
+    allUsers     = uRes || [];
+    _allBranches = bRes.data || [];
+  } catch(e) { console.error('[loadViceReportRefs]', e); }
 }
 
 async function loadTeacherData() {
