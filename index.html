@@ -4043,9 +4043,10 @@ function renderSidebar() {
 
   if (role === 'teacher') {
     sb.innerHTML = buildTeacherSidebar();
-  } else if (role === 'admin' || role === 'desk') {
+  } else if (role === 'admin' || role === 'desk' || role === 'vice_director') {
     sb.innerHTML = buildAdminSidebar();
     if (role === 'desk') applyDeskFilter();
+    else if (role === 'vice_director') applyViceFilter();
   }
 }
 
@@ -4290,6 +4291,10 @@ function switchPanelAdmin(tabId, btn) {
       alert('접근 권한이 없는 메뉴입니다.');
       return;
     }
+    if (currentUser && currentUser.role === 'vice_director' && typeof viceHasTabAccess === 'function' && !viceHasTabAccess(tabId)) {
+      alert('접근 권한이 없는 메뉴입니다.');
+      return;
+    }
     switchPanel(tabId, btn);
   }
 
@@ -4315,6 +4320,9 @@ function enterFirstPanel() {
         switchPanel('admin-exam-score', document.getElementById('amenu-exam-score'));
       }
     }
+  } else if (role === 'vice_director') {
+    var _vt = getViceFirstTab();
+    if (_vt) switchPanel(_vt.tabId, document.getElementById(_vt.btnId));
   }
 }
 
@@ -4507,6 +4515,85 @@ function deskCanAccessBranch(branchId) {
   var allowed = getDeskAllowedBranchIds();
   return allowed.length === 0 || allowed.indexOf(branchId) !== -1;
 }
+/* ============================================================
+   [SECTION: VICE] 부원장 권한 시스템 (관리자급 · 마스터가 기능/분원 지정)
+   - permissions(jsonb) 키로 허용 기능, branch_ids로 담당 분원 지정
+   - Phase 1: monthly_report(월별 수강인원) / consult_manage(입퇴원 상담, 메뉴는 Phase 2)
+============================================================ */
+var VICE_PERMISSIONS = [
+  {key:'monthly_report', label:'📊 월별 수강인원',   group:'관리'},
+  {key:'consult_manage', label:'📋 입퇴원 상담 관리', group:'관리'},
+];
+var VICE_PERM_TO_MENUS = {
+  'monthly_report': [{btnId:'amenu-monthly-report', parent:null}],
+  'consult_manage': [{btnId:'amenu-consult',        parent:null}],
+};
+var VICE_PERM_TO_TABS = {
+  'monthly_report': ['admin-monthly-report'],
+  'consult_manage': ['admin-consult'],
+};
+function getVicePermKeys(user) {
+  var perms = user && user.permissions;
+  if (!perms) return [];
+  if (Array.isArray(perms)) return perms.filter(function(k){ return VICE_PERMISSIONS.some(function(p){return p.key===k;}); });
+  if (typeof perms === 'object') return VICE_PERMISSIONS.filter(function(p){ return perms[p.key] === true; }).map(function(p){ return p.key; });
+  return [];
+}
+function applyViceFilter() {
+  if (!currentUser || currentUser.role !== 'vice_director') return;
+  var permKeys = getVicePermKeys(currentUser);
+  var allowedBtnIds = {}, allowedParents = {};
+  permKeys.forEach(function(pk) {
+    (VICE_PERM_TO_MENUS[pk] || []).forEach(function(m) {
+      allowedBtnIds[m.btnId] = true;
+      if (m.parent) allowedParents[m.parent] = true;
+    });
+  });
+  ADMIN_SIDEBAR_BUTTON_IDS.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  ['amenu-weekend-naje','amenu-weekend-potential','amenu-weekend-bety','amenu-weekend-naesin','amenu-weekend-msg',
+   'amenu-rr-attend','amenu-rr-lobby','amenu-exam-score','amenu-exam-list'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  var ng = document.getElementById('amenu-naesin-group');
+  if (ng) ng.style.display = 'none';
+  Object.keys(allowedParents).forEach(function(pid) {
+    var el = document.getElementById(pid);
+    if (el) el.style.display = '';
+  });
+  Object.keys(allowedBtnIds).forEach(function(bid) {
+    var el = document.getElementById(bid);
+    if (el) el.style.display = '';
+  });
+}
+function viceHasTabAccess(tabId) {
+  if (!currentUser || currentUser.role !== 'vice_director') return true;
+  var permKeys = getVicePermKeys(currentUser);
+  for (var i = 0; i < permKeys.length; i++) {
+    var tabs = VICE_PERM_TO_TABS[permKeys[i]] || [];
+    if (tabs.indexOf(tabId) !== -1) return true;
+  }
+  return false;
+}
+function getViceFirstTab() {
+  var permKeys = getVicePermKeys(currentUser);
+  for (var i = 0; i < permKeys.length; i++) {
+    var menus = VICE_PERM_TO_MENUS[permKeys[i]] || [];
+    var tabs  = VICE_PERM_TO_TABS[permKeys[i]] || [];
+    if (menus.length && tabs.length) return { btnId: menus[0].btnId, tabId: tabs[0] };
+  }
+  return null;
+}
+function getViceAllowedBranchIds() {
+  if (currentUser && currentUser.role === 'vice_director') {
+    return Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+  }
+  return [];
+}
+
 
 /* ============================================================
    [SECTION: STUDENT SCREEN] 학생 패널 전환
@@ -12391,26 +12478,36 @@ async function initAdminMonthlyReport() {
   mrInitYearSelect('mr-year');
   mrInitMonthSelect('mr-month');
 
+  // [VICE] 부원장: 담당 분원만 노출 (단일 분원이면 잠금)
+  var _viceBr = (typeof getViceAllowedBranchIds === 'function') ? getViceAllowedBranchIds() : [];
+
   // 분원 드롭다운 — 매번 재구성 (운영파일 방식)
   var branchSel = document.getElementById('mr-branch');
   if (branchSel) {
+    branchSel.disabled = false;
     branchSel.innerHTML = '<option value="">전체 분원</option>';
-    (_allBranches || []).filter(function(b){ return b.active !== false; }).forEach(function(b) {
-      branchSel.innerHTML += '<option value="' + b.id + '">' + b.name + '</option>';
-    });
+    (_allBranches || []).filter(function(b){ return b.active !== false; })
+      .filter(function(b){ return !_viceBr.length || _viceBr.indexOf(b.id) !== -1; })
+      .forEach(function(b) {
+        branchSel.innerHTML += '<option value="' + b.id + '">' + b.name + '</option>';
+      });
+    if (_viceBr.length === 1) { branchSel.value = _viceBr[0]; branchSel.disabled = true; }
   }
   mrFilterTeachers();
 }
 
 function mrFilterTeachers() {
   var branchId = (document.getElementById('mr-branch') || {}).value || '';
+  var _viceBr = (typeof getViceAllowedBranchIds === 'function') ? getViceAllowedBranchIds() : [];
   var tSel = document.getElementById('mr-teacher');
   if (!tSel) return;
   tSel.innerHTML = '<option value="">전체 선생님</option>';
   (allUsers || [])
     .filter(function(u){
-      return u.role === 'teacher' && u.status === 'active' && !u.deleted_at
-        && (!branchId || u.branch_id === branchId);
+      if (!(u.role === 'teacher' && u.status === 'active' && !u.deleted_at)) return false;
+      if (branchId) return u.branch_id === branchId;
+      if (_viceBr.length) return _viceBr.indexOf(u.branch_id) !== -1;
+      return true;
     })
     .sort(function(a, b){ return a.name.localeCompare(b.name, 'ko'); })
     .forEach(function(t) {
@@ -12431,28 +12528,45 @@ async function generateMonthlyReport() {
   if (btn) { btn.textContent = '⏳ 조회 중...'; btn.disabled = true; }
 
   try {
+    var _viceBr = (typeof getViceAllowedBranchIds === 'function') ? getViceAllowedBranchIds() : [];
+    var _isVice = _viceBr.length > 0;
+
     var tQuery = db.from('users')
       .select('id,name,branch_id').eq('role','teacher').eq('status','active').order('name');
     if (branchId)  tQuery = tQuery.eq('branch_id', branchId);
     if (teacherId) tQuery = tQuery.eq('id', teacherId);
+    if (_isVice && !branchId) tQuery = tQuery.in('branch_id', _viceBr);   // [VICE] E: 담당 분원 선생님만
     var { data: teachers } = await tQuery;
     if (!teachers || !teachers.length) { alert('선생님이 없습니다'); return; }
 
-    var [classRes, studentRes, newStudentRes, transferRes, histRes] = await Promise.all([
-      db.from('classes').select('id,name,teacher_id').eq('active', true),
-      db.from('users')
+    var _allowTids = teachers.map(function(t){ return t.id; });   // [VICE] 격리 기준 선생님 id
+
+    var _qClasses = db.from('classes').select('id,name,teacher_id').eq('active', true);
+    var _qStudents = db.from('users')
         .select('id,name,school,grade,teacher_id,class_id,status,enrolled_at,withdrawn_at,last_class_date,naje_steps,withdraw_reason')
         .eq('role','student')
-        .or('status.eq.active,and(status.eq.inactive,last_class_date.gte.'+monthStart+'),and(status.eq.inactive,and(last_class_date.is.null,withdrawn_at.gte.'+monthStart+'))'),
-      db.from('users')
+        .or('status.eq.active,and(status.eq.inactive,last_class_date.gte.'+monthStart+'),and(status.eq.inactive,and(last_class_date.is.null,withdrawn_at.gte.'+monthStart+'))');
+    var _qNew = db.from('users')
         .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_steps')
-        .eq('role','student').neq('status','cancelled').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd),
-      db.from('transfer_requests')
+        .eq('role','student').neq('status','cancelled').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
+    var _qTransfer = db.from('transfer_requests')
         .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
         .eq('status','done')
-        .gte('transfer_date', monthStart),   // 상한 제거: 조회월 이후 전반까지 로드(과거 시점 소속 복원용)
-      db.from('student_class_history')
-        .select('student_id, from_teacher_id, from_class_name, changed_date')
+        .gte('transfer_date', monthStart);
+    var _qHist = db.from('student_class_history')
+        .select('student_id, from_teacher_id, from_class_name, changed_date');
+
+    if (_isVice) {   // [VICE] F: 데이터 적재도 담당 선생님 기준으로 완전 격리
+      var _idCsv = _allowTids.join(',');
+      _qClasses  = _qClasses.in('teacher_id', _allowTids);
+      _qStudents = _qStudents.in('teacher_id', _allowTids);
+      _qNew      = _qNew.in('teacher_id', _allowTids);
+      _qTransfer = _qTransfer.or('from_teacher_id.in.('+_idCsv+'),to_teacher_id.in.('+_idCsv+')');
+      _qHist     = _qHist.or('from_teacher_id.in.('+_idCsv+'),to_teacher_id.in.('+_idCsv+')');
+    }
+
+    var [classRes, studentRes, newStudentRes, transferRes, histRes] = await Promise.all([
+      _qClasses, _qStudents, _qNew, _qTransfer, _qHist
     ]);
 
     _mrData = {
@@ -19324,7 +19438,7 @@ async function loadAppData() {
     if (role === 'teacher') {
       await loadTeacherData();
       await loadTransferRequests();
-    } else if (role === 'admin' || role === 'desk') {
+    } else if (role === 'admin' || role === 'desk' || role === 'vice_director') {
       await loadAdminData();
     }
   } catch(e) {
