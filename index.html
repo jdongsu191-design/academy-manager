@@ -11119,7 +11119,7 @@ function badge(status) {
 function renderTeacherAccounts(filterBranchId, filterLevel) {
   var statusFilter = _admTeacherStatusFilter || '';
   var t = (allUsers||[]).filter(function(u) {
-    if (u.role !== 'teacher') return false;
+    if (u.role !== 'teacher' && u.role !== 'vice_director') return false;
     if (statusFilter === 'inactive') return u.status === 'inactive';
     if (statusFilter === 'active')   return u.status === 'active' && !u.deleted_at;
     return !u.deleted_at;
@@ -11159,6 +11159,9 @@ function renderTeacherAccounts(filterBranchId, filterLevel) {
     var lvC        = (u.school_level||'high') === 'high' ? '#1d4ed8' : (u.school_level==='middle' ? '#16a34a' : '#7c3aed');
     var lvL        = (u.school_level||'high') === 'high' ? '고등' : (u.school_level==='middle' ? '중등' : '중고등');
     var safe       = function(s){ return (s||'').replace(/'/g,"&#39;").replace(/"/g,"&quot;"); };
+    var isVice     = u.role === 'vice_director';
+    var canVice    = currentUser && (currentUser.is_master || currentUser.role === 'admin');
+    var viceBr     = isVice && Array.isArray(u.branch_ids) ? u.branch_ids.map(function(bid){ var bb=(_allBranches||[]).find(function(x){return x.id===bid;}); return bb?bb.name:'?'; }) : [];
 
     return '<div style="background:#fff;border:1.5px solid ' + (isActive?'#e2e8f0':'#fca5a5') + ';border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px" '
       + 'onmouseover="this.style.boxShadow=\'0 4px 12px rgba(0,0,0,0.08)\'" '
@@ -11172,10 +11175,12 @@ function renderTeacherAccounts(filterBranchId, filterLevel) {
         + '<span style="font-size:10px;padding:2px 7px;border-radius:100px;background:' + lvC + ';color:#fff;font-weight:700;flex-shrink:0">' + lvL + '</span>'
       + '</div>'
       + '<div style="display:flex;align-items:center;justify-content:space-between">' + brBadge + badge(u.status) + '</div>'
+      + (isVice ? '<div style="font-size:11px;color:#6d28d9;background:#f5f3ff;border:1px solid #ddd6fe;padding:5px 9px;border-radius:7px;font-weight:700">👑 부원장 · 담당 ' + (viceBr.length?viceBr.join(', '):'미지정') + '</div>' : '')
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">'
         + '<button class="btn btn-sm" onclick="openEditTeacherModal(\'' + u.id + '\',\'' + safe(u.name) + '\',\'' + safe(u.username) + '\',\'' + safe(u.phone||'') + '\',\'' + (u.school_level||'high') + '\')" style="background:#f0f7ff;border-color:#93c5fd;color:#1d4ed8;font-size:11px">✏️ 수정</button>'
         + '<button class="btn btn-sm" onclick="admViewPassword(\'' + u.id + '\',\'' + safe(u.name) + '\')" style="background:#f5f3ff;border-color:#c4b5fd;color:#6d28d9;font-size:11px">🔑 비밀번호</button>'
         + '<button class="btn btn-sm" onclick="openAssignBranchModal(\'' + u.id + '\',\'' + safe(u.name) + '\')" style="background:#fffbeb;border-color:#fde68a;color:#92400e;font-size:11px">🏢 분원</button>'
+        + (canVice ? '<button class="btn btn-sm" onclick="openViceConfigModal(\'' + u.id + '\')" style="background:#f5f3ff;border-color:#c4b5fd;color:#6d28d9;font-size:11px;grid-column:1/-1;font-weight:700">👑 부원장 설정</button>' : '')
         + (isActive
           ? '<button class="btn btn-danger btn-sm" onclick="deactivateUser(\'' + u.id + '\')" style="font-size:11px">비활성</button>'
           : '<button class="btn btn-success btn-sm" onclick="approveUser(\'' + u.id + '\')" style="font-size:11px">활성화</button>')
@@ -11203,6 +11208,57 @@ function tLevelSelect(mode, level) {
   if (hidden) hidden.value = level;
 }
 
+function openViceConfigModal(teacherId) {
+  if (!(currentUser && (currentUser.is_master || currentUser.role === 'admin'))) { alert('관리자만 지정할 수 있습니다.'); return; }
+  var u = (allUsers||[]).find(function(x){ return x.id === teacherId; });
+  if (!u) { alert('계정을 찾을 수 없습니다.'); return; }
+  var isVice = u.role === 'vice_director';
+  document.getElementById('vc-teacher-id').value = teacherId;
+  document.getElementById('vc-teacher-name').textContent = u.name + ' (@' + u.username + ')';
+  document.getElementById('vc-status-line').innerHTML = isVice
+    ? '<span style="color:#6d28d9;font-weight:700">현재: 👑 부원장</span> — 담당 분원·기능 수정 또는 해제 가능'
+    : '<span style="color:#374151;font-weight:700">현재: 선생님</span> — 분원·기능을 정하면 부원장으로 지정됩니다';
+  document.getElementById('vc-demote-btn').style.display = isVice ? '' : 'none';
+  var existBranches = isVice && Array.isArray(u.branch_ids) ? u.branch_ids : [];
+  document.getElementById('vc-branch-checkboxes').innerHTML = (_allBranches||[]).map(function(b){
+    return '<label style="display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;font-size:12px;background:#fff;border:1px solid #e5e7eb;border-radius:7px"><input type="checkbox" name="vc-branch" value="' + b.id + '"' + (existBranches.indexOf(b.id)!==-1?' checked':'') + ' style="accent-color:#7c3aed">' + b.name + '</label>';
+  }).join('') || '<div style="font-size:12px;color:#9ca3af;padding:6px">분원 없음</div>';
+  var existPerms = (typeof getVicePermKeys === 'function') ? getVicePermKeys(isVice ? u : {}) : [];
+  document.getElementById('vc-perm-checkboxes').innerHTML = (typeof VICE_PERMISSIONS !== 'undefined' ? VICE_PERMISSIONS : []).map(function(p){
+    var ready = (p.key === 'monthly_report');
+    return '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;font-size:13px;border-bottom:1px solid #f1f5f9;cursor:' + (ready?'pointer':'not-allowed') + ';opacity:' + (ready?'1':'0.5') + '"><input type="checkbox" name="vc-perm" value="' + p.key + '"' + (existPerms.indexOf(p.key)!==-1?' checked':'') + (ready?'':' disabled') + ' style="accent-color:#7c3aed;width:14px;height:14px">' + p.label + (ready?'':' <span style="font-size:11px;color:#9ca3af">(준비중)</span>') + '</label>';
+  }).join('');
+  openModal('viceConfig');
+}
+async function saveViceConfig() {
+  var id = document.getElementById('vc-teacher-id').value;
+  var selBranches = Array.from(document.querySelectorAll('input[name="vc-branch"]:checked')).map(function(c){ return c.value; });
+  if (!selBranches.length) { alert('담당 분원을 하나 이상 선택하세요'); return; }
+  var selPerms = {};
+  (typeof VICE_PERMISSIONS !== 'undefined' ? VICE_PERMISSIONS : []).forEach(function(p){ selPerms[p.key] = false; });
+  document.querySelectorAll('input[name="vc-perm"]:checked').forEach(function(c){ selPerms[c.value] = true; });
+  if (!selPerms.monthly_report && !selPerms.consult_manage) { alert('부여할 기능을 하나 이상 선택하세요'); return; }
+  try {
+    var r = await db.from('users').update({ role:'vice_director', branch_ids:selBranches, permissions:selPerms }).eq('id', id);
+    if (r.error) throw r.error;
+    closeModal('viceConfig');
+    await loadAdminData();
+    renderTeacherAccounts(_admBranchFilter, _admLevelFilter);
+    alert('✅ 부원장으로 지정/수정됐습니다');
+  } catch(e) { alert('오류: ' + (e.message||e)); }
+}
+async function demoteVice() {
+  var id = document.getElementById('vc-teacher-id').value;
+  if (!confirm('부원장을 해제하고 일반 선생님으로 되돌리시겠습니까?')) return;
+  try {
+    var r = await db.from('users').update({ role:'teacher', branch_ids:[], permissions:{} }).eq('id', id);
+    if (r.error) throw r.error;
+    closeModal('viceConfig');
+    await loadAdminData();
+    renderTeacherAccounts(_admBranchFilter, _admLevelFilter);
+    alert('부원장이 해제됐습니다');
+  } catch(e) { alert('오류: ' + (e.message||e)); }
+}
 function openEditTeacherModal(id, name, username, phone, level) {
   document.getElementById('edit-teacher-id').value       = id;
   document.getElementById('edit-teacher-name').value     = name;
@@ -19455,7 +19511,7 @@ async function loadViceReportRefs() {
   // 부원장: 선생님 데이터 외에 '월별 수강인원(분원 전체)'용 보조 데이터 적재
   // (allUsers/_allBranches만 채움 — classes/students 등 선생님 전역은 건드리지 않음)
   try {
-    var uRes = await fetchAllRows(db.from('users').select('*').in('role',['teacher','student','admin','desk']).order('name'));
+    var uRes = await fetchAllRows(db.from('users').select('*').in('role',['teacher','student','admin','desk','vice_director']).order('name'));
     var bRes = await db.from('branches').select('*').order('name');
     allUsers     = uRes || [];
     _allBranches = bRes.data || [];
@@ -21150,7 +21206,7 @@ async function loadAdminData() {
   let rawUsers, cRes, bRes;
   try {
     [rawUsers, cRes, bRes] = await Promise.all([
-      fetchAllRows(db.from('users').select('*').in('role',['teacher','student','admin','desk']).order('name')),
+      fetchAllRows(db.from('users').select('*').in('role',['teacher','student','admin','desk','vice_director']).order('name')),
       db.from('classes').select('*').eq('active',true).order('name'),
       db.from('branches').select('*').order('name')
     ]);
@@ -25111,6 +25167,32 @@ tryAutoLogin();
     <div style="display:flex;gap:8px;margin-top:8px">
       <button class="btn btn-full" onclick="closeModal('deskAccount')">취소</button>
       <button class="btn btn-primary btn-full" id="desk-modal-save-btn" onclick="saveDeskAccount()" style="background:#f59e0b;border-color:#f59e0b">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 부원장 설정 -->
+<div class="modal-backdrop" id="modal-viceConfig">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-handle"></div>
+    <div class="modal-title">👑 부원장 설정</div>
+    <input type="hidden" id="vc-teacher-id">
+    <div id="vc-teacher-name" style="font-size:14px;color:#1e293b;font-weight:700;margin-bottom:4px"></div>
+    <div id="vc-status-line" style="font-size:12px;margin-bottom:14px"></div>
+    <div class="form-group">
+      <label>담당 분원 <span style="color:#dc2626">*</span> <span style="font-size:11px;color:#9ca3af;font-weight:400">(월별 수강인원에서 볼 분원, 여러 개 가능)</span></label>
+      <div id="vc-branch-checkboxes" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px;padding:10px;background:#f9fafb;border:1.5px solid var(--border);border-radius:10px;max-height:160px;overflow-y:auto">
+        <div style="font-size:12px;color:#9ca3af;padding:8px;grid-column:1/-1">분원을 불러오는 중...</div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>부여 기능 <span style="font-size:11px;color:#9ca3af;font-weight:400">(선생님 화면에 추가로 표시)</span></label>
+      <div id="vc-perm-checkboxes" style="padding:10px;background:#f9fafb;border:1.5px solid var(--border);border-radius:10px"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-full" onclick="closeModal('viceConfig')">취소</button>
+      <button class="btn btn-full" id="vc-demote-btn" onclick="demoteVice()" style="background:#fff0f0;border-color:#fca5a5;color:#dc2626;display:none">부원장 해제</button>
+      <button class="btn btn-primary btn-full" onclick="saveViceConfig()" style="background:#7c3aed;border-color:#7c3aed">저장</button>
     </div>
   </div>
 </div>
