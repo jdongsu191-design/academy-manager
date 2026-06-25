@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BMAPS 입학 상담 관리 v1.0</title>
+  <title>BMAPS 입학 상담 관리 v1.1</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -91,6 +91,8 @@
     .toolbar .spacer{flex:1;}
     .sort-btn{background:#fff;border:1.5px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:13px;font-weight:600;color:var(--text);display:inline-flex;align-items:center;gap:5px;}
     .sort-btn:hover{border-color:var(--navy-light);}
+    .branch-select{background:#fff;border:1.5px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:13px;font-weight:600;color:var(--navy);cursor:pointer;}
+    .branch-select:hover{border-color:var(--navy-light);}
 
     /* ---------- 테이블 ---------- */
     .table-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:visible;}
@@ -148,6 +150,7 @@
     .fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--navy-light);}
     .fg textarea{min-height:92px;resize:vertical;line-height:1.5;}
     .fg .manual{margin-top:7px;}
+    .fg .branch-fixed{padding:10px 12px;border:1.5px solid var(--border);border-radius:var(--radius);background:#f8fafc;color:var(--navy);font-weight:600;}
     .section-label{grid-column:1 / -1;font-size:11.5px;font-weight:800;color:var(--gold);letter-spacing:0.4px;text-transform:uppercase;margin:6px 0 -4px;}
     .modal-foot{padding:16px 22px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;}
     .save-err{color:var(--red);font-size:12.5px;margin-right:auto;align-self:center;}
@@ -173,7 +176,7 @@
   <div id="loginScreen" class="center-screen hidden">
     <div class="auth-card">
       <h1>BMAPS 입학 상담</h1>
-      <p class="sub">청라관 입학 상담 관리 · 부원장/관리자 전용</p>
+      <p class="sub">입학 상담 관리 · 부원장/관리자 전용</p>
       <label for="login-username">아이디</label>
       <input id="login-username" type="text" autocomplete="username" />
       <label for="login-password">비밀번호</label>
@@ -197,7 +200,7 @@
   <div id="appScreen" class="hidden">
     <div class="topbar">
       <span class="brand">BMAPS <span class="accent">입학 상담</span></span>
-      <span class="branch-chip">청라관</span>
+      <span class="branch-chip" id="branch-chip"></span>
       <span class="spacer"></span>
       <span class="who"><b id="user-name"></b> 님</span>
       <button class="logout" onclick="doLogout()">로그아웃</button>
@@ -207,6 +210,7 @@
       <div class="toolbar">
         <h2>입학 상담 현황</h2>
         <span class="count" id="row-count">0건</span>
+        <select class="branch-select" id="branch-select" onchange="onBranchChange()" style="display:none;"></select>
         <span class="spacer"></span>
         <button class="sort-btn" id="sort-btn" onclick="toggleSort()">접수일 ↑ 오름차순</button>
         <button class="btn-primary" onclick="openAddModal()">+ 상담 추가</button>
@@ -246,6 +250,11 @@
       </div>
       <div class="modal-body">
         <div class="form-grid">
+          <div class="fg" id="fg-branch">
+            <label for="f-branch">분원</label>
+            <select id="f-branch"></select>
+            <div id="f-branch-fixed" class="branch-fixed hidden"></div>
+          </div>
           <div class="fg">
             <label for="f-inquiry">최초 접수일</label>
             <input id="f-inquiry" type="date" />
@@ -329,19 +338,24 @@
        - 별도 페이지 / index.html 과 동일 anon 클라이언트 + savedUserId 공유
        - 접근: admin 또는 (vice_director && permissions.consult_manage)
        ========================================================= */
-    window.CONSULT_VERSION = 'v1.0';
+    window.CONSULT_VERSION = 'v1.1';
 
     const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
-    const CHEONGNA_BRANCH_ID = '79a12fae-74a0-45ae-854d-103caff9c0cc';
     const { createClient } = supabase;
     const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
     const REG_STATUS_OPTIONS = ['등록','상담중','보류','거절','미등록','취소'];
 
+    const BR_ALL = '__all__';     // 관리자: 전체 분원
+    const BR_MINE = '__mine__';   // 부원장: 내 담당 전체
+
     let currentUser = null;
     let _teachers = [];
     let _consults = [];
+    let _allowedBranches = [];    // [{id,name}] 사용자가 조회 가능한 분원
+    let _branchMap = {};          // id -> name
+    let _currentBranchId = null;  // BR_ALL | BR_MINE | 특정 branch id
     let _sortDir = 'asc';     // inquiry_date 정렬 방향
     let _editingId = null;
 
@@ -463,8 +477,83 @@
       showScreen('appScreen');
       $('user-name').textContent = currentUser.name || '';
       buildStatusOptions();
+      await loadBranches();
+      buildBranchUI();
       await loadTeachers();
       await loadConsults();
+    }
+
+    /* ---------- 분원 ---------- */
+    // 부원장 배정 분원 id 목록 (branch_ids 우선, 없으면 단일 branch_id)
+    function viceBranchIds(){
+      var ids = (currentUser && Array.isArray(currentUser.branch_ids)) ? currentUser.branch_ids.slice() : [];
+      if(ids.length===0 && currentUser && currentUser.branch_id) ids = [currentUser.branch_id];
+      return ids;
+    }
+
+    async function loadBranches(){
+      _allowedBranches = []; _branchMap = {}; _currentBranchId = null;
+      try{
+        var res = await db.from('branches').select('id,name,active').order('name');
+        var rows = (res.data||[]);
+        rows.forEach(function(b){ _branchMap[b.id] = b.name; });   // 라벨용: 전체 분원
+        var all = rows.filter(function(b){ return b.active !== false; });  // 선택용: 활성 분원
+        if(currentUser.role==='admin'){
+          _allowedBranches = all;
+          _currentBranchId = BR_ALL;
+        } else {
+          var ids = viceBranchIds();
+          _allowedBranches = all.filter(function(b){ return ids.indexOf(b.id)!==-1; });
+          if(_allowedBranches.length>1) _currentBranchId = BR_MINE;
+          else if(_allowedBranches.length===1) _currentBranchId = _allowedBranches[0].id;
+          else _currentBranchId = null;
+        }
+      }catch(e){ console.error(e); }
+    }
+
+    // 현재 조회 범위 라벨
+    function currentScopeLabel(){
+      if(_currentBranchId===BR_ALL) return '전체 분원';
+      if(_currentBranchId===BR_MINE) return '내 담당';
+      if(_currentBranchId && _branchMap[_currentBranchId]) return _branchMap[_currentBranchId];
+      return '';
+    }
+
+    function buildBranchUI(){
+      var sel = $('branch-select');
+      var opts = [];
+      if(currentUser.role==='admin'){
+        opts.push('<option value="'+BR_ALL+'">전체 분원</option>');
+        _allowedBranches.forEach(function(b){ opts.push('<option value="'+b.id+'">'+esc(b.name)+'</option>'); });
+      } else {
+        if(_allowedBranches.length>1){
+          opts.push('<option value="'+BR_MINE+'">내 담당 전체</option>');
+        }
+        _allowedBranches.forEach(function(b){ opts.push('<option value="'+b.id+'">'+esc(b.name)+'</option>'); });
+      }
+      sel.innerHTML = opts.join('');
+      sel.value = _currentBranchId || '';
+      // 옵션이 2개 이상일 때만 드롭다운 노출 (단일 분원 부원장은 숨김)
+      sel.style.display = (sel.options.length>1) ? '' : 'none';
+      updateBranchChip();
+    }
+
+    function updateBranchChip(){
+      var chip = $('branch-chip');
+      if(chip) chip.textContent = currentScopeLabel();
+    }
+
+    function onBranchChange(){
+      var v = $('branch-select').value;
+      // 권한 방어: 부원장은 허용 분원/내담당만 허용
+      if(currentUser.role!=='admin'){
+        var allowedVals = _allowedBranches.map(function(b){ return b.id; });
+        if(_allowedBranches.length>1) allowedVals.push(BR_MINE);
+        if(allowedVals.indexOf(v)===-1){ v = _currentBranchId; $('branch-select').value=v; }
+      }
+      _currentBranchId = v;
+      updateBranchChip();
+      loadConsults();
     }
 
     async function loadTeachers(){
@@ -481,7 +570,20 @@
 
     async function loadConsults(){
       try{
-        var res = await db.from('admission_consultations').select('*').eq('branch_id', CHEONGNA_BRANCH_ID);
+        var q = db.from('admission_consultations').select('*');
+        if(_currentBranchId===BR_ALL){
+          // 관리자 전체: 분원 필터 없음
+        } else if(_currentBranchId===BR_MINE){
+          var ids = _allowedBranches.map(function(b){ return b.id; });
+          if(ids.length===0){ _consults=[]; renderTable(); return; }
+          q = q.in('branch_id', ids);
+        } else if(_currentBranchId){
+          q = q.eq('branch_id', _currentBranchId);
+        } else {
+          // 조회 가능한 분원 없음
+          _consults=[]; renderTable(); return;
+        }
+        var res = await q;
         if(res.error){ console.error(res.error); _consults=[]; }
         else _consults = res.data || [];
       }catch(e){ console.error(e); _consults=[]; }
@@ -574,10 +676,42 @@
       $('save-error').textContent='';
     }
 
+    /* ---------- 모달 분원 필드 ---------- */
+    function buildModalBranch(editRec){
+      var sel=$('f-branch'), fixed=$('f-branch-fixed');
+      if(editRec){
+        // 수정: 기존 분원 고정 (변경 불가, 보존)
+        sel.style.display='none'; sel.innerHTML=''; sel.dataset.fixedId = editRec.branch_id || '';
+        fixed.classList.remove('hidden');
+        fixed.textContent = _branchMap[editRec.branch_id] || '(분원)';
+        return;
+      }
+      var list = _allowedBranches; // 역할별 허용 분원 (관리자=전체, 부원장=배정)
+      // 기본값: 현재 조회가 특정 분원이면 그 분원, 아니면 첫 분원
+      var def = (_currentBranchId && _currentBranchId!==BR_ALL && _currentBranchId!==BR_MINE) ? _currentBranchId : (list[0] ? list[0].id : '');
+      if(currentUser.role!=='admin' && list.length<=1){
+        // 단일 분원 부원장: 고정 표시
+        sel.style.display='none'; sel.dataset.fixedId = list[0] ? list[0].id : '';
+        fixed.classList.remove('hidden');
+        fixed.textContent = list[0] ? list[0].name : '(분원 없음)';
+        return;
+      }
+      // 선택 가능 (관리자 전체 / 부원장 2개+)
+      fixed.classList.add('hidden'); sel.style.display=''; sel.dataset.fixedId='';
+      sel.innerHTML = list.map(function(b){ return '<option value="'+b.id+'">'+esc(b.name)+'</option>'; }).join('');
+      sel.value = def;
+    }
+    function getModalBranchId(){
+      var sel=$('f-branch');
+      if(sel.dataset.fixedId) return sel.dataset.fixedId;
+      return sel.value || null;
+    }
+
     function openAddModal(){
       _editingId = null;
       $('modal-title').textContent='상담 추가';
       clearForm();
+      buildModalBranch(null);
       $('formModal').classList.remove('hidden');
     }
 
@@ -587,6 +721,7 @@
       _editingId = id;
       $('modal-title').textContent='상담 수정';
       clearForm();
+      buildModalBranch(r);
       $('f-inquiry').value   = r.inquiry_date || '';
       $('f-school').value    = r.school_grade || '';
       $('f-name').value      = r.student_name || '';
@@ -683,8 +818,11 @@
       var name = val('f-name').trim();
       if(!name){ err.textContent='학생 이름을 입력해 주세요. (미정이면 - 입력)'; return; }
 
+      var branchId = getModalBranchId();
+      if(!branchId){ err.textContent='분원을 선택해 주세요.'; return; }
+
       var payload = {
-        branch_id: CHEONGNA_BRANCH_ID,
+        branch_id: branchId,
         inquiry_date: val('f-inquiry') || null,
         reg_status:   getRegStatus() || null,
         school_grade: val('f-school').trim() || null,
