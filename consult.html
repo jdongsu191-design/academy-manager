@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BMAPS 입학 상담 관리 v1.4</title>
+  <title>BMAPS 입학 상담 관리 v1.5</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -95,6 +95,11 @@
     .branch-select:hover{border-color:var(--navy-light);}
     .search-input{background:#fff;border:1.5px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:13px;color:var(--text);min-width:180px;outline:none;}
     .search-input:focus{border-color:var(--navy-light);}
+    .tabbar{display:flex;gap:6px;margin-bottom:14px;border-bottom:2px solid var(--border);}
+    .tab{appearance:none;background:transparent;border:none;border-bottom:3px solid transparent;margin-bottom:-2px;padding:10px 18px;font-size:14px;font-weight:700;color:var(--text-sub);cursor:pointer;border-radius:8px 8px 0 0;transition:all .15s;}
+    .tab:hover{color:var(--navy);background:#f8fafc;}
+    .tab.active{color:var(--navy);border-bottom-color:var(--gold);}
+    .src-auto{font-size:11px;color:var(--navy-light);cursor:help;}
 
     /* ---------- 테이블 ---------- */
     .table-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:visible;}
@@ -203,7 +208,7 @@
   <!-- ====== 메인 앱 ====== -->
   <div id="appScreen" class="hidden">
     <div class="topbar">
-      <span class="brand">BMAPS <span class="accent">입학 상담</span></span>
+      <span class="brand">BMAPS <span class="accent" id="brand-accent">입학 상담</span></span>
       <span class="branch-chip" id="branch-chip"></span>
       <span class="spacer"></span>
       <span class="who"><b id="user-name"></b> 님</span>
@@ -211,18 +216,22 @@
     </div>
 
     <div class="wrap">
+      <div class="tabbar">
+        <button class="tab active" id="tab-admission" onclick="switchView('admission')">📋 입학 상담</button>
+        <button class="tab" id="tab-withdrawal" onclick="switchView('withdrawal')">👋 퇴원 관리</button>
+      </div>
       <div class="toolbar">
-        <h2>입학 상담 현황</h2>
+        <h2 id="toolbar-title">입학 상담 현황</h2>
         <span class="count" id="row-count">0건</span>
         <select class="branch-select" id="branch-select" onchange="onBranchChange()" style="display:none;"></select>
         <select class="branch-select" id="month-select" onchange="onMonthChange()"></select>
         <input class="search-input" id="search-input" type="text" placeholder="🔍 학생 이름 검색" oninput="onSearchInput()" />
         <span class="spacer"></span>
         <button class="sort-btn" id="sort-btn" onclick="toggleSort()">접수일 ↑ 오름차순</button>
-        <button class="btn-primary" onclick="openAddModal()">+ 상담 추가</button>
+        <button class="btn-primary" id="add-btn" onclick="onAddClick()">+ 상담 추가</button>
       </div>
 
-      <div class="table-card">
+      <div class="table-card" id="consult-card">
         <table>
           <thead>
             <tr>
@@ -243,6 +252,29 @@
         <div id="empty-state" class="empty hidden">
           <div class="big">아직 등록된 상담이 없습니다</div>
           <div>오른쪽 위 “+ 상담 추가”로 첫 상담을 기록해 보세요.</div>
+        </div>
+      </div>
+
+      <div class="table-card hidden" id="withdraw-card">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:42px">연번</th>
+              <th class="col-branch">분원</th>
+              <th>마지막 수업일</th>
+              <th>학교/학년</th>
+              <th>이름</th>
+              <th>담당T</th>
+              <th>퇴원사유</th>
+              <th>비고</th>
+              <th style="text-align:right;">관리</th>
+            </tr>
+          </thead>
+          <tbody id="withdraw-body"></tbody>
+        </table>
+        <div id="w-empty-state" class="empty hidden">
+          <div class="big">퇴원 기록이 없습니다</div>
+          <div>오른쪽 위 “+ 퇴원 추가”로 기록하거나, BMAPS 퇴원 자동 반영을 기다려 주세요.</div>
         </div>
       </div>
     </div>
@@ -339,13 +371,81 @@
     </div>
   </div>
 
+  <!-- ====== 퇴원 추가/수정 모달 ====== -->
+  <div id="wFormModal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="w-modal-title">퇴원 추가</h3>
+        <button class="x" onclick="closeWModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="fg" id="wfg-branch">
+            <label for="wf-branch">분원</label>
+            <select id="wf-branch"></select>
+            <div id="wf-branch-fixed" class="branch-fixed hidden"></div>
+          </div>
+          <div class="fg">
+            <label for="wf-lastclass">마지막 수업일(퇴원일)</label>
+            <input id="wf-lastclass" type="date" />
+          </div>
+          <div class="fg">
+            <label for="wf-school">학교</label>
+            <input id="wf-school" type="text" placeholder="예: 청라고" />
+          </div>
+          <div class="fg">
+            <label for="wf-grade">학년</label>
+            <input id="wf-grade" type="text" placeholder="예: 2학년" />
+          </div>
+          <div class="fg">
+            <label for="wf-name">학생 이름</label>
+            <input id="wf-name" type="text" placeholder="학생 이름" />
+          </div>
+          <div class="fg">
+            <label for="wf-teacher">담당T</label>
+            <select id="wf-teacher" onchange="onWTeacherChange()"></select>
+            <input id="wf-teacher-manual" class="manual hidden" type="text" placeholder="담당T 직접 입력" />
+          </div>
+          <div class="fg full">
+            <label for="wf-reason">퇴원사유</label>
+            <textarea id="wf-reason" placeholder="퇴원 사유를 입력하세요"></textarea>
+          </div>
+          <div class="fg full">
+            <label for="wf-note">비고</label>
+            <textarea id="wf-note" placeholder="참고 사항"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span id="w-save-error" class="save-err"></span>
+        <button class="btn-ghost" onclick="closeWModal()">취소</button>
+        <button class="btn-primary" id="w-save-btn" onclick="saveWithdrawal()">저장</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 퇴원 상세보기 모달 (읽기전용) ====== -->
+  <div id="wViewModal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="w-view-title">퇴원 상세</h3>
+        <button class="x" onclick="closeWView()">&times;</button>
+      </div>
+      <div class="modal-body" id="w-view-body"></div>
+      <div class="modal-foot">
+        <button class="btn-ghost" onclick="closeWView()">닫기</button>
+        <button class="btn-primary" onclick="wViewToEdit()">수정하기</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     /* =========================================================
        BMAPS 입학 상담 관리 (consult.html)
        - 별도 페이지 / index.html 과 동일 anon 클라이언트 + savedUserId 공유
        - 접근: admin 또는 (vice_director && permissions.consult_manage)
        ========================================================= */
-    window.CONSULT_VERSION = 'v1.4';
+    window.CONSULT_VERSION = 'v1.5';
 
     const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -367,6 +467,11 @@
     let _searchQuery = '';        // 학생 이름 검색어 (부분일치)
     let _sortDir = 'asc';     // inquiry_date 정렬 방향
     let _editingId = null;
+    // ===== 퇴원 관리 (탭) =====
+    let _viewMode = 'admission';   // 'admission' | 'withdrawal'
+    let _withdrawals = [];
+    let _wEditingId = null;
+    let _wViewingId = null;
 
     /* ---------- 유틸 ---------- */
     function $(id){ return document.getElementById(id); }
@@ -562,14 +667,18 @@
       }
       _currentBranchId = v;
       updateBranchChip();
-      loadConsults();
+      loadActiveData();
     }
 
     /* ---------- 월 필터 ---------- */
     function buildMonthOptions(){
       var sel = $('month-select'); if(!sel) return;
       var set = {};
-      _consults.forEach(function(r){ if(r.inquiry_date){ set[r.inquiry_date.slice(0,7)] = true; } });
+      if(_viewMode==='withdrawal'){
+        _withdrawals.forEach(function(r){ if(r.last_class_date){ set[r.last_class_date.slice(0,7)] = true; } });
+      } else {
+        _consults.forEach(function(r){ if(r.inquiry_date){ set[r.inquiry_date.slice(0,7)] = true; } });
+      }
       var months = Object.keys(set).sort().reverse();  // 최신월 우선
       // 현재 선택월이 더 이상 없으면 전체로 초기화
       if(_monthFilter && months.indexOf(_monthFilter)===-1) _monthFilter = '';
@@ -583,11 +692,11 @@
     }
     function onMonthChange(){
       _monthFilter = $('month-select').value || '';
-      renderTable();
+      renderActive();
     }
     function onSearchInput(){
       _searchQuery = ($('search-input').value || '').trim().toLowerCase();
-      renderTable();
+      renderActive();
     }
 
     async function loadTeachers(){
@@ -600,6 +709,7 @@
         _teachers = list;
       }catch(e){ console.error(e); _teachers=[]; }
       buildTeacherOptions();
+      buildWTeacherOptions();
     }
 
     async function loadConsults(){
@@ -628,17 +738,53 @@
     /* ---------- 렌더 ---------- */
     function toggleSort(){
       _sortDir = (_sortDir==='asc') ? 'desc' : 'asc';
-      $('sort-btn').textContent = (_sortDir==='asc') ? '접수일 ↑ 오름차순' : '접수일 ↓ 내림차순';
-      renderTable();
+      var label = (_viewMode==='withdrawal') ? '퇴원일' : '접수일';
+      $('sort-btn').textContent = (_sortDir==='asc') ? label+' ↑ 오름차순' : label+' ↓ 내림차순';
+      renderActive();
     }
 
     function multiBranchView(){
       return _currentBranchId===BR_ALL || _currentBranchId===BR_MINE;
     }
 
+    /* ---------- 탭 전환 / 모드 디스패처 ---------- */
+    function switchView(mode){
+      if(mode!=='admission' && mode!=='withdrawal') return;
+      _viewMode = mode;
+      // 탭 활성화
+      var ta=$('tab-admission'), tw=$('tab-withdrawal');
+      if(ta) ta.classList.toggle('active', mode==='admission');
+      if(tw) tw.classList.toggle('active', mode==='withdrawal');
+      // 카드 표시
+      var ca=$('consult-card'), cw=$('withdraw-card');
+      if(ca) ca.classList.toggle('hidden', mode!=='admission');
+      if(cw) cw.classList.toggle('hidden', mode!=='withdrawal');
+      // 툴바 라벨
+      var isW = (mode==='withdrawal');
+      $('toolbar-title').textContent = isW ? '퇴원 관리 현황' : '입학 상담 현황';
+      $('add-btn').textContent = isW ? '+ 퇴원 추가' : '+ 상담 추가';
+      var sLabel = isW ? '퇴원일' : '접수일';
+      $('sort-btn').textContent = (_sortDir==='asc') ? sLabel+' ↑ 오름차순' : sLabel+' ↓ 내림차순';
+      var brand=$('brand-accent'); if(brand) brand.textContent = isW ? '퇴원 관리' : '입학 상담';
+      // 데이터 로드 (해당 모드)
+      loadActiveData();
+    }
+    function loadActiveData(){
+      if(_viewMode==='withdrawal') return loadWithdrawals();
+      return loadConsults();
+    }
+    function renderActive(){
+      if(_viewMode==='withdrawal') return renderWithdrawTable();
+      return renderTable();
+    }
+    function onAddClick(){
+      if(_viewMode==='withdrawal') return openAddW();
+      return openAddModal();
+    }
+
     function renderTable(){
       // 분원 컬럼 표시/숨김 (전체·내담당일 때만 표시)
-      var tbl = document.querySelector('.table-card table');
+      var tbl = document.querySelector('#consult-card table');
       if(tbl) tbl.classList.toggle('hide-branch-col', !multiBranchView());
 
       // 월 필터 (접수일 기준, 클라이언트)
@@ -693,6 +839,88 @@
               '<button class="btn-view" onclick="openViewModal(\''+r.id+'\')">보기</button>'+
               '<button class="btn-edit" onclick="openEditModal(\''+r.id+'\')">수정</button>'+
               '<button class="btn-danger" onclick="deleteConsult(\''+r.id+'\')">삭제</button>'+
+            '</td>'+
+          '</tr>';
+      }).join('');
+    }
+
+    /* ---------- 퇴원: 로드 / 렌더 ---------- */
+    async function loadWithdrawals(){
+      try{
+        var q = db.from('withdrawals').select('*');
+        if(_currentBranchId===BR_ALL){
+          // 관리자 전체
+        } else if(_currentBranchId===BR_MINE){
+          var ids = _allowedBranches.map(function(b){ return b.id; });
+          if(ids.length===0){ _withdrawals=[]; buildMonthOptions(); renderWithdrawTable(); return; }
+          q = q.in('branch_id', ids);
+        } else if(_currentBranchId){
+          q = q.eq('branch_id', _currentBranchId);
+        } else {
+          _withdrawals=[]; buildMonthOptions(); renderWithdrawTable(); return;
+        }
+        var res = await q;
+        if(res.error){ console.error(res.error); _withdrawals=[]; }
+        else _withdrawals = res.data || [];
+      }catch(e){ console.error(e); _withdrawals=[]; }
+      buildMonthOptions();
+      renderWithdrawTable();
+    }
+
+    function renderWithdrawTable(){
+      var tbl = document.querySelector('#withdraw-card table');
+      if(tbl) tbl.classList.toggle('hide-branch-col', !multiBranchView());
+
+      var base = _withdrawals.slice();
+      if(_monthFilter){
+        base = base.filter(function(r){ return (r.last_class_date||'').slice(0,7)===_monthFilter; });
+      }
+      if(_searchQuery){
+        base = base.filter(function(r){ return (r.student_name||'').toLowerCase().indexOf(_searchQuery)!==-1; });
+      }
+      var rows = base.sort(function(a,b){
+        var av=a.last_class_date||'', bv=b.last_class_date||'';
+        if(!av && !bv) return (a.created_at||'').localeCompare(b.created_at||'');
+        if(!av) return 1;
+        if(!bv) return -1;
+        if(av===bv) return (a.created_at||'').localeCompare(b.created_at||'');
+        return _sortDir==='asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+      });
+
+      $('row-count').textContent = rows.length + '건';
+      var body = $('withdraw-body');
+      var empty = $('w-empty-state');
+
+      if(rows.length===0){
+        body.innerHTML='';
+        var filtering = !!(_searchQuery || _monthFilter);
+        empty.innerHTML = filtering
+          ? '<div class="big">조건에 맞는 퇴원 기록이 없습니다</div><div>검색어나 월 필터를 변경해 보세요.</div>'
+          : '<div class="big">퇴원 기록이 없습니다</div><div>오른쪽 위 “+ 퇴원 추가”로 기록하거나, BMAPS 퇴원 자동 반영을 기다려 주세요.</div>';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+
+      body.innerHTML = rows.map(function(r, i){
+        var reason = r.withdraw_reason ? esc(r.withdraw_reason) : '';
+        var note = r.note ? esc(r.note) : '';
+        var sg = [r.school, r.grade].filter(Boolean).join(' ');
+        var src = (r.source==='auto') ? ' <span class="src-auto" title="BMAPS 자동 반영">⚙</span>' : '';
+        return ''+
+          '<tr>'+
+            '<td class="seq">'+(i+1)+'</td>'+
+            '<td class="col-branch">'+esc(_branchMap[r.branch_id]||'-')+'</td>'+
+            '<td class="date">'+fmtKDate(r.last_class_date)+'</td>'+
+            '<td style="white-space:nowrap">'+(sg?esc(sg):'<span style="color:#cbd5e1">—</span>')+'</td>'+
+            '<td class="name">'+(r.student_name?esc(r.student_name):'—')+src+'</td>'+
+            '<td style="white-space:nowrap">'+(r.teacher_name?esc(r.teacher_name):'<span style="color:#cbd5e1">—</span>')+'</td>'+
+            '<td class="content"><span class="ellip" title="'+reason+'">'+(reason||'<span style="color:#cbd5e1">—</span>')+'</span></td>'+
+            '<td class="note"><span class="ellip" title="'+note+'">'+(note||'<span style="color:#cbd5e1">—</span>')+'</span></td>'+
+            '<td class="actions">'+
+              '<button class="btn-view" onclick="openViewW(\''+r.id+'\')">보기</button>'+
+              '<button class="btn-edit" onclick="openEditW(\''+r.id+'\')">수정</button>'+
+              '<button class="btn-danger" onclick="deleteWithdrawal(\''+r.id+'\')">삭제</button>'+
             '</td>'+
           '</tr>';
       }).join('');
@@ -937,6 +1165,183 @@
         var res = await db.from('admission_consultations').delete().eq('id', id);
         if(res.error){ alert('삭제 실패: '+res.error.message); return; }
         await loadConsults();
+      }catch(e){
+        alert('삭제 중 오류가 발생했습니다.');
+        console.error(e);
+      }
+    }
+
+    /* ========== 퇴원: 폼/모달/저장/삭제 ========== */
+    function buildWTeacherOptions(){
+      var sel = $('wf-teacher');
+      if(!sel) return;
+      var opts = ['<option value="">선택 안 함</option>'];
+      _teachers.forEach(function(t){
+        opts.push('<option value="'+esc(t.id)+'">'+esc(t.name||'(이름없음)')+'</option>');
+      });
+      opts.push('<option value="__manual__">직접입력…</option>');
+      sel.innerHTML = opts.join('');
+    }
+    function onWTeacherChange(){
+      $('wf-teacher-manual').classList.toggle('hidden', val('wf-teacher')!=='__manual__');
+    }
+    function clearWForm(){
+      ['wf-lastclass','wf-school','wf-grade','wf-name','wf-reason','wf-note','wf-teacher-manual'
+      ].forEach(function(id){ if($(id)) $(id).value=''; });
+      $('wf-teacher').value='';
+      onWTeacherChange();
+      $('w-save-error').textContent='';
+    }
+    function buildWModalBranch(editRec){
+      var sel=$('wf-branch'), fixed=$('wf-branch-fixed');
+      if(editRec){
+        sel.style.display='none'; sel.innerHTML=''; sel.dataset.fixedId = editRec.branch_id || '';
+        fixed.classList.remove('hidden');
+        fixed.textContent = _branchMap[editRec.branch_id] || '(분원)';
+        return;
+      }
+      var list = _allowedBranches;
+      var def = (_currentBranchId && _currentBranchId!==BR_ALL && _currentBranchId!==BR_MINE) ? _currentBranchId : (list[0] ? list[0].id : '');
+      if(currentUser.role!=='admin' && list.length<=1){
+        sel.style.display='none'; sel.dataset.fixedId = list[0] ? list[0].id : '';
+        fixed.classList.remove('hidden');
+        fixed.textContent = list[0] ? list[0].name : '(분원 없음)';
+        return;
+      }
+      fixed.classList.add('hidden'); sel.style.display=''; sel.dataset.fixedId='';
+      sel.innerHTML = list.map(function(b){ return '<option value="'+b.id+'">'+esc(b.name)+'</option>'; }).join('');
+      sel.value = def;
+    }
+    function getWModalBranchId(){
+      var sel=$('wf-branch');
+      if(sel.dataset.fixedId) return sel.dataset.fixedId;
+      return sel.value || null;
+    }
+    function openAddW(){
+      _wEditingId = null;
+      $('w-modal-title').textContent='퇴원 추가';
+      clearWForm();
+      buildWModalBranch(null);
+      $('wFormModal').classList.remove('hidden');
+    }
+    function openEditW(id){
+      var r = _withdrawals.find(function(x){ return x.id===id; });
+      if(!r){ alert('해당 퇴원 기록을 찾을 수 없습니다.'); return; }
+      _wEditingId = id;
+      $('w-modal-title').textContent='퇴원 수정';
+      clearWForm();
+      buildWModalBranch(r);
+      $('wf-lastclass').value = r.last_class_date || '';
+      $('wf-school').value    = r.school || '';
+      $('wf-grade').value     = r.grade || '';
+      $('wf-name').value      = r.student_name || '';
+      $('wf-reason').value    = r.withdraw_reason || '';
+      $('wf-note').value      = r.note || '';
+      if(r.teacher_id && _teachers.some(function(t){return t.id===r.teacher_id;})){
+        $('wf-teacher').value=r.teacher_id;
+      } else if(r.teacher_name){
+        $('wf-teacher').value='__manual__';
+        $('wf-teacher-manual').value=r.teacher_name;
+      } else {
+        $('wf-teacher').value='';
+      }
+      onWTeacherChange();
+      $('wFormModal').classList.remove('hidden');
+    }
+    function closeWModal(){
+      $('wFormModal').classList.add('hidden');
+      _wEditingId = null;
+    }
+    function openViewW(id){
+      var r=_withdrawals.find(function(x){ return x.id===id; });
+      if(!r){ alert('해당 퇴원 기록을 찾을 수 없습니다.'); return; }
+      _wViewingId=id;
+      function vrow(label,val,pre){
+        var v=(val==null||val==='')
+          ? '<span style="color:#cbd5e1">—</span>'
+          : (pre ? '<div class="vpre">'+esc(val)+'</div>' : esc(val));
+        return '<div class="vrow"><div class="vlabel">'+label+'</div><div class="vval">'+v+'</div></div>';
+      }
+      var sg = [r.school, r.grade].filter(Boolean).join(' ');
+      var html='';
+      html+=vrow('분원', _branchMap[r.branch_id]);
+      html+=vrow('마지막 수업일(퇴원일)', fmtKDateRaw(r.last_class_date));
+      html+=vrow('학교/학년', sg);
+      html+=vrow('이름', r.student_name);
+      html+=vrow('담당T', r.teacher_name);
+      html+=vrow('퇴원사유', r.withdraw_reason, true);
+      html+=vrow('비고', r.note, true);
+      html+=vrow('출처', r.source==='auto' ? 'BMAPS 자동 반영' : '직접/이관');
+      $('w-view-body').innerHTML=html;
+      $('wViewModal').classList.remove('hidden');
+    }
+    function closeWView(){
+      $('wViewModal').classList.add('hidden');
+      _wViewingId=null;
+    }
+    function wViewToEdit(){
+      var id=_wViewingId;
+      closeWView();
+      if(id) openEditW(id);
+    }
+    async function saveWithdrawal(){
+      var err = $('w-save-error'); err.textContent='';
+      var name = val('wf-name').trim();
+      if(!name){ err.textContent='학생 이름을 입력해 주세요.'; return; }
+      var branchId = getWModalBranchId();
+      if(!branchId){ err.textContent='분원을 선택해 주세요.'; return; }
+
+      var payload = {
+        branch_id: branchId,
+        last_class_date: val('wf-lastclass') || null,
+        school:       val('wf-school').trim() || null,
+        grade:        val('wf-grade').trim() || null,
+        student_name: name,
+        withdraw_reason: val('wf-reason').trim() || null,
+        note:         val('wf-note').trim() || null
+      };
+      var tsel = val('wf-teacher');
+      if(tsel==='__manual__'){
+        payload.teacher_id = null;
+        payload.teacher_name = val('wf-teacher-manual').trim() || null;
+      } else if(tsel){
+        var t = _teachers.find(function(x){ return x.id===tsel; });
+        payload.teacher_id = tsel;
+        payload.teacher_name = t ? (t.name||null) : null;
+      } else {
+        payload.teacher_id = null;
+        payload.teacher_name = null;
+      }
+
+      var btn = $('w-save-btn');
+      btn.disabled = true; btn.textContent='저장 중…';
+      try{
+        var res;
+        if(_wEditingId){
+          res = await db.from('withdrawals').update(payload).eq('id', _wEditingId);
+        } else {
+          payload.source = 'migrated';   // 페이지 직접 입력분
+          payload.created_by = currentUser.id;
+          res = await db.from('withdrawals').insert(payload);
+        }
+        if(res.error){ err.textContent='저장 실패: '+res.error.message; return; }
+        closeWModal();
+        await loadWithdrawals();
+      }catch(e){
+        err.textContent='저장 중 오류가 발생했습니다.';
+        console.error(e);
+      }finally{
+        btn.disabled=false; btn.textContent='저장';
+      }
+    }
+    async function deleteWithdrawal(id){
+      var r = _withdrawals.find(function(x){ return x.id===id; });
+      var nm = r && r.student_name ? r.student_name : '이 퇴원';
+      if(!confirm('['+nm+'] 퇴원 기록을 삭제할까요? 되돌릴 수 없습니다.')) return;
+      try{
+        var res = await db.from('withdrawals').delete().eq('id', id);
+        if(res.error){ alert('삭제 실패: '+res.error.message); return; }
+        await loadWithdrawals();
       }catch(e){
         alert('삭제 중 오류가 발생했습니다.');
         console.error(e);
