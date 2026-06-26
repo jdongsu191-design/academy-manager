@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BMAPS 입학 상담 관리 v1.1</title>
+  <title>BMAPS 입학 상담 관리 v1.2</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -109,6 +109,8 @@
     tbody tr:hover{background:#fafbfc;}
     td.name{font-weight:700;color:var(--navy);white-space:nowrap;}
     td.seq{color:var(--text-sub);text-align:center;white-space:nowrap;}
+    td.col-branch,th.col-branch{white-space:nowrap;font-weight:600;color:var(--navy);}
+    table.hide-branch-col .col-branch{display:none;}
     td.content{max-width:760px;color:var(--text-sub);}
     td.note{max-width:340px;color:var(--text-sub);}
     td.content .ellip,td.note .ellip{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;line-height:1.5;}
@@ -211,6 +213,7 @@
         <h2>입학 상담 현황</h2>
         <span class="count" id="row-count">0건</span>
         <select class="branch-select" id="branch-select" onchange="onBranchChange()" style="display:none;"></select>
+        <select class="branch-select" id="month-select" onchange="onMonthChange()"></select>
         <span class="spacer"></span>
         <button class="sort-btn" id="sort-btn" onclick="toggleSort()">접수일 ↑ 오름차순</button>
         <button class="btn-primary" onclick="openAddModal()">+ 상담 추가</button>
@@ -221,6 +224,7 @@
           <thead>
             <tr>
               <th style="width:42px">연번</th>
+              <th class="col-branch">분원</th>
               <th>최초접수일</th>
               <th>등록여부</th>
               <th>학교/학년</th>
@@ -338,7 +342,7 @@
        - 별도 페이지 / index.html 과 동일 anon 클라이언트 + savedUserId 공유
        - 접근: admin 또는 (vice_director && permissions.consult_manage)
        ========================================================= */
-    window.CONSULT_VERSION = 'v1.1';
+    window.CONSULT_VERSION = 'v1.2';
 
     const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -356,6 +360,7 @@
     let _allowedBranches = [];    // [{id,name}] 사용자가 조회 가능한 분원
     let _branchMap = {};          // id -> name
     let _currentBranchId = null;  // BR_ALL | BR_MINE | 특정 branch id
+    let _monthFilter = '';        // '' = 전체 기간, 아니면 'YYYY-MM'
     let _sortDir = 'asc';     // inquiry_date 정렬 방향
     let _editingId = null;
 
@@ -556,6 +561,27 @@
       loadConsults();
     }
 
+    /* ---------- 월 필터 ---------- */
+    function buildMonthOptions(){
+      var sel = $('month-select'); if(!sel) return;
+      var set = {};
+      _consults.forEach(function(r){ if(r.inquiry_date){ set[r.inquiry_date.slice(0,7)] = true; } });
+      var months = Object.keys(set).sort().reverse();  // 최신월 우선
+      // 현재 선택월이 더 이상 없으면 전체로 초기화
+      if(_monthFilter && months.indexOf(_monthFilter)===-1) _monthFilter = '';
+      var opts = ['<option value="">전체 기간</option>'];
+      months.forEach(function(m){
+        var y = m.slice(2,4), mo = String(Number(m.slice(5,7)));
+        opts.push('<option value="'+m+'">'+y+'년 '+mo+'월</option>');
+      });
+      sel.innerHTML = opts.join('');
+      sel.value = _monthFilter;
+    }
+    function onMonthChange(){
+      _monthFilter = $('month-select').value || '';
+      renderTable();
+    }
+
     async function loadTeachers(){
       try{
         var res = await db.from('users')
@@ -575,18 +601,19 @@
           // 관리자 전체: 분원 필터 없음
         } else if(_currentBranchId===BR_MINE){
           var ids = _allowedBranches.map(function(b){ return b.id; });
-          if(ids.length===0){ _consults=[]; renderTable(); return; }
+          if(ids.length===0){ _consults=[]; buildMonthOptions(); renderTable(); return; }
           q = q.in('branch_id', ids);
         } else if(_currentBranchId){
           q = q.eq('branch_id', _currentBranchId);
         } else {
           // 조회 가능한 분원 없음
-          _consults=[]; renderTable(); return;
+          _consults=[]; buildMonthOptions(); renderTable(); return;
         }
         var res = await q;
         if(res.error){ console.error(res.error); _consults=[]; }
         else _consults = res.data || [];
       }catch(e){ console.error(e); _consults=[]; }
+      buildMonthOptions();
       renderTable();
     }
 
@@ -597,8 +624,22 @@
       renderTable();
     }
 
+    function multiBranchView(){
+      return _currentBranchId===BR_ALL || _currentBranchId===BR_MINE;
+    }
+
     function renderTable(){
-      var rows = _consults.slice().sort(function(a,b){
+      // 분원 컬럼 표시/숨김 (전체·내담당일 때만 표시)
+      var tbl = document.querySelector('.table-card table');
+      if(tbl) tbl.classList.toggle('hide-branch-col', !multiBranchView());
+
+      // 월 필터 (접수일 기준, 클라이언트)
+      var base = _consults.slice();
+      if(_monthFilter){
+        base = base.filter(function(r){ return (r.inquiry_date||'').slice(0,7)===_monthFilter; });
+      }
+
+      var rows = base.sort(function(a,b){
         var av=a.inquiry_date||'', bv=b.inquiry_date||'';
         if(!av && !bv) return (a.created_at||'').localeCompare(b.created_at||'');
         if(!av) return 1;            // 접수일 없는 행은 항상 마지막
@@ -624,6 +665,7 @@
         return ''+
           '<tr>'+
             '<td class="seq">'+(i+1)+'</td>'+
+            '<td class="col-branch">'+esc(_branchMap[r.branch_id]||'-')+'</td>'+
             '<td class="date">'+fmtKDate(r.inquiry_date)+'</td>'+
             '<td>'+statusBadge(r.reg_status)+'</td>'+
             '<td style="white-space:nowrap">'+(r.school_grade?esc(r.school_grade):'<span style="color:#cbd5e1">—</span>')+'</td>'+
