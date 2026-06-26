@@ -21936,18 +21936,57 @@ async function confirmWithdraw() {
   if (lastClass) updateData.last_class_date = lastClass;
   if (enrolled && !isBulk) updateData.enrolled_at = enrolled;
 
-  let errors = [], success = 0;
+  let errors = [], success = 0, successIds = [];
   for (const t of targets) {
     try {
       const { error } = await db.from('users').update(updateData).eq('id', t.id);
       if (error) throw error;
-      success++;
+      success++; successIds.push(t.id);
     } catch(e) { errors.push((t.name || t.id) + ': ' + (e.message || e)); }
   }
 
   if (reportSnapshot && success) {
     try { await db.from('withdraw_reports').insert(reportSnapshot); }
     catch(e) { console.warn('퇴원보고서 저장 실패:', e); }
+  }
+
+  // 퇴원(inactive)만 consult.html 퇴원 탭에 자동 반영 (등록취소 cancelled 제외)
+  if (!isCancelled && successIds.length) {
+    try {
+      const { data: stuRows } = await db.from('users')
+        .select('id,name,school,grade,teacher_id')
+        .in('id', successIds);
+      const tIds = [...new Set((stuRows || []).map(s => s.teacher_id).filter(Boolean))];
+      let tMap = {};
+      if (tIds.length) {
+        const { data: tRows } = await db.from('users').select('id,name,branch_id').in('id', tIds);
+        (tRows || []).forEach(t => { tMap[t.id] = t; });
+      }
+      const wRecords = (stuRows || []).map(s => {
+        const t = s.teacher_id ? tMap[s.teacher_id] : null;
+        return {
+          branch_id:       t ? t.branch_id : null,
+          student_id:      s.id,
+          student_name:    s.name || '',
+          school:          s.school || null,
+          grade:           s.grade || null,
+          teacher_id:      s.teacher_id || null,
+          teacher_name:    t ? (t.name || null) : null,
+          last_class_date: lastClass || date,
+          withdrawn_at:    date,
+          withdraw_reason: reason || null,
+          note:            null,
+          source:          'auto',
+          created_by:      currentUser.id
+        };
+      }).filter(w => w.branch_id);
+      if (wRecords.length) {
+        const { error: wErr } = await db.from('withdrawals').insert(wRecords);
+        if (wErr) console.warn('withdrawals 자동반영 실패:', wErr);
+      }
+      const skipped = (stuRows || []).length - wRecords.length;
+      if (skipped > 0) console.warn('withdrawals 자동반영: 분원 유추 실패로 ' + skipped + '건 제외');
+    } catch(e) { console.warn('withdrawals 자동반영 오류:', e); }
   }
 
   btn.textContent = '📋 퇴원 처리'; btn.disabled = false;
