@@ -339,6 +339,14 @@
   .ts-confirm{ width:100%; margin-top:18px; padding:15px; font-size:17px; font-weight:800; background:#0e9488; color:#fff; border:none; border-radius:12px; cursor:pointer; }
   .ts-confirm:hover{ background:#0c7a73; }
   .ts-back{ margin-top:10px; background:none; border:none; color:#94a3b8; font-size:14px; cursor:pointer; }
+  .ts-custom-row{ display:flex; align-items:center; gap:8px; margin-top:12px; padding-top:12px; border-top:1px dashed #e2e8f0; }
+  .ts-custom-label{ font-size:13px; font-weight:700; color:#64748b; white-space:nowrap; }
+  .ts-custom-input{ flex:1; min-width:0; padding:12px; font-size:16px; font-weight:700; border:1.5px solid #cbd5e1; background:#fff; color:#334155; border-radius:10px; font-variant-numeric:tabular-nums; }
+  .ts-custom-go{ padding:12px 18px; font-size:15px; font-weight:800; background:#2d5a86; color:#fff; border:none; border-radius:10px; cursor:pointer; white-space:nowrap; }
+  .ts-custom-go:hover{ background:#24496e; }
+  .os-reason-input{ width:100%; box-sizing:border-box; margin-top:10px; padding:13px; font-size:16px; font-weight:600; border:1.5px solid #2d5a86; background:#fff; color:#334155; border-radius:10px; }
+  .ts-custom-toggle{ width:100%; margin-top:12px; padding:13px; font-size:15px; font-weight:700; background:#f8fafc; color:#475569; border:1.5px dashed #cbd5e1; border-radius:10px; cursor:pointer; }
+  .ts-custom-toggle:hover{ background:#f1f5f9; border-color:#94a3b8; }
   .os-subject{ width:100%; margin-top:8px; padding:12px; font-size:15px; border:1.5px solid #cbd5e1; border-radius:10px; box-sizing:border-box; }
   /* ── 시간 계획 탭 ── */
   .tp-box{ max-width:none; }
@@ -480,6 +488,12 @@
           <div class="ts-name" id="ts-name">—</div>
           <div class="ts-title" id="ts-title">예상 시간 선택</div>
           <div class="ts-grid" id="ts-grid"></div>
+          <button class="ts-custom-toggle" id="ts-custom-toggle" onclick="scTimeCustomToggle()">⏱ 직접 입력</button>
+          <div class="ts-custom-row" id="ts-custom-row" style="display:none">
+            <span class="ts-custom-label">직접 입력</span>
+            <input type="time" id="ts-custom" class="ts-custom-input">
+            <button class="ts-custom-go" onclick="scTimeCustomGo()">확인</button>
+          </div>
           <div class="ac-msg" id="ts-msg"></div>
           <button class="ts-back" onclick="scShowActionBack()">← 취소</button>
         </div>
@@ -489,12 +503,20 @@
           <div class="os-name" id="os-name">—</div>
           <div class="ts-title">외출 사유</div>
           <div class="ts-grid" id="os-reason"></div>
+          <div id="os-reason-custom-wrap" style="display:none">
+            <input type="text" id="os-reason-custom" class="os-reason-input" placeholder="외출 사유 입력 (예: 서점, 카페)" maxlength="20">
+          </div>
           <div id="os-subject-wrap" style="display:none">
             <div class="ts-title">과목</div>
             <div class="ts-grid" id="os-subject-grid"></div>
           </div>
           <div class="ts-title">예상 복귀까지</div>
           <div class="ts-grid" id="os-dur"></div>
+          <button class="ts-custom-toggle" id="os-dur-toggle" onclick="scOutDurToggle()">⏱ 복귀시각 직접 입력</button>
+          <div class="ts-custom-row" id="os-dur-custom-row" style="display:none">
+            <span class="ts-custom-label">복귀시각</span>
+            <input type="time" id="os-dur-custom" class="ts-custom-input" oninput="scOutDurCustom(this)">
+          </div>
           <button class="ts-confirm" onclick="scConfirmOut()">⚡ 외출 완료</button>
           <button class="ts-back" onclick="scShowActionBack()">← 취소</button>
         </div>
@@ -1153,7 +1175,7 @@
       // 외출 시작칸: 해당 슬롯이 진행중 외출이면 읽기전용 표시(편집 input 미생성 → 복귀 정산 로직 무손상)
       function outStartCell(slot, field, val){
         if(row && row.pending_out_start && pendingSlot === slot){
-          return '<div class="wk-pending">🚶 '+scWkHm(row.pending_out_start)+'<div class="wk-pending-lbl">외출중</div></div>';
+          return '<div class="wk-pending">🚶 '+scWkHm(row.pending_out_start)+'<div class="wk-pending-lbl">외출중</div></div>' + scWkMsgBtnFor(sid, field);
         }
         return cell(field, val);
       }
@@ -2099,10 +2121,11 @@
   }
 
   /* ── 시간계획: 시간선택 / 외출 모달 + 액션 ── */
-  var SC_OUT_REASONS = ["점심","저녁","타학원","병원","집"];
+  var SC_OUT_REASONS = ["점심","저녁","타학원","병원","집","기타"];
   var SC_OUT_SUBJECTS = ["국어","영어","수학","과학","기타"];
   var SC_OUT_DURS = [{l:"30분",m:30},{l:"1시간",m:60},{l:"1시간 30분",m:90},{l:"2시간",m:120},{l:"2시간 30분",m:150},{l:"3시간",m:180}];
   var _scOutReason = null, _scOutDurMin = null, _scOutSubject = null;
+  var _scOutCustomEnd = null, _scTimeMode = null;
 
   function scGenTimes(startMin, endMin){
     var a = [];
@@ -2120,7 +2143,7 @@
   function scShowEnterTime(){
     document.getElementById("kiosk-action-screen").style.display="none";
     document.getElementById("ts-name").textContent=_scKioskStudent?_scKioskStudent.name:"";
-    document.getElementById("ts-title").textContent="오늘 예상 하원시간을 선택하세요";
+    document.getElementById("ts-title").textContent="오늘 예상 하원시간을 선택하세요"; _scTimeMode="in"; { var _ci=document.getElementById("ts-custom"); if(_ci) _ci.value=""; var _cr=document.getElementById("ts-custom-row"); if(_cr) _cr.style.display="none"; var _ct=document.getElementById("ts-custom-toggle"); if(_ct) _ct.style.display=""; }
     var times=scGenTimes(20*60, 25*60+30);
     document.getElementById("ts-grid").innerHTML=times.map(function(t){return '<button onclick="scActIn(\''+t+':00\')">'+t+'</button>';}).join("");
     document.getElementById("ts-msg").textContent="";
@@ -2130,7 +2153,7 @@
   function scShowLeaveTime(){
     document.getElementById("kiosk-action-screen").style.display="none";
     document.getElementById("ts-name").textContent=_scKioskStudent?_scKioskStudent.name:"";
-    document.getElementById("ts-title").textContent="다음날 예상 등원시간을 선택하세요";
+    document.getElementById("ts-title").textContent="다음날 예상 등원시간을 선택하세요"; _scTimeMode="leave"; { var _ci=document.getElementById("ts-custom"); if(_ci) _ci.value=""; var _cr=document.getElementById("ts-custom-row"); if(_cr) _cr.style.display="none"; var _ct=document.getElementById("ts-custom-toggle"); if(_ct) _ct.style.display=""; }
     var times=scGenTimes(8*60, 18*60+30);
     document.getElementById("ts-grid").innerHTML=times.map(function(t){return '<button onclick="scActLeave(\''+t+':00\')">'+t+'</button>';}).join("");
     document.getElementById("ts-msg").textContent="";
@@ -2145,6 +2168,8 @@
     document.getElementById("os-dur").innerHTML=SC_OUT_DURS.map(function(d){return '<button onclick="scPickDur(this,'+d.m+')">'+d.l+'</button>';}).join("");
     document.getElementById("os-subject-grid").innerHTML=SC_OUT_SUBJECTS.map(function(s){return '<button onclick="scPickSubject(this,\''+s+'\')">'+s+'</button>';}).join("");
     document.getElementById("os-subject-wrap").style.display="none";
+    _scOutCustomEnd=null;
+    { var _orc=document.getElementById("os-reason-custom"); if(_orc) _orc.value=""; var _orw=document.getElementById("os-reason-custom-wrap"); if(_orw) _orw.style.display="none"; var _odc=document.getElementById("os-dur-custom"); if(_odc) _odc.value=""; var _odr=document.getElementById("os-dur-custom-row"); if(_odr) _odr.style.display="none"; var _odt=document.getElementById("os-dur-toggle"); if(_odt) _odt.style.display=""; }
     document.getElementById("kiosk-out-screen").style.display="";
   }
   function scPickReason(btn, r){
@@ -2155,6 +2180,7 @@
     var grid=document.getElementById("os-subject-grid");
     if(grid){ Array.prototype.forEach.call(grid.children,function(b){ b.classList.remove("sel"); }); }
     document.getElementById("os-subject-wrap").style.display=(r==="타학원")?"":"none";
+    var _orw=document.getElementById("os-reason-custom-wrap"); if(_orw) _orw.style.display=(r==="기타")?"":"none";
   }
   function scPickSubject(btn, s){
     _scOutSubject=s;
@@ -2162,7 +2188,8 @@
     btn.classList.add("sel");
   }
   function scPickDur(btn, m){
-    _scOutDurMin=m;
+    _scOutDurMin=m; _scOutCustomEnd=null;
+    var _odc=document.getElementById("os-dur-custom"); if(_odc) _odc.value="";
     Array.prototype.forEach.call(btn.parentNode.children,function(b){ b.classList.remove("sel"); });
     btn.classList.add("sel");
   }
@@ -2170,15 +2197,47 @@
   async function scConfirmOut(){
     if(!_scOutReason){ alert("외출 사유를 선택해주세요."); return; }
     if(_scOutReason==="타학원" && !_scOutSubject){ alert("과목을 선택해주세요."); return; }
-    if(!_scOutDurMin){ alert("예상 복귀시간을 선택해주세요."); return; }
+    var customReason="";
+    if(_scOutReason==="기타"){
+      customReason=(document.getElementById("os-reason-custom").value||"").trim();
+      if(!customReason){ alert("외출 사유를 입력해주세요."); return; }
+    }
+    if(!_scOutDurMin && !_scOutCustomEnd){ alert("예상 복귀시간을 선택하거나 입력해주세요."); return; }
     try{
       var now=scNowTime();
-      var reason=(_scOutReason==="타학원") ? ("타학원("+_scOutSubject+")") : _scOutReason;
-      var expEnd=scAddMinToTime(now,_scOutDurMin);
+      var reason=(_scOutReason==="타학원") ? ("타학원("+_scOutSubject+")") : (_scOutReason==="기타" ? customReason : _scOutReason);
+      var expEnd=_scOutCustomEnd ? _scOutCustomEnd : scAddMinToTime(now,_scOutDurMin);
       _scActionRow = await scRrUpsert({ pending_out_start: now, pending_out_is_next_day:false, pending_out_reason:reason, pending_out_expected_end:expEnd });
       scShowActionBack();
       scActDone("외출", now);
     }catch(e){ scShowActionBack(); scActError(e); }
+  }
+  // [직접입력] 시간선택 화면(입실 예상하원 / 하원 예상등원) 직접 입력 확인
+  function scTimeCustomGo(){
+    var v=document.getElementById("ts-custom").value;
+    if(!v){ document.getElementById("ts-msg").textContent="시간을 입력해주세요."; return; }
+    var t=v+":00";
+    if(_scTimeMode==="leave") scActLeave(t); else scActIn(t);
+  }
+  // [직접입력] 외출 복귀시각 직접 입력 → 절대시각 저장 (시간버튼과 상호배타)
+  function scOutDurCustom(inp){
+    var v=inp.value;
+    if(v){
+      _scOutCustomEnd=v+":00"; _scOutDurMin=null;
+      var g=document.getElementById("os-dur"); if(g){ Array.prototype.forEach.call(g.children,function(b){ b.classList.remove("sel"); }); }
+    } else { _scOutCustomEnd=null; }
+  }
+  // [직접입력 토글] 예상시간 직접 입력란 표시
+  function scTimeCustomToggle(){
+    var row=document.getElementById("ts-custom-row"); if(row) row.style.display="";
+    var btn=document.getElementById("ts-custom-toggle"); if(btn) btn.style.display="none";
+    var inp=document.getElementById("ts-custom"); if(inp) inp.value="";
+  }
+  // [직접입력 토글] 외출 복귀시각 직접 입력란 표시
+  function scOutDurToggle(){
+    var row=document.getElementById("os-dur-custom-row"); if(row) row.style.display="";
+    var btn=document.getElementById("os-dur-toggle"); if(btn) btn.style.display="none";
+    var inp=document.getElementById("os-dur-custom"); if(inp) inp.value="";
   }
 
   /* ============================================================
