@@ -1655,10 +1655,11 @@
     if(outEl) outEl.value = (row && row.expected_check_out) ? scWkHm(row.expected_check_out) : "";
     if(inEl) inEl.value = "";
     if(msgEl){ msgEl.textContent=""; msgEl.classList.remove("err"); }
-    _scExpLoadOut(1, row?row.out_1_reason:"", row?row.out_1_expected_end:"");
-    _scExpLoadOut(2, row?row.out_2_reason:"", row?row.out_2_expected_end:"");
-    // 외출 시작시각(실제) 표시: out_N_start, 진행중이면 pending_out_start
     var _pSlot = (row && row.pending_out_start) ? (!row.out_1_start ? 1 : (!row.out_2_start ? 2 : 0)) : 0;
+    // 외출중(진행중) 슬롯은 pending 사유·예상복귀를 표시 (복귀 전에도 확인·수정 가능)
+    _scExpLoadOut(1, row?(row.out_1_reason || (_pSlot===1?row.pending_out_reason:"")):"", row?(row.out_1_expected_end || (_pSlot===1?row.pending_out_expected_end:"")):"");
+    _scExpLoadOut(2, row?(row.out_2_reason || (_pSlot===2?row.pending_out_reason:"")):"", row?(row.out_2_expected_end || (_pSlot===2?row.pending_out_expected_end:"")):"");
+    // 외출 시작시각(실제) 표시: out_N_start, 진행중이면 pending_out_start
     [1,2].forEach(function(_s){
       var _stt = (row ? row["out_"+_s+"_start"] : "") || ((_pSlot===_s && row) ? row.pending_out_start : "");
       var _el = document.getElementById("wk-exp-start"+_s);
@@ -1747,12 +1748,16 @@
       var curRow = (_wkData[sid]||{})[date] || null;
       // 당일행: 예상하원 + 외출1/2 사유·예상복귀 (입력값이 있거나, 당일행이 이미 있을 때만 — 빈 행 생성 방지)
       var hasDay = (outV !== null) || o1.reason || o1.expEnd || o2.reason || o2.expEnd || curRow;
+      // 외출중 슬롯의 사유·예상복귀는 pending_out_*에 기록 (복귀 시 scActReturn이 out_N으로 이전 → 정합성 유지)
+      var pSlot = (curRow && curRow.pending_out_start) ? (!curRow.out_1_start ? 1 : (!curRow.out_2_start ? 2 : 0)) : 0;
       if(hasDay){
+        var patch = { student_id: sid, attend_date: date, expected_check_out: outV };
+        if(pSlot===1){ patch.pending_out_reason = o1.reason; patch.pending_out_expected_end = o1.expEnd; }
+        else { patch.out_1_reason = o1.reason; patch.out_1_expected_end = o1.expEnd; }
+        if(pSlot===2){ patch.pending_out_reason = o2.reason; patch.pending_out_expected_end = o2.expEnd; }
+        else { patch.out_2_reason = o2.reason; patch.out_2_expected_end = o2.expEnd; }
         var r1 = await db.from("reading_room_attendance").upsert(
-          { student_id: sid, attend_date: date,
-            expected_check_out: outV,
-            out_1_reason: o1.reason, out_1_expected_end: o1.expEnd,
-            out_2_reason: o2.reason, out_2_expected_end: o2.expEnd },
+          patch,
           { onConflict: "student_id,attend_date" }
         ).select("*").maybeSingle();
         if(r1.error) throw r1.error;
