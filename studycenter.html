@@ -2694,9 +2694,80 @@
   /* ============================================================
      [INIT]
   ============================================================ */
+  /* ============================================================
+     [AUTO-RELOAD] 새벽 3시 영업일 전환 시 자동 새로고침
+     · 근무자 PC/태블릿 상시 켜둠 대응 (영업일이 안 바뀌는 문제 해결)
+     · 현재 화면(키오스크/관리탭) 유지 + 새로고침 전 미저장분 저장
+  ============================================================ */
+  var _scAutoReloadBizDay = null;
+  var _scAutoReloading = false;
+  async function scAutoReloadDo(){
+    if(_scAutoReloading) return;
+    _scAutoReloading = true;
+    try{
+      var onAdmin = document.getElementById('sc-admin').classList.contains('active');
+      var tab = 'weekly';
+      if(onAdmin){
+        ['weekly','register','timeplan'].forEach(function(t){
+          var b=document.getElementById('admin-tab-btn-'+t);
+          if(b && b.classList.contains('active')) tab=t;
+        });
+      }
+      try{
+        localStorage.setItem('sc_reload_restore','1');
+        localStorage.setItem('sc_reload_screen', onAdmin?'admin':'kiosk');
+        localStorage.setItem('sc_reload_tab', tab);
+      }catch(e){}
+      // 안정성: 주간출결 미저장 변경분 저장 후 새로고침
+      if(onAdmin && tab==='weekly'){
+        try{ if(document.querySelectorAll('.wk-t.dirty').length){ await scWkSaveAll(); } }
+        catch(e){ console.error('자동 저장 실패', e); }
+      }
+    }catch(e){}
+    location.reload();
+  }
+  function scAutoReloadTick(){
+    try{
+      if(typeof scRrToday!=='function') return;
+      var d = new Date();
+      if(d.getHours() < 3) return;                       // 새벽 3시 이전 대기
+      if(scRrToday() === _scAutoReloadBizDay) return;    // 영업일 안 바뀌면 대기
+      var modalOpen = ['wk-xout-overlay','wk-exp-overlay'].some(function(id){
+        var e=document.getElementById(id); return e && e.classList.contains('open');
+      });
+      if(modalOpen) return;                              // 모달 편집 중이면 보류
+      scAutoReloadDo();
+    }catch(e){}
+  }
+  function scAutoReloadInit(){
+    if(typeof scRrToday==='function') _scAutoReloadBizDay = scRrToday();
+    setInterval(scAutoReloadTick, 60*1000);
+  }
+  async function scReloadRestore(){
+    var flag=null;
+    try{ flag = localStorage.getItem('sc_reload_restore'); }catch(e){}
+    if(flag !== '1') return;
+    try{ localStorage.removeItem('sc_reload_restore'); }catch(e){}
+    var screen=null, tab='weekly';
+    try{ screen = localStorage.getItem('sc_reload_screen'); tab = localStorage.getItem('sc_reload_tab') || 'weekly'; }catch(e){}
+    if(screen !== 'admin') return;                       // 키오스크는 기본값 유지
+    try{
+      var savedId = localStorage.getItem('savedUserId');
+      if(!savedId) return;
+      var res = await db.from('users').select('id, name, role').eq('id', savedId).maybeSingle();
+      if(res.error || !res.data) return;
+      if(res.data.role !== 'admin' && res.data.role !== 'desk') return;
+      scCurrentUser = res.data;
+      scShowAdmin();
+      scAdminTab(tab);
+    }catch(e){}
+  }
+
   window.addEventListener('DOMContentLoaded', function(){
     // 기본은 키오스크 모드 (학생 무인용)
     scShowKiosk();
+    scAutoReloadInit();   // 새벽 3시 자동 새로고침 타이머
+    scReloadRestore();    // 자동 새로고침 후 화면 복원
   });
 </script>
   <div class="wk-xout-overlay" id="wk-xout-overlay" onclick="if(event.target===this)scWkXoutClose()">
