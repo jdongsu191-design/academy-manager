@@ -1604,6 +1604,7 @@
   }
 
   var MIN_FS = 9.5;  // 학부모 공지용 최소 가독 폰트
+  var FILL_CAP = 42; // 여백 채움 행 padding 상한(안전 상한). 클수록 꽉 채움 / 작을수록 아래 여백↑ (기존 28)
 
   function fitSched2(){
     var a4 = document.getElementById('a4-p2');
@@ -1614,6 +1615,7 @@
     var twoCol = sched.classList.contains('two-col');
     var visualRows = twoCol ? Math.ceil(n/2) : n;
     var avail = sched.parentElement.clientHeight - sched.previousElementSibling.offsetHeight - 6;
+    a4.style.setProperty('--cell-pad', '4px');   // 이전 강좌 채움값 잔존 방지: 폰트/넘침 측정 전 기준 리셋
     var gap = visualRows>12?3:(visualRows>8?5:7);
     a4.style.setProperty('--row-gap', gap+'px');
     var lo=MIN_FS, hi=state.maxfs, best=MIN_FS;
@@ -1639,10 +1641,12 @@
   }
   function fillSched2Padding(a4, sched, avail, n){
     a4.style.setProperty('--cell-pad', '4px');
-    var natural = sched.scrollHeight;
+    var _k = sched.children, _g = parseFloat(getComputedStyle(sched).rowGap) || 0, natural = 0;
+    for(var _i = 0; _i < _k.length; _i++) natural += _k[_i].offsetHeight;
+    natural += _g * Math.max(0, _k.length - 1);
     var slack = avail - natural;
     if(slack <= 0) return;
-    var extra = Math.min(28, (slack / n) / 2);
+    var extra = Math.min(FILL_CAP, (slack / n) / 2);
     a4.style.setProperty('--cell-pad', (4+extra).toFixed(1)+'px');
   }
 
@@ -1654,6 +1658,7 @@
     var twoCol = sched.classList.contains('two-col');
     var visualRows = twoCol ? Math.ceil(n/2) : n;
     var avail = sched.parentElement.clientHeight - sched.previousElementSibling.offsetHeight - 6;
+    a4.style.setProperty('--cell-pad', '4px');   // 이전 강좌 채움값 잔존 방지: 폰트/넘침 측정 전 기준 리셋
 
     var gap = visualRows>12?3:(visualRows>8?5:7);
     a4.style.setProperty('--row-gap', gap+'px');
@@ -1683,10 +1688,12 @@
   }
   function fillSchedPadding(a4, sched, avail, n){
     a4.style.setProperty('--cell-pad', '4px');
-    var natural = sched.scrollHeight;
+    var _k = sched.children, _g = parseFloat(getComputedStyle(sched).rowGap) || 0, natural = 0;
+    for(var _i = 0; _i < _k.length; _i++) natural += _k[_i].offsetHeight;
+    natural += _g * Math.max(0, _k.length - 1);
     var slack = avail - natural;
     if(slack <= 0){ return; }
-    var extra = Math.min(28, (slack / n) / 2);
+    var extra = Math.min(FILL_CAP, (slack / n) / 2);
     var pad = 4 + extra;
     a4.style.setProperty('--cell-pad', pad.toFixed(1)+'px');
   }
@@ -2628,6 +2635,24 @@
   // 파일 안전 이름 조각
   function sylSafe(s){ return String(s||'').replace(/[\/:*?"<>|]/g,'_').trim(); }
 
+  // 요약 A4를 화면 밖에서 캡처해 canvas 반환 (실패 시 null). JPG(전체) ZIP 포함용 — 수동 요약 export와 동일 설정.
+  async function sylCaptureSummaryCanvas(){
+    var html = (typeof sylBuildSummaryHTML==='function') ? sylBuildSummaryHTML() : '';
+    if(!html) return null;
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;left:-99999px;top:0;width:794px;background:#fff;z-index:-1;pointer-events:none';
+    wrap.innerHTML = html;
+    document.body.appendChild(wrap);
+    try {
+      var node = wrap.querySelector('#syl-summary-page') || wrap.firstElementChild;
+      await sylLoadScript(SYL_LIBS.h2c);
+      if(typeof html2canvas === 'undefined') throw new Error('html2canvas 로드 실패');
+      return await html2canvas(node, { scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff', width: 794, windowWidth: 794, logging: false });
+    } finally {
+      if(wrap.parentNode) wrap.parentNode.removeChild(wrap);
+    }
+  }
+
   async function sylExportJPG(pages, base){
     base = base || sylExportName();
     if(pages.length === 1){
@@ -2645,6 +2670,14 @@
         var pageSuffix = (pg.pageNo > 1) ? ('_' + pg.pageNo + '페이지') : '';
         zip.file(seq + '_' + sylSafe(pg.course) + pageSuffix + '.jpg', b);
       }
+      // 요약 이미지도 ZIP에 포함 (맨 앞 정렬용 00_ 접두사). 실패해도 강좌 ZIP은 정상 저장.
+      try {
+        var _sumCv = await sylCaptureSummaryCanvas();
+        if(_sumCv){
+          var _sumB = await sylCanvasToBlob(_sumCv, 'image/jpeg', 0.95);
+          zip.file('00_강좌요약.jpg', _sumB);
+        }
+      } catch(_se){ console.warn('요약 이미지 ZIP 포함 실패(건너뜀):', _se); }
       var zipBlob = await zip.generateAsync({type:'blob'});
       await sylSaveFile(zipBlob, base + '.zip', 'application/zip', 'zip');
     }
