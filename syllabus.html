@@ -356,6 +356,7 @@
     <span class="tb-spacer"></span>
     <span class="tb-fit" id="syl-fit"></span>
     <span class="tb-user" id="syl-user"></span>
+    <button type="button" id="syl-vice-view-btn" onclick="sylViewOpen()" style="display:none;margin-left:10px;padding:5px 12px;border:1px solid #d6bcbc;background:#fdf6f6;color:#5C2A2A;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">&#128214; 조회</button>
     <button type="button" id="syl-logout-btn" onclick="sylLogout()"
       style="margin-left:10px;padding:5px 12px;border:1px solid #d1d8e0;background:#fff;color:#64748b;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">로그아웃</button>
   </div>
@@ -1296,7 +1297,7 @@
   var _sylViewActive = false;
 
   async function sylViewOpen(){
-    if(!currentUser || currentUser.role !== 'admin'){ alert('관리자 전용 기능입니다.'); return; }
+    if(!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'vice_director')){ alert('관리자/부원장 전용 기능입니다.'); return; }
     _sylViewBackup = {
       sylDoc: sylDoc, state: state,
       recordId: window._sylCurrentRecordId,
@@ -1349,8 +1350,13 @@
     if(!sel) return;
     try {
       var res = await db.from('branches').select('id, name').order('name', { ascending: true });
+      var list = (res.data || []);
+      if(currentUser && currentUser.role === 'vice_director'){
+        var allow = (Array.isArray(currentUser.branch_ids) && currentUser.branch_ids.length) ? currentUser.branch_ids : (currentUser.branch_id ? [currentUser.branch_id] : []);
+        list = list.filter(function(b){ return allow.indexOf(b.id) !== -1; });
+      }
       var html = '<option value="">분원 선택…</option>';
-      (res.data || []).forEach(function(b){ html += '<option value="' + esc(b.id) + '">' + esc(b.name || '(이름없음)') + '</option>'; });
+      list.forEach(function(b){ html += '<option value="' + esc(b.id) + '">' + esc(b.name || '(이름없음)') + '</option>'; });
       sel.innerHTML = html;
     } catch(e){ console.warn('조회 분원 예외:', e); }
   }
@@ -1366,7 +1372,7 @@
     if(!branchId) return;
     try {
       var res = await db.from('users').select('id, name, branch_id, status, deleted_at')
-        .eq('role','teacher').eq('branch_id', branchId).order('name', { ascending: true });
+        .in('role',['teacher','vice_director']).eq('branch_id', branchId).order('name', { ascending: true });
       var rows = (res.data || []).filter(function(u){ return u.status !== 'inactive' && !u.deleted_at; });
       var html = '<option value="">선생님 선택…</option>';
       rows.forEach(function(u){ html += '<option value="' + esc(u.id) + '">' + esc(u.name || '(이름없음)') + '</option>'; });
@@ -1598,6 +1604,7 @@
   }
 
   var MIN_FS = 9.5;  // 학부모 공지용 최소 가독 폰트
+  var FILL_CAP = 42; // 여백 채움 행 padding 상한(안전 상한). 클수록 꽉 채움 / 작을수록 아래 여백↑ (기존 28)
 
   function fitSched2(){
     var a4 = document.getElementById('a4-p2');
@@ -1636,7 +1643,7 @@
     var natural = sched.scrollHeight;
     var slack = avail - natural;
     if(slack <= 0) return;
-    var extra = Math.min(28, (slack / n) / 2);
+    var extra = Math.min(FILL_CAP, (slack / n) / 2);
     a4.style.setProperty('--cell-pad', (4+extra).toFixed(1)+'px');
   }
 
@@ -1680,7 +1687,7 @@
     var natural = sched.scrollHeight;
     var slack = avail - natural;
     if(slack <= 0){ return; }
-    var extra = Math.min(28, (slack / n) / 2);
+    var extra = Math.min(FILL_CAP, (slack / n) / 2);
     var pad = 4 + extra;
     a4.style.setProperty('--cell-pad', pad.toFixed(1)+'px');
   }
@@ -1769,7 +1776,7 @@
       var res = await db.from('users').select('*').eq('username', username).eq('password', password).maybeSingle();
       var data = res.data;
       if(res.error || !data){ if(errEl) errEl.textContent = '아이디 또는 비밀번호가 올바르지 않습니다.'; return; }
-      if(data.role !== 'teacher' && data.role !== 'admin'){ if(errEl) errEl.textContent = '진도계획서 권한이 없는 계정입니다 (선생님/관리자 전용).'; return; }
+      if(data.role !== 'teacher' && data.role !== 'admin' && data.role !== 'vice_director'){ if(errEl) errEl.textContent = '진도계획서 권한이 없는 계정입니다 (선생님/관리자 전용).'; return; }
       if(data.status === 'pending'){ if(errEl) errEl.textContent = '관리자 승인 대기 중인 계정입니다.'; return; }
       if(data.status === 'inactive' || data.deleted_at){ if(errEl) errEl.textContent = '비활성화된 계정입니다.'; return; }
       // 성공 → 메인과 동일하게 저장 후 리로드(기존 인증·초기화 흐름 재사용)
@@ -1819,7 +1826,7 @@
       var res = await db.from('users').select('*').eq('id', savedId).single();
       var data = res.data, error = res.error;
       if(error || !data){ block('계정 조회에 실패했습니다. 다시 로그인해 주세요.', '계정 조회 실패', true); return; }
-      if(data.role !== 'teacher' && data.role !== 'admin'){
+      if(data.role !== 'teacher' && data.role !== 'admin' && data.role !== 'vice_director'){
         block('진도계획서 제작 권한이 없습니다 (선생님/관리자 전용). 다른 계정으로 로그인하세요.', data.name + ' (' + data.role + ')', true);
         return;
       }
@@ -1831,6 +1838,7 @@
       currentUser = data;
       var roleLabel = (data.role === 'admin') ? '관리자' : '선생님';
       document.getElementById('syl-user').textContent = '✅ ' + data.name + ' (' + roleLabel + ')';
+      var _vb = document.getElementById('syl-vice-view-btn'); if(_vb) _vb.style.display = (data.role === 'vice_director') ? '' : 'none';
       blocker.style.display = 'none';
       topbar.style.display = 'flex';
       shell.classList.add('ready');
@@ -1914,7 +1922,7 @@
     if(!branchId) return;
     try {
       var res = await db.from('users').select('id, name, branch_id, status, deleted_at, profile_image_url')
-        .eq('role', 'teacher').eq('branch_id', branchId).order('name', { ascending: true });
+        .in('role',['teacher','vice_director']).eq('branch_id', branchId).order('name', { ascending: true });
       if(res.error){ console.warn('선생님 조회 실패:', res.error); return; }
       var rows = (res.data || []).filter(function(u){ return u.status !== 'inactive' && !u.deleted_at; });
       var html = '<option value="">선생님 선택…</option>';
@@ -2100,8 +2108,8 @@
     if(schedAdd){
       schedAdd.addEventListener('click', function(){
         if(!Array.isArray(state.sched)) state.sched = [];
-        if(state.sched.length >= 15){
-          alert('회차별 진도는 1페이지에 최대 15개까지 입력할 수 있습니다.\n\n16회차부터는 아래의 "2페이지 (다음 달)" 기능을 켜고 입력해 주세요.\n( ☑ 2페이지 추가 → 진도 입력 )');
+        if(state.sched.length >= 20){
+          alert('회차별 진도는 1페이지에 최대 20개까지 입력할 수 있습니다.\n\n21회차부터는 아래의 "2페이지 (다음 달)" 기능을 켜고 입력해 주세요.\n( ☑ 2페이지 추가 → 진도 입력 )');
           return;
         }
         state.sched.push(['', '', '', '']);
@@ -2251,8 +2259,8 @@
       sym.addEventListener('click', function(e){ sylOpenSymPop(e.currentTarget, c, function(v){ pg.sched2[i][2] = v; scheduleRender(); }); });
       c.addEventListener('input', function(){ pg.sched2[i][2] = c.value; scheduleRender(); });
       div.querySelector('.fmv').addEventListener('click', function(){
-        if(state.sched.length >= 15){
-          alert('1페이지는 최대 15개까지 입력할 수 있습니다.\n먼저 1페이지 행을 정리한 뒤 옮겨 주세요.');
+        if(state.sched.length >= 20){
+          alert('1페이지는 최대 20개까지 입력할 수 있습니다.\n먼저 1페이지 행을 정리한 뒤 옮겨 주세요.');
           return;
         }
         var moved = pg.sched2.splice(i, 1)[0];
@@ -2333,8 +2341,8 @@
         if(e.key !== 'Enter') return;
         e.preventDefault();
         if(i >= state.sched.length - 1){          // 마지막 행이면 새 행 추가
-          if(state.sched.length >= 15){
-            alert('회차별 진도는 1페이지에 최대 15개까지 입력할 수 있습니다.\n\n16회차부터는 아래의 "2페이지 (다음 달)" 기능을 켜고 입력해 주세요.\n( ☑ 2페이지 추가 → 진도 입력 )');
+          if(state.sched.length >= 20){
+            alert('회차별 진도는 1페이지에 최대 20개까지 입력할 수 있습니다.\n\n21회차부터는 아래의 "2페이지 (다음 달)" 기능을 켜고 입력해 주세요.\n( ☑ 2페이지 추가 → 진도 입력 )');
             return;
           }
           state.sched.push(['', '', '', '']);
