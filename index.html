@@ -16996,6 +16996,14 @@ async function renderAdminNajeFolderView(){
         var k = r.folder_name || '__none__';
         folderCounts[k] = (folderCounts[k] || 0) + 1;
       });
+      // [Step2a] naje_folders 레지스트리의 빈 폴더도 합집합으로 포함 (N제 0개여도 표시)
+      try {
+        var { data: regFolders } = await db.from('naje_folders')
+          .select('name').eq('target_grade', _adminNajeFolderSelected);
+        (regFolders||[]).forEach(function(rf){
+          if(rf.name && !(rf.name in folderCounts)) folderCounts[rf.name] = 0;
+        });
+      } catch(regErr){ console.warn('[naje_folders 로드 실패]', regErr); }
       grid.innerHTML = adminNajeBuildSubfolderGrid(folderCounts, _adminNajeFolderSelected);
     } catch(e) {
       grid.innerHTML = '<div class="empty-state"><p>불러오기 실패</p></div>';
@@ -17044,6 +17052,15 @@ async function renderAdminNajeFolderView(){
       rb.style.cssText = 'padding:6px 12px;border:1.5px solid #fbbf24;border-radius:8px;background:#fffbeb;color:#b45309;font-size:12px;font-weight:700;cursor:pointer';
       rb.onclick = function(){ adminNajeRenameSubfolder(); };
       crumbEl.insertBefore(rb, inlineBtn);
+      // [Step2a] 폴더 삭제 버튼 (빈 폴더만 실제 삭제, 함수 내부에서 N제 존재 시 거부)
+      var _delBtnId = 'admin-naje-subfolder-del-btn';
+      var _oldDel = document.getElementById(_delBtnId); if(_oldDel) _oldDel.remove();
+      var _delb = document.createElement('button');
+      _delb.id = _delBtnId;
+      _delb.textContent = '🗑️ 폴더 삭제';
+      _delb.style.cssText = 'padding:6px 12px;border:1.5px solid #fca5a5;border-radius:8px;background:#fff5f5;color:#b91c1c;font-size:12px;font-weight:700;cursor:pointer';
+      _delb.onclick = (function(_fn){ return function(){ adminNajeDeleteEmptyFolder(_fn); }; })(_adminNajeSubfolderSelected);
+      crumbEl.insertBefore(_delb, inlineBtn);
     }
   }
 
@@ -17137,14 +17154,49 @@ function adminNajeBuildSubfolderGrid(folderCounts, grade){
 }
 
 // "새 폴더 만들기" 클릭 \u2192 등록 탭으로 이동하면서 학년+폴더 입력 유도
-function adminNajeCreateNewSubfolder(){
+async function adminNajeCreateNewSubfolder(){
   var grade = _adminNajeFolderSelected;
   if(!['고1','고2','고3'].includes(grade)){ alert('학년 폴더에서만 가능합니다'); return; }
   var folderName = prompt('새 폴더 이름을 입력하세요:');
   if(!folderName) return;
   folderName = folderName.trim();
   if(!folderName) return;
-  switchAdminNajeTab('upload', { prefillGrade: grade, prefillFolder: folderName });
+  try {
+    // 중복 체크 (레지스트리 + 파생)
+    var { data: existReg } = await db.from('naje_folders').select('id').eq('target_grade', grade).eq('name', folderName).limit(1);
+    if(existReg && existReg.length){ alert('이미 같은 이름의 폴더가 있습니다: ' + folderName); return; }
+    var { data: existSet } = await db.from('naje_sets').select('id').eq('target_grade', grade).eq('folder_name', folderName).limit(1);
+    if(existSet && existSet.length){ alert('이미 같은 이름의 폴더가 있습니다: ' + folderName); return; }
+    var _payload = { target_grade: grade, name: folderName };
+    try { if(typeof currentUser !== 'undefined' && currentUser && currentUser.id) _payload.created_by = currentUser.id; } catch(e){}
+    var { error } = await db.from('naje_folders').insert(_payload);
+    if(error) throw error;
+    alert('✅ 폴더가 생성되었습니다: ' + folderName);
+    renderAdminNajeFolderView();
+  } catch(e){
+    alert('폴더 생성 실패: ' + (e.message || e));
+  }
+}
+
+// [Step2a] 빈 폴더 삭제 (N제가 있으면 거부)
+async function adminNajeDeleteEmptyFolder(folderName){
+  var grade = _adminNajeFolderSelected;
+  if(!['고1','고2','고3'].includes(grade)) return;
+  if(!folderName) return;
+  try {
+    var { data: sets } = await db.from('naje_sets').select('id').eq('target_grade', grade).eq('folder_name', folderName).limit(1);
+    if(sets && sets.length){ alert('이 폴더에 N제가 있어 삭제할 수 없습니다.\n먼저 N제를 다른 폴더나 미분류로 옮겨주세요.'); return; }
+  } catch(e){ alert('확인 실패: ' + (e.message || e)); return; }
+  if(!confirm('빈 폴더 "' + folderName + '" 을(를) 삭제할까요?')) return;
+  try {
+    var { error } = await db.from('naje_folders').delete().eq('target_grade', grade).eq('name', folderName);
+    if(error) throw error;
+    alert('✅ 폴더가 삭제되었습니다');
+    _adminNajeSubfolderSelected = null;
+    renderAdminNajeFolderView();
+  } catch(e){
+    alert('폴더 삭제 실패: ' + (e.message || e));
+  }
 }
 
 function adminNajeSelectSubfolder(folderName){
@@ -17186,10 +17238,16 @@ async function adminNajeRenameSubfolder(){
   if(!newName || newName === oldName) return;
 
   try {
+    // [Step2a] 중복 이름 방지 (레지스트리 + 파생)
+    var { data: _dupReg } = await db.from('naje_folders').select('id').eq('target_grade', _adminNajeFolderSelected).eq('name', newName).limit(1);
+    var { data: _dupSet } = await db.from('naje_sets').select('id').eq('target_grade', _adminNajeFolderSelected).eq('folder_name', newName).limit(1);
+    if((_dupReg && _dupReg.length) || (_dupSet && _dupSet.length)){ alert('이미 같은 이름의 폴더가 있습니다: ' + newName); return; }
     var { error } = await db.from('naje_sets').update({ folder_name: newName })
       .eq('target_grade', _adminNajeFolderSelected)
       .eq('folder_name', oldName);
     if(error) throw error;
+    // [Step2a] 레지스트리 폴더명 동기화
+    try { await db.from('naje_folders').update({ name: newName }).eq('target_grade', _adminNajeFolderSelected).eq('name', oldName); } catch(_re){ console.warn('[naje_folders 이름변경 동기화 실패]', _re); }
     alert('\u2705 폴더 이름이 변경되었습니다');
     _adminNajeSubfolderSelected = newName;
     renderAdminNajeFolderView();
