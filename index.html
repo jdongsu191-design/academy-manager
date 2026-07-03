@@ -3265,14 +3265,15 @@
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div>
-          <label style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">퇴원일 *</label>
+          <label style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">퇴원일</label>
           <input type="date" id="withdraw-date" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
         </div>
         <div>
-          <label style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">마지막 수업일</label>
+          <label style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">마지막 수업일 *</label>
           <input type="date" id="withdraw-last-class" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
         </div>
       </div>
+      <div style="font-size:11px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;padding:7px 10px;line-height:1.5">📊 마지막 수업일이 <b>월별 수강인원 통계</b>에 반영됩니다.</div>
       <div>
         <label style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">입학일</label>
         <input type="date" id="withdraw-enrolled" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
@@ -5878,7 +5879,7 @@ function wnRenderTable() {
       <th style="min-width:46px;cursor:pointer;user-select:none" onclick="wnToggleSort()" title="시간순 정렬 토글"><span style="text-decoration:underline dotted 2px #86efac">시간</span> ${_wnSortMode==='time'?'<span style="color:#fde047">⬇</span>':'⇅'}</th>
       <th style="min-width:52px;cursor:pointer;user-select:none" onclick="wnBulkModal('attendance')" title="클릭: 일괄처리">
         <span style="text-decoration:underline dotted 2px #86efac">출석</span> ✦</th>
-      <th style="min-width:52px;cursor:pointer;user-select:none" onclick="wnBulkModal('homework')" title="클릭: 일괄처리">
+      <th style="min-width:52px;cursor:pointer;user-select:none" onclick="wnBulkModal('homework_done')" title="클릭: 일괄처리">
         <span style="text-decoration:underline dotted 2px #86efac">숙제</span> ✦</th>
       <th style="min-width:30px">본시</th>
       <th style="min-width:30px">재시</th>
@@ -13640,7 +13641,8 @@ async function tesLoadScores() {
     var { data: scores } = await db.from('exam_scores')
       .select('student_id,subject,score,note')
       .in('student_id', sids)
-      .eq('year', year).eq('semester', semester).eq('exam_type', examType);
+      .eq('year', year).eq('semester', semester).eq('exam_type', examType)
+      .order('subject');
 
     var scoresByStudent = {}, noteByStudent = {};
     (scores || []).forEach(function(sc) {
@@ -13696,7 +13698,7 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
       var subjVal  = rec.subject || '수학';
       var scoreVal = (rec.score !== undefined && rec.score !== null) ? rec.score : '';
       return '<div class="tes-subj-item" style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;background:#fff;border:1px solid ' + col.border + ';border-radius:7px;padding:4px 6px;position:relative;min-width:70px">'
-        + (ri > 0 ? '<button onclick="tesRemoveSubjRow(this)" style="position:absolute;top:2px;right:2px;width:14px;height:14px;border:none;border-radius:50%;background:#fca5a5;color:#dc2626;font-size:9px;cursor:pointer;line-height:14px;padding:0">&times;</button>' : '')
+        + '<button onclick="tesRemoveSubjRow(this)" style="position:absolute;top:2px;right:2px;width:14px;height:14px;border:none;border-radius:50%;background:#fca5a5;color:#dc2626;font-size:9px;cursor:pointer;line-height:14px;padding:0">&times;</button>'
         + '<input type="text" class="tes-subj-input" data-sid="' + sid + '" data-ri="' + ri + '" value="' + subjVal + '"'
         + ' style="width:62px;padding:2px 4px;border:1px solid #ddd6fe;border-radius:4px;font-size:11px;font-weight:600;color:#7c3aed;text-align:center;outline:none;background:#faf5ff;box-sizing:border-box"'
         + ' onfocus="this.style.borderColor=\'#7c3aed\'" onblur="this.style.borderColor=\'#ddd6fe\'">'
@@ -13763,7 +13765,8 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
 }
 
 async function tesSaveScores(year, semester, examType) {
-  var upsertData = [];
+  year = parseInt(year); semester = parseInt(semester);
+  var upsertData = [], uiKeys = {};   // uiKeys[sid][subject]=1 (현재 UI에 있는 과목)
   _tesStudents.forEach(function(stu) {
     var sid    = stu.id;
     var noteEl = document.querySelector('.tes-note-input[data-sid="' + sid + '"]');
@@ -13775,9 +13778,11 @@ async function tesSaveScores(year, semester, examType) {
       var subj     = subjInp  ? subjInp.value.trim()  : '';
       var scoreV   = scoreInp ? scoreInp.value.trim() : '';
       if (!subj) return;
+      if (uiKeys[sid] && uiKeys[sid][subj]) return;   // 같은 학생 내 과목 중복 방지
+      (uiKeys[sid] = uiKeys[sid] || {})[subj] = 1;
       upsertData.push({
         student_id: sid, teacher_id: currentUser.id,
-        year: parseInt(year), semester: parseInt(semester), exam_type: examType,
+        year: year, semester: semester, exam_type: examType,
         subject: subj, score: scoreV !== '' ? parseFloat(scoreV) : null, note: note
       });
     });
@@ -13788,6 +13793,18 @@ async function tesSaveScores(year, semester, examType) {
       onConflict: 'student_id,year,semester,exam_type,subject'
     });
     if (error) throw error;
+    // UI에서 제거된 과목을 DB에서 삭제 (DB↔UI 동기화) — upsert 성공 후라 안전
+    var sids = _tesStudents.map(function(s){ return s.id; });
+    var sel = await db.from('exam_scores').select('student_id,subject')
+      .in('student_id', sids).eq('year', year).eq('semester', semester).eq('exam_type', examType);
+    if (sel.error) throw sel.error;
+    var stale = (sel.data || []).filter(function(r){ return !(uiKeys[r.student_id] && uiKeys[r.student_id][r.subject]); });
+    for (var i = 0; i < stale.length; i++) {
+      var del = await db.from('exam_scores').delete()
+        .eq('student_id', stale[i].student_id).eq('year', year)
+        .eq('semester', semester).eq('exam_type', examType).eq('subject', stale[i].subject);
+      if (del.error) throw del.error;
+    }
     var btn = document.querySelector('#tes-table-wrap button');
     if (btn) {
       var orig = btn.innerHTML;
@@ -13797,7 +13814,12 @@ async function tesSaveScores(year, semester, examType) {
   } catch(e) { alert('저장 실패: ' + (e.message || e)); }
 }
 
-function tesRemoveSubjRow(btn) { btn.closest('.tes-subj-item').remove(); }
+function tesRemoveSubjRow(btn) {
+  var it = btn.closest('.tes-subj-item');
+  var w  = it && it.closest('.tes-subj-wrap');
+  if (w && w.querySelectorAll('.tes-subj-item').length <= 1) { alert('최소 1개 과목은 있어야 합니다'); return; }
+  if (it) it.remove();
+}
 
 function tesAddSubjItem(addBtn, sid) {
   var subjWrap = addBtn.previousElementSibling;
@@ -13996,7 +14018,8 @@ async function esLoadScores() {
     var { data: scores } = await db.from('exam_scores')
       .select('student_id,subject,score,note')
       .in('student_id', studentIds)
-      .eq('year', year).eq('semester', semester).eq('exam_type', examType);
+      .eq('year', year).eq('semester', semester).eq('exam_type', examType)
+      .order('subject');
 
     var scoresByStudent = {}, noteByStudent = {};
     (scores || []).forEach(function(sc) {
@@ -14057,7 +14080,7 @@ function esRenderTable(year, semester, examType, teacherId, numCols, scoresByStu
         var subjVal  = rec.subject || '수학';
         var scoreVal = (rec.score !== undefined && rec.score !== null) ? rec.score : '';
         return '<div class="es-subj-item" style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;background:#fff;border:1px solid ' + col.border + ';border-radius:7px;padding:4px 6px;position:relative;min-width:70px">'
-          + (ri > 0 ? '<button onclick="esRemoveSubjRow(this,\'' + sid + '\')" style="position:absolute;top:2px;right:2px;width:14px;height:14px;border:none;border-radius:50%;background:#fca5a5;color:#dc2626;font-size:9px;cursor:pointer;line-height:14px;padding:0">&times;</button>' : '')
+          + '<button onclick="esRemoveSubjRow(this,\'' + sid + '\')" style="position:absolute;top:2px;right:2px;width:14px;height:14px;border:none;border-radius:50%;background:#fca5a5;color:#dc2626;font-size:9px;cursor:pointer;line-height:14px;padding:0">&times;</button>'
           + '<input type="text" class="es-subj-input" data-sid="' + sid + '" data-ri="' + ri + '" value="' + subjVal + '"'
           + ' style="width:62px;padding:2px 4px;border:1px solid #ddd6fe;border-radius:4px;font-size:11px;font-weight:600;color:#7c3aed;text-align:center;outline:none;background:#faf5ff;box-sizing:border-box"'
           + ' onfocus="this.style.borderColor=\'#7c3aed\'" onblur="this.style.borderColor=\'#ddd6fe\'">'
@@ -14127,7 +14150,8 @@ function esRenderTable(year, semester, examType, teacherId, numCols, scoresByStu
 }
 
 async function esSaveScores(teacherId, year, semester, examType) {
-  var upsertData = [];
+  year = parseInt(year); semester = parseInt(semester);
+  var upsertData = [], uiKeys = {};
   _esStudents.forEach(function(stu) {
     var sid            = stu.id;
     var realTeacherId  = (teacherId === '__all__') ? (stu.teacher_id || teacherId) : teacherId;
@@ -14140,9 +14164,11 @@ async function esSaveScores(teacherId, year, semester, examType) {
       var subj     = subjInp  ? subjInp.value.trim()  : '';
       var scoreV   = scoreInp ? scoreInp.value.trim() : '';
       if (!subj) return;
+      if (uiKeys[sid] && uiKeys[sid][subj]) return;
+      (uiKeys[sid] = uiKeys[sid] || {})[subj] = 1;
       upsertData.push({
         student_id: sid, teacher_id: realTeacherId,
-        year: parseInt(year), semester: parseInt(semester), exam_type: examType,
+        year: year, semester: semester, exam_type: examType,
         subject: subj, score: scoreV !== '' ? parseFloat(scoreV) : null, note: note
       });
     });
@@ -14153,6 +14179,17 @@ async function esSaveScores(teacherId, year, semester, examType) {
       onConflict: 'student_id,year,semester,exam_type,subject'
     });
     if (error) throw error;
+    var sids = _esStudents.map(function(s){ return s.id; });
+    var sel = await db.from('exam_scores').select('student_id,subject')
+      .in('student_id', sids).eq('year', year).eq('semester', semester).eq('exam_type', examType);
+    if (sel.error) throw sel.error;
+    var stale = (sel.data || []).filter(function(r){ return !(uiKeys[r.student_id] && uiKeys[r.student_id][r.subject]); });
+    for (var i = 0; i < stale.length; i++) {
+      var del = await db.from('exam_scores').delete()
+        .eq('student_id', stale[i].student_id).eq('year', year)
+        .eq('semester', semester).eq('exam_type', examType).eq('subject', stale[i].subject);
+      if (del.error) throw del.error;
+    }
     var btn = document.querySelector('#es-table-wrap button');
     if (btn) {
       var orig = btn.innerHTML;
@@ -14162,7 +14199,12 @@ async function esSaveScores(teacherId, year, semester, examType) {
   } catch(e) { alert('저장 실패: ' + (e.message || e)); }
 }
 
-function esRemoveSubjRow(btn, sid) { btn.closest('.es-subj-item').remove(); }
+function esRemoveSubjRow(btn, sid) {
+  var it = btn.closest('.es-subj-item');
+  var w  = it && it.closest('.es-subj-wrap');
+  if (w && w.querySelectorAll('.es-subj-item').length <= 1) { alert('최소 1개 과목은 있어야 합니다'); return; }
+  if (it) it.remove();
+}
 
 function esAddSubjItem(addBtn, sid) {
   var subjWrap = addBtn.previousElementSibling;
@@ -21936,6 +21978,7 @@ async function confirmWithdraw() {
   const reason    = (document.getElementById('withdraw-reason').value || '').trim();
   const isCancelled = !!(document.getElementById('withdraw-cancelled') && document.getElementById('withdraw-cancelled').checked);
   if (!date) { alert('퇴원일을 입력하세요'); return; }
+  if (!lastClass) { alert('마지막 수업일을 입력하세요'); return; }
 
   const targets = isBulk
     ? (window._bulkWithdrawStudents || [])
