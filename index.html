@@ -3741,7 +3741,7 @@ var _najeModalCtx = { setId: null, studentId: null };
 // ⑪ 관리자 N제 전역변수
 var _adminNajeFilter = '';
 var _admNaState = {setId:null, classId:null, setSteps:[], setInfo:null, classStudents:{}, original:{}, current:{}, excludedOriginal:{}, excludedCurrent:{}};
-var _adminNajeViewMode = 'list';
+var _adminNajeViewMode = 'folder';
 var _adminNajeFolderSelected = null;       // 레벨1: 학년 ('고1'/'고2'/'고3'/'기타'/'전체')
 var _adminNajeSubfolderSelected = null;    // 레벨2: 하위 폴더 이름 (null=학년 내 폴더 목록, ''=미분류)
 var _adminNajeSearchTimer = null;
@@ -3955,7 +3955,7 @@ function doLogout() {
   window._najeResultData = null;
   _naState = { grade:'', setId:null, setInfo:null, setSteps:[], classId:null, classes:[], classStudents:{}, original:{}, current:{}, excludedOriginal:{}, excludedCurrent:{} };
   // 관리자 N제 상태 정리
-  _adminNajeViewMode = 'list'; _adminNajeFolderSelected = null; _adminNajeSubfolderSelected = null;
+  _adminNajeViewMode = 'folder'; _adminNajeFolderSelected = null; _adminNajeSubfolderSelected = null;
   _adminNajeFilter = ''; _adminNajeAllData = null; _adminNajeSelectedIds = new Set();
   if (_adminNajeSearchTimer) { clearTimeout(_adminNajeSearchTimer); _adminNajeSearchTimer = null; }
   _admNaState = {setId:null, classId:null, setSteps:[], setInfo:null, classStudents:{}, original:{}, current:{}, excludedOriginal:{}, excludedCurrent:{}};
@@ -16478,15 +16478,12 @@ function naClearAllInStep(studentId, stepNum){
 
 async function initAdminNaje(){
   switchAdminNajeTab('list');
-  // localStorage에서 이전에 선택한 뷰 모드 복원
+  // [폴더 뷰 단일화] 목록/폴더 토글 숨김 + 항상 폴더 뷰로 진입
   try {
-    var savedMode = localStorage.getItem('bmaps_admin_naje_viewmode');
-    if(savedMode === 'folder'){
-      setAdminNajeViewMode('folder');
-      return;
-    }
+    var _vmBtn = document.getElementById('admin-naje-viewmode-list');
+    if(_vmBtn){ var _row = _vmBtn.closest('div'); if(_row && _row.parentElement){ _row.parentElement.style.display = 'none'; } }
   } catch(e){}
-  loadAdminNajeSets();
+  setAdminNajeViewMode('folder');
 }
 
 /* ── 관리자 단계부여 ── */
@@ -16999,6 +16996,14 @@ async function renderAdminNajeFolderView(){
         var k = r.folder_name || '__none__';
         folderCounts[k] = (folderCounts[k] || 0) + 1;
       });
+      // [Step2a] naje_folders 레지스트리의 빈 폴더도 합집합으로 포함 (N제 0개여도 표시)
+      try {
+        var { data: regFolders } = await db.from('naje_folders')
+          .select('name').eq('target_grade', _adminNajeFolderSelected);
+        (regFolders||[]).forEach(function(rf){
+          if(rf.name && !(rf.name in folderCounts)) folderCounts[rf.name] = 0;
+        });
+      } catch(regErr){ console.warn('[naje_folders 로드 실패]', regErr); }
       grid.innerHTML = adminNajeBuildSubfolderGrid(folderCounts, _adminNajeFolderSelected);
     } catch(e) {
       grid.innerHTML = '<div class="empty-state"><p>불러오기 실패</p></div>';
@@ -17027,10 +17032,9 @@ async function renderAdminNajeFolderView(){
     inlineBtn.style.display = gradeOk ? 'block' : 'none';
     inlineBtn.textContent = '\u2795 이 폴더에 등록';
     inlineBtn.onclick = function(){
-      switchAdminNajeTab('upload', { 
-        prefillGrade: _adminNajeFolderSelected,
-        prefillFolder: isActualFolder ? _adminNajeSubfolderSelected : ''
-      });
+      var _g = _adminNajeFolderSelected || '';
+      var _f = isActualFolder ? (_adminNajeSubfolderSelected || '') : '';
+      window.open('/nje.html?grade=' + encodeURIComponent(_g) + '&folder=' + encodeURIComponent(_f), '_blank');
     };
   }
 
@@ -17047,6 +17051,15 @@ async function renderAdminNajeFolderView(){
       rb.style.cssText = 'padding:6px 12px;border:1.5px solid #fbbf24;border-radius:8px;background:#fffbeb;color:#b45309;font-size:12px;font-weight:700;cursor:pointer';
       rb.onclick = function(){ adminNajeRenameSubfolder(); };
       crumbEl.insertBefore(rb, inlineBtn);
+      // [Step2a] 폴더 삭제 버튼 (빈 폴더만 실제 삭제, 함수 내부에서 N제 존재 시 거부)
+      var _delBtnId = 'admin-naje-subfolder-del-btn';
+      var _oldDel = document.getElementById(_delBtnId); if(_oldDel) _oldDel.remove();
+      var _delb = document.createElement('button');
+      _delb.id = _delBtnId;
+      _delb.textContent = '🗑️ 폴더 삭제';
+      _delb.style.cssText = 'padding:6px 12px;border:1.5px solid #fca5a5;border-radius:8px;background:#fff5f5;color:#b91c1c;font-size:12px;font-weight:700;cursor:pointer';
+      _delb.onclick = (function(_fn){ return function(){ adminNajeDeleteEmptyFolder(_fn); }; })(_adminNajeSubfolderSelected);
+      crumbEl.insertBefore(_delb, inlineBtn);
     }
   }
 
@@ -17140,14 +17153,49 @@ function adminNajeBuildSubfolderGrid(folderCounts, grade){
 }
 
 // "새 폴더 만들기" 클릭 \u2192 등록 탭으로 이동하면서 학년+폴더 입력 유도
-function adminNajeCreateNewSubfolder(){
+async function adminNajeCreateNewSubfolder(){
   var grade = _adminNajeFolderSelected;
   if(!['고1','고2','고3'].includes(grade)){ alert('학년 폴더에서만 가능합니다'); return; }
   var folderName = prompt('새 폴더 이름을 입력하세요:');
   if(!folderName) return;
   folderName = folderName.trim();
   if(!folderName) return;
-  switchAdminNajeTab('upload', { prefillGrade: grade, prefillFolder: folderName });
+  try {
+    // 중복 체크 (레지스트리 + 파생)
+    var { data: existReg } = await db.from('naje_folders').select('id').eq('target_grade', grade).eq('name', folderName).limit(1);
+    if(existReg && existReg.length){ alert('이미 같은 이름의 폴더가 있습니다: ' + folderName); return; }
+    var { data: existSet } = await db.from('naje_sets').select('id').eq('target_grade', grade).eq('folder_name', folderName).limit(1);
+    if(existSet && existSet.length){ alert('이미 같은 이름의 폴더가 있습니다: ' + folderName); return; }
+    var _payload = { target_grade: grade, name: folderName };
+    try { if(typeof currentUser !== 'undefined' && currentUser && currentUser.id) _payload.created_by = currentUser.id; } catch(e){}
+    var { error } = await db.from('naje_folders').insert(_payload);
+    if(error) throw error;
+    alert('✅ 폴더가 생성되었습니다: ' + folderName);
+    renderAdminNajeFolderView();
+  } catch(e){
+    alert('폴더 생성 실패: ' + (e.message || e));
+  }
+}
+
+// [Step2a] 빈 폴더 삭제 (N제가 있으면 거부)
+async function adminNajeDeleteEmptyFolder(folderName){
+  var grade = _adminNajeFolderSelected;
+  if(!['고1','고2','고3'].includes(grade)) return;
+  if(!folderName) return;
+  try {
+    var { data: sets } = await db.from('naje_sets').select('id').eq('target_grade', grade).eq('folder_name', folderName).limit(1);
+    if(sets && sets.length){ alert('이 폴더에 N제가 있어 삭제할 수 없습니다.\n먼저 N제를 다른 폴더나 미분류로 옮겨주세요.'); return; }
+  } catch(e){ alert('확인 실패: ' + (e.message || e)); return; }
+  if(!confirm('빈 폴더 "' + folderName + '" 을(를) 삭제할까요?')) return;
+  try {
+    var { error } = await db.from('naje_folders').delete().eq('target_grade', grade).eq('name', folderName);
+    if(error) throw error;
+    alert('✅ 폴더가 삭제되었습니다');
+    _adminNajeSubfolderSelected = null;
+    renderAdminNajeFolderView();
+  } catch(e){
+    alert('폴더 삭제 실패: ' + (e.message || e));
+  }
 }
 
 function adminNajeSelectSubfolder(folderName){
@@ -17189,10 +17237,16 @@ async function adminNajeRenameSubfolder(){
   if(!newName || newName === oldName) return;
 
   try {
+    // [Step2a] 중복 이름 방지 (레지스트리 + 파생)
+    var { data: _dupReg } = await db.from('naje_folders').select('id').eq('target_grade', _adminNajeFolderSelected).eq('name', newName).limit(1);
+    var { data: _dupSet } = await db.from('naje_sets').select('id').eq('target_grade', _adminNajeFolderSelected).eq('folder_name', newName).limit(1);
+    if((_dupReg && _dupReg.length) || (_dupSet && _dupSet.length)){ alert('이미 같은 이름의 폴더가 있습니다: ' + newName); return; }
     var { error } = await db.from('naje_sets').update({ folder_name: newName })
       .eq('target_grade', _adminNajeFolderSelected)
       .eq('folder_name', oldName);
     if(error) throw error;
+    // [Step2a] 레지스트리 폴더명 동기화
+    try { await db.from('naje_folders').update({ name: newName }).eq('target_grade', _adminNajeFolderSelected).eq('name', oldName); } catch(_re){ console.warn('[naje_folders 이름변경 동기화 실패]', _re); }
     alert('\u2705 폴더 이름이 변경되었습니다');
     _adminNajeSubfolderSelected = newName;
     renderAdminNajeFolderView();
@@ -17280,7 +17334,7 @@ function adminNajeRegisterInFolder(){
   var grade = _adminNajeFolderSelected;
   // 특정 학년 폴더일 때만 prefill, '전체'/'기타'는 빈 값
   var prefill = (grade && ['고1','고2','고3'].includes(grade)) ? grade : '';
-  switchAdminNajeTab('upload', { prefillGrade: prefill });
+  window.open('/nje.html?grade=' + encodeURIComponent(prefill), '_blank');
 }
 
 // 관리자용 N제 세트 카드 (폴더 뷰 내부용) - 목록 뷰와 완전히 동일 (보기/수정/삭제)
@@ -17491,14 +17545,137 @@ function toggleNajeStageEdit(){
 }
 
 // 여러 N제를 한 번에 폴더로 이동
+// ── [Step2b] N제 이동 모달 (prompt 대체) ──
+var _adminNajeMoveCtx = null;
+
+function adminNajeEnsureMoveModal(){
+  if(document.getElementById('admin-naje-move-modal')) return;
+  var wrap = document.createElement('div');
+  wrap.id = 'admin-naje-move-modal';
+  wrap.style.cssText = 'display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;padding:20px';
+  wrap.innerHTML =
+    '<div style="background:#fff;border-radius:16px;max-width:520px;width:100%;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3)">'
+    + '<div style="padding:16px 20px;background:var(--primary);color:#fff;display:flex;justify-content:space-between;align-items:center">'
+    +   '<div style="font-size:16px;font-weight:700">\uD83D\uDCC1 폴더로 이동</div>'
+    +   '<button type="button" onclick="adminNajeCloseMoveModal()" style="background:rgba(255,255,255,0.2);color:#fff;border:none;width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer">\u2715</button>'
+    + '</div>'
+    + '<div style="padding:16px 20px;overflow-y:auto;flex:1">'
+    +   '<div id="admin-naje-move-info" style="font-size:13px;color:#374151;margin-bottom:12px;padding:10px 12px;background:#f8fafc;border-radius:8px"></div>'
+    +   '<div style="font-size:12px;color:#6b7280;margin-bottom:8px;font-weight:600">이동할 폴더 선택</div>'
+    +   '<div id="admin-naje-move-chips" style="display:flex;flex-wrap:wrap;gap:8px"></div>'
+    +   '<div id="admin-naje-move-newfolder-wrap" style="display:none;margin-top:12px">'
+    +     '<input id="admin-naje-move-newfolder-input" placeholder="새 폴더 이름 입력" style="width:100%;padding:9px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:14px;outline:none">'
+    +   '</div>'
+    + '</div>'
+    + '<div style="padding:14px 20px;border-top:1px solid #eef2f7;display:flex;gap:8px;justify-content:flex-end">'
+    +   '<button type="button" onclick="adminNajeCloseMoveModal()" style="padding:9px 16px;border:1.5px solid #d1d5db;border-radius:8px;background:#fff;color:#4b5563;font-size:13px;font-weight:600;cursor:pointer">취소</button>'
+    +   '<button type="button" id="admin-naje-move-confirm-btn" onclick="adminNajeMoveConfirm()" style="padding:9px 18px;border:none;border-radius:8px;background:var(--primary);color:#fff;font-size:13px;font-weight:700;cursor:pointer">이동</button>'
+    + '</div>'
+    + '</div>';
+  document.body.appendChild(wrap);
+  wrap.addEventListener('click', function(e){ if(e.target === wrap) adminNajeCloseMoveModal(); });
+}
+
+async function adminNajeOpenMoveModal(setIds, grade, currentFolder){
+  if(!setIds || !setIds.length) return;
+  if(!['고1','고2','고3'].includes(grade)){ alert('고1/고2/고3 학년의 N제만 폴더 이동 가능합니다.'); return; }
+  adminNajeEnsureMoveModal();
+  _adminNajeMoveCtx = { setIds: setIds.slice(), grade: grade, currentFolder: (currentFolder||null), selected: undefined };
+  var nameSet = {};
+  try {
+    var { data: reg } = await db.from('naje_folders').select('name').eq('target_grade', grade);
+    (reg||[]).forEach(function(f){ if(f.name) nameSet[f.name] = true; });
+  } catch(e){ console.warn('[이동모달 레지스트리 로드 실패]', e); }
+  try {
+    var { data: der } = await db.from('naje_sets').select('folder_name').eq('target_grade', grade).not('folder_name','is',null);
+    (der||[]).forEach(function(r){ if(r.folder_name) nameSet[r.folder_name] = true; });
+  } catch(e){}
+  var folders = Object.keys(nameSet).sort();
+  var info = document.getElementById('admin-naje-move-info');
+  if(info) info.innerHTML = '<b>' + setIds.length + '개</b>의 N제 · 학년 ' + _esc(grade) + '<br><span style="color:#6b7280">현재: ' + (currentFolder ? ('\uD83D\uDCC1 ' + _esc(currentFolder)) : '(미분류)') + '</span>';
+  adminNajeMoveRenderChips(folders, (currentFolder||null));
+  var nw = document.getElementById('admin-naje-move-newfolder-wrap'); if(nw) nw.style.display = 'none';
+  var ni = document.getElementById('admin-naje-move-newfolder-input'); if(ni) ni.value = '';
+  var modal = document.getElementById('admin-naje-move-modal'); if(modal) modal.style.display = 'flex';
+}
+
+function _adminNajeAttrEsc(s){ return _esc(s).replace(/"/g, '&quot;'); }
+
+function adminNajeMoveRenderChips(folders, currentFolder){
+  var box = document.getElementById('admin-naje-move-chips'); if(!box) return;
+  function chip(val, label){
+    return '<button type="button" data-val="' + _adminNajeAttrEsc(val) + '" onclick="adminNajeMovePickChip(this)" style="padding:8px 14px;border:1.5px solid #e2e8f0;border-radius:20px;background:#fff;color:#1F3A51;font-size:13px;font-weight:600;cursor:pointer">' + label + '</button>';
+  }
+  var html = chip('__unfiled__', '\uD83D\uDDC2 미분류');
+  folders.forEach(function(f){ html += chip(f, '\uD83D\uDCC1 ' + _esc(f)); });
+  html += chip('__new__', '\u2795 새 폴더');
+  box.innerHTML = html;
+}
+
+function adminNajeMovePickChip(el){
+  if(!el || !_adminNajeMoveCtx) return;
+  var val = el.getAttribute('data-val');
+  _adminNajeMoveCtx.selected = val;
+  var box = document.getElementById('admin-naje-move-chips');
+  if(box){ [].forEach.call(box.children, function(b){
+    var active = (b === el);
+    b.style.borderColor = active ? 'var(--primary)' : '#e2e8f0';
+    b.style.background = active ? '#eef2f7' : '#fff';
+  }); }
+  var nw = document.getElementById('admin-naje-move-newfolder-wrap');
+  if(nw) nw.style.display = (val === '__new__') ? 'block' : 'none';
+  if(val === '__new__'){ var ni = document.getElementById('admin-naje-move-newfolder-input'); if(ni) ni.focus(); }
+}
+
+async function adminNajeMoveConfirm(){
+  var ctx = _adminNajeMoveCtx;
+  if(!ctx) return;
+  if(ctx.selected === undefined){ alert('이동할 폴더를 선택하세요'); return; }
+  var target;
+  if(ctx.selected === '__unfiled__'){ target = null; }
+  else if(ctx.selected === '__new__'){
+    var ni = document.getElementById('admin-naje-move-newfolder-input');
+    target = (ni ? ni.value : '').trim();
+    if(!target){ alert('새 폴더 이름을 입력하세요'); return; }
+  } else { target = ctx.selected; }
+  var setIds = ctx.setIds, grade = ctx.grade;
+  var btn = document.getElementById('admin-naje-move-confirm-btn');
+  if(btn){ btn.disabled = true; btn.textContent = '이동 중...'; }
+  try {
+    if(target){
+      var { data: exist } = await db.from('naje_folders').select('id').eq('target_grade', grade).eq('name', target).limit(1);
+      if(!(exist && exist.length)){
+        var _p = { target_grade: grade, name: target };
+        try { if(typeof currentUser !== 'undefined' && currentUser && currentUser.id) _p.created_by = currentUser.id; } catch(e){}
+        var { error: insErr } = await db.from('naje_folders').insert(_p);
+        if(insErr) throw insErr;
+      }
+    }
+    var { error } = await db.from('naje_sets').update({ folder_name: target }).in('id', setIds);
+    if(error) throw error;
+    var label = target ? ('\uD83D\uDCC1 ' + target) : '(미분류)';
+    adminNajeCloseMoveModal();
+    _adminNajeSelectedIds.clear(); adminNajeUpdateBulkBar();
+    if(_adminNajeViewMode === 'folder'){ renderAdminNajeFolderView(); } else { loadAdminNajeSets(); }
+    alert('\u2705 ' + setIds.length + '개의 N제가 "' + label + '" 로 이동되었습니다');
+  } catch(e){
+    alert('이동 실패: ' + (e.message || e));
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '이동'; }
+  }
+}
+
+function adminNajeCloseMoveModal(){
+  var modal = document.getElementById('admin-naje-move-modal');
+  if(modal) modal.style.display = 'none';
+  _adminNajeMoveCtx = null;
+}
+
 async function adminNajeBulkMove(){
   if(_adminNajeSelectedIds.size === 0){ alert('선택된 N제가 없습니다'); return; }
-
   var setIds = Array.from(_adminNajeSelectedIds);
-  // 선택된 N제들의 학년 확인 (모두 같은 학년이어야 이동 가능 - 폴더는 학년별 소속)
   try {
-    var { data: selectedSets, error: selErr } = await db.from('naje_sets')
-      .select('id,target_grade,title,folder_name').in('id', setIds);
+    var { data: selectedSets, error: selErr } = await db.from('naje_sets').select('id,target_grade').in('id', setIds);
     if(selErr) throw selErr;
     var grades = new Set();
     (selectedSets||[]).forEach(function(r){ grades.add(r.target_grade || ''); });
@@ -17511,58 +17688,9 @@ async function adminNajeBulkMove(){
       alert('고1/고2/고3 학년의 N제만 폴더 이동 가능합니다.');
       return;
     }
-
-    // 기존 폴더 목록 가져오기
-    var { data: folderData } = await db.from('naje_sets')
-      .select('folder_name').eq('target_grade', grade).not('folder_name','is',null);
-    var u = {};
-    (folderData||[]).forEach(function(r){ if(r.folder_name) u[r.folder_name] = true; });
-    var folders = Object.keys(u).sort();
-
-    // 선택 메뉴 표시 (prompt)
-    var options = ['(미분류 - 폴더에서 빼기)'].concat(folders).concat(['+ 새 폴더 만들기']);
-    var msg = '선택된 ' + setIds.length + '개의 N제를 이동할 폴더를 선택하세요\n\n';
-    options.forEach(function(o, i){ msg += (i+1) + '. ' + o + '\n'; });
-    msg += '\n\uD83D\uDCDA 학년: ' + grade;
-    var chosen = prompt(msg + '\n\n번호 입력:');
-    if(!chosen) return;
-    var idx = parseInt(chosen) - 1;
-    if(isNaN(idx) || idx < 0 || idx >= options.length){ alert('잘못된 번호입니다'); return; }
-
-    var newFolder = null;
-    if(idx === 0){
-      newFolder = null; // 미분류로
-    } else if(idx === options.length - 1){
-      // 새 폴더
-      var name = prompt('새 폴더 이름:');
-      if(!name) return;
-      newFolder = name.trim();
-      if(!newFolder) return;
-    } else {
-      newFolder = options[idx];
-    }
-
-    // 최종 확인
-    var targetLabel = newFolder ? ('\uD83D\uDCC1 ' + newFolder) : '(미분류)';
-    if(!confirm('선택된 ' + setIds.length + '개의 N제를 "' + targetLabel + '" 로 이동하시겠어요?')) return;
-
-    // 일괄 UPDATE
-    var { error: updErr } = await db.from('naje_sets')
-      .update({ folder_name: newFolder }).in('id', setIds);
-    if(updErr) throw updErr;
-
-    alert('\u2705 ' + setIds.length + '개의 N제가 "' + targetLabel + '" 로 이동되었습니다');
-    _adminNajeSelectedIds.clear();
-    adminNajeUpdateBulkBar();
-
-    // 현재 뷰 재로드
-    if(_adminNajeViewMode === 'folder'){
-      renderAdminNajeFolderView();
-    } else {
-      loadAdminNajeSets();
-    }
+    adminNajeOpenMoveModal(setIds, grade, null);
   } catch(e) {
-    alert('일괄 이동 실패: ' + (e.message || e));
+    alert('이동 준비 실패: ' + (e.message || e));
   }
 }
 
@@ -17572,51 +17700,7 @@ async function adminNajeMoveFolder(setId, grade, currentFolder){
     alert('고1/고2/고3 학년의 N제만 폴더 이동 가능합니다.');
     return;
   }
-  // 기존 폴더 목록 가져오기
-  var folders = [];
-  try {
-    var { data } = await db.from('naje_sets')
-      .select('folder_name').eq('target_grade', grade).not('folder_name','is',null);
-    var u = {};
-    (data||[]).forEach(function(r){ if(r.folder_name) u[r.folder_name] = true; });
-    folders = Object.keys(u).sort();
-  } catch(e){}
-
-  var options = ['(미분류)'].concat(folders).concat(['+ 새 폴더 만들기']);
-  var msg = '이동할 폴더를 선택하세요\n\n';
-  options.forEach(function(o, i){ msg += (i+1) + '. ' + o + '\n'; });
-  msg += '\n현재: ' + (currentFolder ? '\uD83D\uDCC1 ' + currentFolder : '(미분류)');
-  var chosen = prompt(msg + '\n\n번호 입력:');
-  if(!chosen) return;
-  var idx = parseInt(chosen) - 1;
-  if(isNaN(idx) || idx < 0 || idx >= options.length){ alert('잘못된 번호'); return; }
-
-  var newFolder = null;
-  if(idx === 0){
-    newFolder = null; // 미분류로
-  } else if(idx === options.length - 1){
-    // 새 폴더
-    var name = prompt('새 폴더 이름:');
-    if(!name) return;
-    newFolder = name.trim();
-    if(!newFolder) return;
-  } else {
-    newFolder = options[idx];
-  }
-
-  try {
-    var { error } = await db.from('naje_sets').update({ folder_name: newFolder }).eq('id', setId);
-    if(error) throw error;
-    alert('\u2705 폴더로 이동되었습니다' + (newFolder ? ': ' + newFolder : ' (미분류)'));
-    // 현재 뷰 재로드
-    if(_adminNajeViewMode === 'folder'){
-      renderAdminNajeFolderView();
-    } else {
-      loadAdminNajeSets();
-    }
-  } catch(e) {
-    alert('이동 실패: ' + (e.message || e));
-  }
+  adminNajeOpenMoveModal([setId], grade, (currentFolder||null));
 }
 
 function refreshAdminNajeList(){
@@ -22974,6 +23058,17 @@ async function saveWithdrawReportEdit() {
       if (error) throw error;
       if (data) _wdrCurrentRecordId = data.id;
     }
+
+    // [버그수정] 편집한 퇴원일·마지막수업일을 학생(users) 레코드에도 반영 → 학생목록·월별수강인원이 보고서와 일치
+    if (_wdrCurrentStudentId) {
+      const { error: uErr } = await db.from('users')
+        .update({ withdrawn_at: snap.withdrawn || null, last_class_date: snap.lastClass || null })
+        .eq('id', _wdrCurrentStudentId);
+      if (uErr) throw uErr;
+    }
+    // 목록·통계 즉시 반영 (기존 퇴원 처리와 동일 패턴)
+    await loadTeacherData();
+    if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'desk')) await loadAdminData();
 
     _wdrCurrentSnap = snap;
     document.getElementById('wdr-edit-mode').style.display  = 'none';
