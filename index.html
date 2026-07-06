@@ -15024,6 +15024,33 @@ async function teacherNajeSearchExec(keyword){
 }
 
 /* ── N제 보기 모달 ────────────────────────────────────────── */
+// [문항삭제] 등록된 N제에서 문항 삭제 (관리자 전용, 학생답안 cascade, 이미지 보존)
+async function najeDeleteRegisteredProblem(problemId, problemNumber, setId){
+  if(!(typeof currentUser!=='undefined' && currentUser && currentUser.role==='admin')){ alert('관리자만 삭제할 수 있습니다.'); return; }
+  if(!problemId || !setId){ return; }
+  var ansCnt = 0;
+  try { var { data: ans } = await db.from('naje_answers').select('id').eq('problem_id', problemId); ansCnt = (ans||[]).length; } catch(e){}
+  var warn = problemNumber + '번 문항을 삭제할까요?\n\n※ 되돌릴 수 없습니다.';
+  if(ansCnt > 0){ warn += '\n※ 이 문항의 학생 답안 ' + ansCnt + '건도 함께 삭제됩니다.'; }
+  if(!confirm(warn)) return;
+  try {
+    var { error: aErr } = await db.from('naje_answers').delete().eq('problem_id', problemId);
+    if(aErr) throw aErr;
+    var { error: pErr } = await db.from('naje_problems').delete().eq('id', problemId);
+    if(pErr) throw pErr;
+    var remain = null;
+    try {
+      var cres = await db.from('naje_problems').select('id', { count: 'exact', head: true }).eq('set_id', setId);
+      remain = (typeof cres.count === 'number') ? cres.count : null;
+      if(remain !== null){ await db.from('naje_sets').update({ total_problems: remain }).eq('id', setId); }
+    } catch(e){}
+    alert('\u2705 ' + problemNumber + '번 문항이 삭제되었습니다.');
+    if(remain === 0){ var vm = document.getElementById('modal-naje-view'); if(vm) vm.remove(); }
+    else { try { await viewNajeSet(setId); } catch(e){} }
+    try { if(typeof refreshAdminNajeList==='function') refreshAdminNajeList(); } catch(e){}
+  } catch(e){ alert('삭제 실패: ' + (e.message || e)); }
+}
+
 async function viewNajeSet(setId){
   const{data:problems} = await db.from('naje_problems').select('*').eq('set_id',setId).order('problem_number');
   if(!problems?.length){ alert('문제가 없습니다'); return; }
@@ -15073,6 +15100,7 @@ function openNajeViewModal(setInfo, problems){
                   ? `<span style="font-size:11px;color:#dc2626;font-weight:700;background:#fef2f2;padding:1px 6px;border-radius:100px;">정답: ${p.correct_answer}</span>`
                   : `<span style="font-size:10px;color:#9ca3af;">정답없음</span>`}
                 <button onclick="openEditAnswerModal('${p.id}',${p.problem_number},'${(p.correct_answer||'').replace(/'/g,"\'")}')" style="background:none;border:1px solid #d1d5db;border-radius:6px;padding:1px 5px;font-size:10px;cursor:pointer;color:#6b7280;" title="정답 수정">\u270F\uFE0F</button>
+                ${(typeof currentUser!=='undefined' && currentUser && currentUser.role==='admin') ? `<button onclick="najeDeleteRegisteredProblem('${p.id}',${p.problem_number},'${setInfo?.id||''}')" style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:1px 5px;font-size:10px;cursor:pointer;color:#dc2626;" title="문항 삭제 (관리자 전용)">🗑</button>` : ''}
               </div>
             </div>
             <img src="${p.image_url}" style="width:100%;display:block;cursor:pointer" onclick="openImgViewer('${p.image_url}')">
