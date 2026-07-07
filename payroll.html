@@ -419,7 +419,15 @@ function daysInMonth(ym){
 function logOf(staffId, dateStr){
   return DB.logs.find(l => l.staff_id===staffId && l.date===dateStr) || null;
 }
+// [권한] 현재 사용자가 지정 알바의 근무기록을 편집할 수 있는지 (중앙 권한판정)
+function canEditStaff(staffId){
+  if(APP_MODE==='admin') return true;                    // 관리자: 전체 가능
+  if(STAFF_ROLE==='self') return staffId===LOGIN_STAFF;  // 본인입력: 본인만
+  if(STAFF_ROLE==='manager'){ var _s=staffById(staffId); return !!(_s && _s.branch_id===LOGIN_BRANCH); } // 위임입력자: 자기 분원만
+  return false;                                          // 조회전용: 편집 불가
+}
 async function upsertLog(staffId, dateStr, field, val){
+  if(!canEditStaff(staffId)) return;   // 권한 없는 편집 차단 (조회자·타분원)
   var l = logOf(staffId, dateStr);
   if(!l){
     if(!val) return;
@@ -441,6 +449,8 @@ function onMemoChange(inp){ upsertLog(SEL, inp.getAttribute('data-d'), inp.getAt
 var SEL = null;          // 선택 알바 id
 var APP_MODE = 'admin';  // 'admin' | 'staff'
 var LOGIN_STAFF = null;  // 알바 로그인 시 본인 id
+var STAFF_ROLE = 'self';  // 알바 모드 역할: 'self'(본인입력) | 'manager'(분원 위임입력자) | 'viewer'(조회전용)
+var LOGIN_BRANCH = null;  // 알바 로그인 시 본인 분원 id (권한자 명단 제한용)
 var VIEW = 'both';       // 표시 모드: both / normal / mentoring
 var CUR = '2026-01';     // 현재 보는 월
 
@@ -601,9 +611,13 @@ async function onLoginSubmit(){
 function enterStaffMode(id){
   LOGIN_STAFF=id; APP_MODE='staff';
   document.getElementById('staffLogin').classList.remove('show');
+  var _s=staffById(id);
+  LOGIN_BRANCH = _s ? _s.branch_id : null;
+  var _br = DB.branches.find(function(b){ return b.id===LOGIN_BRANCH; });
+  var _deleg = _br ? !!_br.delegated_input : false;
+  STAFF_ROLE = !_deleg ? 'self' : ((_s && _s.can_input_hours) ? 'manager' : 'viewer');
   document.body.classList.add('staffmode');
   document.getElementById('logoutBtn').style.display='inline-flex';
-  var _s=staffById(id);
   SEL=id; VIEW=isMentoringActive(id,CUR)?'both':'normal';
   renderDetail();
   resetIdle();
@@ -651,7 +665,7 @@ function enterAdminMode(id){
 }
 function staffLogout(){
   clearTimeout(idleTimer);
-  LOGIN_STAFF=null; SEL=null; APP_MODE='staff';
+  LOGIN_STAFF=null; SEL=null; APP_MODE='staff'; STAFF_ROLE='self'; LOGIN_BRANCH=null;
   document.getElementById('logoutBtn').style.display='none';
   showStaffLogin();
 }
@@ -754,7 +768,7 @@ function renderDetail(){
           '<td class="mt">'+timeCell(ds,'m_out',l.m_out)+'</td>' +
           '<td class="mt dur dur-m '+(md?'':'z')+'">'+m2hm(md)+'</td>' : '') +
         (showMemo ?
-          '<td class="memo"><input class="memoinput" data-d="'+ds+'" data-f="'+memoField+'" value="'+esc(l[memoField]||'')+'" onchange="onMemoChange(this)" placeholder="메모"></td>' : '') +
+          '<td class="memo"><input class="memoinput" '+(canEditStaff(SEL)?'':'readonly ')+'data-d="'+ds+'" data-f="'+memoField+'" value="'+esc(l[memoField]||'')+'" onchange="onMemoChange(this)" placeholder="메모"></td>' : '') +
       '</tr>';
   }
 
@@ -870,7 +884,7 @@ function cellBadge(ds,field,val){
 }
 function timeCell(ds, field, val){
   return '<div class="tcell">' +
-    '<input class="tinput" data-d="'+ds+'" data-f="'+field+'" value="'+(val||'')+'" ' +
+    '<input class="tinput" '+(canEditStaff(SEL)?'':'readonly ')+'data-d="'+ds+'" data-f="'+field+'" value="'+(val||'')+'" ' +
       'oninput="onTimeInput(this)" onchange="onTimeChange(this)" placeholder="--:--" maxlength="5" inputmode="numeric" autocomplete="off">' +
     '<span class="ampm">'+cellBadge(ds,field,val)+'</span>' +
   '</div>';
