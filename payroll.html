@@ -332,7 +332,7 @@ const DB = { staff:[], rates:[], logs:[], branches:[], mentorings:[], mentoringR
 
 // Supabase에서 전체 로드 → 로컬 캐시(렌더는 캐시 기반 동기 유지)
 async function loadAll(){
-  var st = await sb.from('pt_staff').select('id,name,branch_id,has_mentoring,active,sort').order('sort');
+  var st = await sb.from('pt_staff').select('id,name,branch_id,has_mentoring,active,sort,can_input_hours').order('sort');
   var ra = await sb.from('pt_rate').select('*');
   var lo = await sb.from('pt_log').select('*');
   var br = await sb.from('pt_branch').select('*').order('sort');
@@ -779,6 +779,7 @@ function renderDetail(){
         '<span class="mlabel">'+CUR.replace('-',' / ')+'</span>' +
         '<button onclick="shiftMonth(1)">›</button>' +
       '</div>' +
+      (APP_MODE==='admin' ? '<button class="btn '+(s.can_input_hours?'pri':'gho')+'" onclick="toggleStaffInputPerm(\''+s.id+'\')" style="margin-left:8px" title="분원 전체 근무시간 입력 권한(위임 모드 분원에서 적용)">입력권한 '+(s.can_input_hours?'ON':'OFF')+'</button>' : '') +
       (APP_MODE==='admin' ? '<button class="btn gho" onclick="openPinModal()" style="margin-left:8px">PIN 관리</button>' : '') +
       (APP_MODE==='admin' ? '<button class="btn gho del-staff" onclick="deleteStaff(\''+s.id+'\')" title="알바 삭제">삭제</button>' : '') +
     '</div>' +
@@ -1099,10 +1100,31 @@ function renderBranchList(){
       '<span class="brnm">'+esc(b.name)+'</span>'+
       '<span class="brcnt">'+cnt+'명</span>'+
       '<span class="brsp"></span>'+
+      '<button class="btn '+(b.delegated_input?'pri':'gho')+'" onclick="toggleBranchDelegated(\''+b.id+'\')" title="위임 입력 모드: 권한 있는 알바만 분원 전체 입력, 나머지는 조회만">위임입력 '+(b.delegated_input?'ON':'OFF')+'</button>'+
       '<button class="btn gho" onclick="editBranch(\''+b.id+'\')">수정</button>'+
       '<button class="btn gho" onclick="deleteBranch(\''+b.id+'\')">삭제</button>'+
     '</div>';
   }).join('');
+}
+async function toggleBranchDelegated(id){
+  var b=DB.branches.find(function(x){return x.id===id;}); if(!b) return;
+  var next = !b.delegated_input;
+  var msg = next
+    ? '분원 "'+b.name+'"을(를) 위임 입력 모드로 켤까요?\n\n입력 권한이 있는 알바만 이 분원 전체 근무시간을 입력하고,\n나머지 알바는 본인 근무시간 조회만 가능해집니다.'
+    : '분원 "'+b.name+'"의 위임 입력 모드를 끌까요?\n\n모든 알바가 본인 근무시간을 직접 입력하는 기본 방식으로 돌아갑니다.';
+  if(!confirm(msg)) return;
+  var up=await sb.from('pt_branch').update({delegated_input:next}).eq('id',id);
+  if(up.error){ alert('변경 실패: '+up.error.message); return; }
+  b.delegated_input=next;
+  renderBranchList();
+}
+async function toggleStaffInputPerm(id){
+  var s=staffById(id); if(!s) return;
+  var next = !s.can_input_hours;
+  var up=await sb.from('pt_staff').update({can_input_hours:next}).eq('id',id);
+  if(up.error){ alert('변경 실패: '+up.error.message); return; }
+  s.can_input_hours=next;
+  renderDetail();
 }
 async function addBranch(){
   var el=document.getElementById('br_name'); var name=el.value.trim();
