@@ -141,6 +141,7 @@
   /* 알바 로그인 / 본인 모드 */
   body.staffmode aside.panel{display:none}
   body.staffmode main{grid-template-columns:1fr}
+  body.mgrmode .master-only{display:none}
   .modebar{margin:0 0 12px;padding:9px 12px;border-radius:10px;font-size:13px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
   .modebar.mgr{background:var(--maroon-l)}
   .modebar.mgr .mbl{font-weight:800;color:var(--maroon)}
@@ -185,7 +186,7 @@
         <div class="sa-label" id="saLabel">알바를 선택하세요</div>
         <div class="sa-btns">
           <button onclick="actPin()">PIN 관리</button>
-          <button onclick="actRate()">시급 변경</button>
+          <button class="master-only" onclick="actRate()">시급 변경</button>
           <button class="del-act" onclick="actDel()">삭제</button>
         </div>
       </div>
@@ -195,7 +196,7 @@
       </div>
       <div class="stafflist" id="stafflist"></div>
       <button class="btn pri addbtn" onclick="openAddStaff()">+ 알바 등록</button>
-      <button class="btn gho mgrbtn" onclick="openBranchMgr()">분원 관리</button>
+      <button class="btn gho mgrbtn master-only" onclick="openBranchMgr()">분원 관리</button>
       <button class="btn gho mgrbtn" onclick="openExcelModal()">📊 월별 급여 Excel</button>
     </div>
   </aside>
@@ -429,6 +430,8 @@ function daysInMonth(ym){
 function logOf(staffId, dateStr){
   return DB.logs.find(l => l.staff_id===staffId && l.date===dateStr) || null;
 }
+// [권한] 관리 UI(명단·등록·삭제·PIN·Excel) = 마스터 or 권한자
+function adminUI(){ return APP_MODE==='admin' || !!MGR_BRANCH; }
 // [권한] 현재 사용자가 지정 알바의 근무기록을 편집할 수 있는지 (중앙 권한판정)
 function canEditStaff(staffId){
   if(APP_MODE==='admin') return true;                    // 관리자: 전체 가능
@@ -461,6 +464,7 @@ var APP_MODE = 'admin';  // 'admin' | 'staff'
 var LOGIN_STAFF = null;  // 알바 로그인 시 본인 id
 var STAFF_ROLE = 'inputter';  // 'viewer'(조회자) | 'inputter'(입력자·기본) | 'manager'(권한자)  // 알바 모드 역할: 'self'(본인입력) | 'manager'(분원 위임입력자) | 'viewer'(조회전용)
 var LOGIN_BRANCH = null;  // 알바 로그인 시 본인 분원 id (권한자 명단 제한용)
+var MGR_BRANCH = null;   // 권한자 관리 범위(본인 분원 id). 마스터=null
 var VIEW = 'both';       // 표시 모드: both / normal / mentoring
 var CUR = '2026-01';     // 현재 보는 월
 
@@ -471,7 +475,8 @@ function renderStaffList(){
   var fb=(document.getElementById('flt_branch')||{}).value||'';
   var fn=((document.getElementById('flt_name')||{}).value||'').trim().toLowerCase();
   var arr = DB.staff.slice().sort((a,b)=> (a.sort||0)-(b.sort||0));
-  if(fb) arr=arr.filter(function(s){return s.branch_id===fb;});
+  if(MGR_BRANCH) arr=arr.filter(function(s){return s.branch_id===MGR_BRANCH;});
+  else if(fb) arr=arr.filter(function(s){return s.branch_id===fb;});
   if(fn) arr=arr.filter(function(s){return (s.name||'').toLowerCase().indexOf(fn)>=0;});
   box.innerHTML = arr.map(s =>
     '<div class="staff '+(s.id===SEL?'sel':'')+' '+(s.active?'':'off')+'" onclick="selectStaff(\''+s.id+'\')">' +
@@ -494,6 +499,7 @@ function actDel(){ if(requireSel()) deleteStaff(SEL); }
 function setView(v){ VIEW=v; renderDetail(); }
 async function deleteStaff(id){
   var s=staffById(id); if(!s) return;
+  if(MGR_BRANCH && s.branch_id!==MGR_BRANCH){ alert('본인 분원 알바만 삭제할 수 있습니다.'); return; }
   if(!confirm('알바 "'+s.name+'"을(를) 삭제할까요?\n근무기록과 시급정보도 함께 삭제되며 되돌릴 수 없습니다.')) return;
   await sb.from('pt_log').delete().eq('staff_id',id);
   await sb.from('pt_rate').delete().eq('staff_id',id);
@@ -504,7 +510,7 @@ async function deleteStaff(id){
   DB.logs=DB.logs.filter(function(x){return x.staff_id!==id;});
   if(SEL===id) SEL=null;
   refreshBranchSelects(); renderStaffList();
-  if(!SEL){ if(DB.staff.length) selectStaff(DB.staff[0].id); else renderDetail(); }
+  if(!SEL){ var _fst = MGR_BRANCH ? (DB.staff.find(function(x){return x.branch_id===MGR_BRANCH;})||null) : DB.staff[0]; if(_fst) selectStaff(_fst.id); else renderDetail(); }
 }
 
 /* ===== 알바 PIN 로그인 (2a) ===== */
@@ -625,10 +631,24 @@ function enterStaffMode(id){
   LOGIN_BRANCH = _s ? _s.branch_id : null;
   STAFF_ROLE = (_s && _s.staff_role) ? _s.staff_role : 'inputter';
   if(STAFF_ROLE!=='viewer' && STAFF_ROLE!=='inputter' && STAFF_ROLE!=='manager') STAFF_ROLE='inputter';
-  document.body.classList.add('staffmode');
   document.getElementById('logoutBtn').style.display='inline-flex';
-  SEL=id; VIEW=isMentoringActive(id,CUR)?'both':'normal';
-  renderDetail();
+  if(STAFF_ROLE==='manager'){
+    MGR_BRANCH = LOGIN_BRANCH;
+    document.body.classList.remove('staffmode');
+    document.body.classList.add('mgrmode');
+    refreshBranchSelects();
+    var _fb=document.getElementById('flt_branch'); if(_fb){ _fb.value=LOGIN_BRANCH||''; _fb.disabled=true; }
+    renderStaffList();
+    var _mine=DB.staff.filter(function(x){return x.branch_id===LOGIN_BRANCH;});
+    var _sel=(_mine.some(function(x){return x.id===id;})?id:(_mine[0]?_mine[0].id:id));
+    selectStaff(_sel);
+  } else {
+    MGR_BRANCH = null;
+    document.body.classList.remove('mgrmode');
+    document.body.classList.add('staffmode');
+    SEL=id; VIEW=isMentoringActive(id,CUR)?'both':'normal';
+    renderDetail();
+  }
   resetIdle();
 }
 /* ===== 관리자 로그인 (2단계) ===== */
@@ -663,9 +683,11 @@ async function onAdminLogin(){
 }
 function enterAdminMode(id){
   if(id) localStorage.setItem('savedUserId', id);
-  APP_MODE='admin'; LOGIN_STAFF=null;
+  APP_MODE='admin'; LOGIN_STAFF=null; MGR_BRANCH=null;
   clearTimeout(idleTimer);
   document.body.classList.remove('staffmode');
+  document.body.classList.remove('mgrmode');
+  var _efb=document.getElementById('flt_branch'); if(_efb) _efb.disabled=false;
   document.getElementById('staffLogin').classList.remove('show');
   document.getElementById('logoutBtn').style.display='none';
   refreshBranchSelects();
@@ -674,7 +696,7 @@ function enterAdminMode(id){
 }
 function staffLogout(){
   clearTimeout(idleTimer);
-  LOGIN_STAFF=null; SEL=null; APP_MODE='staff'; STAFF_ROLE='inputter'; LOGIN_BRANCH=null;
+  LOGIN_STAFF=null; SEL=null; APP_MODE='staff'; STAFF_ROLE='inputter'; LOGIN_BRANCH=null; MGR_BRANCH=null; document.body.classList.remove('mgrmode');
   document.getElementById('logoutBtn').style.display='none';
   showStaffLogin();
 }
@@ -697,6 +719,8 @@ function startIdleWatch(){
 /* ===== 관리자 PIN 관리 (2c) ===== */
 var PIN_TARGET=null;
 async function openPinModal(){
+  var _ps=staffById(SEL);
+  if(MGR_BRANCH && (!_ps || _ps.branch_id!==MGR_BRANCH)){ alert('본인 분원 알바만 관리할 수 있습니다.'); return; }
   PIN_TARGET=SEL;
   var s=staffById(SEL); if(!s) return;
   document.getElementById('pin_staff_name').textContent=s.name;
@@ -755,17 +779,10 @@ function renderDetail(){
   panel.classList.toggle('mtcol-off', !mtActive);
 
   // [Stage2b] 권한자(manager) 근무자 선택 바 / 조회자 안내 + 급여 프라이버시(남의 시급·급여 숨김)
-  var _hidePay = (APP_MODE==='staff' && STAFF_ROLE==='manager' && SEL!==LOGIN_STAFF);
+  var _hidePay = !!MGR_BRANCH;   // 권한자: 급여(시급·세전·세후) 숨김
   panel.classList.toggle('hidepay', _hidePay);
   var modeBar = '';
-  if(APP_MODE==='staff' && STAFF_ROLE==='manager'){
-    var _mates = DB.staff.filter(function(x){ return x.branch_id===LOGIN_BRANCH; }).sort(function(a,b){ return (a.sort||0)-(b.sort||0); });
-    modeBar = '<div class="modebar mgr"><span class="mbl">근무자 선택</span>' +
-      '<select onchange="selectStaff(this.value)">' +
-        _mates.map(function(x){ return '<option value="'+x.id+'"'+(x.id===SEL?' selected':'')+'>'+esc(x.name)+(x.id===LOGIN_STAFF?' (본인)':'')+'</option>'; }).join('') +
-      '</select>' +
-      '<span class="modehint">권한자 · 이 분원 근무자의 근무시간을 입력할 수 있습니다.</span></div>';
-  } else if(APP_MODE==='staff' && STAFF_ROLE==='viewer'){
+  if(APP_MODE==='staff' && STAFF_ROLE==='viewer'){
     modeBar = '<div class="modebar viewer">🔒 조회 전용 · 본인 근무시간이 어떻게 입력됐는지 확인만 가능합니다.</div>';
   }
 
@@ -822,8 +839,8 @@ function renderDetail(){
         '<option value="inputter"'+((s.staff_role||'inputter')==='inputter'?' selected':'')+'>입력자(본인 입력)</option>'+
         '<option value="manager"'+((s.staff_role||'inputter')==='manager'?' selected':'')+'>권한자(분원 관리)</option>'+
       '</select>' : '') +
-      (APP_MODE==='admin' ? '<button class="btn gho" onclick="openPinModal()" style="margin-left:8px">PIN 관리</button>' : '') +
-      (APP_MODE==='admin' ? '<button class="btn gho del-staff" onclick="deleteStaff(\''+s.id+'\')" title="알바 삭제">삭제</button>' : '') +
+      (adminUI() ? '<button class="btn gho" onclick="openPinModal()" style="margin-left:8px">PIN 관리</button>' : '') +
+      (adminUI() ? '<button class="btn gho del-staff" onclick="deleteStaff(\''+s.id+'\')" title="알바 삭제">삭제</button>' : '') +
     '</div>' +
 
     '<div class="rates">' +
@@ -975,7 +992,8 @@ function openAddStaff(){
   document.getElementById('as_rm').value=12000;
   document.getElementById('as_branch').value='';
   refreshBranchSelects();
-  document.getElementById('as_branch').value='';
+  var _asb=document.getElementById('as_branch');
+  if(MGR_BRANCH){ _asb.value=MGR_BRANCH; _asb.disabled=true; } else { _asb.value=''; _asb.disabled=false; }
   document.getElementById('addStaffModal').style.display='flex';
 }
 document.getElementById('as_mt').addEventListener('change',function(){
@@ -985,7 +1003,7 @@ document.getElementById('as_mt').addEventListener('change',function(){
 async function addStaff(){
   var name=document.getElementById('as_name').value.trim();
   if(!name){ alert('이름을 입력하세요.'); return; }
-  var branch_id=document.getElementById('as_branch').value || null;
+  var branch_id = MGR_BRANCH ? MGR_BRANCH : (document.getElementById('as_branch').value || null);
   var mt=document.getElementById('as_mt').checked;
   var ym=document.getElementById('as_ym').value;
   var rn=+document.getElementById('as_rn').value;
@@ -1123,11 +1141,11 @@ function exportPayrollExcel(){
     any=true;
   }
   DB.branches.forEach(function(b){
+    if(MGR_BRANCH && b.id!==MGR_BRANCH) return;   // 권한자: 자기 분원만
     var list=DB.staff.filter(function(s){ return s.branch_id===b.id && s.active; });
     buildSheet(b.name, list);
   });
-  var noBr=DB.staff.filter(function(s){ return !s.branch_id && s.active; });
-  if(noBr.length) buildSheet('(미지정)', noBr);
+  if(!MGR_BRANCH){ var noBr=DB.staff.filter(function(s){ return !s.branch_id && s.active; }); if(noBr.length) buildSheet('(미지정)', noBr); }
   if(!any){ alert('추출할 데이터가 없습니다.'); return; }
   XLSX.writeFile(wb, '급여_'+ym+'.xlsx');
   closeModal('excelModal');
