@@ -19902,9 +19902,11 @@ async function loadTeacherData() {
 
   // ── 전반 시행일 보정 ──────────────────────────────────────
   const futureInIds = new Set((futureInRes.data || []).map(r => r.student_id));
+  const _foSeen = new Set();
   const futureOutStudents = (futureOutRes.data || [])
     .filter(r => r.student)
-    .map(r => r.student);
+    .map(r => r.student)
+    .filter(s => { if (_foSeen.has(s.id)) return false; _foSeen.add(s.id); return true; });
 
   const rawStudents = sRes.data || [];
   students = rawStudents
@@ -22413,8 +22415,42 @@ function renderTransferOutCard() {
         <div style="font-size:11px;color:#065f46">→ ${tt.name||''}T (${tc.name||''}) · 시행일: ${req.transfer_date||''}</div>
       </div>
       <span style="font-size:11px;padding:3px 8px;border-radius:100px;background:#d1fae5;color:#065f46;font-weight:700">✅ 완료</span>
+      <button onclick="cancelTransfer('${req.id}')" style="font-size:11px;padding:4px 10px;border:1.5px solid #ef4444;background:#fff;color:#ef4444;border-radius:7px;font-weight:700;cursor:pointer;white-space:nowrap">전반 취소</button>
     </div>`;
   }).join('');
+}
+
+async function cancelTransfer(reqId) {
+  const req = _transferOutList.find(r => r.id === reqId);
+  if (!req) { alert('요청을 찾을 수 없습니다.'); return; }
+  const todayStr = new Date().toISOString().slice(0,10);
+  if (req.from_teacher_id !== currentUser.id) { alert('본인이 신청한 전반만 취소할 수 있습니다.'); return; }
+  if (!(req.transfer_date && req.transfer_date >= todayStr)) { alert('시행일이 지난 전반은 취소할 수 없습니다.'); return; }
+  const s = req.student || {};
+  if (!confirm((s.name||'학생') + ' 학생의 전반을 취소할까요?\n\n원래 담당·반으로 되돌아가고, 이 전반 기록은 삭제됩니다.')) return;
+  try {
+    let origClassId = req.from_class_id || null;
+    let histId = null;
+    try {
+      const { data: hist } = await db.from('student_class_history')
+        .select('id, from_class_id').eq('student_id', req.student_id)
+        .eq('to_class_id', req.to_class_id).eq('changed_date', req.transfer_date)
+        .order('id',{ascending:false}).limit(1);
+      if (hist && hist.length) { histId = hist[0].id; if (!origClassId) origClassId = hist[0].from_class_id || null; }
+    } catch(e) { console.warn('[cancelTransfer] 이력 조회 경고:', e); }
+    const { error: ue } = await db.from('users').update({
+      teacher_id: req.from_teacher_id, class_id: origClassId, class_id2: null
+    }).eq('id', req.student_id);
+    if (ue) throw ue;
+    const { error: de } = await db.from('transfer_requests').delete().eq('id', reqId);
+    if (de) throw de;
+    if (histId) { try { await db.from('student_class_history').delete().eq('id', histId); } catch(e) { console.warn('[cancelTransfer] 이력 삭제 경고:', e); } }
+    alert('✅ 전반이 취소되었습니다. ' + (s.name||'') + ' 학생이 원래대로 복원됐습니다.');
+    await loadTeacherData();
+    await loadTransferRequests();
+  } catch(e) {
+    alert('전반 취소 실패: ' + (e.message || e));
+  }
 }
 
 async function openTransferModal(studentId, studentName) {
@@ -22492,6 +22528,12 @@ async function submitTransfer() {
       const { data: stuData } = await db.from('users').select('id,name,teacher_id,class_id').eq('id',t.id).single();
       if (!stuData) { errors.push((t.name||t.id) + ': 학생 정보 없음'); continue; }
 
+      // [중복방지] 이미 미래 전반요청이 있으면 스킵 (재제출 중복 방지)
+      const { data: _dupReq } = await db.from('transfer_requests')
+        .select('id').eq('student_id', t.id).eq('from_teacher_id', currentUser.id)
+        .eq('status','done').gte('transfer_date', new Date().toISOString().slice(0,10));
+      if (_dupReq && _dupReq.length) { errors.push((stuData.name||t.id) + ': 이미 전반 신청됨(취소 후 재신청)'); continue; }
+
       const { error: ue } = await db.from('users').update({
         teacher_id: toTeacherId, class_id: toClassId, class_id2: null
       }).eq('id', t.id);
@@ -22499,7 +22541,7 @@ async function submitTransfer() {
 
       await db.from('transfer_requests').insert({
         student_id: t.id, from_teacher_id: currentUser.id, to_teacher_id: toTeacherId,
-        to_class_id: toClassId, note: note || null, transfer_date: transferDate,
+        to_class_id: toClassId, from_class_id: stuData.class_id || null, note: note || null, transfer_date: transferDate,
         status: 'done', responded_at: new Date().toISOString(), notified: false
       });
 
@@ -23330,9 +23372,11 @@ async function loadWorkLog() {
         .eq('from_teacher_id', currentUser.id).eq('status', 'done').gt('transfer_date', date)
     ]);
     const futureInSet  = new Set((futureInRes.data  || []).map(r => r.student_id));
+    const _poSeen = new Set();
     const pastOutStuds = (futureOutRes.data || [])
       .filter(r => r.student && r.student.class_id === classId)
-      .map(r => r.student);
+      .map(r => r.student)
+      .filter(s => { if (_poSeen.has(s.id)) return false; _poSeen.add(s.id); return true; });
 
     let filtered = (activeStuds || [])
       .filter(s => !futureInSet.has(s.id))
