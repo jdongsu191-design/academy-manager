@@ -121,6 +121,8 @@
   .brrow .brcnt{font-size:11px;color:var(--mut)}
   .brrow .brsp{margin-left:auto}
   .brrow button{font-size:11px;padding:3px 8px}
+  .brrow .brsel{font-size:11px;padding:3px 6px;border:1px solid var(--line);border-radius:7px;background:#fff;cursor:pointer;color:var(--ink)}
+  .permsel{font:inherit;font-size:12px;padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;font-weight:700;color:var(--ink)}
   .staff .br{font-size:11px;color:var(--maroon);margin-left:6px;background:var(--maroon-l);padding:1px 6px;border-radius:6px}
   .dnm-br{font-size:12px;color:var(--maroon);font-weight:600;margin-left:8px;background:var(--maroon-l);padding:2px 8px;border-radius:6px}
   .del-staff{color:#b91c1c;border-color:#e7b8b8;margin-left:8px;font-size:12px;padding:4px 10px;align-self:center}
@@ -816,7 +818,7 @@ function renderDetail(){
         '<span class="mlabel">'+CUR.replace('-',' / ')+'</span>' +
         '<button onclick="shiftMonth(1)">›</button>' +
       '</div>' +
-      (APP_MODE==='admin' ? '<button class="btn '+(s.can_input_hours?'pri':'gho')+'" onclick="toggleStaffInputPerm(\''+s.id+'\')" style="margin-left:8px" title="분원 전체 근무시간 입력 권한(위임 모드 분원에서 적용)">입력권한 '+(s.can_input_hours?'ON':'OFF')+'</button>' : '') +
+      (APP_MODE==='admin' ? '<select class="permsel" onchange="setStaffInputPerm(\''+s.id+'\', this.value)" style="margin-left:8px" title="위임모드 분원에서 적용 · 권한자=분원 전체 입력 / 조회자=조회만"><option value="viewer"'+(s.can_input_hours?'':' selected')+'>조회자(조회만)</option><option value="manager"'+(s.can_input_hours?' selected':'')+'>권한자(입력가능)</option></select>' : '') +
       (APP_MODE==='admin' ? '<button class="btn gho" onclick="openPinModal()" style="margin-left:8px">PIN 관리</button>' : '') +
       (APP_MODE==='admin' ? '<button class="btn gho del-staff" onclick="deleteStaff(\''+s.id+'\')" title="알바 삭제">삭제</button>' : '') +
     '</div>' +
@@ -1137,29 +1139,34 @@ function renderBranchList(){
       '<span class="brnm">'+esc(b.name)+'</span>'+
       '<span class="brcnt">'+cnt+'명</span>'+
       '<span class="brsp"></span>'+
-      '<button class="btn '+(b.delegated_input?'pri':'gho')+'" onclick="toggleBranchDelegated(\''+b.id+'\')" title="위임 입력 모드: 권한 있는 알바만 분원 전체 입력, 나머지는 조회만">위임입력 '+(b.delegated_input?'ON':'OFF')+'</button>'+
+      '<select class="brsel" onchange="setBranchDelegated(\''+b.id+'\', this.value)" title="위임 입력 모드 (권한자만 입력 / 본인입력 기본)">'+
+        '<option value="off"'+(b.delegated_input?'':' selected')+'>본인입력(기본)</option>'+
+        '<option value="on"'+(b.delegated_input?' selected':'')+'>위임입력(권한자만)</option>'+
+      '</select>'+
       '<button class="btn gho" onclick="editBranch(\''+b.id+'\')">수정</button>'+
       '<button class="btn gho" onclick="deleteBranch(\''+b.id+'\')">삭제</button>'+
     '</div>';
   }).join('');
 }
-async function toggleBranchDelegated(id){
+async function setBranchDelegated(id, value){
   var b=DB.branches.find(function(x){return x.id===id;}); if(!b) return;
-  var next = !b.delegated_input;
+  var next = (value==='on');
+  if(next === !!b.delegated_input){ renderBranchList(); return; }   // 변화 없음
   var msg = next
-    ? '분원 "'+b.name+'"을(를) 위임 입력 모드로 켤까요?\n\n입력 권한이 있는 알바만 이 분원 전체 근무시간을 입력하고,\n나머지 알바는 본인 근무시간 조회만 가능해집니다.'
-    : '분원 "'+b.name+'"의 위임 입력 모드를 끌까요?\n\n모든 알바가 본인 근무시간을 직접 입력하는 기본 방식으로 돌아갑니다.';
-  if(!confirm(msg)) return;
+    ? '분원 "'+b.name+'"을(를) 위임입력 모드로 바꿀까요?\n\n권한자로 지정된 알바만 이 분원 전체 근무시간을 입력하고,\n나머지 알바는 본인 근무시간 조회만 가능해집니다.'
+    : '분원 "'+b.name+'"을(를) 본인입력(기본)으로 되돌릴까요?\n\n모든 알바가 본인 근무시간을 직접 입력합니다.';
+  if(!confirm(msg)){ renderBranchList(); return; }   // 취소 → 드롭다운 원복
   var up=await sb.from('pt_branch').update({delegated_input:next}).eq('id',id);
-  if(up.error){ alert('변경 실패: '+up.error.message); return; }
+  if(up.error){ alert('변경 실패: '+up.error.message); renderBranchList(); return; }
   b.delegated_input=next;
   renderBranchList();
 }
-async function toggleStaffInputPerm(id){
+async function setStaffInputPerm(id, value){
   var s=staffById(id); if(!s) return;
-  var next = !s.can_input_hours;
+  var next = (value==='manager');
+  if(next === !!s.can_input_hours){ renderDetail(); return; }   // 변화 없음
   var up=await sb.from('pt_staff').update({can_input_hours:next}).eq('id',id);
-  if(up.error){ alert('변경 실패: '+up.error.message); return; }
+  if(up.error){ alert('변경 실패: '+up.error.message); renderDetail(); return; }
   s.can_input_hours=next;
   renderDetail();
 }
