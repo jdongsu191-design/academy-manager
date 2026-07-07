@@ -342,7 +342,7 @@ const DB = { staff:[], rates:[], logs:[], branches:[], mentorings:[], mentoringR
 
 // Supabase에서 전체 로드 → 로컬 캐시(렌더는 캐시 기반 동기 유지)
 async function loadAll(){
-  var st = await sb.from('pt_staff').select('id,name,branch_id,has_mentoring,active,sort,can_input_hours').order('sort');
+  var st = await sb.from('pt_staff').select('id,name,branch_id,has_mentoring,active,sort,can_input_hours,staff_role').order('sort');
   var ra = await sb.from('pt_rate').select('*');
   var lo = await sb.from('pt_log').select('*');
   var br = await sb.from('pt_branch').select('*').order('sort');
@@ -432,7 +432,7 @@ function logOf(staffId, dateStr){
 // [권한] 현재 사용자가 지정 알바의 근무기록을 편집할 수 있는지 (중앙 권한판정)
 function canEditStaff(staffId){
   if(APP_MODE==='admin') return true;                    // 관리자: 전체 가능
-  if(STAFF_ROLE==='self') return staffId===LOGIN_STAFF;  // 본인입력: 본인만
+  if(STAFF_ROLE==='inputter') return staffId===LOGIN_STAFF;  // 본인입력: 본인만
   if(STAFF_ROLE==='manager'){ var _s=staffById(staffId); return !!(_s && _s.branch_id===LOGIN_BRANCH); } // 위임입력자: 자기 분원만
   return false;                                          // 조회전용: 편집 불가
 }
@@ -459,7 +459,7 @@ function onMemoChange(inp){ upsertLog(SEL, inp.getAttribute('data-d'), inp.getAt
 var SEL = null;          // 선택 알바 id
 var APP_MODE = 'admin';  // 'admin' | 'staff'
 var LOGIN_STAFF = null;  // 알바 로그인 시 본인 id
-var STAFF_ROLE = 'self';  // 알바 모드 역할: 'self'(본인입력) | 'manager'(분원 위임입력자) | 'viewer'(조회전용)
+var STAFF_ROLE = 'inputter';  // 'viewer'(조회자) | 'inputter'(입력자·기본) | 'manager'(권한자)  // 알바 모드 역할: 'self'(본인입력) | 'manager'(분원 위임입력자) | 'viewer'(조회전용)
 var LOGIN_BRANCH = null;  // 알바 로그인 시 본인 분원 id (권한자 명단 제한용)
 var VIEW = 'both';       // 표시 모드: both / normal / mentoring
 var CUR = '2026-01';     // 현재 보는 월
@@ -623,9 +623,8 @@ function enterStaffMode(id){
   document.getElementById('staffLogin').classList.remove('show');
   var _s=staffById(id);
   LOGIN_BRANCH = _s ? _s.branch_id : null;
-  var _br = DB.branches.find(function(b){ return b.id===LOGIN_BRANCH; });
-  var _deleg = _br ? !!_br.delegated_input : false;
-  STAFF_ROLE = !_deleg ? 'self' : ((_s && _s.can_input_hours) ? 'manager' : 'viewer');
+  STAFF_ROLE = (_s && _s.staff_role) ? _s.staff_role : 'inputter';
+  if(STAFF_ROLE!=='viewer' && STAFF_ROLE!=='inputter' && STAFF_ROLE!=='manager') STAFF_ROLE='inputter';
   document.body.classList.add('staffmode');
   document.getElementById('logoutBtn').style.display='inline-flex';
   SEL=id; VIEW=isMentoringActive(id,CUR)?'both':'normal';
@@ -675,7 +674,7 @@ function enterAdminMode(id){
 }
 function staffLogout(){
   clearTimeout(idleTimer);
-  LOGIN_STAFF=null; SEL=null; APP_MODE='staff'; STAFF_ROLE='self'; LOGIN_BRANCH=null;
+  LOGIN_STAFF=null; SEL=null; APP_MODE='staff'; STAFF_ROLE='inputter'; LOGIN_BRANCH=null;
   document.getElementById('logoutBtn').style.display='none';
   showStaffLogin();
 }
@@ -818,7 +817,11 @@ function renderDetail(){
         '<span class="mlabel">'+CUR.replace('-',' / ')+'</span>' +
         '<button onclick="shiftMonth(1)">›</button>' +
       '</div>' +
-      (APP_MODE==='admin' ? '<select class="permsel" onchange="setStaffInputPerm(\''+s.id+'\', this.value)" style="margin-left:8px" title="위임모드 분원에서 적용 · 권한자=분원 전체 입력 / 조회자=조회만"><option value="viewer"'+(s.can_input_hours?'':' selected')+'>조회자(조회만)</option><option value="manager"'+(s.can_input_hours?' selected':'')+'>권한자(입력가능)</option></select>' : '') +
+      (APP_MODE==='admin' ? '<select class="permsel" onchange="setStaffRole(\''+s.id+'\', this.value)" style="margin-left:8px" title="역할 지정 · 조회자=조회만 / 입력자=본인 입력 / 권한자=자기 분원 관리">'+
+        '<option value="viewer"'+((s.staff_role||'inputter')==='viewer'?' selected':'')+'>조회자(조회만)</option>'+
+        '<option value="inputter"'+((s.staff_role||'inputter')==='inputter'?' selected':'')+'>입력자(본인 입력)</option>'+
+        '<option value="manager"'+((s.staff_role||'inputter')==='manager'?' selected':'')+'>권한자(분원 관리)</option>'+
+      '</select>' : '') +
       (APP_MODE==='admin' ? '<button class="btn gho" onclick="openPinModal()" style="margin-left:8px">PIN 관리</button>' : '') +
       (APP_MODE==='admin' ? '<button class="btn gho del-staff" onclick="deleteStaff(\''+s.id+'\')" title="알바 삭제">삭제</button>' : '') +
     '</div>' +
@@ -1139,35 +1142,18 @@ function renderBranchList(){
       '<span class="brnm">'+esc(b.name)+'</span>'+
       '<span class="brcnt">'+cnt+'명</span>'+
       '<span class="brsp"></span>'+
-      '<select class="brsel" onchange="setBranchDelegated(\''+b.id+'\', this.value)" title="위임 입력 모드 (권한자만 입력 / 본인입력 기본)">'+
-        '<option value="off"'+(b.delegated_input?'':' selected')+'>본인입력(기본)</option>'+
-        '<option value="on"'+(b.delegated_input?' selected':'')+'>위임입력(권한자만)</option>'+
-      '</select>'+
       '<button class="btn gho" onclick="editBranch(\''+b.id+'\')">수정</button>'+
       '<button class="btn gho" onclick="deleteBranch(\''+b.id+'\')">삭제</button>'+
     '</div>';
   }).join('');
 }
-async function setBranchDelegated(id, value){
-  var b=DB.branches.find(function(x){return x.id===id;}); if(!b) return;
-  var next = (value==='on');
-  if(next === !!b.delegated_input){ renderBranchList(); return; }   // 변화 없음
-  var msg = next
-    ? '분원 "'+b.name+'"을(를) 위임입력 모드로 바꿀까요?\n\n권한자로 지정된 알바만 이 분원 전체 근무시간을 입력하고,\n나머지 알바는 본인 근무시간 조회만 가능해집니다.'
-    : '분원 "'+b.name+'"을(를) 본인입력(기본)으로 되돌릴까요?\n\n모든 알바가 본인 근무시간을 직접 입력합니다.';
-  if(!confirm(msg)){ renderBranchList(); return; }   // 취소 → 드롭다운 원복
-  var up=await sb.from('pt_branch').update({delegated_input:next}).eq('id',id);
-  if(up.error){ alert('변경 실패: '+up.error.message); renderBranchList(); return; }
-  b.delegated_input=next;
-  renderBranchList();
-}
-async function setStaffInputPerm(id, value){
+async function setStaffRole(id, value){
   var s=staffById(id); if(!s) return;
-  var next = (value==='manager');
-  if(next === !!s.can_input_hours){ renderDetail(); return; }   // 변화 없음
-  var up=await sb.from('pt_staff').update({can_input_hours:next}).eq('id',id);
+  if(value!=='viewer' && value!=='inputter' && value!=='manager'){ renderDetail(); return; }
+  if(value === (s.staff_role||'inputter')){ renderDetail(); return; }   // 변화 없음
+  var up=await sb.from('pt_staff').update({staff_role:value}).eq('id',id);
   if(up.error){ alert('변경 실패: '+up.error.message); renderDetail(); return; }
-  s.can_input_hours=next;
+  s.staff_role=value;
   renderDetail();
 }
 async function addBranch(){
