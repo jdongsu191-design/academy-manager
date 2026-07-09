@@ -22177,8 +22177,39 @@ async function confirmWithdraw() {
         };
       }).filter(w => w.branch_id);
       if (wRecords.length) {
-        const { error: wErr } = await db.from('withdrawals').insert(wRecords);
-        if (wErr) console.warn('withdrawals 자동반영 실패:', wErr);
+        // [퇴원처리 우선·덮어쓰기] 같은 학생의 기존 withdrawals(수동 사전등록/이전 자동)가 있으면 그 행을 퇴원처리 값으로 덮어쓰고, 없으면 새로 insert → 중복 방지
+        const _wNames = [...new Set(wRecords.map(w => w.student_name))];
+        const _wBrs = [...new Set(wRecords.map(w => w.branch_id))];
+        let _wExisting = [];
+        try {
+          const _exRes = await db.from('withdrawals')
+            .select('id,student_id,student_name,branch_id,note,created_by')
+            .in('student_name', _wNames).in('branch_id', _wBrs);
+          _wExisting = _exRes.data || [];
+        } catch(e) { console.warn('withdrawals 기존조회 실패:', e); }
+        const _wInsert = [];
+        for (const w of wRecords) {
+          const _m = _wExisting.filter(e =>
+            (e.student_id && e.student_id === w.student_id) ||
+            (e.student_name === w.student_name && e.branch_id === w.branch_id)
+          );
+          if (_m.length) {
+            const _tgt = _m[0];
+            const _patch = Object.assign({}, w);
+            delete _patch.created_by;                                // 최초 등록자 보존
+            if (!_patch.note && _tgt.note) _patch.note = _tgt.note;  // 담당자 메모 보존
+            try {
+              const _upR = await db.from('withdrawals').update(_patch).eq('id', _tgt.id);
+              if (_upR.error) console.warn('withdrawals 덮어쓰기 실패:', _upR.error);
+            } catch(e) { console.warn('withdrawals 덮어쓰기 오류:', e); }
+          } else {
+            _wInsert.push(w);
+          }
+        }
+        if (_wInsert.length) {
+          const { error: wErr } = await db.from('withdrawals').insert(_wInsert);
+          if (wErr) console.warn('withdrawals 자동반영 실패:', wErr);
+        }
       }
       const skipped = (stuRows || []).length - wRecords.length;
       if (skipped > 0) console.warn('withdrawals 자동반영: 분원 유추 실패로 ' + skipped + '건 제외');
