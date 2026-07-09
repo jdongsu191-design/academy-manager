@@ -672,6 +672,12 @@
   </div>
 </div>
 
+<!-- 예상 복귀시간 초과 알림 (데스크 전용) -->
+<div id="sc-overdue-modal" style="display:none;position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#fff;border:2px solid #ef4444;border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.22);padding:15px 18px;max-width:92vw;min-width:300px">
+  <div style="font-size:15px;font-weight:800;color:#dc2626;margin-bottom:8px">⏰ 예상 복귀시간 초과</div>
+  <div id="sc-overdue-list" style="font-size:14px;color:#334155;line-height:1.7;margin-bottom:12px"></div>
+  <button onclick="scOverdueDismiss()" style="width:100%;padding:11px;background:#dc2626;color:#fff;border:none;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer">확인 (읽음)</button>
+</div>
 <!-- 관리자 인증 차단 오버레이 -->
 <div class="sc-blocker" id="sc-blocker">
   <div class="bk-card">
@@ -2714,6 +2720,65 @@
     document.getElementById('sc-mode-admin').style.display = '';
   }
 
+  /* ── [OVERDUE] 예상 복귀시간 초과 미복귀 알림 (데스크 전용) ── */
+  var _SC_OVERDUE_KEY = 'sc_overdue_dismissed';
+  function _scOverdueGetDismissed(){ try{ return JSON.parse(localStorage.getItem(_SC_OVERDUE_KEY)||'{}'); }catch(e){ return {}; } }
+  function _scOverdueSetDismissed(m){ try{ localStorage.setItem(_SC_OVERDUE_KEY, JSON.stringify(m)); }catch(e){} }
+  var _scOverdueShown = [];
+  function _scOverdueName(id){
+    var src = (typeof _wkStudents!=='undefined' && _wkStudents) ? _wkStudents : [];
+    var s = src.find(function(x){ return x.id===id; });
+    if(!s && typeof _scListData!=='undefined' && _scListData) s = _scListData.find(function(x){ return x.id===id; });
+    return s ? (s.name||'학생') : '학생';
+  }
+  function _scOverdueHide(){ var m=document.getElementById('sc-overdue-modal'); if(m) m.style.display='none'; _scOverdueShown=[]; }
+  async function scOverdueCheck(){
+    try{
+      var adm = document.getElementById('sc-admin');
+      if(!adm || !adm.classList.contains('active')){ _scOverdueHide(); return; }   // 데스크(관리자) 화면에서만
+      if(typeof scRrToday!=='function' || typeof db==='undefined'){ return; }
+      var today = scRrToday();
+      var r = await db.from('reading_room_attendance')
+        .select('student_id,attend_date,pending_out_start,pending_out_expected_end')
+        .eq('attend_date', today).not('pending_out_start','is',null);
+      if(r.error || !r.data){ return; }
+      var now = new Date();
+      var dismissed = _scOverdueGetDismissed();
+      var overdue = [];
+      r.data.forEach(function(row){
+        if(!row.pending_out_expected_end) return;                 // 예상복귀 미입력이면 스킵
+        var expEnd = new Date(row.attend_date + 'T' + row.pending_out_expected_end);
+        var start  = new Date(row.attend_date + 'T' + row.pending_out_start);
+        if(expEnd < start) expEnd = new Date(expEnd.getTime() + 86400000);   // 자정 넘김 처리
+        if(now <= expEnd) return;                                 // 아직 예상복귀 안 지남
+        var key = row.student_id + '|' + row.attend_date + '|' + row.pending_out_start;
+        if(dismissed[key]) return;                                // 확인 눌러 읽음처리된 건 스킵
+        overdue.push({ id: row.student_id, key: key, exp: String(row.pending_out_expected_end).slice(0,5) });
+      });
+      if(!overdue.length){ _scOverdueHide(); return; }
+      _scOverdueShown = overdue.map(function(o){ return o.key; });
+      var list = document.getElementById('sc-overdue-list');
+      if(list){
+        list.innerHTML = overdue.map(function(o){ return '<div>&bull; <b>'+ _scOverdueName(o.id) +'</b> 학생 (예상복귀 '+ o.exp +')</div>'; }).join('')
+          + '<div style="margin-top:7px;color:#dc2626;font-weight:700">아직 복귀하지 않았습니다.</div>';
+      }
+      var m=document.getElementById('sc-overdue-modal'); if(m) m.style.display='';
+    }catch(e){ console.warn('[scOverdueCheck]', e); }
+  }
+  function scOverdueDismiss(){
+    var d = _scOverdueGetDismissed();
+    _scOverdueShown.forEach(function(k){ d[k] = Date.now(); });
+    var cut = Date.now() - 2*86400000;                            // 2일 지난 읽음기록 정리
+    Object.keys(d).forEach(function(k){ if(d[k] < cut) delete d[k]; });
+    _scOverdueSetDismissed(d);
+    _scOverdueHide();
+  }
+  var _scOverdueStarted = false;
+  function scOverdueStart(){
+    if(_scOverdueStarted) return; _scOverdueStarted = true;
+    scOverdueCheck();
+    setInterval(scOverdueCheck, 60*1000);                         // 60초마다 스캔
+  }
   function scShowAdmin(){
     document.getElementById('sc-admin').classList.add('active');
     document.getElementById('sc-kiosk').classList.remove('active');
@@ -2721,6 +2786,7 @@
     document.getElementById('sc-mode-admin').style.display = 'none';
     scAdminTab('weekly');   // 관리자 진입 시 주간출결 우선 표시
     scRemindStart();        // 30분 시간계획 확인 알람 시작
+    scOverdueStart();       // 예상 복귀시간 초과 미복귀 알림 시작
   }
 
   // 관리 버튼 클릭 → 인증 차단 오버레이 표시
