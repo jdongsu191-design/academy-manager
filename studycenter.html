@@ -212,6 +212,8 @@
   .wk-tbl .wk-pending .wk-pending-lbl { font-size: 9px; font-weight: 700; color: #ea580c; margin-top: 1px; }
   .wk-refresh-btn { background: #0891b2 !important; }
   .wk-refresh-btn:hover { background: #0e7490 !important; }
+  .wk-update-btn { background: #7c3aed !important; }
+  .wk-update-btn:hover { background: #6d28d9 !important; }
   /* 일괄 등록 UI */
   /* 학생 추가 폼 */
   .rf-grid { display:flex; flex-direction:column; gap:10px; margin-bottom:6px; }
@@ -658,6 +660,7 @@
             <button class="wk-load-btn wk-saveall-btn" id="wk-saveall-btn" onclick="scWkSaveAll()">&#128190; 전체 저장</button>
             <button class="wk-load-btn" onclick="scWkLoad()">&#128229; 불러오기</button>
             <button class="wk-load-btn wk-refresh-btn" onclick="scWkLoad()" title="현재 주차 데이터 새로고침">&#128260; 새로고침</button>
+            <button class="wk-load-btn wk-update-btn" id="wk-update-btn" onclick="scSendUpdate()" title="패드·모든 화면 강제 새로고침(코드 업데이트)">&#128242; 업데이트</button>
           </div>
           <div class="wk-week-label" id="wk-week-label"></div>
           <div class="wk-biz-notice">&#8505;&#65039; 독서실 영업일은 <b>익일 새벽 1시 10분</b>까지입니다 · 00:00~01:09 입실·기록은 <b>전날</b>로 집계됩니다 (오늘은 01:10부터 시작)</div>
@@ -696,7 +699,7 @@
 
 <!-- 예상 복귀시간 초과 알림 (데스크 전용) -->
 <div id="sc-overdue-modal" style="display:none;position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#fff;border:2px solid #ef4444;border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.22);padding:15px 18px;max-width:92vw;min-width:300px">
-  <div style="font-size:15px;font-weight:800;color:#dc2626;margin-bottom:8px">⏰ 예상 복귀시간 초과</div>
+  <div style="font-size:15px;font-weight:800;color:#dc2626;margin-bottom:8px">⏰ 미복귀 · 미등원 알림</div>
   <div id="sc-overdue-list" style="font-size:14px;color:#334155;line-height:1.7;margin-bottom:12px"></div>
   <button onclick="scOverdueDismiss()" style="width:100%;padding:11px;background:#dc2626;color:#fff;border:none;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer">확인 (읽음)</button>
 </div>
@@ -2786,6 +2789,23 @@
     document.getElementById('sc-mode-admin').style.display = '';
   }
 
+  /* ── [UPDATE] 원격 새로고침 (업데이트 버튼) — 패드·전 화면 강제 리로드 ── */
+  function scForceReload(){ try{ location.replace(location.pathname + '?_upd=' + Date.now()); }catch(e){ location.reload(); } }
+  var _scReloadCh=null;
+  function scReloadListen(){
+    try{
+      if(typeof db!=='undefined' && db && db.channel){
+        _scReloadCh = db.channel('sc-reload-bc', { config:{ broadcast:{ self:false } } })
+          .on('broadcast', { event:'reload' }, function(){ scForceReload(); })
+          .subscribe();
+      }
+    }catch(e){}
+  }
+  async function scSendUpdate(){
+    var btn=document.getElementById('wk-update-btn'); if(btn){ btn.disabled=true; btn.textContent='업데이트 중…'; }
+    try{ if(_scReloadCh){ await _scReloadCh.send({ type:'broadcast', event:'reload', payload:{ at:Date.now() } }); } }catch(e){}
+    setTimeout(function(){ scForceReload(); }, 600);
+  }
   /* ── [OVERDUE] 예상 복귀시간 초과 미복귀 알림 (데스크 전용) ── */
   var _SC_OVERDUE_KEY = 'sc_overdue_dismissed';
   function _scOverdueGetDismissed(){ try{ return JSON.parse(localStorage.getItem(_SC_OVERDUE_KEY)||'{}'); }catch(e){ return {}; } }
@@ -2805,28 +2825,41 @@
       if(typeof scRrToday!=='function' || typeof db==='undefined'){ return; }
       var today = scRrToday();
       var r = await db.from('reading_room_attendance')
-        .select('student_id,attend_date,pending_out_start,pending_out_expected_end')
-        .eq('attend_date', today).not('pending_out_start','is',null);
+        .select('student_id,attend_date,pending_out_start,pending_out_expected_end,expected_check_in,check_in_time')
+        .eq('attend_date', today)
+        .or('pending_out_start.not.is.null,and(expected_check_in.not.is.null,check_in_time.is.null)');
       if(r.error || !r.data){ return; }
       var now = new Date();
       var dismissed = _scOverdueGetDismissed();
       var overdue = [];
       r.data.forEach(function(row){
-        if(!row.pending_out_expected_end) return;                 // 예상복귀 미입력이면 스킵
-        var expEnd = new Date(row.attend_date + 'T' + row.pending_out_expected_end);
-        var start  = new Date(row.attend_date + 'T' + row.pending_out_start);
-        if(expEnd < start) expEnd = new Date(expEnd.getTime() + 86400000);   // 자정 넘김 처리
-        if(now <= expEnd) return;                                 // 아직 예상복귀 안 지남
-        var key = row.student_id + '|' + row.attend_date + '|' + row.pending_out_start;
-        if(dismissed[key]) return;                                // 확인 눌러 읽음처리된 건 스킵
-        overdue.push({ id: row.student_id, key: key, exp: String(row.pending_out_expected_end).slice(0,5) });
+        // 미복귀 외출 (예상복귀 지남 + 아직 외출중)
+        if(row.pending_out_start && row.pending_out_expected_end){
+          var expEnd = new Date(row.attend_date + 'T' + row.pending_out_expected_end);
+          var start  = new Date(row.attend_date + 'T' + row.pending_out_start);
+          if(expEnd < start) expEnd = new Date(expEnd.getTime() + 86400000);   // 자정 넘김
+          if(now > expEnd){
+            var k1 = row.student_id + '|' + row.attend_date + '|out|' + row.pending_out_start;
+            if(!dismissed[k1]) overdue.push({ id:row.student_id, key:k1, kind:'return', exp:String(row.pending_out_expected_end).slice(0,5) });
+          }
+        }
+        // 미등원 (예상등원 지남 + 아직 미등원)
+        if(row.expected_check_in && !row.check_in_time){
+          var expIn = new Date(row.attend_date + 'T' + row.expected_check_in);
+          if(now > expIn){
+            var k2 = row.student_id + '|' + row.attend_date + '|in|' + row.expected_check_in;
+            if(!dismissed[k2]) overdue.push({ id:row.student_id, key:k2, kind:'arrive', exp:String(row.expected_check_in).slice(0,5) });
+          }
+        }
       });
       if(!overdue.length){ _scOverdueHide(); return; }
       _scOverdueShown = overdue.map(function(o){ return o.key; });
       var list = document.getElementById('sc-overdue-list');
       if(list){
-        list.innerHTML = overdue.map(function(o){ return '<div>&bull; <b>'+ _scOverdueName(o.id) +'</b> 학생 (예상복귀 '+ o.exp +')</div>'; }).join('')
-          + '<div style="margin-top:7px;color:#dc2626;font-weight:700">아직 복귀하지 않았습니다.</div>';
+        list.innerHTML = overdue.map(function(o){
+          if(o.kind==='return') return '<div>&bull; <b>'+ _scOverdueName(o.id) +'</b> 학생 &mdash; 예상복귀 '+ o.exp +' <span style="color:#dc2626;font-weight:800">미복귀</span></div>';
+          return '<div>&bull; <b>'+ _scOverdueName(o.id) +'</b> 학생 &mdash; 예상등원 '+ o.exp +' <span style="color:#d97706;font-weight:800">미등원</span></div>';
+        }).join('');
       }
       var m=document.getElementById('sc-overdue-modal'); if(m) m.style.display='';
     }catch(e){ console.warn('[scOverdueCheck]', e); }
@@ -3042,6 +3075,7 @@
     scShowKiosk();
     scAutoReloadInit();   // 새벽 3시 자동 새로고침 타이머
     scReloadRestore();    // 자동 새로고침 후 화면 복원
+    scReloadListen();     // 업데이트 버튼용 원격 리로드 수신
   });
 </script>
   <div class="wk-xout-overlay" id="wk-xout-overlay" onclick="if(event.target===this)scWkXoutClose()">
