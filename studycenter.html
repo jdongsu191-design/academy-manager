@@ -91,7 +91,7 @@
   .ac-back { background: none; border: none; color: #94a3b8; font-size: 13px; text-decoration: underline; cursor: pointer; padding: 6px; }
 
   /* 관리자 화면 (Phase 0 placeholder) */
-  .admin-wrap { max-width: min(1340px, 96vw); margin: 0 auto; width: 100%; background: #fff; border-radius: 16px; padding: 16px 20px; min-height: 60vh; }
+  .admin-wrap { position: relative; max-width: min(1340px, 96vw); margin: 0 auto; width: 100%; background: #fff; border-radius: 16px; padding: 16px 20px; min-height: 60vh; }
   /* 관리자 화면은 카드 대신 전체 화면 사용(키오스크는 기존 중앙정렬 유지) */
   .sc-body:has(#sc-admin.active) { padding: 0; align-items: stretch; justify-content: stretch; }
   #sc-admin.active { display: flex; flex-direction: column; }
@@ -439,6 +439,22 @@
   .s-outing-late{ color:#b91c1c; font-weight:800; }
   .s-late-tag{ display:inline-block; margin-left:4px; font-size:9.5px; background:#dc2626; color:#fff; padding:1px 5px; border-radius:6px; vertical-align:middle; font-weight:800; }
   .tp-flag.u-overdue{ box-shadow:0 0 0 2px #fecaca; }
+  /* ── 키오스크 실시간 현황 카드 ── */
+  .sc-live-card { position:absolute; top:10px; right:16px; width:min(430px,40vw); max-height:330px; display:flex; flex-direction:column; background:#fff; border:2px solid #f9a8d4; border-radius:14px; box-shadow:0 4px 16px rgba(0,0,0,.08); overflow:hidden; z-index:20; }
+  .sc-live-head { padding:9px 14px; background:#fdf2f8; border-bottom:1px solid #fbcfe8; font-size:14px; font-weight:800; color:#be185d; }
+  .sc-live-list { overflow-y:auto; padding:6px; }
+  .sc-live-empty { padding:24px 10px; text-align:center; color:#94a3b8; font-size:13px; }
+  .sc-live-item { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:9px; cursor:pointer; font-size:13px; }
+  .sc-live-item:hover { background:#fdf2f8; }
+  .sc-live-time { font-weight:800; color:#0f172a; font-variant-numeric:tabular-nums; }
+  .sc-live-name { font-weight:700; color:#334155; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sc-live-tag { font-size:11px; font-weight:800; padding:2px 8px; border-radius:100px; white-space:nowrap; }
+  .sc-live-ago { font-size:11px; color:#94a3b8; white-space:nowrap; }
+  .sc-live-new { animation: scLiveIn .5s ease; }
+  @keyframes scLiveIn { from{ opacity:0; transform:translateY(-6px); } to{ opacity:1; transform:none; } }
+  .sc-row-hl { animation: scRowHl 2.2s ease; }
+  @keyframes scRowHl { 0%,65%{ background:#fef9c3; } 100%{ background:transparent; } }
+  @media (max-width: 900px){ .sc-live-card { position:static; width:100%; max-width:none; margin:10px 0; } }
 </style>
 </head>
 <body>
@@ -541,6 +557,10 @@
     <!-- 관리자 화면 -->
     <div class="sc-screen" id="sc-admin">
       <div class="admin-wrap">
+        <div id="sc-live-feed" class="sc-live-card">
+          <div class="sc-live-head">📟 키오스크 실시간 현황</div>
+          <div id="sc-live-body" class="sc-live-list"><div class="sc-live-empty">불러오는 중…</div></div>
+        </div>
         <div class="admin-title">⚙️ 독서실 관리</div>
         <div class="admin-sub">독서실 관리 (관리자 전용)</div>
         <div class="admin-tabs">
@@ -567,6 +587,7 @@
             </div>
             <div class="rf-row"><label class="rf-label">이름</label><input id="rf-name" class="rf-input" placeholder="학생 이름"></div>
             <div class="rf-row"><label class="rf-label">연락처</label><input id="rf-phone" class="rf-input" placeholder="010-1234-5678"></div>
+            <div class="rf-row" id="rf-code-row" style="display:none"><label class="rf-label">코드</label><input id="rf-code" class="rf-input" inputmode="numeric" maxlength="6" placeholder="숫자 4~5자리 (보통 전화 뒷자리)"></div>
             <div class="rf-row"><label class="rf-label">학교급</label><select id="rf-level" class="rf-input"><option value="">선택</option><option value="middle">중등</option><option value="high">고등</option></select></div>
             <div class="rf-row"><label class="rf-label">학교</label><input id="rf-school" class="rf-input" placeholder="예: 청라고"></div>
             <div class="rf-row"><label class="rf-label">학년</label><select id="rf-grade" class="rf-input"><option value="">학년 선택</option><option value="1">1학년</option><option value="2">2학년</option><option value="3">3학년</option></select></div>
@@ -671,6 +692,12 @@
   </div>
 </div>
 
+<!-- 예상 복귀시간 초과 알림 (데스크 전용) -->
+<div id="sc-overdue-modal" style="display:none;position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#fff;border:2px solid #ef4444;border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.22);padding:15px 18px;max-width:92vw;min-width:300px">
+  <div style="font-size:15px;font-weight:800;color:#dc2626;margin-bottom:8px">⏰ 예상 복귀시간 초과</div>
+  <div id="sc-overdue-list" style="font-size:14px;color:#334155;line-height:1.7;margin-bottom:12px"></div>
+  <button onclick="scOverdueDismiss()" style="width:100%;padding:11px;background:#dc2626;color:#fff;border:none;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer">확인 (읽음)</button>
+</div>
 <!-- 관리자 인증 차단 오버레이 -->
 <div class="sc-blocker" id="sc-blocker">
   <div class="bk-card">
@@ -1211,7 +1238,7 @@
         if(remain <= 0){ remainCls += " ok"; remainHtml = "충족 +" + scWkFmtDur(-remain); }
         else remainHtml = scWkFmtDur(remain);
       }
-      h += '<tr'+warnCls+'>'
+      h += '<tr'+warnCls+' data-sid="'+sid+'">'
         + '<td class="wk-no">'+(idx+1)+'</td>'
         + '<td class="wk-name"><div class="wk-name-row"><div class="wk-name-info">'+scWkEsc(st.name)+warnBadge
           + '<div class="wk-sub">'+scWkEsc(((st.school||'')+' '+(st.grade||'')).trim())
@@ -1240,7 +1267,11 @@
         + '</tr>';
     });
     h += "</tbody></table></div>";
+    var _oldSc = wrap.querySelector('.wk-table-scroll');
+    var _scT = _oldSc ? _oldSc.scrollTop : 0, _scL = _oldSc ? _oldSc.scrollLeft : 0;
     wrap.innerHTML = h;
+    var _newSc = wrap.querySelector('.wk-table-scroll');
+    if(_newSc){ _newSc.scrollTop = _scT; _newSc.scrollLeft = _scL; }
   }
 
   function scWkEsc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
@@ -1583,6 +1614,22 @@
     var msg=scWkMsgName(sid)+" 학생 "+scKkHm(ci)+" 등원하였습니다."+(eco?(" "+scKkHm(eco)+" 하원 예정입니다."):"");
     scKkCopy(msg, btn);
   }
+  async function scMsgCheckout(sid, btn){
+    var co=scWkCellVal(sid,"check_out_time"); if(!co){ alert("하원 시각이 없습니다."); return; }
+    var msg=scWkMsgName(sid)+" 학생 "+scKkHm(co)+" 하원하였습니다.";
+    try {
+      var curDate=_wkWeekDates[_wkSelectedDay];
+      var _p=curDate.split("-"); var _nd=new Date(+_p[0], +_p[1]-1, +_p[2]); _nd.setDate(_nd.getDate()+1);
+      var nextDate=_nd.getFullYear()+"-"+String(_nd.getMonth()+1).padStart(2,"0")+"-"+String(_nd.getDate()).padStart(2,"0");
+      var eci=((_wkData[sid]||{})[nextDate]||{}).expected_check_in || null;
+      if(!eci){
+        var r=await db.from("reading_room_attendance").select("expected_check_in").eq("student_id",sid).eq("attend_date",nextDate).maybeSingle();
+        eci=(r.data && r.data.expected_check_in) ? r.data.expected_check_in : null;
+      }
+      if(eci) msg += " 내일 "+scKkHm(eci)+" 등원 예정입니다.";
+    } catch(e){}
+    scKkCopy(msg, btn);
+  }
   function scMsgOut(sid, slot, btn){
     var row=scWkMsgRow(sid);
     var os=scWkCellVal(sid,"out_"+slot+"_start");
@@ -1602,6 +1649,7 @@
   }
   function scWkMsgBtnFor(sid, field){
     var m={ "check_in_time":'scMsgCheckin(\''+sid+'\',this)',
+            "check_out_time":'scMsgCheckout(\''+sid+'\',this)',
             "out_1_start":'scMsgOut(\''+sid+'\',1,this)', "out_2_start":'scMsgOut(\''+sid+'\',2,this)',
             "out_1_end":'scMsgReturn(\''+sid+'\',1,this)', "out_2_end":'scMsgReturn(\''+sid+'\',2,this)' };
     if(!m[field]) return "";
@@ -1638,6 +1686,24 @@
     patch.check_out_is_next_day = (ciM!=null && coM!=null && coM < ciM);
     var _rmk = document.querySelector('.wk-remark[data-sid="'+sid+'"]');
     if(_rmk) patch.remark = (_rmk.value||"").trim() || null;
+    // [외출 복귀 정산] 직접입력으로 외출종료를 넣었으면 진행중(pending) 외출을 out 슬롯에 정산하고 '외출중' 해제
+    var _curRow = (_wkData[sid] || {})[date] || {};
+    if(_curRow.pending_out_start){
+      var _pStart = _curRow.pending_out_start;
+      var _pSlot = !_curRow.out_1_start ? 1 : (!_curRow.out_2_start ? 2 : 0);
+      var _endF = "out_" + _pSlot + "_end";
+      if(_pSlot > 0 && patch[_endF]){
+        patch["out_" + _pSlot + "_start"] = _pStart;
+        if(!patch["out_" + _pSlot + "_reason"]) patch["out_" + _pSlot + "_reason"] = _curRow.pending_out_reason || null;
+        if(patch["out_" + _pSlot + "_expected_end"] == null) patch["out_" + _pSlot + "_expected_end"] = _curRow.pending_out_expected_end || null;
+        var _psM = scWkT2M(_pStart), _peM = scWkT2M(patch[_endF]);
+        patch["out_" + _pSlot + "_end_is_next_day"] = (_psM != null && _peM != null && _peM < _psM);
+        patch.pending_out_start = null;
+        patch.pending_out_reason = null;
+        patch.pending_out_expected_end = null;
+        patch.pending_out_is_next_day = false;
+      }
+    }
     var btn = document.querySelector('.wk-save-btn[data-sid="'+sid+'"]');
     if(btn){ btn.textContent = "저장중..."; btn.disabled = true; }
     try {
@@ -2090,6 +2156,7 @@
     scShowActionBack();
     try {
       _scActionRow = await scRrUpsert({ check_in_time: scNowTime(), expected_check_out: expCheckout || null });
+      scKioskMark("in");
       scActDone("입실", scNowTime());
     } catch(e){ scActError(e); }
   }
@@ -2124,6 +2191,7 @@
         patch.extra_out_minutes = (row.extra_out_minutes || 0) + diff;
       }
       _scActionRow = await scRrUpsert(patch);
+      scKioskMark("return");
       scActDone("복귀", now);
     } catch(e){ scActError(e); }
   }
@@ -2144,6 +2212,7 @@
           { onConflict: "student_id,attend_date" }
         );
       }
+      scKioskMark("out");
       scActDone("하원", now);
     } catch(e){ scActError(e); }
   }
@@ -2252,6 +2321,7 @@
       var expEnd=_scOutCustomEnd ? _scOutCustomEnd : scAddMinToTime(now,_scOutDurMin);
       _scActionRow = await scRrUpsert({ pending_out_start: now, pending_out_is_next_day:false, pending_out_reason:reason, pending_out_expected_end:expEnd });
       scShowActionBack();
+      scKioskMark("outing");
       scActDone("외출", now);
     }catch(e){ scShowActionBack(); scActError(e); }
   }
@@ -2468,6 +2538,8 @@
   var _scEditId = null;
   function scFormReset(){
     _scEditId = null;
+    var _crow2=document.getElementById('rf-code-row'); if(_crow2) _crow2.style.display='none';
+    var _ci2=document.getElementById('rf-code'); if(_ci2) _ci2.value='';
     var r0=document.querySelector('input[name="rf-class"][value="원생"]'); if(r0) r0.checked=true;
     var mt=document.getElementById('rf-mentoring'); if(mt) mt.checked=false;
     ['rf-name','rf-phone','rf-level','rf-school','rf-grade','rf-enrolled','rf-req-h','rf-req-m'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
@@ -2485,6 +2557,8 @@
     var mt=document.getElementById('rf-mentoring'); if(mt) mt.checked=!!s.reading_room_mentoring;
     document.getElementById('rf-name').value=s.name||'';
     document.getElementById('rf-phone').value=s.phone||'';
+    var _crow=document.getElementById('rf-code-row'); if(_crow) _crow.style.display='';
+    var _ci=document.getElementById('rf-code'); if(_ci) _ci.value=s.reading_room_code||'';
     document.getElementById('rf-level').value=s.school_level||'';
     document.getElementById('rf-school').value=s.school||'';
     var _gn=(s.grade||'').match(/\d/); document.getElementById('rf-grade').value=_gn?_gn[0]:'';
@@ -2528,7 +2602,15 @@
     if(btn){ btn.disabled=true; btn.textContent='⏳ 추가 중...'; }
     try {
       if(_scEditId){
+        var _newCode=(document.getElementById('rf-code').value||'').trim();
+        if(_newCode){
+          if(!/^\d{4,6}$/.test(_newCode)){ showErr('코드는 숫자 4~6자리로 입력하세요.'); return; }
+          var _dup=await db.from('users').select('id').eq('reading_room_code',_newCode).neq('id',_scEditId).limit(1);
+          if(_dup.error){ showErr('코드 확인 실패: '+_dup.error.message); return; }
+          if((_dup.data||[]).length){ showErr('이미 사용 중인 코드입니다: '+_newCode); return; }
+        }
         var upd={ name:name, school:school||null, school_level:level||null, grade:grade||null, phone:phone||null, reading_room_class:classVal, reading_room_mentoring:mentoring, enrolled_at:enrolled||null, required_study_minutes:reqMin };
+        if(_newCode) upd.reading_room_code=_newCode;
         var ur=await db.from('users').update(upd).eq('id',_scEditId).select('id,name').maybeSingle();
         if(ur.error) throw ur.error;
         if(msg){ msg.textContent='✅ '+name+' 수정 완료'; msg.style.color='#16a34a'; }
@@ -2701,6 +2783,132 @@
     document.getElementById('sc-mode-admin').style.display = '';
   }
 
+  /* ── [OVERDUE] 예상 복귀시간 초과 미복귀 알림 (데스크 전용) ── */
+  var _SC_OVERDUE_KEY = 'sc_overdue_dismissed';
+  function _scOverdueGetDismissed(){ try{ return JSON.parse(localStorage.getItem(_SC_OVERDUE_KEY)||'{}'); }catch(e){ return {}; } }
+  function _scOverdueSetDismissed(m){ try{ localStorage.setItem(_SC_OVERDUE_KEY, JSON.stringify(m)); }catch(e){} }
+  var _scOverdueShown = [];
+  function _scOverdueName(id){
+    var src = (typeof _wkStudents!=='undefined' && _wkStudents) ? _wkStudents : [];
+    var s = src.find(function(x){ return x.id===id; });
+    if(!s && typeof _scListData!=='undefined' && _scListData) s = _scListData.find(function(x){ return x.id===id; });
+    return s ? (s.name||'학생') : '학생';
+  }
+  function _scOverdueHide(){ var m=document.getElementById('sc-overdue-modal'); if(m) m.style.display='none'; _scOverdueShown=[]; }
+  async function scOverdueCheck(){
+    try{
+      var adm = document.getElementById('sc-admin');
+      if(!adm || !adm.classList.contains('active')){ _scOverdueHide(); return; }   // 데스크(관리자) 화면에서만
+      if(typeof scRrToday!=='function' || typeof db==='undefined'){ return; }
+      var today = scRrToday();
+      var r = await db.from('reading_room_attendance')
+        .select('student_id,attend_date,pending_out_start,pending_out_expected_end')
+        .eq('attend_date', today).not('pending_out_start','is',null);
+      if(r.error || !r.data){ return; }
+      var now = new Date();
+      var dismissed = _scOverdueGetDismissed();
+      var overdue = [];
+      r.data.forEach(function(row){
+        if(!row.pending_out_expected_end) return;                 // 예상복귀 미입력이면 스킵
+        var expEnd = new Date(row.attend_date + 'T' + row.pending_out_expected_end);
+        var start  = new Date(row.attend_date + 'T' + row.pending_out_start);
+        if(expEnd < start) expEnd = new Date(expEnd.getTime() + 86400000);   // 자정 넘김 처리
+        if(now <= expEnd) return;                                 // 아직 예상복귀 안 지남
+        var key = row.student_id + '|' + row.attend_date + '|' + row.pending_out_start;
+        if(dismissed[key]) return;                                // 확인 눌러 읽음처리된 건 스킵
+        overdue.push({ id: row.student_id, key: key, exp: String(row.pending_out_expected_end).slice(0,5) });
+      });
+      if(!overdue.length){ _scOverdueHide(); return; }
+      _scOverdueShown = overdue.map(function(o){ return o.key; });
+      var list = document.getElementById('sc-overdue-list');
+      if(list){
+        list.innerHTML = overdue.map(function(o){ return '<div>&bull; <b>'+ _scOverdueName(o.id) +'</b> 학생 (예상복귀 '+ o.exp +')</div>'; }).join('')
+          + '<div style="margin-top:7px;color:#dc2626;font-weight:700">아직 복귀하지 않았습니다.</div>';
+      }
+      var m=document.getElementById('sc-overdue-modal'); if(m) m.style.display='';
+    }catch(e){ console.warn('[scOverdueCheck]', e); }
+  }
+  function scOverdueDismiss(){
+    var d = _scOverdueGetDismissed();
+    _scOverdueShown.forEach(function(k){ d[k] = Date.now(); });
+    var cut = Date.now() - 2*86400000;                            // 2일 지난 읽음기록 정리
+    Object.keys(d).forEach(function(k){ if(d[k] < cut) delete d[k]; });
+    _scOverdueSetDismissed(d);
+    _scOverdueHide();
+  }
+  var _scOverdueStarted = false;
+  function scOverdueStart(){
+    if(_scOverdueStarted) return; _scOverdueStarted = true;
+    scOverdueCheck();
+    setInterval(scOverdueCheck, 60*1000);                         // 60초마다 스캔
+  }
+  /* ── [LIVE] 키오스크 입력 실시간 현황 (데스크 전용) ── */
+  var _SC_LIVE_TYPES = { "in":{label:"등원",color:"#2563eb",bg:"#eff6ff"}, "out":{label:"하원",color:"#7c3aed",bg:"#f5f3ff"}, "outing":{label:"외출",color:"#d97706",bg:"#fffbeb"}, "return":{label:"복귀",color:"#059669",bg:"#ecfdf5"} };
+  var _scLivePrevKeys = [];
+  function _scLiveAgo(ts){ var sec=Math.floor((Date.now()-new Date(ts).getTime())/1000); if(sec<60) return "방금"; var m=Math.floor(sec/60); if(m<60) return m+"분 전"; var h=Math.floor(m/60); return h+"시간 전"; }
+  // [키오스크 마커] 실시간 현황용 — 본 기록과 분리(실패해도 무시). SQL 미실행이어도 체크인 무손상
+  async function scKioskMark(type){
+    try{ var stu=_scKioskStudent; if(!stu) return;
+      await db.from("reading_room_attendance").update({ last_action_at:new Date().toISOString(), last_action_type:type }).eq("student_id",stu.id).eq("attend_date",scRrToday());
+    }catch(e){}
+  }
+  async function scLiveFeedRender(){
+    try{
+      var adm=document.getElementById("sc-admin"); if(!adm || !adm.classList.contains("active")) return;
+      var body=document.getElementById("sc-live-body"); if(!body) return;
+      var today=(typeof scRrToday==="function")?scRrToday():new Date().toISOString().slice(0,10);
+      var r=await db.from("reading_room_attendance").select("student_id,last_action_at,last_action_type,student:student_id(name)").eq("attend_date",today).not("last_action_at","is",null).order("last_action_at",{ascending:false}).limit(25);
+      if(r.error){ return; }
+      var rows=r.data||[];
+      if(!rows.length){ if(!body.querySelector(".sc-live-empty")){ body.innerHTML='<div class="sc-live-empty">아직 키오스크 입력이 없습니다.</div>'; } _scLivePrevKeys=[]; return; }
+      var keys=rows.map(function(x){ return x.student_id+"|"+x.last_action_at; });
+      var sameOrder=(keys.length===_scLivePrevKeys.length) && keys.every(function(k,i){ return k===_scLivePrevKeys[i]; });
+      if(sameOrder){
+        // 내용 동일 → 'N분 전' 텍스트만 제자리 갱신 (재렌더 없음 = 깜빡임/스크롤튐 없음)
+        var agos=body.querySelectorAll(".sc-live-ago");
+        rows.forEach(function(x,i){ if(agos[i]) agos[i].textContent=_scLiveAgo(x.last_action_at); });
+        return;
+      }
+      // 변화 있음 → 스크롤 보존 + 새 줄만 fade-in
+      var _sTop=body.scrollTop;
+      var _prev={}; _scLivePrevKeys.forEach(function(k){ _prev[k]=1; });
+      body.innerHTML = rows.map(function(x){
+        var key=x.student_id+"|"+x.last_action_at, isNew=!_prev[key];
+        var t=_SC_LIVE_TYPES[x.last_action_type]||{label:(x.last_action_type||"-"),color:"#475569",bg:"#f1f5f9"};
+        var d=new Date(x.last_action_at); var hhmm=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+        var nm=(x.student&&x.student.name)?x.student.name:"학생";
+        return '<div class="sc-live-item'+(isNew?" sc-live-new":"")+'" onclick="scLiveGoStudent(\''+x.student_id+'\')">'
+          + '<span class="sc-live-time">'+hhmm+'</span>'
+          + '<span class="sc-live-name">'+nm+'</span>'
+          + '<span class="sc-live-tag" style="color:'+t.color+';background:'+t.bg+'">'+t.label+'</span>'
+          + '<span class="sc-live-ago">'+_scLiveAgo(x.last_action_at)+'</span></div>';
+      }).join("");
+      body.scrollTop=_sTop;
+      _scLivePrevKeys=keys;
+    }catch(e){ console.warn("[scLiveFeed]", e); }
+  }
+  function scLiveGoStudent(sid){
+    try{
+      var today=(typeof scRrToday==="function")?scRrToday():null;
+      if(today && typeof _wkWeekDates!=="undefined"){ var idx=_wkWeekDates.indexOf(today); if(idx>=0 && _wkSelectedDay!==idx){ _wkSelectedDay=idx; scWkRenderTable(); } }
+      if(typeof scAdminTab==="function"){ try{ scAdminTab("weekly"); }catch(e){} }
+      setTimeout(function(){
+        var row=document.querySelector('tr[data-sid="'+sid+'"]');
+        if(row){ row.scrollIntoView({behavior:"smooth",block:"center"}); row.classList.add("sc-row-hl"); setTimeout(function(){ row.classList.remove("sc-row-hl"); },2200); }
+      },80);
+    }catch(e){}
+  }
+  var _scLiveStarted=false, _scLiveChannel=null;
+  function scLiveStart(){
+    if(_scLiveStarted) return; _scLiveStarted=true;
+    scLiveFeedRender();
+    setInterval(scLiveFeedRender, 15*1000);   // 15초 폴링(안전망)
+    try{
+      if(db && db.channel){
+        _scLiveChannel = db.channel("sc-live-rr").on("postgres_changes",{ event:"*", schema:"public", table:"reading_room_attendance" }, function(){ scLiveFeedRender(); }).subscribe();
+      }
+    }catch(e){ console.warn("[scLive] realtime 구독 실패(폴링 대체):", e); }
+  }
   function scShowAdmin(){
     document.getElementById('sc-admin').classList.add('active');
     document.getElementById('sc-kiosk').classList.remove('active');
@@ -2708,6 +2916,8 @@
     document.getElementById('sc-mode-admin').style.display = 'none';
     scAdminTab('weekly');   // 관리자 진입 시 주간출결 우선 표시
     scRemindStart();        // 30분 시간계획 확인 알람 시작
+    scOverdueStart();       // 예상 복귀시간 초과 미복귀 알림 시작
+    scLiveStart();          // 키오스크 입력 실시간 현황 시작
   }
 
   // 관리 버튼 클릭 → 인증 차단 오버레이 표시
