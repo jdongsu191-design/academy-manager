@@ -316,6 +316,8 @@
       box-shadow: var(--shadow);
     }
     .card + .card { margin-top: 14px; }
+  /* 가로 배치(통계 행)에서는 .card+.card 의 margin-top 이 2·3번째만 밀어내려 단차가 생김 → 제거 (간격은 flex gap 사용) */
+  .stat-row .card + .card { margin-top: 0; }
     .card-title {
       font-size: 15px;
       font-weight: 700;
@@ -783,7 +785,7 @@
       <div class="panel" id="panel-students">
 
         <!-- 통계 -->
-        <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+        <div class="stat-row" style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
           <div class="card" style="flex:1;min-width:80px;padding:14px 16px;text-align:center">
             <div style="font-size:22px;font-weight:800;color:var(--navy)" id="st-total">-</div>
             <div style="font-size:11px;color:var(--text-sub);margin-top:2px">재원 학생</div>
@@ -11257,9 +11259,19 @@ function switchAcctTab(tab) {
 /* ── 통계 카드 업데이트 ─────────────────────────────────── */
 function updateAcctStats() {
   var all      = allUsers || [];
-  var teachers = all.filter(function(u){ return u.role==='teacher' && u.status==='active' && !u.deleted_at; }).length;
-  var stus     = all.filter(function(u){ return u.role==='student' && !u.reading_room_yn && u.status==='active'; }).length;
-  var pending  = all.filter(function(u){ return u.role==='teacher' && u.status==='pending'; }).length;
+  /* [데스크] 배정된 분원만 집계 — 전체 분원 합계로 덮어쓰지 않도록
+     (loadAdminData 와 동일 규칙: 본인 branch_id 또는 담당 선생님의 branch_id 기준) */
+  var _allowed = (typeof getDeskAllowedBranchIds === 'function') ? getDeskAllowedBranchIds() : [];
+  var _isDesk  = !!(currentUser && currentUser.role === 'desk') && _allowed.length > 0;
+  var _inScope = function(u){
+    if (!_isDesk) return true;
+    if (u.branch_id && _allowed.indexOf(u.branch_id) !== -1) return true;
+    var t = all.find(function(x){ return x.id === u.teacher_id; });
+    return !!(t && t.branch_id && _allowed.indexOf(t.branch_id) !== -1);
+  };
+  var teachers = all.filter(function(u){ return u.role==='teacher' && u.status==='active' && !u.deleted_at && _inScope(u); }).length;
+  var stus     = all.filter(function(u){ return u.role==='student' && !u.reading_room_yn && u.status==='active' && _inScope(u); }).length;
+  var pending  = all.filter(function(u){ return u.role==='teacher' && u.status==='pending' && _inScope(u); }).length;
   var tEl = document.getElementById('adm-teachers'); if (tEl) tEl.textContent = teachers;
   var sEl = document.getElementById('adm-students');  if (sEl) sEl.textContent = stus;
   var pEl = document.getElementById('adm-pending');   if (pEl) pEl.textContent = pending;
