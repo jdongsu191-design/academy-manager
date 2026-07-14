@@ -5744,11 +5744,11 @@ async function wnLoadData() {
     // weekend_naje 레코드 조회
     _wnData = {}; _wnCarry = {};
     if (_wnStudents.length) {
-      var records = await fetchAllRows(
-        db.from('weekend_naje').select('*').lte('session_date', date)
-          .in('student_id', _wnStudents.map(s => s.id))
-          .order('session_date', { ascending: true }).order('id', { ascending: true })
-      );
+      var records = await fetchRowsByIds(function(chunk) {
+        return db.from('weekend_naje').select('*').lte('session_date', date)
+          .in('student_id', chunk)
+          .order('session_date', { ascending: true }).order('id', { ascending: true });
+      }, _wnStudents.map(s => s.id));
       (records || []).forEach(r => {
         if (r.session_date === date) _wnData[r.student_id] = r;  // 그날 입력(출결·점수용)
         _wnCarry[r.student_id] = r;                              // 최신 회차(레벨·시간·요일 지속용)
@@ -7076,11 +7076,11 @@ async function ptLoadData() {
     _ptData = {}; _ptCarry = {};
     if (_ptStudents.length) {
       // 직전 회차 forward-fill: 그날 이하 전체를 가져와 exact/carry 분리
-      var records = await fetchAllRows(
-        db.from('weekend_potential').select('*').lte('session_date', date)
-          .in('student_id', _ptStudents.map(s => s.id))
-          .order('session_date', { ascending: true }).order('id', { ascending: true })
-      );
+      var records = await fetchRowsByIds(function(chunk) {
+        return db.from('weekend_potential').select('*').lte('session_date', date)
+          .in('student_id', chunk)
+          .order('session_date', { ascending: true }).order('id', { ascending: true });
+      }, _ptStudents.map(s => s.id));
       (records || []).forEach(r => {
         if (r.session_date === date) _ptData[r.student_id] = r;  // 그날 입력(출결·점수용)
         _ptCarry[r.student_id] = r;                              // 최신 회차(레벨·시간·요일 지속용)
@@ -7143,11 +7143,11 @@ async function ptSetupLoad() {
 
     // 선택 날짜(date) 기준 직전 회차(carry) 조회 → 현재 유효 레벨/시간 표시 (일일표와 동일 규칙)
     var ids = studs.map(s => s.id);
-    var recs = await fetchAllRows(
-      db.from('weekend_potential').select('student_id,session_date,level,attend_time')
-        .lte('session_date', date).in('student_id', ids)
-        .order('session_date', { ascending: true }).order('id', { ascending: true })
-    );
+    var recs = await fetchRowsByIds(function(chunk) {
+      return db.from('weekend_potential').select('student_id,session_date,level,attend_time')
+        .lte('session_date', date).in('student_id', chunk)
+        .order('session_date', { ascending: true }).order('id', { ascending: true });
+    }, ids);
     var carry = {};
     (recs || []).forEach(r => { carry[r.student_id] = r; });  // 오름차순 → 마지막(최신)이 carry
 
@@ -7237,8 +7237,9 @@ async function ptSetupSave() {
 
     var ids = targets.map(t => t.id);
     // 선택 날짜 기존 기록 조회 → UPDATE(컬럼만, 출결·점수 보존) / INSERT(신규) 분리
-    var { data: existRows } = await db.from('weekend_potential')
-      .select('student_id').eq('session_date', date).in('student_id', ids);
+    var existRows = await fetchRowsByIds(function(chunk) {
+      return db.from('weekend_potential').select('student_id').eq('session_date', date).in('student_id', chunk);
+    }, ids);
     var existSet = new Set((existRows || []).map(r => r.student_id));
     var toInsert = targets.filter(t => !existSet.has(t.id))
       .map(t => ({ student_id: t.id, session_date: date, level: t.level, attend_time: t.attend_time, attendance: null }));
@@ -9031,11 +9032,11 @@ async function byLoadData() {
     _byData = {}; _byCarry = {};
     if (_byStudents.length) {
       // 직전 회차 forward-fill: 그날 이하 전체를 가져와 exact/carry 분리
-      var records = await fetchAllRows(
-        db.from('weekend_bety').select('*').lte('session_date', date)
-          .in('student_id', _byStudents.map(s => s.id))
-          .order('session_date', { ascending: true }).order('id', { ascending: true })
-      );
+      var records = await fetchRowsByIds(function(chunk) {
+        return db.from('weekend_bety').select('*').lte('session_date', date)
+          .in('student_id', chunk)
+          .order('session_date', { ascending: true }).order('id', { ascending: true });
+      }, _byStudents.map(s => s.id));
       (records || []).forEach(r => {
         if (r.session_date === date) _byData[r.student_id] = r;  // 그날 입력(출결·점수용)
         _byCarry[r.student_id] = r;                              // 최신 회차(레벨·시간·요일 지속용)
@@ -10189,9 +10190,9 @@ async function nsLoadData() {
 
     _nsData = {};
     if (_nsStudents.length) {
-      var { data: records } = await db.from('weekend_naesin')
-        .select('*').eq('session_date', date)
-        .in('student_id', _nsStudents.map(s => s.id));
+      var records = await fetchRowsByIds(function(chunk) {
+        return db.from('weekend_naesin').select('*').eq('session_date', date).in('student_id', chunk);
+      }, _nsStudents.map(s => s.id));
       (records || []).forEach(r => { _nsData[r.student_id] = r; });
     }
 
@@ -18122,11 +18123,13 @@ async function anrLoad(){
     return;
   }
 
-  // 3) N제 부여 정보
-  var {data: assignments} = await db.from('naje_assignments')
-    .select('set_id,student_id,steps,excluded_problems')
-    .in('student_id', studentIds);
-  assignments = assignments || [];
+  // 3) N제 부여 정보 (학생 수 많을 때 URL 한계 → 청크 분할)
+  var assignments = [];
+  try {
+    assignments = await fetchRowsByIds(function(chunk) {
+      return db.from('naje_assignments').select('set_id,student_id,steps,excluded_problems').in('student_id', chunk);
+    }, studentIds);
+  } catch(e) { console.error('[anrLoad] naje_assignments 오류:', e); assignments = []; }
 
   var assignedSetIds = Array.from(new Set(assignments.map(function(a){ return a.set_id; })));
   if(!assignedSetIds.length){
@@ -18146,11 +18149,11 @@ async function anrLoad(){
   // 6) 답안 정보 - fetchAllRows로 1000건 제한 우회
   var answers = [];
   try {
-    answers = await fetchAllRows(
-      db.from('naje_answers')
+    answers = await fetchRowsByIds(function(chunk) {
+      return db.from('naje_answers')
         .select('student_id,set_id,problem_id')
-        .in('set_id', assignedSetIds).in('student_id', studentIds)
-    );
+        .in('set_id', assignedSetIds).in('student_id', chunk);
+    }, studentIds);
   } catch(e) {
     console.error('[anrLoad] naje_answers 오류:', e);
   }
@@ -21605,6 +21608,21 @@ async function fetchAllRows(query) {
     from += PAGE;
   }
   return all;
+}
+
+/* [대량 IN 조회 분할] .in('student_id', [수백 개]) 는 URL 길이 한계로 400 Bad Request 발생.
+   ID를 청크(기본 150)로 나눠 조회 후 합침. 한 학생의 행은 한 청크에 모두 들어가므로
+   session_date 오름차순 carry 계산 등 기존 로직에 영향 없음. */
+const ID_IN_CHUNK = 150;
+async function fetchRowsByIds(makeQuery, ids, chunkSize) {
+  const size = chunkSize || ID_IN_CHUNK;
+  const list = ids || [];
+  let out = [];
+  for (let i = 0; i < list.length; i += size) {
+    const rows = await fetchAllRows(makeQuery(list.slice(i, i + size)));
+    if (rows && rows.length) out = out.concat(rows);
+  }
+  return out;
 }
 
 async function loadAdminData() {
