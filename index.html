@@ -24197,15 +24197,34 @@ function buildWorkLogCardHTML(log, cls, stus, dateLabel, teacherName) {
   const clsInfo = [cls?.class_days, cls?.class_time].filter(Boolean).join(' · ');
   const esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
+  /* [임시 학생 반영] 업무일지에서 '학생 추가 → 직접 입력'으로 넣은 학생은 student_id=null 로 저장되고
+     이름/학교는 note 의 "[이름 · 학교] 비고" 태그에만 있음 → users 조인이 비어 이름·학교가 빈칸으로 출력되던 문제.
+     태그를 파싱해 이름·학교를 복원하고, 비고에서는 태그를 제거한다. */
+  const _wlParseTemp = (row) => {
+    if (row.users && row.users.name) return null;               // 정규 학생
+    const m = /^\s*\[([^\]]+)\]\s*([\s\S]*)$/.exec(row.note || '');
+    if (!m) return null;                                        // 태그 없음 → 그대로
+    const head  = m[1].split('·').map(x => x.trim()).filter(Boolean);
+    return { name: head[0] || '', school: head.slice(1).join(' ') || '', note: (m[2] || '').trim() };
+  };
+  const _wlResolved = (row) => {
+    const t = _wlParseTemp(row);
+    const u = row.users || {};
+    return t
+      ? { name: t.name, sg: t.school, note: t.note }
+      : { name: u.name || '', sg: [u.school, u.grade].filter(Boolean).join(' '), note: row.note || '' };
+  };
+
   const sortedStus = (stus || []).slice().sort((a, b) => {
-    const an = (a.users && a.users.name) || '';
-    const bn = (b.users && b.users.name) || '';
+    const an = _wlResolved(a).name || '';
+    const bn = _wlResolved(b).name || '';
     return an.localeCompare(bn, 'ko');
   });
 
   const studentRows = sortedStus.map((s, i) => {
-    const u  = s.users || {};
-    const sg = [u.school, u.grade].filter(Boolean).join(' ');
+    const _rv = _wlResolved(s);
+    const u  = { name: _rv.name };
+    const sg = _rv.sg;
     const att   = s.attendance === 'present' ? '정시' : s.attendance === 'late' ? '지각' : s.attendance === 'absent' ? '결석' : '-';
     const attC  = s.attendance === 'absent'  ? '#ef4444' : s.attendance === 'late' ? '#f97316' : '';
     const hw    = s.homework_done === 'true' || s.homework_done === true ? '완료'
@@ -24220,7 +24239,7 @@ function buildWorkLogCardHTML(log, cls, stus, dateLabel, teacherName) {
       <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">${s.n_count != null ? s.n_count : ''}</td>
       <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;color:${hwC};font-weight:600">${hw}</td>
       <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">${esc(s.test_score || '')}</td>
-      <td style="padding:6px 8px;border:1px solid #e5e7eb;font-size:12px;color:#4b5563">${esc(s.note || '')}</td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;font-size:12px;color:#4b5563">${esc(_rv.note || '')}</td>
     </tr>`;
   }).join('');
 
