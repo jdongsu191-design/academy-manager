@@ -1550,6 +1550,14 @@
         </div>
         <!-- ── 상단 컨트롤 ── -->
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px">
+          <!-- 회차 선택 -->
+          <div style="flex:0 0 auto">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">회차</div>
+            <select id="pt-round-select" onchange="wsOnRoundSelect('potential')"
+              style="padding:8px 12px;border:1.5px solid #c4b5fd;border-radius:8px;font-size:13px;outline:none;background:#fff;cursor:pointer;min-width:130px">
+              <option value="">회차 선택</option>
+            </select>
+          </div>
           <!-- 날짜 -->
           <div style="flex:0 0 auto">
             <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">날짜</div>
@@ -1779,6 +1787,14 @@
       <div class="panel" id="panel-weekend-bety">
         <!-- ── 상단 컨트롤 ── -->
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px">
+          <!-- 회차 선택 -->
+          <div style="flex:0 0 auto">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">회차</div>
+            <select id="by-round-select" onchange="wsOnRoundSelect('bety')"
+              style="padding:8px 12px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff;cursor:pointer;min-width:130px">
+              <option value="">회차 선택</option>
+            </select>
+          </div>
           <!-- 날짜 -->
           <div style="flex:0 0 auto">
             <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">날짜</div>
@@ -3132,8 +3148,12 @@
             <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">날짜</div>
             <input type="date" id="ws-input-date" onclick="this.showPicker&&this.showPicker()" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
           </div>
+          <div id="ws-input-month-wrap" style="flex:0 0 70px;display:none">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">월</div>
+            <input type="number" id="ws-input-month" min="1" max="12" placeholder="예: 7" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
+          </div>
           <div style="flex:0 0 90px">
-            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">회차 번호</div>
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px" id="ws-input-round-label">회차 번호</div>
             <input type="number" id="ws-input-round" min="1" placeholder="예: 14" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
           </div>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding-bottom:8px">
@@ -7126,6 +7146,46 @@ async function wsLoadSessions(program){
 }
 
 /* 날짜 뱃지 갱신 (program: 'potential'|'bety') */
+/* 회차 라벨 (포텐셜: "7월 3회차", 베티: "14회차", 휴강: "휴강") */
+function wsRoundLabel(program, row){
+  if (!row) return '';
+  if (row.is_closed) return '휴강';
+  if (row.round_no == null) return '';
+  if (program === 'potential' && row.round_month != null) return row.round_month + '월 ' + row.round_no + '회차';
+  return row.round_no + '회차';
+}
+
+/* 회차 드롭다운 채우기 (날짜순, 휴강 제외하고 회차만) */
+function wsFillRoundSelect(program){
+  var pfx = (program === 'potential') ? 'pt' : 'by';
+  var sel = document.getElementById(pfx + '-round-select');
+  if (!sel) return;
+  var map = _wsCache[program] || {};
+  var rows = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(r){ return !r.is_closed && r.round_no != null; })
+    .sort(function(a,b){ return String(a.session_date).localeCompare(String(b.session_date)); });
+  var curDate = (document.getElementById(pfx + '-date') || {}).value || '';
+  var html = '<option value="">회차 선택</option>';
+  rows.forEach(function(r){
+    var label = wsRoundLabel(program, r);
+    var md = String(r.session_date).slice(5).replace('-', '/');   // MM/DD
+    html += '<option value="' + r.session_date + '"' + (r.session_date === curDate ? ' selected' : '') + '>'
+          + label + ' (' + md + ')</option>';
+  });
+  sel.innerHTML = html;
+}
+
+/* 회차 드롭다운 선택 → 해당 날짜로 이동 + 로드 */
+function wsOnRoundSelect(program){
+  var pfx = (program === 'potential') ? 'pt' : 'by';
+  var sel = document.getElementById(pfx + '-round-select');
+  var dateEl = document.getElementById(pfx + '-date');
+  if (!sel || !dateEl || !sel.value) return;
+  dateEl.value = sel.value;
+  if (program === 'potential') { ptLoad(); }
+  else { byLoad(); }
+}
+
 function wsRenderBadge(program){
   var pfx   = (program === 'potential') ? 'pt' : 'by';
   var badge = document.getElementById(pfx + '-round-badge');
@@ -7145,7 +7205,9 @@ function wsRenderBadge(program){
     badge.style.background = '#fee2e2';
     badge.style.color = '#dc2626';
   } else if (row.round_no != null) {
-    badge.textContent = row.round_no + '회차';
+    badge.textContent = (program === 'potential' && row.round_month != null)
+      ? (row.round_month + '월 ' + row.round_no + '회차')
+      : (row.round_no + '회차');
     badge.style.background = (program === 'potential') ? '#ede9fe' : '#fef3c7';
     badge.style.color = (program === 'potential') ? '#5b21b6' : '#92400e';
   } else {
@@ -7157,6 +7219,7 @@ function wsRenderBadge(program){
 async function wsSyncBadge(program){
   await wsLoadSessions(program);
   wsRenderBadge(program);
+  wsFillRoundSelect(program);
 }
 
 /* ── 회차 관리 모달 ── */
@@ -7164,6 +7227,11 @@ var _wsManageProgram = null;
 async function wsOpenManage(program){
   if (!_wsIsAdmin()) { alert('회차 관리는 관리자만 가능합니다.'); return; }
   _wsManageProgram = program;
+  // 포텐셜이면 월 입력칸 표시 + 라벨 조정
+  var _mw = document.getElementById('ws-input-month-wrap');
+  var _rl = document.getElementById('ws-input-round-label');
+  if (_mw) _mw.style.display = (program === 'potential') ? '' : 'none';
+  if (_rl) _rl.textContent = (program === 'potential') ? '회차' : '회차 번호';
   await wsLoadSessions(program);
   var modal = document.getElementById('modal-wsManage');
   var title = document.getElementById('ws-manage-title');
@@ -7196,30 +7264,45 @@ function wsRenderList(){
     + '<th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e5e7eb">삭제</th>'
     + '</tr></thead><tbody>';
   rows.forEach(function(r){
+    var _lbl = wsRoundLabel(_wsManageProgram, r);
     var label = r.is_closed ? '<span style="color:#dc2626;font-weight:700">휴강</span>'
-              : (r.round_no != null ? '<span style="font-weight:700">' + r.round_no + '회차</span>' : '-');
-    html += '<tr style="border-bottom:1px solid #f1f5f9">'
+              : (_lbl ? '<span style="font-weight:700">' + _esc(_lbl) + '</span>' : '-');
+    html += '<tr style="border-bottom:1px solid #f1f5f9;cursor:pointer" onclick="wsEditSessionRow(\'' + _esc(r.session_date) + '\')" title="클릭하면 위 입력칸에 불러옵니다">'
       + '<td style="padding:7px 8px">' + _esc(r.session_date) + '</td>'
       + '<td style="padding:7px 8px;text-align:center">' + label + '</td>'
       + '<td style="padding:7px 8px;text-align:center;color:#6b7280">' + _esc(r.note || '') + '</td>'
-      + '<td style="padding:7px 8px;text-align:center"><button onclick="wsDeleteSession(\'' + _esc(r.session_date) + '\')" style="font-size:11px;padding:3px 8px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;cursor:pointer">삭제</button></td>'
+      + '<td style="padding:7px 8px;text-align:center"><button onclick="event.stopPropagation();wsDeleteSession(\'' + _esc(r.session_date) + '\')" style="font-size:11px;padding:3px 8px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;cursor:pointer">삭제</button></td>'
       + '</tr>';
   });
   html += '</tbody></table>';
   wrap.innerHTML = html;
 }
 
+/* 목록 행 클릭 → 입력칸에 불러오기 (수정 편의) */
+function wsEditSessionRow(date){
+  var row = (_wsCache[_wsManageProgram] || {})[date];
+  if (!row) return;
+  var dEl = document.getElementById('ws-input-date'); if (dEl) dEl.value = date;
+  var rEl = document.getElementById('ws-input-round'); if (rEl) rEl.value = (row.round_no != null ? row.round_no : '');
+  var mEl = document.getElementById('ws-input-month'); if (mEl) mEl.value = (row.round_month != null ? row.round_month : '');
+  var cEl = document.getElementById('ws-input-closed'); if (cEl) cEl.checked = !!row.is_closed;
+}
+
 async function wsSaveSession(){
   if (!_wsIsAdmin()) { alert('관리자만 가능합니다.'); return; }
   var date   = (document.getElementById('ws-input-date') || {}).value || '';
   var roundV = (document.getElementById('ws-input-round') || {}).value;
+  var monthV = (document.getElementById('ws-input-month') || {}).value;
   var closed = !!(document.getElementById('ws-input-closed') || {}).checked;
+  var _isPotential = (_wsManageProgram === 'potential');
   if (!date) { alert('날짜를 선택하세요.'); return; }
   if (!closed && (roundV === '' || roundV == null)) { alert('회차 번호를 입력하거나 휴강을 선택하세요.'); return; }
+  if (!closed && _isPotential && (monthV === '' || monthV == null)) { alert('월을 입력하세요.'); return; }
   var payload = {
     program: _wsManageProgram,
     session_date: date,
     round_no: closed ? null : parseInt(roundV, 10),
+    round_month: (closed || !_isPotential) ? null : parseInt(monthV, 10),
     is_closed: closed
   };
   try {
@@ -7229,7 +7312,9 @@ async function wsSaveSession(){
     wsRenderList();
     wsRenderBadge(_wsManageProgram);
     var rEl = document.getElementById('ws-input-round'); if (rEl) rEl.value = '';
+    var mEl = document.getElementById('ws-input-month'); if (mEl) mEl.value = '';
     var cEl = document.getElementById('ws-input-closed'); if (cEl) cEl.checked = false;
+    wsFillRoundSelect(_wsManageProgram);
   } catch(e) { alert('오류: ' + (e.message || e)); }
 }
 
