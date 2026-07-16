@@ -23716,6 +23716,21 @@ async function loadWorkLog() {
       .filter(s => !futureInSet.has(s.id))
       .concat(pastOutStuds.filter(s => !(activeStuds || []).some(a => a.id === s.id)));
 
+    // [버그수정] 검색추가 학생(이 반 소속이 아닌 정규 학생)도 저장 기록엔 student_id로 남아 있음.
+    // 반 재원학생 목록(filtered)에 없으면 로드 시 사라지므로, 기록에 있는 student_id 중
+    // 누락된 학생을 별도로 조회해 명단에 되살린다. (보강 학생으로 표시)
+    const _filteredIds = new Set(filtered.map(s => s.id));
+    const _missingIds = [...new Set(
+      studentLogs.filter(sl => sl.student_id && !_filteredIds.has(sl.student_id))
+                 .map(sl => sl.student_id)
+    )];
+    let extraStuds = [];
+    if (_missingIds.length) {
+      const { data: extraData } = await db.from('users')
+        .select('id,name,school,grade').in('id', _missingIds);
+      extraStuds = (extraData || []).map(s => ({ ...s, _isTemp: true }));
+    }
+
     // student_id=null인 보강/삭제 레코드 처리
     const nullLogs = studentLogs.filter(sl => !sl.student_id);
     const nullPlaceholders = nullLogs.map(sl => {
@@ -23727,7 +23742,7 @@ async function loadWorkLog() {
       return { id: `deleted_${sl.id}`, name: '삭제된 학생', _isDeleted: true, _logId: sl.id };
     });
 
-    _wlStudents = [...filtered, ...nullPlaceholders]
+    _wlStudents = [...filtered, ...extraStuds, ...nullPlaceholders]
       .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
 
     _wlStudentLogs = studentLogs;
@@ -23921,9 +23936,16 @@ async function saveWorkLog() {
         if (!tempInfo) continue;
         const noteWithTag = `[${_esc(tempInfo.name)}${tempInfo.school ? ' · ' + tempInfo.school : ''}] ${note || ''}`.trim();
         // 이미 존재하는 레코드 확인 후 insert/update
-        const existing = await db.from('work_log_students')
-          .select('id').eq('log_id', logId).is('student_id', null)
-          .ilike('note', `[${_esc(tempInfo.name)}%`).single();
+        // .single()은 0건/다건에서 에러 → maybeSingle + 정확 태그(`[이름]` 또는 `[이름 ·`)로 안전 매칭
+        const _nameTag1 = `[${tempInfo.name}]`;
+        const _nameTag2 = `[${tempInfo.name} ·`;
+        const { data: _exRows } = await db.from('work_log_students')
+          .select('id,note').eq('log_id', logId).is('student_id', null)
+          .ilike('note', `[${_esc(tempInfo.name)}%`);
+        const existing = { data: (_exRows || []).find(r => {
+          const nt = r.note || '';
+          return nt.startsWith(_nameTag1) || nt.startsWith(_nameTag2);
+        }) || null };
         if (existing.data) {
           await db.from('work_log_students').update({
             attendance: att, n_count: nCount || null, homework_done: hw,
