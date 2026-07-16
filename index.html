@@ -20684,6 +20684,7 @@ async function saveEditClass(){
    기존 학생의 class_id/class_id2 배정만 — 계정 생성 없음(users update).
    XLSX 일괄등록 탭은 A-3b에서 student_code 규약 적응 후 추가 예정. */
 var _csmClassId = null, _csmClassName = '', _csmClassLevel = 'high', _csmAllCandidates = [];
+var _csmCandTeacherMap = {}, _csmCandBranchMap = {};
 
 async function openClassStudentModal(classId, className){
   _csmClassId = classId;
@@ -20709,7 +20710,7 @@ function csmSwitchTab(tab){
     btn.style.color      = active ? '#fff' : '#6b7280';
     btn.style.fontWeight = active ? '700' : '500';
   });
-  if(tab === 'add')  csmLoadAddList();
+  if(tab === 'add')  csmLoadAddList();   // async — 내부에서 렌더
   if(tab === 'xlsx') csmXlsxReset();
 }
 
@@ -20751,11 +20752,40 @@ async function csmRemoveStudent(studentId, studentName, isMain){
   await csmLoadCurrentStudents();
 }
 
-function csmLoadAddList(){
-  var inClassIds = new Set(students.filter(function(s){
-    return s.class_id === _csmClassId || s.class_id2 === _csmClassId;
-  }).map(function(s){ return s.id; }));
-  _csmAllCandidates = students.filter(function(s){ return !inClassIds.has(s.id); });
+async function csmLoadAddList(){
+  // [타 선생님 학생 추가] 후보를 전체 활성 학생으로 조회 (전역 students 불변 → 수강인원 등 무영향)
+  // _csmCandTeacherMap: 후보 학생의 담당 선생님/분원 표시용
+  var listEl = document.getElementById('csm-add-list');
+  if (listEl) listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#9ca3af;font-size:13px">불러오는 중...</div>';
+  try {
+    var { data: allStuds } = await db.from('users')
+      .select('id,name,school,grade,class_id,class_id2,teacher_id,branch_id,school_level')
+      .eq('role','student').eq('status','active').order('name');
+    var all = allStuds || [];
+    // 담당 선생님·분원 이름 매핑
+    var tids = [...new Set(all.map(function(s){ return s.teacher_id; }).filter(Boolean))];
+    var bids = [...new Set(all.map(function(s){ return s.branch_id; }).filter(Boolean))];
+    _csmCandTeacherMap = {};
+    _csmCandBranchMap = {};
+    if (tids.length) {
+      var { data: tRows } = await db.from('users').select('id,name').in('id', tids);
+      (tRows || []).forEach(function(t){ _csmCandTeacherMap[t.id] = t.name; });
+    }
+    if (bids.length && typeof _allBranches !== 'undefined' && Array.isArray(_allBranches)) {
+      (_allBranches || []).forEach(function(b){ _csmCandBranchMap[b.id] = b.name; });
+    }
+    var inClassIds = new Set(all.filter(function(s){
+      return s.class_id === _csmClassId || s.class_id2 === _csmClassId;
+    }).map(function(s){ return s.id; }));
+    _csmAllCandidates = all.filter(function(s){ return !inClassIds.has(s.id); });
+  } catch(e) {
+    console.error('[csmLoadAddList]', e);
+    // 실패 시 기존 방식(내 담당) 폴백
+    var inClassIds2 = new Set(students.filter(function(s){
+      return s.class_id === _csmClassId || s.class_id2 === _csmClassId;
+    }).map(function(s){ return s.id; }));
+    _csmAllCandidates = students.filter(function(s){ return !inClassIds2.has(s.id); });
+  }
   var sb = document.getElementById('csm-search');
   if(sb) sb.value = '';
   csmFilterStudents();
@@ -20777,12 +20807,19 @@ function csmFilterStudents(){
     var cls1 = classes.find(function(c){ return c.id===s.class_id; });
     var cls2 = s.class_id2 ? classes.find(function(c){ return c.id===s.class_id2; }) : null;
     var clsLabel = [cls1?cls1.name:'', cls2?cls2.name:''].filter(Boolean).join(', ');
+    // [타 선생님 학생 표시] 담당 선생님·분원 배지 (내 담당이 아니면)
+    var _tName = (s.teacher_id && _csmCandTeacherMap[s.teacher_id]) ? _csmCandTeacherMap[s.teacher_id] : '';
+    var _bName = (s.branch_id && _csmCandBranchMap[s.branch_id]) ? _csmCandBranchMap[s.branch_id] : '';
+    var _isMine = (currentUser && s.teacher_id === currentUser.id);
+    var _teacherBadge = (!_isMine && _tName)
+      ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;margin-left:6px;font-weight:700">담당:' + _esc(_tName) + (_bName ? ' ('+_esc(_bName)+')' : '') + '</span>'
+      : '';
     return '<label style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;transition:background 0.1s" '
       +'onmouseover="this.style.background=\'#f8fafc\'" onmouseout="this.style.background=\'\'">'
       +'<input type="checkbox" class="csm-chk" data-id="'+s.id+'" onchange="csmUpdateSelCount()"'
         +' style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:var(--primary)">'
       +'<div style="flex:1;min-width:0">'
-        +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+s.name+'</div>'
+        +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+_esc(s.name)+_teacherBadge+'</div>'
         +'<div style="font-size:11px;color:#9ca3af">'+(sg||'')+(clsLabel?' \u00B7 '+clsLabel:'')+'</div>'
       +'</div>'
     +'</label>';
@@ -20807,15 +20844,18 @@ async function csmAddSelected(){
   var ok=0, fail=[];
   for(var i=0; i<checked.length; i++){
     var sid = checked[i].dataset.id;
-    var s   = students.find(function(x){ return x.id===sid; });
+    var s   = _csmAllCandidates.find(function(x){ return x.id===sid; }) || students.find(function(x){ return x.id===sid; });
     if(!s){ fail.push(sid); continue; }
     var updateObj;
     if(!s.class_id){ updateObj = {class_id: _csmClassId}; }
     else if(!s.class_id2){ updateObj = {class_id2: _csmClassId}; }
     else { updateObj = {class_id2: _csmClassId}; }
-    updateObj.school_level = _csmClassLevel;
-    // [베티 자동체크] 고등·중고등 반이면 베티모의고사 참여 (해제는 하지 않음)
-    if (_csmClassLevel === 'high' || _csmClassLevel === 'both') updateObj.bety_yn = true;
+    // [타 선생님 학생] 반 연결만 — teacher_id·school_level·bety_yn 등 원래 담당 설정 보호
+    var _isMyStudent = (currentUser && s.teacher_id === currentUser.id);
+    if (_isMyStudent) {
+      updateObj.school_level = _csmClassLevel;
+      if (_csmClassLevel === 'high' || _csmClassLevel === 'both') updateObj.bety_yn = true;
+    }
     var {error} = await db.from('users').update(updateObj).eq('id', sid);
     if(error) fail.push(s.name);
     else ok++;
