@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.43-wksave]</title>
+<title>BMAPS · 독서실 출결 [v0.44-wkout]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -466,7 +466,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.43-wksave</span>
+    <span class="tb-ver" id="sc-ver">v0.44-wkout</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -730,7 +730,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.43-wksave';
+  window.STUDYCENTER_VERSION = 'v0.44-wkout';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1250,9 +1250,19 @@
   }
 
   // 일별 상태 판정 (데스크용): 미하원/미복귀 = 확인필요
+  // [표 직접입력 외출중] 진행 중 외출 판정: 시작은 있는데 종료가 비어있으면 외출중
+  //   키오스크 외출: pending_out_start (읽기전용)
+  //   표 직접입력 외출: out_N_start 있고 out_N_end 없음 (편집 가능)
+  function scWkOngoingOutStart(row){
+    if(!row) return null;
+    if(row.pending_out_start) return row.pending_out_start;               // 키오스크 외출
+    if(row.out_1_start && !row.out_1_end) return row.out_1_start;         // 표 외출1 진행중
+    if(row.out_2_start && !row.out_2_end) return row.out_2_start;         // 표 외출2 진행중
+    return null;
+  }
   function scWkRowState(row, attendDate){
     if(!row) return "none";
-    if(row.pending_out_start) return "warn_outing";   // 외출 후 미복귀 (즉시)
+    if(scWkOngoingOutStart(row)) return "warn_outing";   // 외출 후 미복귀 (키오스크 pending + 표 직접입력)
     if(row.check_in_time && !row.check_out_time){      // 등원 후 미하원
       // 영업일 종료(출결일 익일 01:10) 전에는 '진행 중'으로 보고 경고하지 않음
       if(attendDate){
@@ -1302,7 +1312,7 @@
       var warnCls = (rs === "warn_noout" || rs === "warn_outing") ? ' class="wk-warn"' : '';
       var warnBadge = "";
       if(rs === "warn_noout") warnBadge = '<span class="wk-warn-badge">⚠ 미하원</span>';
-      else if(rs === "warn_outing") warnBadge = '<span class="wk-warn-badge">⚠ 외출중 '+scWkHm(row.pending_out_start)+'~</span>';
+      else if(rs === "warn_outing") warnBadge = '<span class="wk-warn-badge">⚠ 외출중 '+scWkHm(scWkOngoingOutStart(row))+'~</span>';
       var sid = st.id;
       // 진행중 외출(pending)이 정산될 슬롯: out_1 비었으면 1, 아니면 out_2 비었으면 2, 둘 다 차면 0(추가외출)
       var pendingSlot = (row && row.pending_out_start) ? (!row.out_1_start ? 1 : (!row.out_2_start ? 2 : 0)) : 0;
@@ -1314,8 +1324,15 @@
       }
       // 외출 시작칸: 해당 슬롯이 진행중 외출이면 읽기전용 표시(편집 input 미생성 → 복귀 정산 로직 무손상)
       function outStartCell(slot, field, val){
+        // 키오스크 외출(pending): 읽기전용 표시 (복귀 정산 로직 무손상)
         if(row && row.pending_out_start && pendingSlot === slot){
           return '<div class="wk-pending">🚶 '+scWkHm(row.pending_out_start)+'<div class="wk-pending-lbl">외출중</div></div>' + scWkMsgBtnFor(sid, field);
+        }
+        // 표 직접입력 외출(시작만 있고 종료 비었으면): 편집 가능하되 "외출중" 배지 표시
+        var _startV = row ? row["out_"+slot+"_start"] : "";
+        var _endV   = row ? row["out_"+slot+"_end"]   : "";
+        if(_startV && !_endV){
+          return cell(field, val) + '<div class="wk-pending-lbl" style="margin-top:2px">🚶 외출중</div>';
         }
         return cell(field, val);
       }
