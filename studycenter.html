@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.39-wkread]</title>
+<title>BMAPS · 독서실 출결 [v0.40-wkrt]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -466,7 +466,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.39-wkread</span>
+    <span class="tb-ver" id="sc-ver">v0.40-wkrt</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -723,7 +723,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.39-wkread';
+  window.STUDYCENTER_VERSION = 'v0.40-wkrt';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1049,6 +1049,76 @@
   }
 
   // 주간 데이터 불러오기
+  /* ── [REALTIME 주간출결] 편집 중 보호하며 실시간 반영 ── */
+  var _scWkRtChannel = null, _scWkRtStarted = false, _scWkRtTimer = null, _scWkRtPollTimer = null;
+  // 편집 중이던 입력칸 스냅샷 (다시 그린 뒤 값·커서 복원)
+  function _scWkSnapshotEdit(){
+    var el = document.activeElement;
+    if(!el || !el.classList) return null;
+    // 주간출결 입력칸만 대상 (wk-t, wk-req-h, wk-req-m, wk-extra 등)
+    var isWkInput = el.tagName === 'INPUT' && (
+      el.classList.contains('wk-t') || el.classList.contains('wk-req-h') ||
+      el.classList.contains('wk-req-m') || el.classList.contains('wk-extra')
+    );
+    if(!isWkInput) return null;
+    var snap = {
+      sid:   el.getAttribute('data-sid') || '',
+      field: el.getAttribute('data-field') || '',
+      cls:   el.className,
+      value: el.value,
+      selStart: (typeof el.selectionStart==='number') ? el.selectionStart : null,
+      selEnd:   (typeof el.selectionEnd==='number')   ? el.selectionEnd   : null
+    };
+    return snap;
+  }
+  function _scWkRestoreEdit(snap){
+    if(!snap) return;
+    // 동일 셀 찾기 (sid + field 우선, 없으면 sid + 클래스)
+    var sel = 'input[data-sid="' + snap.sid + '"]';
+    if(snap.field) sel += '[data-field="' + snap.field + '"]';
+    var cands = document.querySelectorAll(sel);
+    var target = null;
+    for(var i=0;i<cands.length;i++){
+      // 클래스 유형이 같은 것 우선 (req-h/req-m 구분)
+      if(snap.cls && cands[i].className === snap.cls){ target = cands[i]; break; }
+    }
+    if(!target && cands.length) target = cands[0];
+    if(!target) return;
+    // 사용자가 입력하던 값 유지 (DB값으로 덮지 않음)
+    target.value = snap.value;
+    try{
+      target.focus();
+      if(snap.selStart!=null && snap.selEnd!=null) target.setSelectionRange(snap.selStart, snap.selEnd);
+    }catch(e){}
+  }
+  // realtime 이벤트 → 디바운스 후, 주간출결 탭이 열려있을 때만 갱신 (편집칸 복원)
+  function _scWkRtSchedule(){
+    if(_scWkRtTimer) clearTimeout(_scWkRtTimer);
+    _scWkRtTimer = setTimeout(function(){
+      _scWkRtTimer = null;
+      // 주간출결 탭 활성 여부
+      var panel = document.getElementById('admin-tab-weekly');
+      if(!panel || panel.style.display === 'none') return;
+      var snap = _scWkSnapshotEdit();
+      scWkLoad().then(function(){ _scWkRestoreEdit(snap); }).catch(function(){});
+    }, 1500);   // 디바운스 1.5초 (동시 입력 묶음 처리)
+  }
+  function scWkRtStart(){
+    if(_scWkRtStarted) return; _scWkRtStarted = true;
+    // 안전망 폴링 (realtime 실패 대비, 30초) — 편집 중이면 스킵됨(스냅샷 복원)
+    _scWkRtPollTimer = setInterval(function(){
+      var panel = document.getElementById('admin-tab-weekly');
+      if(panel && panel.style.display !== 'none') _scWkRtSchedule();
+    }, 30*1000);
+    try{
+      if(db && db.channel){
+        _scWkRtChannel = db.channel('sc-wk-rt')
+          .on('postgres_changes', { event:'*', schema:'public', table:'reading_room_attendance' }, function(){ _scWkRtSchedule(); })
+          .subscribe();
+      }
+    }catch(e){ console.warn('[scWkRt] realtime 구독 실패(폴링 대체):', e); }
+  }
+
   async function scWkLoad(){
     var monday = document.getElementById("wk-week-start").value;
     if(!monday){ monday = scWkMonday(scWkFmtDate(new Date())); document.getElementById("wk-week-start").value = monday; }
@@ -2081,6 +2151,7 @@
      Next-day: end < start adds is_next_day flag.
   ============================================================ */
   var _scActionRow = null;
+  var _scActBusy = false;   // [순간 잠금] 키패드 동작 처리 중 중복 실행 방지
 
   function scRrToday(){
     var d = new Date();
@@ -2159,18 +2230,23 @@
 
   // [입실] (예상 하원시각 포함)
   async function scActIn(expCheckout){
+    if(_scActBusy) return;   // [순간 잠금] 처리 중이면 무시
+    _scActBusy = true;
     scShowActionBack();
     try {
       _scActionRow = await scRrUpsert({ check_in_time: scNowTime(), expected_check_out: expCheckout || null });
       scKioskMark("in");
       scActDone("입실", scNowTime());
     } catch(e){ scActError(e); }
+    finally { _scActBusy = false; }
   }
 
   // [외출 진입] → 사유/복귀 선택 화면 (scShowOutScreen)으로 대체됨
 
   // [복귀] → pending~now 외출분 계산 → out_1/out_2/extra 정산 + pending 비우기
   async function scActReturn(){
+    if(_scActBusy) return;   // [순간 잠금] 처리 중이면 무시
+    _scActBusy = true;
     try {
       var row = _scActionRow || {};
       var now = scNowTime();
@@ -2200,10 +2276,13 @@
       scKioskMark("return");
       scActDone("복귀", now);
     } catch(e){ scActError(e); }
+    finally { _scActBusy = false; }
   }
 
   // [하원] (다음날 예상등원 → 예약 행 생성)
   async function scActLeave(expNextIn){
+    if(_scActBusy) return;   // [순간 잠금] 처리 중이면 무시
+    _scActBusy = true;
     scShowActionBack();
     try {
       var row = _scActionRow || {};
@@ -2221,6 +2300,7 @@
       scKioskMark("out");
       scActDone("하원", now);
     } catch(e){ scActError(e); }
+    finally { _scActBusy = false; }
   }
 
   function scActDone(label, time){
@@ -2313,6 +2393,7 @@
   }
   // [외출 완료] → pending_out_start + 사유 + 예상복귀
   async function scConfirmOut(){
+    if(_scActBusy) return;   // [순간 잠금] 처리 중이면 무시
     if(!_scOutReason){ alert("외출 사유를 선택해주세요."); return; }
     if(_scOutReason==="타학원" && !_scOutSubject){ alert("과목을 선택해주세요."); return; }
     var customReason="";
@@ -2321,6 +2402,7 @@
       if(!customReason){ alert("외출 사유를 입력해주세요."); return; }
     }
     if(!_scOutDurMin && !_scOutCustomEnd){ alert("예상 복귀시간을 선택하거나 입력해주세요."); return; }
+    _scActBusy = true;   // [순간 잠금] 모든 검증 통과 후 저장 시작 시점에 획득
     try{
       var now=scNowTime();
       var reason=(_scOutReason==="타학원") ? ("타학원("+_scOutSubject+")") : (_scOutReason==="기타" ? customReason : _scOutReason);
@@ -2330,6 +2412,7 @@
       scKioskMark("outing");
       scActDone("외출", now);
     }catch(e){ scShowActionBack(); scActError(e); }
+    finally { _scActBusy = false; }
   }
   // ===== 아이폰 알람식 드래그 휠 (오전/오후·시·분) — 기기 무관 =====
   var _SC_WH_ITEM_H = 36;  // 항목 높이(px), CSS .sc-wh-item 와 반드시 일치
@@ -2968,6 +3051,7 @@
     scRemindStart();        // 30분 시간계획 확인 알람 시작
     scOverdueStart();       // 예상 복귀시간 초과 미복귀 알림 시작
     scLiveStart();          // 키오스크 입력 실시간 현황 시작
+    scWkRtStart();          // [REALTIME 주간출결] 실시간 반영 시작
   }
 
   // 관리 버튼 클릭 → 인증 차단 오버레이 표시
