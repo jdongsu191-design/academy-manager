@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.40-wkrt]</title>
+<title>BMAPS · 독서실 출결 [v0.43-wksave]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -466,7 +466,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.40-wkrt</span>
+    <span class="tb-ver" id="sc-ver">v0.43-wksave</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -649,6 +649,13 @@
 
         <!-- [탭] 주간 출결 -->
         <div id="admin-tab-weekly" style="display:none">
+          <div id="wk-unsaved-banner" style="display:none;align-items:center;justify-content:space-between;gap:10px;background:#fef3c7;border:1.5px solid #f59e0b;border-radius:10px;padding:10px 14px;margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#92400e">
+              <span style="font-size:16px">⚠️</span>
+              <span>저장하지 않은 변경사항이 <span id="wk-unsaved-count">0</span>개 있습니다. 저장 버튼을 눌러주세요.</span>
+            </div>
+            <button onclick="scWkSaveAll()" style="background:#f59e0b;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap">모두 저장</button>
+          </div>
           <div class="wk-filter">
             <div class="wk-week-nav">
               <button class="wk-nav-btn" onclick="scWkShiftWeek(-1)" title="이전주">&#8592;</button>
@@ -723,7 +730,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.40-wkrt';
+  window.STUDYCENTER_VERSION = 'v0.43-wksave';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1066,6 +1073,7 @@
       field: el.getAttribute('data-field') || '',
       cls:   el.className,
       value: el.value,
+      dirty: el.classList.contains('dirty'),   // [미저장 유지] 편집 중 dirty 상태 보존
       selStart: (typeof el.selectionStart==='number') ? el.selectionStart : null,
       selEnd:   (typeof el.selectionEnd==='number')   ? el.selectionEnd   : null
     };
@@ -1086,6 +1094,17 @@
     if(!target) return;
     // 사용자가 입력하던 값 유지 (DB값으로 덮지 않음)
     target.value = snap.value;
+    // [미저장 유지] 편집 중이던 dirty 상태 복원 → 저장버튼·배너도 미저장으로 되돌림
+    if(snap.dirty){
+      target.classList.add('dirty');
+      var _sid = snap.sid;
+      // 해당 행 저장버튼 미저장 상태로
+      var _sbtn = document.querySelector('.wk-save-btn[data-sid="' + _sid + '"]');
+      if(_sbtn){ _sbtn.classList.remove('saved'); _sbtn.textContent = '저장'; }
+      var _rbtn = document.querySelector('.wk-req-save[data-sid="' + _sid + '"]');
+      if(_rbtn && (target.classList.contains('wk-req-h') || target.classList.contains('wk-req-m'))){ _rbtn.classList.remove('saved'); _rbtn.textContent = '저장'; }
+      if(typeof scWkUpdateUnsavedBanner === 'function') scWkUpdateUnsavedBanner();
+    }
     try{
       target.focus();
       if(snap.selStart!=null && snap.selEnd!=null) target.setSelectionRange(snap.selStart, snap.selEnd);
@@ -1100,16 +1119,16 @@
       var panel = document.getElementById('admin-tab-weekly');
       if(!panel || panel.style.display === 'none') return;
       var snap = _scWkSnapshotEdit();
-      scWkLoad().then(function(){ _scWkRestoreEdit(snap); }).catch(function(){});
+      scWkLoad(true).then(function(){ _scWkRestoreEdit(snap); }).catch(function(){});
     }, 1500);   // 디바운스 1.5초 (동시 입력 묶음 처리)
   }
   function scWkRtStart(){
     if(_scWkRtStarted) return; _scWkRtStarted = true;
-    // 안전망 폴링 (realtime 실패 대비, 30초) — 편집 중이면 스킵됨(스냅샷 복원)
+    // 안전망 폴링 (realtime 실패 대비, 60초) — 편집 중이면 편집칸만 복원(silent 갱신)
     _scWkRtPollTimer = setInterval(function(){
       var panel = document.getElementById('admin-tab-weekly');
       if(panel && panel.style.display !== 'none') _scWkRtSchedule();
-    }, 30*1000);
+    }, 60*1000);   // 60초 안전망 (realtime 이 주역)
     try{
       if(db && db.channel){
         _scWkRtChannel = db.channel('sc-wk-rt')
@@ -1119,14 +1138,15 @@
     }catch(e){ console.warn('[scWkRt] realtime 구독 실패(폴링 대체):', e); }
   }
 
-  async function scWkLoad(){
+  async function scWkLoad(silent){
     var monday = document.getElementById("wk-week-start").value;
     if(!monday){ monday = scWkMonday(scWkFmtDate(new Date())); document.getElementById("wk-week-start").value = monday; }
     _wkWeekDates = scWkBuildWeek(monday);
     var lbl = document.getElementById("wk-week-label");
     if(lbl) lbl.textContent = _wkWeekDates[0] + " ~ " + _wkWeekDates[6];
     var wrap = document.getElementById("wk-table-wrap");
-    if(wrap) wrap.innerHTML = '<div class="wk-empty">\ubd88\ub7ec\uc624\ub294 \uc911...</div>';
+    // [REALTIME] silent 갱신 시엔 "불러오는 중" 표시 생략 (깜빡임 방지). 최초/수동 로드만 표시.
+    if(wrap && !silent && !wrap.querySelector('table')) wrap.innerHTML = '<div class="wk-empty">\ubd88\ub7ec\uc624\ub294 \uc911...</div>';
     try {
       // reading_room 학생
       var stuRes = await db.from("users")
@@ -1348,6 +1368,7 @@
     wrap.innerHTML = h;
     var _newSc = wrap.querySelector('.wk-table-scroll');
     if(_newSc){ _newSc.scrollTop = _scT; _newSc.scrollLeft = _scL; }
+    if(typeof scWkUpdateUnsavedBanner === 'function') scWkUpdateUnsavedBanner();   // [미저장 경고] 표 갱신마다 배너 동기화
   }
 
   function scWkEsc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
@@ -1657,8 +1678,21 @@
       setTimeout(function(){ var b=document.getElementById("wk-saveall-btn"); if(b) b.innerHTML = "&#128190; 전체 저장"; }, 2000);
     }
   }
+  /* [미저장 경고] dirty 개수 세어 배너 표시/숨김 + 페이지 이탈 경고 연동 */
+  function scWkUpdateUnsavedBanner(){
+    var banner = document.getElementById('wk-unsaved-banner');
+    if(!banner) return;
+    var n = document.querySelectorAll('.wk-t.dirty, .wk-req-h.dirty, .wk-req-m.dirty').length;
+    var cnt = document.getElementById('wk-unsaved-count');
+    if(cnt) cnt.textContent = String(n);
+    banner.style.display = (n > 0) ? 'flex' : 'none';
+    _scWkHasUnsaved = (n > 0);   // [이탈 경고] beforeunload 판단용
+  }
+  var _scWkHasUnsaved = false;
+
   function scWkCellEdit(inp){
     inp.classList.add("dirty");
+    scWkUpdateUnsavedBanner();
     var sid = inp.getAttribute("data-sid");
     var btn = document.querySelector('.wk-save-btn[data-sid="'+sid+'"]');
     if(btn){ btn.classList.remove("saved"); btn.textContent = "저장"; }
@@ -1951,6 +1985,7 @@
 
   function scWkReqEdit(inp){
     inp.classList.add("dirty");
+    scWkUpdateUnsavedBanner();
     var sid = inp.getAttribute("data-sid");
     var btn = document.querySelector('.wk-req-save[data-sid="'+sid+'"]');
     if(btn){ btn.classList.remove("saved"); btn.textContent = "저장"; }
@@ -3174,6 +3209,14 @@
     scAutoReloadInit();   // 새벽 3시 자동 새로고침 타이머
     scReloadRestore();    // 자동 새로고침 후 화면 복원
     scReloadListen();     // 업데이트 버튼용 원격 리로드 수신
+    // [이탈 경고] 주간출결 미저장 변경이 있으면 페이지 닫기/새로고침 시 경고
+    window.addEventListener('beforeunload', function(e){
+      if(_scWkHasUnsaved){
+        e.preventDefault();
+        e.returnValue = '';   // 브라우저 기본 경고 표시
+        return '';
+      }
+    });
   });
 </script>
   <div class="wk-xout-overlay" id="wk-xout-overlay" onclick="if(event.target===this)scWkXoutClose()">
