@@ -3009,6 +3009,17 @@
         <input type="text" id="ts-direct-school" placeholder="예: 베스티안고 2"
           style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
       </div>
+      <div style="margin-bottom:16px">
+        <label style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">유형</label>
+        <div style="display:flex;gap:10px">
+          <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;padding:9px;border:1.5px solid #fcd34d;border-radius:8px;cursor:pointer;font-size:13px;background:#fffbeb">
+            <input type="radio" name="ts-direct-type" value="makeup" checked style="cursor:pointer"> 보강
+          </label>
+          <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;padding:9px;border:1.5px solid #a5b4fc;border-radius:8px;cursor:pointer;font-size:13px;background:#eef2ff">
+            <input type="radio" name="ts-direct-type" value="trial" style="cursor:pointer"> 시범수업
+          </label>
+        </div>
+      </div>
       <button onclick="addDirectTempStudent()" class="btn btn-primary" style="width:100%">추가</button>
     </div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);flex-shrink:0">
@@ -24294,13 +24305,17 @@ async function loadWorkLog() {
       const m = (sl.note || '').match(/^\[([^\]]+)\]/);
       if (m) {
         const displayName = m[1].split('·')[0].trim();
-        return { id: `deleted_${sl.id}`, name: displayName, _isTemp: true, _logId: sl.id };
+        return { id: `deleted_${sl.id}`, name: displayName, _isTemp: true, _logId: sl.id, _studentType: sl.student_type || 'makeup' };
       }
       return { id: `deleted_${sl.id}`, name: '삭제된 학생', _isDeleted: true, _logId: sl.id };
     });
 
     _wlStudents = [...filtered, ...extraStuds, ...nullPlaceholders]
       .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
+    // [학생 유형] 직접입력 임시학생을 _wlTempStudents 에 복원 (재저장 시 유형 유지)
+    _wlTempStudents = nullPlaceholders.filter(p => p._isTemp).map(p => ({
+      id: p.id, name: p.name, school: null, grade: null, _isTemp: true, _isDirect: true, _studentType: p._studentType || 'makeup'
+    }));
 
     _wlStudentLogs = studentLogs;
     renderWlStudentTable(_wlStudents, studentLogs);
@@ -24325,7 +24340,9 @@ function renderWlStudentTable(students, studentLogs) {
     const badge   = s._isDeleted
       ? '<span style="font-size:10px;background:#e5e7eb;color:#6b7280;padding:1px 5px;border-radius:4px;margin-left:4px">삭제됨</span>'
       : s._isTemp
-      ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:4px;margin-left:4px">보강</span>'
+      ? (s._studentType === 'trial'
+          ? '<span style="font-size:10px;background:#eef2ff;color:#4338ca;padding:1px 5px;border-radius:4px;margin-left:4px">시범수업</span>'
+          : '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:4px;margin-left:4px">보강</span>')
       : '';
     const sl       = s._isDeleted
       ? studentLogs.find(l => l.id === s._logId) || {}
@@ -24492,6 +24509,7 @@ async function saveWorkLog() {
         const tempInfo = _wlTempStudents.find(t => t.id === sid);
         if (!tempInfo) continue;
         const noteWithTag = `[${_esc(tempInfo.name)}${tempInfo.school ? ' · ' + tempInfo.school : ''}] ${note || ''}`.trim();
+        const _stuType = tempInfo._studentType || 'makeup';   // 보강/시범수업
         // 이미 존재하는 레코드 확인 후 insert/update
         // .single()은 0건/다건에서 에러 → maybeSingle + 정확 태그(`[이름]` 또는 `[이름 ·`)로 안전 매칭
         const _nameTag1 = `[${tempInfo.name}]`;
@@ -24506,13 +24524,13 @@ async function saveWorkLog() {
         if (existing.data) {
           await db.from('work_log_students').update({
             attendance: att, n_count: nCount || null, homework_done: hw,
-            test_score: score || null, note: noteWithTag
+            test_score: score || null, note: noteWithTag, student_type: _stuType
           }).eq('id', existing.data.id);
         } else {
           await db.from('work_log_students').insert({
             log_id: logId, student_id: null,
             attendance: att, n_count: nCount || null, homework_done: hw,
-            test_score: score || null, note: noteWithTag
+            test_score: score || null, note: noteWithTag, student_type: _stuType
           });
         }
       }
@@ -25910,12 +25928,18 @@ function addDirectTempStudent() {
   const name   = (document.getElementById('ts-direct-name')?.value || '').trim();
   const school = (document.getElementById('ts-direct-school')?.value || '').trim();
   if (!name) { alert('이름을 입력하세요'); return; }
+  // [학생 유형] 보강/시범수업 (직접입력 임시학생만)
+  const typeEl = document.querySelector('input[name="ts-direct-type"]:checked');
+  const studentType = typeEl ? typeEl.value : 'makeup';
   const tempId  = 'temp_' + Date.now();
-  const tempStu = { id: tempId, name, school: school || null, grade: null, _isTemp: true, _isDirect: true };
+  const tempStu = { id: tempId, name, school: school || null, grade: null, _isTemp: true, _isDirect: true, _studentType: studentType };
   _wlStudents     = [..._wlStudents, tempStu].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
   _wlTempStudents = [..._wlTempStudents, tempStu];
   refreshWlTable();
   closeModal('addTempStudent');
+  var _resetName = document.getElementById('ts-direct-name'); if (_resetName) _resetName.value = '';
+  var _resetSchool = document.getElementById('ts-direct-school'); if (_resetSchool) _resetSchool.value = '';
+  var _resetType = document.querySelector('input[name="ts-direct-type"][value="makeup"]'); if (_resetType) _resetType.checked = true;
 }
 
 async function copyWorkLogImage(mode) {
@@ -25945,8 +25969,14 @@ async function copyWorkLogImage(mode) {
     rows.forEach(row => {
       const cells = row.querySelectorAll('td');
       if (cells.length < 8) return;
-      const name       = cells[2].textContent.replace(/삭제됨|보강/g, '').replace(/\n.*/s, '').trim();
+      const name       = cells[2].textContent.replace(/삭제됨|시범수업|보강/g, '').replace(/\n.*/s, '').trim();
       const schoolGrade= cells[1].textContent.trim();
+      // [학생 유형] 행의 학생 id 로 _wlStudents 에서 유형 조회 (보강/시범수업)
+      const _rowSid = row.getAttribute('data-sid');
+      const _rowStu = (typeof _wlStudents !== 'undefined' && _wlStudents) ? _wlStudents.find(x => x.id === _rowSid) : null;
+      const _stuTypeLabel = (_rowStu && _rowStu._isTemp)
+        ? (_rowStu._studentType === 'trial' ? '시범수업' : '보강')
+        : '';
       const att        = cells[3].querySelector('select')?.value || 'present';
       const attLabel   = att === 'present' ? '정시' : att === 'late' ? '지각' : '결석';
       const attColor   = att === 'absent' ? '#ef4444' : att === 'late' ? '#f97316' : '#16a34a';
@@ -25956,7 +25986,7 @@ async function copyWorkLogImage(mode) {
       const hwColor    = hwVal === 'true' ? '#16a34a' : hwVal === 'partial' ? '#b45309' : hwVal === 'false' ? '#ef4444' : '#9ca3af';
       const score      = cells[6].querySelector('input')?.value  || '';
       const note       = cells[7].querySelector('input')?.value  || '';
-      studentData.push({ name, schoolGrade, attLabel, attColor, nCount, hwLabel, hwColor, score, note });
+      studentData.push({ name, schoolGrade, attLabel, attColor, nCount, hwLabel, hwColor, score, note, typeLabel: _stuTypeLabel });
     });
 
     const progress   = document.getElementById('wl-progress')?.value    || '';
@@ -25975,7 +26005,7 @@ async function copyWorkLogImage(mode) {
     const studentRows = studentData.map((s, i) => `
       <tr style="background:${i % 2 === 0 ? '#fff' : '#f8fbff'}">
         <td style="padding:6px 8px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280">${esc(s.schoolGrade)}</td>
-        <td style="padding:6px 8px;border:1px solid #e5e7eb;font-weight:600">${esc(s.name)}</td>
+        <td style="padding:6px 8px;border:1px solid #e5e7eb;font-weight:600">${esc(s.name)}${s.typeLabel ? ` <span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;${s.typeLabel === '시범수업' ? 'background:#eef2ff;color:#4338ca' : 'background:#fef3c7;color:#92400e'}">${s.typeLabel}</span>` : ''}</td>
         <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;color:${s.attColor};font-weight:600">${s.attLabel}</td>
         <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center">${esc(s.nCount) || '-'}</td>
         <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;color:${s.hwColor};font-weight:${s.hwLabel ? '600' : '400'}">${s.hwLabel || ''}</td>
