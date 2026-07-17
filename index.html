@@ -21417,6 +21417,97 @@ async function dlpExportImage(studentId, studentName, classId, className, dateSt
   window._lpCalState = _prev;
 }
 
+/* [보강 학습진행표] 목록 외 학생 선택 — 지정 날짜 이 반 업무일지에 있는 보강 학생만 후보 */
+async function openLpExtraStudentPicker(classId, className){
+  var ex = document.getElementById('lp-extra-modal');
+  if(ex) ex.remove();
+  var today = _localYMD(new Date());
+  var modal = document.createElement('div');
+  modal.id = 'lp-extra-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3100;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:16px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden;display:flex;flex-direction:column;max-height:85vh">'
+      +'<div style="background:linear-gradient(135deg,#7c3aed,#a855f7);padding:18px 20px;display:flex;align-items:center;justify-content:space-between">'
+        +'<div>'
+          +'<div style="font-size:15px;font-weight:800;color:#fff">➕ 목록 외 학생 (보강)</div>'
+          +'<div style="font-size:12px;color:#e9d5ff;margin-top:2px">'+_esc(className)+' · 날짜를 선택하면 업무일지 보강 학생이 표시됩니다</div>'
+        +'</div>'
+        +'<button onclick="document.getElementById(\'lp-extra-modal\').remove()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:16px">×</button>'
+      +'</div>'
+      +'<div style="padding:14px 16px">'
+        +'<div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:4px">날짜</div>'
+        +'<input type="date" id="lp-extra-date" value="'+today+'" onclick="this.showPicker&&this.showPicker()" onchange="lpExtraLoadCandidates(\''+classId+'\',\''+_esc(className)+'\')" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;margin-bottom:12px">'
+        +'<div id="lp-extra-list" style="max-height:45vh;overflow-y:auto"></div>'
+      +'</div>'
+    +'</div>';
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+  await lpExtraLoadCandidates(classId, className);
+}
+
+/* [보강 학습진행표] 지정 날짜 이 반 업무일지의 보강 학생 후보 로드 */
+async function lpExtraLoadCandidates(classId, className){
+  var listEl = document.getElementById('lp-extra-list');
+  var dateEl = document.getElementById('lp-extra-date');
+  if(!listEl || !dateEl) return;
+  var date = dateEl.value;
+  if(!date){ listEl.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px">날짜를 선택하세요</div>'; return; }
+  listEl.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px">불러오는 중...</div>';
+  try {
+    // 이 반의 그 날짜 업무일지
+    var { data: logs } = await db.from('work_logs').select('id').eq('class_id', classId).eq('log_date', date);
+    var log = logs && logs[0] ? logs[0] : null;
+    if(!log){
+      listEl.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px">해당 날짜에 이 반 업무일지가 없습니다.</div>';
+      return;
+    }
+    // 그 업무일지의 학생들 (student_id 있는 것만 = 정규/검색추가 학생)
+    var { data: wls } = await db.from('work_log_students').select('student_id').eq('log_id', log.id).not('student_id','is',null);
+    var sids = [...new Set((wls||[]).map(function(x){ return x.student_id; }))];
+    if(!sids.length){
+      listEl.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px">이 날짜 업무일지에 학생이 없습니다.</div>';
+      return;
+    }
+    // 이 반 재원생(class_id) 제외 = "목록 외 = 보강 학생"만
+    var { data: classStuds } = await db.from('users').select('id').eq('class_id', classId);
+    var classSet = new Set((classStuds||[]).map(function(s){ return s.id; }));
+    var extraSids = sids.filter(function(id){ return !classSet.has(id); });
+    if(!extraSids.length){
+      listEl.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px">이 날짜에 보강(목록 외) 학생이 없습니다.<br>업무일지에 보강 학생을 먼저 추가하세요.</div>';
+      return;
+    }
+    // 학생 정보 + 담당 선생님
+    var { data: studs } = await db.from('users').select('id,name,school,grade,teacher_id').in('id', extraSids);
+    var tids = [...new Set((studs||[]).map(function(s){ return s.teacher_id; }).filter(Boolean))];
+    var tmap = {};
+    if(tids.length){ var { data: ts } = await db.from('users').select('id,name').in('id', tids); (ts||[]).forEach(function(t){ tmap[t.id]=t.name; }); }
+    var html = (studs||[]).sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); }).map(function(s){
+      var sg = [s.school, s.grade].filter(Boolean).join(' ');
+      var tName = s.teacher_id && tmap[s.teacher_id] ? tmap[s.teacher_id] : '';
+      return '<div onclick="lpExtraPickStudent(\''+s.id+'\',\''+_esc(s.name)+'\',\''+classId+'\',\''+_esc(className)+'\',\''+date+'\')" '
+        +'style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid #f1f5f9;border-radius:8px;margin-bottom:6px;cursor:pointer;transition:background 0.1s" '
+        +'onmouseover="this.style.background=\'#f8fafc\'" onmouseout="this.style.background=\'\'">'
+        +'<div><div style="font-size:13px;font-weight:700;color:#1e293b">'+_esc(s.name)
+        +(tName?'<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;margin-left:6px;font-weight:700">담당:'+_esc(tName)+'</span>':'')
+        +'</div><div style="font-size:11px;color:#9ca3af">'+(sg||'')+'</div></div>'
+        +'<span style="color:#7c3aed;font-size:13px;font-weight:700">작성 →</span>'
+        +'</div>';
+    }).join('');
+    listEl.innerHTML = html;
+  } catch(e){
+    console.error('[lpExtraLoadCandidates]', e);
+    listEl.innerHTML = '<div style="text-align:center;padding:24px;color:#dc2626;font-size:13px">불러오기 오류</div>';
+  }
+}
+
+/* [보강 학습진행표] 후보 학생 선택 → 작성 모달 (그 날짜, 이 반 기준, 업무일지 자동 반영) */
+function lpExtraPickStudent(studentId, studentName, classId, className, date){
+  var m = document.getElementById('lp-extra-modal');
+  if(m) m.remove();
+  // openLpWriteModal 이 initDate 로 날짜 지정 → lpLoadWorkLog 가 자동 반영
+  openLpWriteModal(studentId, studentName, classId, className, date);
+}
+
 async function openLpClassModal(classId, className){
   var ex = document.getElementById('lp-class-modal');
   if(ex) ex.remove();
@@ -21473,6 +21564,12 @@ async function openLpClassModal(classId, className){
       +'<div style="padding:14px 16px;overflow-y:auto;flex:1">'
         +(rows || '<div style="text-align:center;padding:30px;color:#9ca3af">이 반에 학생이 없습니다</div>')
       +'</div>'
+      +'<div style="padding:12px 16px;border-top:1px solid #f1f5f9;background:#fafafa">'
+        +'<button onclick="openLpExtraStudentPicker(\'' + classId + '\',\'' + _esc(className) + '\')" '
+        +'style="width:100%;padding:10px;background:#f5f3ff;color:#7c3aed;border:1.5px dashed #c4b5fd;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">'
+        +'➕ 목록 외 학생 학습진행표 작성 (보강)</button>'
+        +'<div style="font-size:11px;color:#9ca3af;text-align:center;margin-top:6px">해당 날짜 이 반 업무일지에 보강으로 있는 학생만 작성 가능</div>'
+      +'</div>'
     +'</div>';
 
   modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
@@ -21484,12 +21581,28 @@ async function openLpViewModal(studentId, studentName, classId, className){
   var ex = document.getElementById('lp-view-modal');
   if(ex) ex.remove();
 
+  // [보강 학습진행표] 학생 기준 전체 조회 (타 반 보강 포함), 현재 반이 아니면 뱃지
   var {data:lps} = await db.from('learning_progress')
-    .select('*').eq('student_id', studentId).eq('class_id', classId)
+    .select('*').eq('student_id', studentId)
     .order('log_date', {ascending:true});
+  var _lpOtherIds = [...new Set((lps||[]).map(function(l){ return l.class_id; }).filter(function(cid){ return cid && cid !== classId; }))];
+  var _lpClassNameMap = {};
+  if(_lpOtherIds.length){
+    var { data: _lpCls } = await db.from('classes').select('id,name').in('id', _lpOtherIds);
+    (_lpCls||[]).forEach(function(c){ _lpClassNameMap[c.id] = c.name; });
+  }
+  (lps||[]).forEach(function(l){
+    l._isOtherClass = (l.class_id && l.class_id !== classId);
+    l._otherClassName = l._isOtherClass ? (_lpClassNameMap[l.class_id] || '다른 반') : '';
+  });
 
   var lpByDate = {};
-  (lps||[]).forEach(function(lp){ lpByDate[lp.log_date] = lp; });
+  (lps||[]).forEach(function(lp){
+    // 같은 날짜 중복 시 현재 반 우선 (타 반 보강은 현재 반 기록 없을 때만)
+    var _ex = lpByDate[lp.log_date];
+    if(!_ex) lpByDate[lp.log_date] = lp;
+    else if(_ex._isOtherClass && !lp._isOtherClass) lpByDate[lp.log_date] = lp;
+  });
 
   var today = new Date();
   var curYear = today.getFullYear();
@@ -21619,10 +21732,12 @@ function lpRenderCalendar(){
   for(var d=1;d<=lastDate;d++){
     var dateStr=year+'-'+String(month+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
     var hasRecord=!!lpByDate[dateStr];
+    var _isOtherRec = hasRecord && lpByDate[dateStr]._isOtherClass;
     var isToday=dateStr===todayStr;
     var dow=(firstDay+d-1)%7;
     var bg,color,border,fontW;
-    if(hasRecord){bg='#7c3aed';color='#fff';border='2px solid #6d28d9';fontW='700';}
+    if(hasRecord && _isOtherRec){bg='#f59e0b';color='#fff';border='2px solid #d97706';fontW='700';}
+    else if(hasRecord){bg='#7c3aed';color='#fff';border='2px solid #6d28d9';fontW='700';}
     else if(isToday){bg='#fef9c3';color='#92400e';border='2px solid #fbbf24';fontW='700';}
     else{bg='#f9fafb';color=(dow===0?'#ef4444':dow===6?'#3b82f6':'#374151');border='1px solid #e5e7eb';fontW='400';}
     cells+='<div onclick="lpSelectDate(\''+dateStr+'\')" '
@@ -21643,7 +21758,11 @@ function lpSelectDate(dateStr){
   detail.style.display='block';
   var attendMap={'present':'✅ 출석','late':'⏰ 지각','absent':'❌ 결석','makeup':'🔄 보강'};
   if(lp){
+    var _otherBadge = lp._isOtherClass
+      ? '<div style="display:inline-block;font-size:10px;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:100px;font-weight:700;margin-bottom:6px">🔄 ' + _esc(lp._otherClassName) + '에서 보강</div>'
+      : '';
     detail.innerHTML=
+      _otherBadge+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;gap:6px">'
         +'<div style="font-size:13px;font-weight:800;color:#4c1d95">'+d+'</div>'
         +'<div style="display:flex;gap:4px;flex-wrap:wrap">'
