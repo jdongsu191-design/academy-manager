@@ -103,6 +103,17 @@
 
     /* ---------- 테이블 ---------- */
     .table-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:visible;}
+    #to-top-btn{ position:fixed; right:24px; bottom:24px; z-index:200; width:46px; height:46px; border-radius:50%; border:1px solid var(--border); background:var(--surface); color:var(--text); box-shadow:var(--shadow); cursor:pointer; font-size:22px; line-height:1; display:none; align-items:center; justify-content:center; transition:transform .15s, box-shadow .15s; }
+    #to-top-btn:hover{ transform:translateY(-2px); box-shadow:0 6px 16px rgba(0,0,0,0.15); }
+    .pager{ margin-top:12px; }
+    .pager-bar{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:4px 2px; }
+    .pg-nav{ display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+    .pg{ min-width:34px; height:34px; padding:0 9px; border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; }
+    .pg:hover:not(:disabled){ border-color:var(--navy); }
+    .pg.active{ background:var(--navy); color:#fff; border-color:var(--navy); }
+    .pg:disabled{ opacity:.4; cursor:default; }
+    .pg-ellip{ padding:0 4px; color:var(--text-sub); }
+    .pager-info{ font-size:12px; color:var(--text-sub); font-weight:600; }
     thead tr th:first-child{border-top-left-radius:13px;}
     thead tr th:last-child{border-top-right-radius:13px;}
     table{width:100%;border-collapse:collapse;font-size:13.5px;}
@@ -227,7 +238,11 @@
         <select class="branch-select" id="month-select" onchange="onMonthChange()"></select>
         <input class="search-input" id="search-input" type="text" placeholder="🔍 학생 이름 검색" oninput="onSearchInput()" />
         <span class="spacer"></span>
-        <button class="sort-btn" id="sort-btn" onclick="toggleSort()">접수일 ↑ 오름차순</button>
+        <select class="branch-select" id="page-size-select" onchange="onPageSizeChange()" title="페이지당 개수">
+          <option value="50">50개씩</option>
+          <option value="100">100개씩</option>
+        </select>
+        <button class="sort-btn" id="sort-btn" onclick="toggleSort()">접수일 ↓ 내림차순</button>
         <button class="btn-primary" id="add-btn" onclick="onAddClick()">+ 상담 추가</button>
       </div>
 
@@ -253,6 +268,7 @@
           <div class="big">아직 등록된 상담이 없습니다</div>
           <div>오른쪽 위 “+ 상담 추가”로 첫 상담을 기록해 보세요.</div>
         </div>
+        <div class="pager" id="consult-pager"></div>
       </div>
 
       <div class="table-card hidden" id="withdraw-card">
@@ -276,6 +292,7 @@
           <div class="big">퇴원 기록이 없습니다</div>
           <div>오른쪽 위 “+ 퇴원 추가”로 기록하거나, BMAPS 퇴원 자동 반영을 기다려 주세요.</div>
         </div>
+        <div class="pager" id="withdraw-pager"></div>
       </div>
     </div>
   </div>
@@ -465,7 +482,9 @@
     let _currentBranchId = null;  // BR_ALL | BR_MINE | 특정 branch id
     let _monthFilter = '';        // '' = 전체 기간, 아니면 'YYYY-MM'
     let _searchQuery = '';        // 학생 이름 검색어 (부분일치)
-    let _sortDir = 'asc';     // inquiry_date 정렬 방향
+    let _sortDir = 'desc';    // inquiry_date 정렬 방향 (기본 내림차순)
+    let _pageSize = 50;       // 페이지당 항목 수 (50/100)
+    let _curPage  = 1;        // 현재 페이지 (1-base)
     let _editingId = null;
     // ===== 퇴원 관리 (탭) =====
     let _viewMode = 'admission';   // 'admission' | 'withdrawal'
@@ -667,6 +686,7 @@
       }
       _currentBranchId = v;
       updateBranchChip();
+      _curPage = 1;
       loadActiveData();
     }
 
@@ -692,10 +712,12 @@
     }
     function onMonthChange(){
       _monthFilter = $('month-select').value || '';
+      _curPage = 1;
       renderActive();
     }
     function onSearchInput(){
       _searchQuery = ($('search-input').value || '').trim().toLowerCase();
+      _curPage = 1;
       renderActive();
     }
 
@@ -736,10 +758,43 @@
     }
 
     /* ---------- 렌더 ---------- */
+    function onPageSizeChange(){
+      _pageSize = parseInt($('page-size-select').value,10) || 50;
+      _curPage = 1;
+      renderActive();
+    }
+    function gotoPage(p){
+      p = parseInt(p,10); if(isNaN(p)||p<1) p=1;
+      _curPage = p;
+      renderActive();
+      window.scrollTo({ top:0, behavior:'smooth' });
+    }
+    function buildPagerHTML(total, pageSize, curPage){
+      var totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if(curPage>totalPages) curPage=totalPages;
+      var from = total===0 ? 0 : (curPage-1)*pageSize + 1;
+      var to   = Math.min(curPage*pageSize, total);
+      var info = '<span class="pager-info">'+from+'\u2013'+to+' / '+total+'건</span>';
+      var nav = '';
+      function pbtn(label, page, disabled, active){
+        if(disabled) return '<button class="pg" disabled>'+label+'</button>';
+        return '<button class="pg'+(active?' active':'')+'" onclick="gotoPage('+page+')">'+label+'</button>';
+      }
+      if(totalPages>1){
+        nav += pbtn('\u00ab',1,curPage===1,false) + pbtn('\u2039',curPage-1,curPage===1,false);
+        var win=2, start=Math.max(1,curPage-win), end=Math.min(totalPages,curPage+win);
+        if(start>1){ nav+=pbtn('1',1,false,false); if(start>2) nav+='<span class="pg-ellip">\u2026</span>'; }
+        for(var p=start;p<=end;p++){ nav+=pbtn(String(p),p,false,p===curPage); }
+        if(end<totalPages){ if(end<totalPages-1) nav+='<span class="pg-ellip">\u2026</span>'; nav+=pbtn(String(totalPages),totalPages,false,false); }
+        nav += pbtn('\u203a',curPage+1,curPage===totalPages,false) + pbtn('\u00bb',totalPages,curPage===totalPages,false);
+      }
+      return '<div class="pager-bar"><div class="pg-nav">'+nav+'</div>'+info+'</div>';
+    }
     function toggleSort(){
       _sortDir = (_sortDir==='asc') ? 'desc' : 'asc';
       var label = (_viewMode==='withdrawal') ? '퇴원일' : '접수일';
       $('sort-btn').textContent = (_sortDir==='asc') ? label+' ↑ 오름차순' : label+' ↓ 내림차순';
+      _curPage = 1;
       renderActive();
     }
 
@@ -751,6 +806,7 @@
     function switchView(mode){
       if(mode!=='admission' && mode!=='withdrawal') return;
       _viewMode = mode;
+      _curPage = 1;
       // 탭 활성화
       var ta=$('tab-admission'), tw=$('tab-withdrawal');
       if(ta) ta.classList.toggle('active', mode==='admission');
@@ -810,6 +866,13 @@
       var body = $('consult-body');
       var empty = $('empty-state');
 
+      var _total = rows.length, _totalPages = Math.max(1, Math.ceil(_total/_pageSize));
+      if(_curPage > _totalPages) _curPage = _totalPages;
+      if(_curPage < 1) _curPage = 1;
+      var _start = (_curPage-1)*_pageSize;
+      var pageRows = rows.slice(_start, _start+_pageSize);
+      $('consult-pager').innerHTML = (_total===0) ? '' : buildPagerHTML(_total, _pageSize, _curPage);
+
       if(rows.length===0){
         body.innerHTML='';
         var filtering = !!(_searchQuery || _monthFilter);
@@ -821,12 +884,12 @@
       }
       empty.classList.add('hidden');
 
-      body.innerHTML = rows.map(function(r, i){
+      body.innerHTML = pageRows.map(function(r, i){
         var content = r.content ? esc(r.content) : '';
         var note = r.note ? esc(r.note) : '';
         return ''+
           '<tr>'+
-            '<td class="seq">'+(i+1)+'</td>'+
+            '<td class="seq">'+(_start + i + 1)+'</td>'+
             '<td class="col-branch">'+esc(_branchMap[r.branch_id]||'-')+'</td>'+
             '<td class="date">'+fmtKDate(r.inquiry_date)+'</td>'+
             '<td>'+statusBadge(r.reg_status)+'</td>'+
@@ -891,6 +954,13 @@
       var body = $('withdraw-body');
       var empty = $('w-empty-state');
 
+      var _total = rows.length, _totalPages = Math.max(1, Math.ceil(_total/_pageSize));
+      if(_curPage > _totalPages) _curPage = _totalPages;
+      if(_curPage < 1) _curPage = 1;
+      var _start = (_curPage-1)*_pageSize;
+      var pageRows = rows.slice(_start, _start+_pageSize);
+      $('withdraw-pager').innerHTML = (_total===0) ? '' : buildPagerHTML(_total, _pageSize, _curPage);
+
       if(rows.length===0){
         body.innerHTML='';
         var filtering = !!(_searchQuery || _monthFilter);
@@ -902,14 +972,14 @@
       }
       empty.classList.add('hidden');
 
-      body.innerHTML = rows.map(function(r, i){
+      body.innerHTML = pageRows.map(function(r, i){
         var reason = r.withdraw_reason ? esc(r.withdraw_reason) : '';
         var note = r.note ? esc(r.note) : '';
         var sg = [r.school, r.grade].filter(Boolean).join(' ');
         var src = (r.source==='auto') ? ' <span class="src-auto" title="BMAPS 자동 반영">⚙</span>' : '';
         return ''+
           '<tr>'+
-            '<td class="seq">'+(i+1)+'</td>'+
+            '<td class="seq">'+(_start + i + 1)+'</td>'+
             '<td class="col-branch">'+esc(_branchMap[r.branch_id]||'-')+'</td>'+
             '<td class="date">'+fmtKDate(r.last_class_date)+'</td>'+
             '<td style="white-space:nowrap">'+(sg?esc(sg):'<span style="color:#cbd5e1">—</span>')+'</td>'+
@@ -1349,7 +1419,15 @@
     }
 
     /* ---------- 시작 ---------- */
+    // ── 맨 위로 가기 버튼 (스크롤 내리면 표시, 클릭 시 최상단) ──
+    function scrollToTop(){ window.scrollTo({ top:0, behavior:'smooth' }); }
+    window.addEventListener('scroll', function(){
+      var b=document.getElementById('to-top-btn'); if(!b) return;
+      b.style.display = (window.scrollY > 300) ? 'flex' : 'none';
+    });
+
     init();
   </script>
+  <button id="to-top-btn" onclick="scrollToTop()" title="맨 위로" aria-label="맨 위로">↑</button>
 </body>
 </html>
