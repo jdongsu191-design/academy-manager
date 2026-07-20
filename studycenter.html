@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.44-wkout]</title>
+<title>BMAPS · 독서실 출결 [v0.45-tpexp]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -233,6 +233,9 @@
   .rl-filters { display:flex; gap:6px; margin-bottom:10px; }
   .rl-fbtn { padding:6px 14px; border:1.5px solid #cbd5e1; border-radius:8px; background:#fff; color:#64748b; font-size:12.5px; font-weight:700; cursor:pointer; }
   .rl-fbtn.active { background:#0369a1; color:#fff; border-color:#0369a1; }
+  .rl-search { flex:1; min-width:120px; padding:6px 12px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:13px; outline:none; }
+  .rl-search:focus { border-color:#0369a1; }
+  .rl-count { font-size:12px; color:#94a3b8; font-weight:700; margin-bottom:6px; }
   .rl-list { max-height:520px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:10px; padding:6px; }
   .rl-item { display:flex; align-items:center; gap:10px; padding:9px 11px; border-bottom:1px solid #f1f5f9; }
   .rl-item:last-child { border-bottom:none; }
@@ -434,6 +437,15 @@
   .tpU td.s-name{ text-align:center; white-space:nowrap; }
   .tpU td.u-expcell{ vertical-align:middle; background:#f8fafc; }
   .tpU td.u-expcell .s-time{ font-weight:700; }
+  .tpU td.u-expcell.u-expnone{ background:#f1f5f9; }
+  .tpU .u-expnone-t{ color:#94a3b8; font-size:12px; font-weight:700; }
+  .tpU .u-edit{ margin-left:5px; padding:1px 5px; border:1px solid #cbd5e1; background:#f8fafc; color:#0369a1; border-radius:5px; font-size:10.5px; line-height:1.5; cursor:pointer; vertical-align:middle; }
+  .tpU .u-edit:hover{ background:#0369a1; color:#fff; border-color:#0369a1; }
+  #tp-exp-overlay .wk-xout-card{ width:360px; }
+  .tp-exp-chips{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; }
+  .tp-exp-chips button{ padding:5px 9px; border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:7px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .tp-exp-chips button:hover{ background:#e0f2fe; border-color:#0ea5e9; }
+  .tp-exp-chips button.on{ background:#0369a1; color:#fff; border-color:#0369a1; }
   .tpU tbody tr td.u-outing{ background:#fff7ed; box-shadow:inset 0 0 0 2px #f97316; }
   .tpU tbody tr td.u-outing-late{ background:#fef2f2; box-shadow:inset 0 0 0 2px #dc2626; animation:scOutBlink 1.2s ease-in-out infinite; }
   @keyframes scOutBlink{ 0%,100%{ background:#fef2f2; } 50%{ background:#fecaca; } }
@@ -466,7 +478,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.44-wkout</span>
+    <span class="tb-ver" id="sc-ver">v0.45-tpexp</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -612,7 +624,9 @@
               <button class="rl-fbtn active" data-filter="all" onclick="scListSetFilter('all')">전체</button>
               <button class="rl-fbtn" data-filter="active" onclick="scListSetFilter('active')">재원</button>
               <button class="rl-fbtn" data-filter="withdrawn" onclick="scListSetFilter('withdrawn')">퇴원</button>
+              <input type="text" id="rl-search" class="rl-search" placeholder="이름 · 학교 · 코드 검색..." oninput="scListRender()">
             </div>
+            <div class="rl-count" id="rl-count"></div>
             <div class="rl-list" id="rl-list"><div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">불러오는 중...</div></div>
           </div>
         </div>
@@ -730,7 +744,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.44-wkout';
+  window.STUDYCENTER_VERSION = 'v0.45-tpexp';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -752,7 +766,11 @@
       var b=document.getElementById(btns[k]); if(b){ if(k===tab) b.classList.add("active"); else b.classList.remove("active"); }
     });
     var _lf=document.getElementById("sc-live-feed"); if(_lf) _lf.style.display=(tab==="weekly")?"":"none";
-    if(tab==="weekly"){ if(!_wkInited){ scWkGoThisWeek(); _wkInited=true; } }
+    if(tab==="weekly"){
+      if(!_wkInited){ scWkGoThisWeek(); _wkInited=true; }
+      // 재진입 시 최신 데이터로 갱신 (다른 탭·키오스크에서 바뀐 값 반영). 단, 미저장 편집이 있으면 보류
+      else if(!document.querySelectorAll('.wk-t.dirty, .wk-req-h.dirty, .wk-req-m.dirty').length){ _scWkRtSchedule(); }
+    }
     else if(tab==="timeplan"){ scTpInit(); }
     else { scListLoad(); }
   }
@@ -805,9 +823,26 @@
     var today=scRrToday();
     var res=await db.from("reading_room_attendance").select("*").eq("attend_date",today);
     var rows=res.data||[];
-    var ids=rows.map(function(r){return r.student_id;});
     var smap={};
-    if(ids.length){ var sres=await db.from("users").select("id,name").in("id",ids); (sres.data||[]).forEach(function(u){smap[u.id]=u.name;}); }
+    // 재원 독서실 학생 전원 (오늘 기록·예상등원이 없어도 표에 노출)
+    var sres=await db.from("users")
+      .select("id,name,status,deleted_at,reading_room_withdrawn_at")
+      .eq("reading_room_yn",true).order("name");
+    var actives=(sres.data||[]).filter(function(u){
+      return u.status!=="inactive" && !u.deleted_at && !u.reading_room_withdrawn_at;
+    });
+    actives.forEach(function(u){ smap[u.id]=u.name; });
+    // 오늘 기록은 있으나 재원 목록에 없는 학생(퇴원 등) 이름 보강
+    var missing=rows.map(function(r){return r.student_id;}).filter(function(id){ return id && !smap[id]; });
+    if(missing.length){
+      var mres=await db.from("users").select("id,name").in("id",missing);
+      (mres.data||[]).forEach(function(u){ smap[u.id]=u.name; });
+    }
+    // 오늘 기록이 없는 재원 학생 → 가상행 (DB에 빈 행을 만들지 않음)
+    var have={}; rows.forEach(function(r){ have[r.student_id]=true; });
+    actives.forEach(function(u){
+      if(!have[u.id]) rows.push({ student_id:u.id, attend_date:today, _virtual:true });
+    });
     _tpData={today:today, rows:rows, smap:smap};
   }
   function tpName(id){ return (_tpData && _tpData.smap[id]) || "?"; }
@@ -961,7 +996,7 @@
     var none='<span class="s-none">—</span>';
     var tbody=document.getElementById("tp-tbU");
     if(!tbody) return;
-    if(!rows.length){ tbody.innerHTML='<tr><td colspan="8" class="s-empty">오늘 독서실 출결 기록이 없습니다.</td></tr>'; return; }
+    if(!rows.length){ tbody.innerHTML='<tr><td colspan="8" class="s-empty">표시할 독서실 학생이 없습니다.</td></tr>'; return; }
     var multi=function(arr){ return arr.length?arr.map(function(x){return '<span class="s-multi">'+x+'</span>';}).join(""):none; };
     function rowCells(r){
       var outs=[], expRets=[], actRets=[], hasOuting=false;
@@ -978,7 +1013,7 @@
       if(r.check_out_time){ actOutCell = '<span class="s-time">'+hm(r.check_out_time)+'</span>'; }
       else if(r.check_in_time){ actOutCell = '<span class="s-rsn">재실중</span>'; }
       else { actOutCell = none; }
-      return '<td class="s-name">'+tpName(r.student_id)+'</td>'
+      return '<td class="s-name">'+tpName(r.student_id)+'<button class="u-edit" title="예상등원 수정" onclick="scTpExpOpen(\''+r.student_id+'\')">✏</button></td>'
         +'<td>'+actInCell+'</td>'
         +'<td>'+multi(outs)+'</td>'
         +'<td class="s-time">'+multi(expRets)+'</td>'
@@ -992,12 +1027,105 @@
       var j=i; while(j<rows.length && (rows[j].expected_check_in||null)===key) j++;
       var cnt=j-i;
       for(var k=i;k<j;k++){
-        var expCell = (k===i) ? ('<td class="u-expcell" rowspan="'+cnt+'">'+(key?('<span class="s-time">'+hm(key)+'</span>'):none)+'</td>') : '';
+        var expCell = (k===i) ? ('<td class="u-expcell'+(key?'':' u-expnone')+'" rowspan="'+cnt+'">'+(key?('<span class="s-time">'+hm(key)+'</span>'):'<span class="u-expnone-t">미정</span>')+'</td>') : '';
         html += '<tr>'+expCell+rowCells(rows[k])+'</tr>';
       }
       i=j;
     }
     tbody.innerHTML=html;
+  }
+
+  /* ── [TP-EXP] 시간계획에서 예상등원 수정 (오늘 기준) ── */
+  var _tpExpSid = null;
+  // 저장 결과를 주간출결 탭 메모리 캐시(_wkData)에도 반영 (DOM은 건드리지 않음)
+  function _tpSyncWeekly(sid, savedRow, val){
+    try{
+      if(typeof _wkData==="undefined" || !_wkData) return;
+      var date=_tpData.today;
+      if(!_wkWeekDates || _wkWeekDates.indexOf(date)===-1) return;   // 다른 주차를 보고 있으면 skip
+      if(!_wkData[sid]) _wkData[sid]={};
+      if(savedRow) _wkData[sid][date]=savedRow;
+      else if(_wkData[sid][date]) _wkData[sid][date].expected_check_in=val;
+    }catch(e){ console.warn("주간출결 캐시 동기화 실패:", e); }
+  }
+  function _tpRowIdx(sid){
+    var rows=(_tpData&&_tpData.rows)||[];
+    for(var i=0;i<rows.length;i++){ if(rows[i].student_id===sid) return i; }
+    return -1;
+  }
+  function scTpExpOpen(sid){
+    if(!_tpData) return;
+    var idx=_tpRowIdx(sid);
+    var row=(idx>=0)?_tpData.rows[idx]:null;
+    _tpExpSid=sid;
+    var nameEl=document.getElementById("tp-exp-name");
+    var inEl=document.getElementById("tp-exp-in");
+    var msgEl=document.getElementById("tp-exp-msg");
+    var noteEl=document.getElementById("tp-exp-datenote");
+    var d=new Date(_tpData.today+"T00:00:00");
+    if(noteEl) noteEl.textContent="오늘 "+(d.getMonth()+1)+"/"+d.getDate()+"("+["일","월","화","수","목","금","토"][d.getDay()]+")";
+    if(nameEl) nameEl.textContent=tpName(sid);
+    if(inEl) inEl.value=(row&&row.expected_check_in)?scWkHm(row.expected_check_in):"";
+    if(msgEl){ msgEl.textContent=""; msgEl.classList.remove("err"); }
+    var btn=document.getElementById("tp-exp-save");
+    if(btn){ btn.textContent="저장"; btn.disabled=false; }
+    scTpExpChips();
+    var ov=document.getElementById("tp-exp-overlay");
+    if(ov) ov.classList.add("open");
+    if(inEl){ inEl.focus(); inEl.select(); }
+  }
+  function scTpExpChips(){
+    var box=document.getElementById("tp-exp-chips"); if(!box) return;
+    var inEl=document.getElementById("tp-exp-in");
+    var cur=inEl?inEl.value.trim():"";
+    var TIMES=["09:00","10:00","13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00"];
+    box.innerHTML=TIMES.map(function(t){
+      return '<button type="button" class="'+(t===cur?"on":"")+'" onclick="scTpExpPick(\''+t+'\')">'+t+'</button>';
+    }).join("");
+  }
+  function scTpExpPick(t){
+    var inEl=document.getElementById("tp-exp-in");
+    if(inEl) inEl.value=t;
+    scTpExpChips();
+  }
+  function scTpExpClose(){
+    var ov=document.getElementById("tp-exp-overlay");
+    if(ov) ov.classList.remove("open");
+    _tpExpSid=null;
+  }
+  async function scTpExpSave(){
+    var sid=_tpExpSid;
+    if(!sid || !_tpData) return;
+    var msgEl=document.getElementById("tp-exp-msg");
+    var v=scWkNorm(document.getElementById("tp-exp-in").value);
+    if(v===undefined){
+      if(msgEl){ msgEl.textContent="시간 형식이 올바르지 않습니다 (HH:MM)"; msgEl.classList.add("err"); }
+      return;
+    }
+    var idx=_tpRowIdx(sid);
+    var row=(idx>=0)?_tpData.rows[idx]:null;
+    // 빈값 + 실제 출결행 없음 → DB에 빈 행을 만들지 않고 종료
+    if(v===null && (!row || row._virtual)){ scTpExpClose(); return; }
+    var btn=document.getElementById("tp-exp-save");
+    if(btn){ btn.textContent="저장중..."; btn.disabled=true; }
+    try{
+      var res=await db.from("reading_room_attendance").upsert(
+        { student_id:sid, attend_date:_tpData.today, expected_check_in:v },
+        { onConflict:"student_id,attend_date" }
+      ).select("*").maybeSingle();
+      if(res.error) throw res.error;
+      if(res.data){ if(idx>=0) _tpData.rows[idx]=res.data; else _tpData.rows.push(res.data); }
+      else if(row){ row.expected_check_in=v; row._virtual=false; }
+      _tpSyncWeekly(sid, res.data||null, v);
+      scTpRender();
+      if(msgEl){ msgEl.textContent="✓ 저장되었습니다"; msgEl.classList.remove("err"); }
+      if(btn) btn.textContent="✓ 저장됨";
+      setTimeout(function(){ scTpExpClose(); }, 700);
+    }catch(e){
+      console.error("예상등원 저장 실패:", e);
+      if(msgEl){ msgEl.textContent="저장 실패: "+(e.message||e); msgEl.classList.add("err"); }
+      if(btn){ btn.textContent="저장"; btn.disabled=false; }
+    }
   }
 
   /* ============================================================
@@ -2803,12 +2931,20 @@
   }
   function scListRender(){
     var el=document.getElementById('rl-list'); if(!el) return;
+    var qEl=document.getElementById('rl-search');
+    var q=(qEl?qEl.value:'').trim().toLowerCase().replace(/\s+/g,'');
     var list=_scListData.filter(function(s){
-      if(_scListFilter==='active') return !s.reading_room_withdrawn_at;
-      if(_scListFilter==='withdrawn') return !!s.reading_room_withdrawn_at;
-      return true;
+      if(_scListFilter==='active' && s.reading_room_withdrawn_at) return false;
+      if(_scListFilter==='withdrawn' && !s.reading_room_withdrawn_at) return false;
+      if(!q) return true;
+      var hay=[s.name,s.school,s.reading_room_code].map(function(v){
+        return String(v==null?'':v).toLowerCase().replace(/\s+/g,'');
+      }).join('|');
+      return hay.indexOf(q)!==-1;
     });
-    if(!list.length){ el.innerHTML='<div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">학생이 없습니다</div>'; return; }
+    var cntEl=document.getElementById('rl-count');
+    if(cntEl) cntEl.textContent = q ? ('검색 결과 '+list.length+'명 / 전체 '+_scListData.length+'명') : (list.length+'명');
+    if(!list.length){ el.innerHTML='<div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">'+(q?'검색 결과가 없습니다':'학생이 없습니다')+'</div>'; return; }
     el.innerHTML=list.map(function(s){
       var lv=s.school_level==='middle'?'중등':(s.school_level==='high'?'고등':(s.school_level==='both'?'중고등':''));
       var cls=(s.reading_room_class||'').replace(/\s+/g,' ').trim();
@@ -3189,7 +3325,7 @@
       var d = new Date();
       if(d.getHours() < 3) return;                       // 새벽 3시 이전 대기
       if(scRrToday() === _scAutoReloadBizDay) return;    // 영업일 안 바뀌면 대기
-      var modalOpen = ['wk-xout-overlay','wk-exp-overlay'].some(function(id){
+      var modalOpen = ['wk-xout-overlay','wk-exp-overlay','tp-exp-overlay'].some(function(id){
         var e=document.getElementById(id); return e && e.classList.contains('open');
       });
       if(modalOpen) return;                              // 모달 편집 중이면 보류
@@ -3278,6 +3414,21 @@
       <div class="wk-xout-btns">
         <button type="button" class="wk-xout-cancel" onclick="scWkExpClose()">닫기</button>
         <button type="button" class="wk-xout-add" id="wk-exp-save" onclick="scWkExpSave()">저장</button>
+      </div>
+    </div>
+  </div>
+  <!-- [TP-EXP] 시간계획: 예상등원 수정 (오늘 기준) -->
+  <div class="wk-xout-overlay" id="tp-exp-overlay" onclick="if(event.target===this)scTpExpClose()">
+    <div class="wk-xout-card">
+      <h3>예상 등원시간</h3>
+      <div class="wk-xout-sub" id="tp-exp-name">학생</div>
+      <div class="wk-xout-frow"><label>예상등원</label><input type="text" id="tp-exp-in" placeholder="HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)" onkeydown="if(event.key==='Enter')scTpExpSave()"></div>
+      <div style="font-size:11px;color:#94a3b8;margin:-4px 0 10px 74px;">※ <b id="tp-exp-datenote">오늘</b> 기준입니다 · 비우고 저장하면 예상등원이 삭제됩니다</div>
+      <div class="tp-exp-chips" id="tp-exp-chips"></div>
+      <div class="wk-xout-preview" id="tp-exp-msg"></div>
+      <div class="wk-xout-btns">
+        <button type="button" class="wk-xout-cancel" onclick="scTpExpClose()">닫기</button>
+        <button type="button" class="wk-xout-add" id="tp-exp-save" onclick="scTpExpSave()">저장</button>
       </div>
     </div>
   </div>
