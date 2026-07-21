@@ -24657,7 +24657,10 @@ async function saveWorkLog() {
     wlCurrentLogId = logId;
 
     // 학생별 저장 (upsert: log_id + student_id unique)
+    // [삭제동기화] 화면에 남아 있는 대상을 모아, 저장 후 DB의 잔여 행을 정리한다
     const rows = document.querySelectorAll('#wl-student-tbody tr');
+    const keepStudentIds = new Set();   // 화면에 남은 정규 학생 student_id
+    const keepRowIds     = new Set();   // 화면에 남은 student_id=null 행의 DB id
     for (const row of rows) {
       const sid = row.dataset.sid;
       if (!sid) continue;
@@ -24678,6 +24681,7 @@ async function saveWorkLog() {
       const indivHomework = realSid ? ((indiv.homework ?? '').trim() || null) : null;
 
       if (realSid) {
+        keepStudentIds.add(realSid);
         // 정규 학생: log_id + student_id upsert
         await db.from('work_log_students').upsert({
           log_id: logId, student_id: realSid,
@@ -24707,22 +24711,62 @@ async function saveWorkLog() {
           return nt.startsWith(_nameTag1) || nt.startsWith(_nameTag2);
         }) || null };
         if (existing.data) {
+          keepRowIds.add(String(existing.data.id));
           await db.from('work_log_students').update({
             attendance: att, n_count: nCount || null, homework_done: hw,
             test_score: score || null, note: noteWithTag, student_type: _stuType
           }).eq('id', existing.data.id);
         } else {
-          await db.from('work_log_students').insert({
+          const { data: _insRow } = await db.from('work_log_students').insert({
             log_id: logId, student_id: null,
             attendance: att, n_count: nCount || null, homework_done: hw,
             test_score: score || null, note: noteWithTag, student_type: _stuType
-          });
+          }).select('id').maybeSingle();
+          if (_insRow && _insRow.id != null) keepRowIds.add(String(_insRow.id));
         }
       }
-      // deleted_ (삭제된 학생 보강 기록) 은 student_id=null 기존 레코드 → 이미 DB에 있어 upsert 불필요
+      else if (isDeletedOrNull) {
+        // deleted_<행ID> : student_id=null 기존 레코드 → 값 갱신은 불필요하나 보존 대상으로 표시
+        keepRowIds.add(String(sid.slice('deleted_'.length)));
+      }
     }
 
-    alert('✅ 업무일지가 저장됐습니다!');
+    // [삭제동기화] 화면에서 제거된 학생의 DB 기록 삭제 — 반드시 사용자 확인 후
+    let _skippedDelete = false;
+    const { data: _dbRows } = await db.from('work_log_students')
+      .select('id,student_id,note').eq('log_id', logId);
+    // [안전망] 표가 비어 있으면(로드 실패 등) 전체 삭제로 이어질 수 있어 정리 자체를 건너뛴다.
+    //          업무일지 전체를 지우려면 목록의 [삭제] 기능을 사용한다.
+    const _orphans = (rows.length === 0) ? [] : (_dbRows || []).filter(r =>
+      r.student_id ? !keepStudentIds.has(r.student_id) : !keepRowIds.has(String(r.id)));
+    if (_orphans.length) {
+      const _oIds = _orphans.filter(r => r.student_id).map(r => r.student_id);
+      const _nameMap = {};
+      if (_oIds.length) {
+        const { data: _us } = await db.from('users').select('id,name').in('id', _oIds);
+        (_us || []).forEach(u => { _nameMap[u.id] = u.name; });
+      }
+      const _names = _orphans.map(r => {
+        if (r.student_id) return _nameMap[r.student_id] || '(이름 미상)';
+        const m = (r.note || '').match(/^\[([^\]]+)\]/);
+        return m ? m[1].split('·')[0].trim() : '(직접입력 학생)';
+      });
+      const _ok = confirm(
+        '화면에서 제거된 학생 ' + _orphans.length + '명의 기록을 삭제합니다.\n\n'
+        + _names.map(n => '· ' + n).join('\n')
+        + '\n\n이 업무일지의 출결·N제·숙제·점수·메모가 함께 사라집니다.\n계속할까요?');
+      if (_ok) {
+        const { error: _delErr } = await db.from('work_log_students')
+          .delete().in('id', _orphans.map(r => r.id));
+        if (_delErr) throw _delErr;
+      } else {
+        _skippedDelete = true;
+      }
+    }
+
+    alert(_skippedDelete
+      ? '✅ 저장됐습니다.\n(제거한 학생은 삭제하지 않아 새로고침하면 다시 나타납니다)'
+      : '✅ 업무일지가 저장됐습니다!');
     await wlLoadDayLogs();
   } catch(e) {
     alert('저장 오류: ' + (e.message || e));
