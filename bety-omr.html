@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 베티 OMR [v0.3-nav]</title>
+<title>BMAPS · 베티 OMR [v0.4-admission]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -115,6 +115,14 @@
   .res-yt { flex-shrink: 0; background: #fee2e2; color: #dc2626; border: 1.5px solid #fca5a5;
             border-radius: 9px; padding: 8px 12px; font-size: 12.5px; font-weight: 800; text-decoration: none; }
 
+  /* ===== 입학 테스트 ===== */
+  .gc-inp { width: 100%; padding: 14px; font-size: 30px; font-weight: 800; letter-spacing: 10px;
+            text-align: center; border: 2px solid #cbd5e1; border-radius: 12px; outline: none;
+            margin-bottom: 10px; }
+  .gc-inp:focus { border-color: #0369a1; }
+  .gc-msg { font-size: 13px; font-weight: 700; color: #dc2626; text-align: center;
+            min-height: 18px; margin-top: 8px; }
+
   /* ===== 차단 ===== */
   .blocker { position: fixed; inset: 0; background: #0f172a; display: none;
              align-items: center; justify-content: center; z-index: 99999; padding: 16px; }
@@ -128,7 +136,7 @@
 
 <div class="bo-top">
   <span class="bo-title">📝 베티 OMR</span>
-  <span class="bo-ver">v0.3-nav</span>
+  <span class="bo-ver">v0.4-admission</span>
   <span class="bo-who" id="bo-who"></span>
   <button class="bo-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -183,6 +191,32 @@
     </div>
     <button class="btn" style="width:100%" onclick="boShowHome()">← 회차 목록으로</button>
   </div>
+
+  <!-- 입학 테스트: 코드 입력 -->
+  <div id="view-code" style="display:none">
+    <div class="card">
+      <div style="font-size:16px;font-weight:800;margin-bottom:6px">🎓 입학 테스트</div>
+      <div class="hint">선생님께 안내받은 <b>응시 코드 6자리</b>를 입력해주세요.</div>
+    </div>
+    <div class="card">
+      <input id="gc-code" class="gc-inp" type="tel" maxlength="6" placeholder="000000"
+             oninput="this.value=this.value.replace(/[^0-9]/g,'')"
+             onkeydown="if(event.key==='Enter')boGuestGo()">
+      <button class="btn btn-primary" style="width:100%;padding:14px;font-size:16px"
+              id="gc-go" onclick="boGuestGo()">응시 시작</button>
+      <div class="gc-msg" id="gc-msg"></div>
+    </div>
+  </div>
+
+  <!-- 입학 테스트: 완료 -->
+  <div id="view-done" style="display:none">
+    <div class="card" style="text-align:center;padding:44px 20px">
+      <div style="font-size:46px">🎉</div>
+      <div style="font-size:19px;font-weight:800;margin:14px 0 8px" id="done-name">수고하셨습니다!</div>
+      <div class="hint">답안 제출이 완료되었습니다.<br>결과는 상담 시 안내해드립니다.</div>
+    </div>
+    <button class="btn" style="width:100%" onclick="location.reload()">처음으로</button>
+  </div>
 </div>
 
 <!-- 제출 바 (OMR 화면에서만) -->
@@ -216,7 +250,8 @@
   <div class="bk">
     <h3>📝 베티 OMR</h3>
     <p id="bo-bk-msg">접근할 수 없습니다.</p>
-    <button class="btn btn-primary" onclick="location.href='index.html'">← BMAPS로 이동</button>
+    <button class="btn btn-primary" style="width:100%" onclick="location.href='index.html'">← BMAPS로 이동</button>
+    <button class="btn" style="width:100%;margin-top:8px" onclick="boGuestStart()">🎓 입학 테스트 응시</button>
   </div>
 </div>
 
@@ -232,16 +267,17 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v0.3-nav';
+window.BETY_OMR_VERSION = 'v0.4-admission';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
-            kpQ:null, kpVal:'', submitting:false };
+            kpQ:null, kpVal:'', submitting:false,
+            guest:false, guestCode:'', guestName:'' };
 
 function boEsc(v){ return String(v==null?'':v)
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function boView(name){
-  ['home','pick','omr','result'].forEach(function(v){
+  ['home','pick','omr','result','code','done'].forEach(function(v){
     document.getElementById('view-'+v).style.display = (v===name) ? '' : 'none';
   });
   document.getElementById('bo-submit-bar').style.display = (name==='omr') ? '' : 'none';
@@ -450,8 +486,43 @@ function boRedrawQ(qNo){
   boSyncProgress();
 }
 function boLeaveOmr(){
-  if(boMarkedCount() > 0 && !confirm('입력한 답이 저장되지 않았습니다.\n회차 목록으로 나갈까요?')) return;
+  if(boMarkedCount() > 0 && !confirm('입력한 답이 저장되지 않았습니다.\n나갈까요?')) return;
+  if(_bo.guest){ boView('code'); return; }
   boShowHome();
+}
+
+/* ── 입학 테스트 (게스트 응시) ──────────────────────────── */
+function boGuestStart(){
+  document.getElementById('bo-blocker').classList.remove('open');
+  document.getElementById('gc-code').value = '';
+  document.getElementById('gc-msg').textContent = '';
+  boView('code');
+  try { document.getElementById('gc-code').focus(); } catch(e){}
+}
+async function boGuestGo(){
+  var code = (document.getElementById('gc-code').value || '').trim();
+  var msg = document.getElementById('gc-msg');
+  if(!/^\d{6}$/.test(code)){ msg.textContent = '응시 코드는 숫자 6자리입니다'; return; }
+  var btn = document.getElementById('gc-go');
+  btn.disabled = true; btn.textContent = '확인 중...'; msg.textContent = '';
+  try {
+    var r = await db.rpc('bety_omr_admission_get', { p_code: code });
+    if(r.error) throw r.error;
+    var d = r.data || {};
+    if(!d.ok){
+      msg.textContent = d.reason === 'already_submitted'
+        ? '이미 제출이 완료된 코드입니다' : '코드를 확인해주세요';
+      return;
+    }
+    _bo.guest = true; _bo.guestCode = code; _bo.guestName = d.name || '';
+    _bo.exam = d.exam; _bo.questions = d.questions || []; _bo.answers = {};
+    document.getElementById('bo-who').textContent = _bo.guestName + ' · 입학 테스트';
+    boRenderOmr();
+    document.getElementById('omr-title').textContent =
+      '입학 테스트 · ' + d.exam.level + (d.exam.elective ? (' · ' + d.exam.elective) : '');
+    boView('omr');
+  } catch(e){ msg.textContent = '오류: ' + (e.message||e); }
+  finally { btn.disabled = false; btn.textContent = '응시 시작'; }
 }
 
 /* ── 주관식 키패드 ──────────────────────────────────────── */
@@ -500,6 +571,23 @@ async function boSubmit(){
   try {
     var payload = {};
     Object.keys(_bo.answers).forEach(function(k){ payload[k] = _bo.answers[k]; });
+
+    if(_bo.guest){
+      // 입학 테스트: 점수·정오는 보여주지 않고 완료 화면만
+      var gr = await db.rpc('bety_omr_admission_submit',
+        { p_code: _bo.guestCode, p_answers: payload });
+      if(gr.error) throw gr.error;
+      var gd = gr.data || {};
+      if(!gd.ok){
+        if(gd.reason === 'already_submitted'){ alert('이미 제출이 완료된 코드입니다.'); boView('code'); return; }
+        alert('제출하지 못했습니다: ' + (gd.reason||'')); return;
+      }
+      document.getElementById('done-name').textContent =
+        (_bo.guestName ? _bo.guestName + ' 학생, ' : '') + '수고하셨습니다!';
+      boView('done');
+      return;
+    }
+
     var r = await db.rpc('bety_omr_submit', {
       p_student_id: _bo.user.id, p_exam_id: _bo.exam.id, p_answers: payload });
     if(r.error) throw r.error;
