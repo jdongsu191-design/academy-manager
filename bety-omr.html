@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 베티 OMR [v0.1-omr]</title>
+<title>BMAPS · 베티 OMR [v0.2-grade]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -126,7 +126,7 @@
 
 <div class="bo-top">
   <span class="bo-title">📝 베티 OMR</span>
-  <span class="bo-ver">v0.1-omr</span>
+  <span class="bo-ver">v0.2-grade</span>
   <span class="bo-who" id="bo-who"></span>
 </div>
 
@@ -141,14 +141,14 @@
     <div id="bo-rounds"><div class="empty">불러오는 중...</div></div>
   </div>
 
-  <!-- 선택과목 -->
-  <div id="view-elective" style="display:none">
+  <!-- 시험지 선택 (레벨·선택과목이 갈릴 때) -->
+  <div id="view-pick" style="display:none">
     <div class="card">
-      <div style="font-size:16px;font-weight:800;margin-bottom:6px">선택과목을 골라주세요</div>
-      <div class="hint">본인이 응시하는 선택과목입니다. 한 번 고르면 다음부터 자동으로 적용됩니다.<br>
-      잘못 골랐다면 선생님(데스크)께 말씀해주세요.</div>
+      <div style="font-size:16px;font-weight:800;margin-bottom:6px">응시한 시험을 선택하세요</div>
+      <div class="hint">본인이 <b>실제로 푼 시험지 표지</b>와 같은 것을 골라주세요.<br>
+      잘못 골라 제출했다면 선생님(데스크)께 초기화를 요청하면 됩니다.</div>
     </div>
-    <div id="bo-elective-btns"></div>
+    <div id="bo-pick-btns"></div>
     <button class="btn" style="width:100%" onclick="boShowHome()">← 돌아가기</button>
   </div>
 
@@ -229,7 +229,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v0.1-omr';
+window.BETY_OMR_VERSION = 'v0.2-grade';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -238,7 +238,7 @@ var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
 function boEsc(v){ return String(v==null?'':v)
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function boView(name){
-  ['home','elective','omr','result'].forEach(function(v){
+  ['home','pick','omr','result'].forEach(function(v){
     document.getElementById('view-'+v).style.display = (v===name) ? '' : 'none';
   });
   document.getElementById('bo-submit-bar').style.display = (name==='omr') ? '' : 'none';
@@ -269,7 +269,20 @@ async function boBoot(){
   } catch(e){ boBlock('오류: ' + boEsc(e.message||e)); }
 }
 
-/* ── 홈: 회차 목록 ──────────────────────────────────────── */
+/* ── 홈: 회차 목록 (학년·학교급 기준) ───────────────────── */
+// 좁히기: 조건에 맞는 게 하나도 없으면 좁히기를 취소하고 전체 유지
+function boNarrow(list, pred){ var f = list.filter(pred); return f.length ? f : list; }
+// 회차의 후보 시험지 결정: 제출본 > 출석부 레벨 > 저장된 선택과목 순으로 좁힘
+function boCandidates(rd){
+  var done = (rd.exams||[]).filter(function(e){ return e.submitted; });
+  if(done.length) return { mode:'done', exam: done[0] };
+  var c = (rd.exams||[]).slice();
+  if(rd.known_level) c = boNarrow(c, function(e){ return e.level === rd.known_level; });
+  if(_bo.elective)   c = boNarrow(c, function(e){ return !e.elective || e.elective === _bo.elective; });
+  return (c.length === 1) ? { mode:'auto', exam: c[0] } : { mode:'pick', exams: c };
+}
+function boExamLabel(e){ return e.level + (e.elective ? (' · ' + e.elective) : ''); }
+
 async function boLoadRounds(){
   var box = document.getElementById('bo-rounds');
   box.innerHTML = '<div class="empty">불러오는 중...</div>';
@@ -282,20 +295,28 @@ async function boLoadRounds(){
         ? '베티모의고사 대상 학생이 아닙니다' : '회차를 불러올 수 없습니다') + '</div>';
       return;
     }
+    _bo.elective = d.elective || null;
     _bo.rounds = d.rounds || [];
     if(!_bo.rounds.length){
       box.innerHTML = '<div class="empty">아직 응시할 수 있는 회차가 없습니다.<br>시험지가 준비되면 여기에 표시됩니다.</div>';
       return;
     }
-    box.innerHTML = _bo.rounds.map(function(rd){
-      var meta = rd.level + (rd.elective ? (' · ' + rd.elective) : '');
-      var act = rd.submitted
-        ? '<button class="rd-done" onclick="boOpenResultByDate(\''+rd.session_date+'\')">'
-          + rd.score + '점 · 결과</button>'
-        : '<button class="rd-go" onclick="boOpenRound(\''+rd.session_date+'\')">응시하기</button>';
+    box.innerHTML = _bo.rounds.map(function(rd, i){
+      var c = boCandidates(rd), meta, act;
+      if(c.mode === 'done'){
+        meta = boExamLabel(c.exam) + ' · ' + c.exam.total_score + '점 만점';
+        act = '<button class="rd-done" onclick="boOpenResult(\''+c.exam.id+'\',\''+rd.session_date+'\')">'
+            + c.exam.score + '점 · 결과</button>';
+      } else if(c.mode === 'auto'){
+        meta = boExamLabel(c.exam) + ' · ' + c.exam.total_score + '점 만점';
+        act = '<button class="rd-go" onclick="boOpenExam(\''+c.exam.id+'\',\''+rd.session_date+'\')">응시하기</button>';
+      } else {
+        meta = '시험지 ' + c.exams.length + '종 · 응시한 시험 선택';
+        act = '<button class="rd-go" onclick="boShowPicker(' + i + ')">응시하기</button>';
+      }
       return '<div class="rd-item"><div>'
         + '<div class="rd-date">' + boEsc(rd.session_date) + '</div>'
-        + '<div class="rd-meta">' + boEsc(meta) + ' · ' + rd.total_score + '점 만점</div>'
+        + '<div class="rd-meta">' + boEsc(meta) + '</div>'
         + '</div><div class="rd-act">' + act + '</div></div>';
     }).join('');
   } catch(e){
@@ -304,52 +325,51 @@ async function boLoadRounds(){
 }
 function boShowHome(){ boView('home'); boLoadRounds(); }
 
-/* ── 회차 열기 (배정 → 선택과목/응시/결과 분기) ─────────── */
-async function boOpenRound(date){
+/* ── 시험지 선택 화면 ───────────────────────────────────── */
+function boShowPicker(idx){
+  var rd = _bo.rounds[idx]; if(!rd) return;
+  var c = boCandidates(rd);
+  if(c.mode === 'done'){ boOpenResult(c.exam.id, rd.session_date); return; }
+  if(c.mode === 'auto'){ boOpenExam(c.exam.id, rd.session_date); return; }
+  _bo.date = rd.session_date;
+  document.getElementById('bo-pick-btns').innerHTML = c.exams.map(function(e){
+    return '<button class="el-btn" onclick="boPickExam(\''+e.id+'\',\''+rd.session_date
+         + '\',\''+boEsc(e.elective||'')+'\')">' + boEsc(boExamLabel(e)) + '</button>';
+  }).join('');
+  boView('pick');
+}
+async function boPickExam(examId, date, elective){
+  // 고3: 처음 고른 선택과목을 저장해 다음부터 자동 적용
+  if(elective && !_bo.elective){
+    if(confirm('선택과목을 [' + elective + '](으)로 저장할까요?\n다음부터 자동으로 적용됩니다.')){
+      try {
+        var r = await db.rpc('bety_omr_set_elective', { p_student_id: _bo.user.id, p_elective: elective });
+        if(!r.error && r.data && r.data.ok) _bo.elective = elective;
+      } catch(e){ /* 저장 실패해도 응시는 진행 */ }
+    }
+  }
+  await boOpenExam(examId, date);
+}
+
+/* ── 시험지 진입 (응시/결과 분기) ───────────────────────── */
+async function boOpenExam(examId, date){
   _bo.date = date;
   try {
-    var r = await db.rpc('bety_omr_get_for_student', { p_student_id: _bo.user.id, p_session_date: date });
+    var r = await db.rpc('bety_omr_get_exam', { p_student_id: _bo.user.id, p_exam_id: examId });
     if(r.error) throw r.error;
     var d = r.data || {};
     if(!d.ok){
-      if(d.reason === 'need_elective'){ boShowElective(d.options || []); return; }
-      var msg = d.reason === 'no_level' ? '레벨이 설정되지 않았습니다. 선생님께 문의해주세요.'
-              : d.reason === 'no_exam'  ? '이 회차의 시험지가 아직 준비되지 않았습니다.'
-              : '시험지를 불러올 수 없습니다.';
-      alert(msg); return;
+      alert(d.reason === 'not_eligible' ? '이 시험지의 응시 대상이 아닙니다.'
+          : d.reason === 'no_exam'      ? '시험지가 없거나 아직 발행되지 않았습니다.'
+          : '시험지를 불러올 수 없습니다.');
+      return;
     }
-    if(d.submitted){ await boOpenResult(d.exam.id, date); return; }
+    if(d.submitted){ await boOpenResult(examId, date); return; }
     _bo.exam = d.exam;
     _bo.questions = d.questions || [];
     _bo.answers = {};
     boRenderOmr();
     boView('omr');
-  } catch(e){ alert('오류: ' + (e.message||e)); }
-}
-async function boOpenResultByDate(date){
-  try {
-    var r = await db.rpc('bety_omr_get_for_student', { p_student_id: _bo.user.id, p_session_date: date });
-    var d = (r && r.data) || {};
-    if(d.ok && d.exam){ await boOpenResult(d.exam.id, date); return; }
-    alert('결과를 불러올 수 없습니다.');
-  } catch(e){ alert('오류: ' + (e.message||e)); }
-}
-
-/* ── 선택과목 ───────────────────────────────────────────── */
-function boShowElective(options){
-  var box = document.getElementById('bo-elective-btns');
-  box.innerHTML = (options||[]).map(function(o){
-    return '<button class="el-btn" onclick="boPickElective(\''+boEsc(o)+'\')">' + boEsc(o) + '</button>';
-  }).join('');
-  boView('elective');
-}
-async function boPickElective(elec){
-  if(!confirm('선택과목을 [' + elec + '](으)로 저장할까요?\n다음부터 자동으로 적용됩니다.')) return;
-  try {
-    var r = await db.rpc('bety_omr_set_elective', { p_student_id: _bo.user.id, p_elective: elec });
-    if(r.error) throw r.error;
-    if(!r.data || r.data.ok === false){ alert('저장하지 못했습니다.'); return; }
-    await boOpenRound(_bo.date);   // 선택 후 같은 회차 재진입
   } catch(e){ alert('오류: ' + (e.message||e)); }
 }
 
