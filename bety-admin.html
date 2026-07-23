@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 베티 OMR 관리 [v0.5-admission]</title>
+<title>BMAPS · 베티 OMR 관리 [v0.6-keynav]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -73,6 +73,10 @@
   .qt-area { width: 100%; min-width: 84px; padding: 5px 7px; border: 1.5px solid #cbd5e1;
              border-radius: 6px; font-size: 12.5px; outline: none; }
   .qt-area:focus { border-color: #0369a1; }
+  /* 키보드 내비: 현재 셀 강조 + 잘못된 입력 깜빡임 */
+  .qt-inp:focus, .qt-area:focus, .qt-sel:focus {
+    border-color: #0369a1; box-shadow: 0 0 0 2px rgba(3,105,161,.18); }
+  .qt-bad { border-color: #dc2626 !important; background: #fef2f2 !important; }
   .qt-url { width: 100%; max-width: 340px; padding: 5px 7px; border: 1.5px solid #cbd5e1;
             border-radius: 6px; font-size: 12px; outline: none; }
 
@@ -120,7 +124,7 @@
 
 <div class="ba-top">
   <span class="ba-title">📝 베티 OMR 관리</span>
-  <span class="ba-ver" id="ba-ver">v0.5-admission</span>
+  <span class="ba-ver" id="ba-ver">v0.6-keynav</span>
   <span class="ba-who" id="ba-who"></span>
   <button class="ba-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -167,7 +171,7 @@
       <div class="row" style="margin-bottom:10px">
         <button class="btn btn-sm" onclick="baOpenBulk()">⚙ 일괄 편집</button>
         <button class="btn btn-sm" onclick="baOpenCopy()">📋 다른 회차에서 복사</button>
-        <span class="hint">유형 · 배점 · 제외를 범위로 한 번에 지정합니다</span>
+        <span class="hint">⌨ 엑셀처럼 <b>↑↓·Enter</b>로 이동 · 객관식 정답은 <b>숫자 한 번</b>에 자동 아래로 · 유형 칸에서 <b>1</b>=객관식 <b>2</b>=주관식</span>
       </div>
       <div class="qt-wrap"><table class="qt" id="ba-qt"></table></div>
       <div class="sum-bar" id="ba-sum"></div>
@@ -417,7 +421,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_ADMIN_VERSION = 'v0.5-admission';
+window.BETY_ADMIN_VERSION = 'v0.6-keynav';
 console.log('BETY-ADMIN build:', window.BETY_ADMIN_VERSION);
 
 /* 레벨별 기본값 */
@@ -668,48 +672,122 @@ async function baLoadQuestions(){
 }
 
 /* ── 문항 표 ────────────────────────────────────────────── */
+/* 셀 그리드: data-r(행 index) / data-c(열: 0배점 1정답 2내용 3행동 4유형 5제외) */
+function baQRowHtml(i){
+  var q = _ba.questions[i];
+  var off = q.is_excluded ? ' disabled' : '';
+  var ansCell;
+  if(q.q_type === 'choice'){
+    ansCell = '<input class="qt-inp" data-r="'+i+'" data-c="1" inputmode="numeric" maxlength="1"'
+            + ' value="'+baEsc(q.answer)+'"'+off
+            + ' oninput="baAnsChoice(this,'+i+')" placeholder="1~5">';
+  } else {
+    ansCell = '<input class="qt-inp" data-r="'+i+'" data-c="1" inputmode="numeric" maxlength="3"'
+            + ' value="'+baEsc(q.answer)+'"'+off
+            + ' oninput="baAnsShort(this,'+i+')" placeholder="0~999">';
+  }
+  return '<tr id="ba-qr-'+i+'" class="'+(q.is_excluded?'ex-off':'')+'">'
+    + '<td class="qt-no">'+q.q_no+'</td>'
+    + '<td><input class="qt-inp" data-r="'+i+'" data-c="0" type="number" min="0" value="'+(q.points||0)+'"'+off
+      + ' oninput="baQEdit('+i+',\'points\',this.value)"></td>'
+    + '<td>'+ansCell+'</td>'
+    + '<td><input class="qt-area" data-r="'+i+'" data-c="2" value="'+baEsc(q.content_area)+'"'+off
+      + ' oninput="baQEdit('+i+',\'content_area\',this.value)" placeholder="예: 수와 연산"></td>'
+    + '<td><input class="qt-area" data-r="'+i+'" data-c="3" value="'+baEsc(q.behavior_area)+'"'+off
+      + ' oninput="baQEdit('+i+',\'behavior_area\',this.value)" placeholder="예: 계산"></td>'
+    + '<td><select class="qt-sel" data-r="'+i+'" data-c="4" onchange="baSetType('+i+',this.value,false)"'+off+'>'
+      + '<option value="choice"'+(q.q_type==='choice'?' selected':'')+'>객관식</option>'
+      + '<option value="short"'+(q.q_type==='short'?' selected':'')+'>주관식</option></select></td>'
+    + '<td><input type="checkbox" data-r="'+i+'" data-c="5" '+(q.is_excluded?'checked':'')
+      + ' onchange="baToggleExcl('+i+',this.checked)"></td>'
+    + '</tr>';
+}
 function baRenderQT(){
   var t = document.getElementById('ba-qt');
   var head = '<thead><tr><th class="qt-no">번호</th><th>배점</th><th>정답</th>'
            + '<th>내용영역</th><th>행동영역</th><th>유형</th><th>제외</th></tr></thead>';
-  var body = _ba.questions.map(function(q, i){
-    var off = q.is_excluded ? ' disabled' : '';
-    var ansCell;
-    if(q.q_type === 'choice'){
-      var opts = ['','1','2','3','4','5'].map(function(v){
-        return '<option value="'+v+'"'+(String(q.answer)===v?' selected':'')+'>'+(v||'-')+'</option>';
-      }).join('');
-      ansCell = '<select class="qt-sel" onchange="baQEdit('+i+',\'answer\',this.value)"'+off+'>'+opts+'</select>';
-    } else {
-      ansCell = '<input class="qt-inp" inputmode="numeric" maxlength="3" value="'+baEsc(q.answer)+'"'+off
-              + ' oninput="baQEdit('+i+',\'answer\',this.value)" placeholder="0~999">';
-    }
-    return '<tr class="'+(q.is_excluded?'ex-off':'')+'">'
-      + '<td class="qt-no">'+q.q_no+'</td>'
-      + '<td><input class="qt-inp" type="number" min="0" value="'+(q.points||0)+'"'+off
-        + ' oninput="baQEdit('+i+',\'points\',this.value)"></td>'
-      + '<td>'+ansCell+'</td>'
-      + '<td><input class="qt-area" value="'+baEsc(q.content_area)+'"'+off
-        + ' oninput="baQEdit('+i+',\'content_area\',this.value)" placeholder="예: 수와 연산"></td>'
-      + '<td><input class="qt-area" value="'+baEsc(q.behavior_area)+'"'+off
-        + ' oninput="baQEdit('+i+',\'behavior_area\',this.value)" placeholder="예: 계산"></td>'
-      + '<td><select class="qt-sel" onchange="baQEdit('+i+',\'q_type\',this.value)"'+off+'>'
-        + '<option value="choice"'+(q.q_type==='choice'?' selected':'')+'>객관식</option>'
-        + '<option value="short"'+(q.q_type==='short'?' selected':'')+'>주관식</option></select></td>'
-      + '<td><input type="checkbox" '+(q.is_excluded?'checked':'')
-        + ' onchange="baQEdit('+i+',\'is_excluded\',this.checked)"></td>'
-      + '</tr>';
-  }).join('');
-  t.innerHTML = head + '<tbody>' + body + '</tbody>';
+  t.innerHTML = head + '<tbody>'
+    + _ba.questions.map(function(q, i){ return baQRowHtml(i); }).join('') + '</tbody>';
   baRenderSum();
+}
+// 한 행만 다시 그리기 (전체 재렌더 시 포커스·스크롤이 날아가는 것 방지)
+function baRedrawRow(i, focusC){
+  var old = document.getElementById('ba-qr-' + i);
+  if(!old){ baRenderQT(); return; }
+  var tmp = document.createElement('tbody');
+  tmp.innerHTML = baQRowHtml(i);
+  old.replaceWith(tmp.firstElementChild);
+  baRenderSum();
+  if(focusC != null) baNavCell(i, focusC);
 }
 function baQEdit(i, field, val){
   var q = _ba.questions[i]; if(!q) return;
   if(field === 'points') q.points = parseInt(val,10) || 0;
-  else if(field === 'is_excluded'){ q.is_excluded = !!val; baRenderQT(); return; }
-  else if(field === 'q_type'){ q.q_type = val; q.answer = ''; baRenderQT(); return; }
   else q[field] = val;
   baRenderSum();
+}
+/* 객관식 정답: 1~5 한 글자 → 자동으로 아래 정답 칸 이동. 그 외 입력은 거부 */
+function baAnsChoice(inp, i){
+  var v = (inp.value || '').replace(/[^1-5]/g, '');
+  if(inp.value && !v){ inp.value = ''; _ba.questions[i].answer = ''; baFlash(inp); baRenderSum(); return; }
+  v = v.slice(-1);
+  inp.value = v;
+  _ba.questions[i].answer = v;
+  baRenderSum();
+  if(v) baNavDown(i, 1, 1);
+}
+/* 주관식 정답: 숫자 3자리 제한 (이동은 Enter/방향키) */
+function baAnsShort(inp, i){
+  var v = (inp.value || '').replace(/[^0-9]/g, '').slice(0, 3);
+  if(inp.value !== v) inp.value = v;
+  _ba.questions[i].answer = v;
+  baRenderSum();
+}
+function baSetType(i, val, advance){
+  var q = _ba.questions[i]; if(!q) return;
+  if(q.q_type !== val){ q.q_type = val; q.answer = ''; baRedrawRow(i, advance ? null : 4); }
+  if(advance) baNavDown(i, 4, 1);
+}
+function baToggleExcl(i, on){
+  _ba.questions[i].is_excluded = !!on;
+  baRedrawRow(i, 5);
+}
+function baFlash(el){
+  el.classList.add('qt-bad');
+  setTimeout(function(){ el.classList.remove('qt-bad'); }, 400);
+}
+
+/* ── 키보드 내비게이션 (엑셀식: ↑↓ 이동, Enter=아래, Tab=오른쪽) ── */
+function baNavCell(r, c){
+  var el = document.querySelector('#ba-qt [data-r="'+r+'"][data-c="'+c+'"]');
+  if(!el || el.disabled) return false;
+  el.focus();
+  if(el.select) try{ el.select(); }catch(e){}
+  return true;
+}
+// dir(+1/-1) 방향으로 같은 열의 다음 활성 셀 (제외 문항은 건너뜀)
+function baNavDown(r, c, dir){
+  var n = r + dir;
+  while(n >= 0 && n < _ba.questions.length){
+    if(baNavCell(n, c)) return true;
+    n += dir;
+  }
+  return false;
+}
+function baQtKeydown(e){
+  var t = e.target;
+  if(!t || !t.getAttribute) return;
+  var r = parseInt(t.getAttribute('data-r'), 10);
+  var c = parseInt(t.getAttribute('data-c'), 10);
+  if(isNaN(r) || isNaN(c)) return;
+  if(e.key === 'Enter' || e.key === 'ArrowDown'){ e.preventDefault(); baNavDown(r, c, 1); return; }
+  if(e.key === 'ArrowUp'){ e.preventDefault(); baNavDown(r, c, -1); return; }
+  // 유형 칸: 1/ㄱ/c = 객관식, 2/ㅈ/s = 주관식 → 즉시 전환 후 아래로
+  if(c === 4){
+    var k = e.key;
+    if(k === '1' || k === 'c' || k === 'C' || k === 'ㄱ'){ e.preventDefault(); baSetType(r, 'choice', true); }
+    else if(k === '2' || k === 's' || k === 'S' || k === 'ㅈ'){ e.preventDefault(); baSetType(r, 'short', true); }
+  }
 }
 function baRenderSum(){
   var ex = _ba.exam; if(!ex) return;
@@ -861,7 +939,7 @@ function baRenderYT(){
   var head = '<thead><tr><th class="qt-no">번호</th><th>유튜브 URL</th></tr></thead>';
   var body = _ba.questions.map(function(q,i){
     return '<tr class="'+(q.is_excluded?'ex-off':'')+'"><td class="qt-no">'+q.q_no+'</td>'
-      + '<td><input class="qt-url" value="'+baEsc(q.youtube_url)+'" placeholder="https://youtu.be/..."'
+      + '<td><input class="qt-url" data-yr="'+i+'" value="'+baEsc(q.youtube_url)+'" placeholder="https://youtu.be/..."'
       + ' oninput="_ba.questions['+i+'].youtube_url=this.value"></td></tr>';
   }).join('');
   t.innerHTML = head + '<tbody>' + body + '</tbody>';
@@ -1215,6 +1293,21 @@ function baTab(t){
 // 복사 항목 체크박스 ↔ 전체선택 동기화
 document.querySelectorAll('.ba-cp').forEach(function(c){
   c.addEventListener('change', baCopySyncAll);
+});
+
+// 문항 표 키보드 내비 (테이블 요소에 위임 — innerHTML 교체에도 유지됨)
+document.getElementById('ba-qt').addEventListener('keydown', baQtKeydown);
+// 해설 링크 표에서도 Enter/방향키로 상하 이동
+document.getElementById('ba-yt').addEventListener('keydown', function(e){
+  var t = e.target;
+  if(!t || !t.getAttribute) return;
+  var r = parseInt(t.getAttribute('data-yr'), 10);
+  if(isNaN(r)) return;
+  var dir = (e.key === 'Enter' || e.key === 'ArrowDown') ? 1 : (e.key === 'ArrowUp' ? -1 : 0);
+  if(!dir) return;
+  e.preventDefault();
+  var nx = document.querySelector('#ba-yt [data-yr="'+(r+dir)+'"]');
+  if(nx){ nx.focus(); try{ nx.select(); }catch(err){} }
 });
 
 baBoot();
