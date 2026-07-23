@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.45-tpexp]</title>
+<title>BMAPS · 독서실 출결 [v0.46-mentor]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -442,6 +442,20 @@
   .tpU .u-edit{ margin-left:5px; padding:1px 5px; border:1px solid #cbd5e1; background:#f8fafc; color:#0369a1; border-radius:5px; font-size:10.5px; line-height:1.5; cursor:pointer; vertical-align:middle; }
   .tpU .u-edit:hover{ background:#0369a1; color:#fff; border-color:#0369a1; }
   #tp-exp-overlay .wk-xout-card{ width:360px; }
+  /* ── 멘토링 기간 모달 ── */
+  #sc-mentor-overlay .wk-xout-card{ width:440px; }
+  .mentor-row{ display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid #e2e8f0;
+               border-radius:8px; margin-bottom:6px; font-size:13.5px; }
+  .mentor-row.on{ background:#f0fdf4; border-color:#86efac; }
+  .mentor-row .mp-range{ font-weight:800; color:#0f172a; }
+  .mentor-row .mp-memo{ color:#64748b; font-size:12px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mentor-row .mp-now{ font-size:11px; font-weight:800; color:#15803d; background:#dcfce7; border-radius:5px; padding:2px 7px; }
+  .mentor-row .mp-del{ margin-left:auto; border:1px solid #fca5a5; background:#fef2f2; color:#dc2626;
+                       border-radius:6px; padding:3px 9px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .mentor-note{ background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; padding:8px 11px;
+                font-size:12px; color:#075985; line-height:1.6; margin-bottom:12px; }
+  .wk-mentor-badge{ display:inline-block; margin-left:8px; font-size:12px; font-weight:800; color:#15803d;
+                    background:#dcfce7; border:1px solid #86efac; border-radius:100px; padding:2px 10px; vertical-align:1px; }
   .tp-exp-chips{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; }
   .tp-exp-chips button{ padding:5px 9px; border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:7px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; }
   .tp-exp-chips button:hover{ background:#e0f2fe; border-color:#0ea5e9; }
@@ -478,7 +492,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.45-tpexp</span>
+    <span class="tb-ver" id="sc-ver">v0.46-mentor</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -681,6 +695,7 @@
             <button class="wk-load-btn wk-saveall-btn" id="wk-saveall-btn" onclick="scWkSaveAll()">&#128190; 전체 저장</button>
             <button class="wk-load-btn" onclick="scWkLoad()">&#128229; 불러오기</button>
             <button class="wk-load-btn wk-refresh-btn" onclick="scWkLoad()" title="현재 주차 데이터 새로고침">&#128260; 새로고침</button>
+            <button class="wk-load-btn" onclick="scMentorOpen()" title="멘토링 기간: 점심·저녁 외출을 식사 시간창만큼 공부시간으로 인정">&#127869;&#65039; 멘토링 기간</button>
             <button class="wk-load-btn wk-update-btn" id="wk-update-btn" onclick="scSendUpdate()" title="패드·모든 화면 강제 새로고침(코드 업데이트)">&#128242; 업데이트</button>
           </div>
           <div class="wk-week-label" id="wk-week-label"></div>
@@ -744,7 +759,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.45-tpexp';
+  window.STUDYCENTER_VERSION = 'v0.46-mentor';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1298,6 +1313,9 @@
         if(!_wkReqHistory[h.student_id]) _wkReqHistory[h.student_id] = [];
         _wkReqHistory[h.student_id].push(h);
       });
+      // 멘토링 기간 로드 (순공부 계산에 반영) + 주간 라벨 배지
+      await scMentorLoad();
+      scMentorBadge();
       scWkRenderDayTabs();
       scWkRenderTable();
     } catch(e){
@@ -1357,24 +1375,143 @@
   }
   // [순공부 포함 외출] 베스티안 외출은 공부시간으로 인정 → 순공부에서 차감하지 않음
   function scIsStudyOut(reason){ return !!reason && String(reason).indexOf("베스티안")===0; }
+
+  /* ── [멘토링 기간] 사유가 점심·저녁인 외출은 식사 창과 겹치는 만큼 공부시간 인정 ──
+     식사 인정 창: 점심 12:00~13:00 · 저녁 17:30~18:30 (분 단위)
+     예) 17:00~18:00 외출 → 겹침 30분 → 30분만 차감 / 18:00~18:45 → 겹침 30분 → 15분만 차감 */
+  var _mentorPeriods = [];   // [{id, start_date, end_date, memo}]
+  var SC_MEAL_WINDOWS = [[720, 780], [1050, 1110]];
+  function scMentorOn(date){
+    if(!date) return false;
+    for(var i=0; i<_mentorPeriods.length; i++){
+      var p = _mentorPeriods[i];
+      if(p.start_date <= date && date <= p.end_date) return true;
+    }
+    return false;
+  }
+  function scIsMealOut(reason){
+    var r = String(reason||"");
+    return r.indexOf("점심")===0 || r.indexOf("저녁")===0;
+  }
+  // 외출 [s,e)(분)과 식사 창의 겹침(분)
+  function scMealOverlap(s, e){
+    var ov = 0;
+    for(var i=0; i<SC_MEAL_WINDOWS.length; i++){
+      var w = SC_MEAL_WINDOWS[i];
+      ov += Math.max(0, Math.min(e, w[1]) - Math.max(s, w[0]));
+    }
+    return ov;
+  }
+  async function scMentorLoad(){
+    try{
+      var r = await db.from("reading_room_mentoring_periods").select("*").order("start_date");
+      if(r.error) throw r.error;
+      _mentorPeriods = r.data || [];
+    }catch(e){ console.warn("멘토링 기간 로드 실패:", e); }
+  }
+
   function scWkCalcDaily(row){
     if(!row || !row.check_in_time || !row.check_out_time) return null;
     var ci = scWkT2M(row.check_in_time), co = scWkT2M(row.check_out_time);
     if(row.check_out_is_next_day) co += 1440;
     if(co < ci) co += 1440;
     var total = co - ci;
-    if(row.out_1_start && row.out_1_end && !scIsStudyOut(row.out_1_reason)){
-      var s1 = scWkT2M(row.out_1_start), e1 = scWkT2M(row.out_1_end);
-      if(row.out_1_end_is_next_day) e1 += 1440; if(e1 < s1) e1 += 1440;
-      total -= (e1 - s1);
+    var mentor = scMentorOn(row.attend_date);
+    // 외출 1건의 차감분: 베스티안=0 / 멘토링+점심·저녁=식사 창 겹침 제외 / 그 외=전체
+    function ded(sT, eT, endNext, reason){
+      if(!sT || !eT || scIsStudyOut(reason)) return 0;
+      var s = scWkT2M(sT), e = scWkT2M(eT);
+      if(endNext) e += 1440; if(e < s) e += 1440;
+      var d = e - s;
+      if(mentor && scIsMealOut(reason)) d -= scMealOverlap(s, e);
+      return Math.max(0, d);
     }
-    if(row.out_2_start && row.out_2_end && !scIsStudyOut(row.out_2_reason)){
-      var s2 = scWkT2M(row.out_2_start), e2 = scWkT2M(row.out_2_end);
-      if(row.out_2_end_is_next_day) e2 += 1440; if(e2 < s2) e2 += 1440;
-      total -= (e2 - s2);
-    }
+    total -= ded(row.out_1_start, row.out_1_end, row.out_1_end_is_next_day, row.out_1_reason);
+    total -= ded(row.out_2_start, row.out_2_end, row.out_2_end_is_next_day, row.out_2_reason);
     total -= (row.extra_out_minutes || 0);
     return Math.max(0, total);
+  }
+
+  /* ── 멘토링 기간 설정 모달 ── */
+  function scMentorBadge(){
+    var lbl = document.getElementById("wk-week-label");
+    if(!lbl || !_wkWeekDates.length) return;
+    var hit = _mentorPeriods.filter(function(p){
+      return !(p.end_date < _wkWeekDates[0] || p.start_date > _wkWeekDates[6]);
+    });
+    var html = scWkEsc(_wkWeekDates[0] + " ~ " + _wkWeekDates[6]);
+    if(hit.length){
+      var rng = hit.map(function(p){
+        return p.start_date.slice(5).replace("-","/") + "~" + p.end_date.slice(5).replace("-","/");
+      }).join(", ");
+      html += '<span class="wk-mentor-badge">&#127869;&#65039; 멘토링 기간 ' + scWkEsc(rng) + '</span>';
+    }
+    lbl.innerHTML = html;
+  }
+  async function scMentorOpen(){
+    document.getElementById("sc-mentor-overlay").classList.add("open");
+    var msg = document.getElementById("sc-mentor-msg");
+    msg.textContent = ""; msg.classList.remove("err");
+    await scMentorLoad();
+    scMentorRenderList();
+  }
+  function scMentorClose(){ document.getElementById("sc-mentor-overlay").classList.remove("open"); }
+  function scMentorRenderList(){
+    var box = document.getElementById("sc-mentor-list");
+    if(!box) return;
+    if(!_mentorPeriods.length){
+      box.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:13px;padding:10px 0">등록된 멘토링 기간이 없습니다</div>';
+      return;
+    }
+    var today = scRrToday();
+    box.innerHTML = _mentorPeriods.map(function(p){
+      var on = p.start_date <= today && today <= p.end_date;
+      return '<div class="mentor-row' + (on ? ' on' : '') + '">'
+        + '<span class="mp-range">' + scWkEsc(p.start_date) + ' ~ ' + scWkEsc(p.end_date) + '</span>'
+        + (on ? '<span class="mp-now">적용중</span>' : '')
+        + '<span class="mp-memo">' + scWkEsc(p.memo || '') + '</span>'
+        + '<button type="button" class="mp-del" onclick="scMentorDel(\'' + p.id + '\')">삭제</button>'
+        + '</div>';
+    }).join('');
+  }
+  async function scMentorAdd(){
+    var s = document.getElementById("sc-mentor-start").value;
+    var e = document.getElementById("sc-mentor-end").value;
+    var memo = document.getElementById("sc-mentor-memo").value.trim();
+    var msg = document.getElementById("sc-mentor-msg");
+    msg.classList.remove("err");
+    if(!s || !e){ msg.textContent = "시작일과 종료일을 모두 선택해주세요"; msg.classList.add("err"); return; }
+    if(s > e){ msg.textContent = "종료일이 시작일보다 빠릅니다"; msg.classList.add("err"); return; }
+    var overlap = _mentorPeriods.some(function(p){ return !(p.end_date < s || e < p.start_date); });
+    if(overlap && !confirm("기존 멘토링 기간과 겹칩니다. 그래도 추가할까요?")) return;
+    var btn = document.getElementById("sc-mentor-add");
+    btn.disabled = true;
+    try{
+      var r = await db.from("reading_room_mentoring_periods")
+        .insert({ start_date: s, end_date: e, memo: memo || null });
+      if(r.error) throw r.error;
+      document.getElementById("sc-mentor-start").value = "";
+      document.getElementById("sc-mentor-end").value = "";
+      document.getElementById("sc-mentor-memo").value = "";
+      msg.textContent = "✓ 추가되었습니다 — 해당 기간 순공부시간이 새 규칙으로 계산됩니다";
+      await scMentorLoad();
+      scMentorRenderList();
+      if(_wkWeekDates.length){ scMentorBadge(); scWkRenderTable(); }
+    }catch(err){
+      msg.classList.add("err"); msg.textContent = "추가 실패: " + (err.message || err);
+    }finally{ btn.disabled = false; }
+  }
+  async function scMentorDel(id){
+    var p = _mentorPeriods.find(function(x){ return x.id === id; });
+    if(!p) return;
+    if(!confirm("멘토링 기간 " + p.start_date + " ~ " + p.end_date + " 을(를) 삭제할까요?\n삭제하면 해당 기간 순공부시간이 기존 계산으로 돌아갑니다.")) return;
+    try{
+      var r = await db.from("reading_room_mentoring_periods").delete().eq("id", id);
+      if(r.error) throw r.error;
+      await scMentorLoad();
+      scMentorRenderList();
+      if(_wkWeekDates.length){ scMentorBadge(); scWkRenderTable(); }
+    }catch(err){ alert("삭제 실패: " + (err.message || err)); }
   }
 
   // 일별 상태 판정 (데스크용): 미하원/미복귀 = 확인필요
@@ -3325,7 +3462,7 @@
       var d = new Date();
       if(d.getHours() < 3) return;                       // 새벽 3시 이전 대기
       if(scRrToday() === _scAutoReloadBizDay) return;    // 영업일 안 바뀌면 대기
-      var modalOpen = ['wk-xout-overlay','wk-exp-overlay','tp-exp-overlay'].some(function(id){
+      var modalOpen = ['wk-xout-overlay','wk-exp-overlay','tp-exp-overlay','sc-mentor-overlay'].some(function(id){
         var e=document.getElementById(id); return e && e.classList.contains('open');
       });
       if(modalOpen) return;                              // 모달 편집 중이면 보류
@@ -3414,6 +3551,27 @@
       <div class="wk-xout-btns">
         <button type="button" class="wk-xout-cancel" onclick="scWkExpClose()">닫기</button>
         <button type="button" class="wk-xout-add" id="wk-exp-save" onclick="scWkExpSave()">저장</button>
+      </div>
+    </div>
+  </div>
+  <!-- [MENTOR] 멘토링 기간 설정 -->
+  <div class="wk-xout-overlay" id="sc-mentor-overlay" onclick="if(event.target===this)scMentorClose()">
+    <div class="wk-xout-card">
+      <h3>&#127869;&#65039; 멘토링 기간</h3>
+      <div class="wk-xout-sub">기간 중에는 사유가 <b>점심·저녁</b>인 외출이 식사 시간창과 겹치는 만큼 공부시간으로 인정됩니다</div>
+      <div class="mentor-note">
+        식사 인정 창 — 점심 <b>12:00~13:00</b> · 저녁 <b>17:30~18:30</b><br>
+        예) 17:00 외출 → 18:00 복귀 = 30분만 차감 · 18:00 외출 → 18:45 복귀 = 15분만 차감<br>
+        타학원·병원 등 다른 사유는 기간과 무관하게 전체 차감됩니다
+      </div>
+      <div id="sc-mentor-list" style="margin-bottom:12px"></div>
+      <div class="wk-xout-frow"><label>시작일</label><input type="date" id="sc-mentor-start"></div>
+      <div class="wk-xout-frow"><label>종료일</label><input type="date" id="sc-mentor-end"></div>
+      <div class="wk-xout-frow"><label>메모</label><input type="text" id="sc-mentor-memo" placeholder="예: 여름방학 멘토링 (선택)" maxlength="30"></div>
+      <div class="wk-xout-preview" id="sc-mentor-msg"></div>
+      <div class="wk-xout-btns">
+        <button type="button" class="wk-xout-cancel" onclick="scMentorClose()">닫기</button>
+        <button type="button" class="wk-xout-add" id="sc-mentor-add" onclick="scMentorAdd()">기간 추가</button>
       </div>
     </div>
   </div>
