@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 베티 OMR [v0.6-round]</title>
+<title>BMAPS · 베티 OMR [v0.7-tabs]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -32,6 +32,11 @@
   .btn:disabled { opacity: .5; }
 
   /* ===== 홈: 회차 선택 (드롭다운) ===== */
+  .rd-tabs { display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 12px;
+             margin-bottom: 10px; }
+  .rd-tabs button { flex: 1; border: none; background: transparent; color: #64748b;
+                    font-size: 14px; font-weight: 800; padding: 10px; border-radius: 9px; }
+  .rd-tabs button.on { background: #fff; color: #0369a1; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
   .rd-sel { width: 100%; padding: 13px 12px; font-size: 16px; font-weight: 800; color: #0f172a;
             border: 2px solid #cbd5e1; border-radius: 12px; background: #fff; outline: none; }
   .rd-sel:focus { border-color: #0369a1; }
@@ -140,7 +145,7 @@
 
 <div class="bo-top">
   <span class="bo-title">📝 베티 OMR</span>
-  <span class="bo-ver">v0.6-round</span>
+  <span class="bo-ver">v0.7-tabs</span>
   <span class="bo-who" id="bo-who"></span>
   <button class="bo-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -151,7 +156,10 @@
   <div id="view-home">
     <div class="card">
       <div style="font-size:15px;font-weight:800;margin-bottom:8px">응시 회차</div>
-      <div class="hint" style="margin-bottom:10px">회차를 고르면 아래에 시험지가 표시됩니다. 제출한 회차는 결과를 다시 볼 수 있습니다.</div>
+      <div class="rd-tabs" id="rd-tabs" style="display:none">
+        <button id="rd-tab-todo" class="on" onclick="boRoundTab('todo')">미응시</button>
+        <button id="rd-tab-done" onclick="boRoundTab('done')">응시완료</button>
+      </div>
       <select class="rd-sel" id="rd-sel" onchange="boRoundDetail()" style="display:none"></select>
       <div id="rd-detail"><div class="empty">불러오는 중...</div></div>
     </div>
@@ -261,7 +269,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v0.6-round';
+window.BETY_OMR_VERSION = 'v0.7-tabs';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -319,13 +327,48 @@ function boCandidates(rd){
 }
 function boExamLabel(e){ return e.level + (e.elective ? (' · ' + e.elective) : ''); }
 
-// 회차 라벨: "8회차 · 2026-07-19" (+ 제출완료 점수)
+// 회차 라벨: "8회차 · 2026-07-19" (응시완료 탭에서는 점수 표시)
 function boRoundLabel(rd){
   var no = (_bo.roundNo || {})[rd.session_date];
   var base = (no != null ? (no + '회차 · ') : '') + rd.session_date;
   var c = boCandidates(rd);
-  if(c.mode === 'done') base += '  —  제출완료 ' + c.exam.score + '점';
+  if(c.mode === 'done') base += ' — ' + c.exam.score + '점';
   return base;
+}
+
+/* ── 미응시/응시완료 탭 ─────────────────────────────────── */
+function boRoundTab(t){
+  _bo.roundTab = t;
+  boRenderRoundSel();
+}
+function boRenderRoundSel(){
+  var sel = document.getElementById('rd-sel');
+  var det = document.getElementById('rd-detail');
+  ['todo','done'].forEach(function(k){
+    var b = document.getElementById('rd-tab-' + k);
+    if(b) b.classList.toggle('on', k === _bo.roundTab);
+  });
+  var nTodo = 0;
+  var idxs = [];
+  _bo.rounds.forEach(function(rd, i){
+    var done = boCandidates(rd).mode === 'done';
+    if(!done) nTodo++;
+    if((_bo.roundTab === 'done') === done) idxs.push(i);
+  });
+  document.getElementById('rd-tab-todo').textContent = '미응시 (' + nTodo + ')';
+  document.getElementById('rd-tab-done').textContent = '응시완료 (' + (_bo.rounds.length - nTodo) + ')';
+  if(!idxs.length){
+    sel.style.display = 'none';
+    det.innerHTML = '<div class="empty">' + (_bo.roundTab === 'todo'
+      ? '미응시 회차가 없습니다 🎉' : '아직 응시 완료한 회차가 없습니다') + '</div>';
+    return;
+  }
+  sel.innerHTML = idxs.map(function(i){
+    return '<option value="'+i+'">' + boEsc(boRoundLabel(_bo.rounds[i])) + '</option>';
+  }).join('');
+  sel.style.display = '';
+  sel.value = String(idxs[0]);
+  boRoundDetail();
 }
 
 async function boLoadRounds(){
@@ -333,6 +376,7 @@ async function boLoadRounds(){
   var sel = document.getElementById('rd-sel');
   det.innerHTML = '<div class="empty">불러오는 중...</div>';
   sel.style.display = 'none';
+  document.getElementById('rd-tabs').style.display = 'none';
   try {
     var r = await db.rpc('bety_omr_list_for_student', { p_student_id: _bo.user.id });
     if(r.error) throw r.error;
@@ -358,12 +402,11 @@ async function boLoadRounds(){
         });
       } catch(e){ /* 회차번호 없으면 날짜만 표시 */ }
     }
-    sel.innerHTML = _bo.rounds.map(function(rd, i){
-      return '<option value="'+i+'">' + boEsc(boRoundLabel(rd)) + '</option>';
-    }).join('');
-    sel.style.display = '';
-    sel.value = '0';   // 최신 회차 기본 선택
-    boRoundDetail();
+    // 미응시가 있으면 미응시 탭, 전부 응시했으면 응시완료 탭이 기본
+    var hasTodo = _bo.rounds.some(function(rd){ return boCandidates(rd).mode !== 'done'; });
+    _bo.roundTab = hasTodo ? 'todo' : 'done';
+    document.getElementById('rd-tabs').style.display = 'flex';
+    boRenderRoundSel();
   } catch(e){
     det.innerHTML = '<div class="empty" style="color:#dc2626">불러오기 실패: ' + boEsc(e.message||e) + '</div>';
   }
