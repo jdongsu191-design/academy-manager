@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.46-mentor]</title>
+<title>BMAPS · 독서실 출결 [v0.47-rpt]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -326,6 +326,23 @@
   .rpt-card .rpt-total .rlabel{ font-size:15px; font-weight:600; opacity:0.92; }
   .rpt-card .rpt-total .rval{ font-size:27px; font-weight:800; letter-spacing:-0.01em; }
   .rpt-card .rpt-note{ margin-top:18px; font-size:11px; color:#aab4c2; line-height:1.7; }
+  /* 랭킹 카드 (전주 순공부 기준) */
+  .rpt-card .rpt-rank{ margin-top:18px; padding:15px 18px; background:#fbf7ec; border:1px solid #f0e2c0; border-radius:14px; }
+  .rpt-card .rpt-rank .rr-t{ font-size:13px; font-weight:800; color:#a07b26; margin-bottom:9px; }
+  .rpt-card .rr-row{ display:flex; align-items:baseline; gap:8px; font-size:14px; color:#54616f; font-weight:600; margin-bottom:4px; }
+  .rpt-card .rr-row b{ font-size:19px; color:#1a202c; font-weight:800; }
+  .rpt-card .rr-k{ display:inline-block; min-width:52px; font-size:12px; font-weight:800; color:#8a6b1f; background:#f6ecd2; border-radius:6px; padding:3px 8px; text-align:center; }
+  .rpt-card .rr-top5{ margin-top:10px; padding-top:10px; border-top:1px dashed #ead9ae; }
+  .rpt-card .rr-top5 .r5-t{ font-size:12px; font-weight:800; color:#a07b26; margin-bottom:6px; }
+  .rpt-card .r5-row{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:#54616f; font-weight:600; padding:2px 0; }
+  .rpt-card .r5-row .r5-rk{ width:18px; height:18px; line-height:18px; border-radius:50%; background:#e9dcb6; color:#7c5f16; font-size:11px; font-weight:800; text-align:center; flex-shrink:0; }
+  .rpt-card .r5-row.me{ color:#1f7a44; font-weight:800; }
+  .rpt-card .r5-row.me .r5-rk{ background:#cdf2d8; color:#1f7a44; }
+  .rpt-card .r5-row .r5-min{ margin-left:auto; font-variant-numeric:tabular-nums; font-weight:700; color:#2d3748; }
+  /* 총 외출시간 */
+  .rpt-card .rpt-out{ display:flex; align-items:center; justify-content:space-between; margin-top:10px; padding:13px 22px; background:#fdf6ee; border:1px solid #f5e3ce; border-radius:12px; }
+  .rpt-card .rpt-out .rlabel{ font-size:13.5px; color:#54616f; font-weight:600; }
+  .rpt-card .rpt-out .rval{ font-size:17px; font-weight:800; color:#b45309; }
   .wk-tbl .wk-rpt-btn{ font-size:10px; padding:2px 7px; border:1px solid #5ec4bc; background:#effbfa; color:#1f8a82; border-radius:4px; cursor:pointer; font-weight:700; white-space:nowrap; }
   .wk-tbl .wk-rpt-btn:hover{ background:#1f8a82; color:#fff; }
   .wk-tbl .wk-rpt-btn:disabled{ opacity:0.5; cursor:default; }
@@ -492,7 +509,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.46-mentor</span>
+    <span class="tb-ver" id="sc-ver">v0.47-rpt</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -759,7 +776,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.46-mentor';
+  window.STUDYCENTER_VERSION = 'v0.47-rpt';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1656,17 +1673,25 @@
   function scWkEsc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
   /* ── 주간 학습 리포트 (이미지 생성·복사) ───────────────── */
-  function scRptBuildCard(student, rowsByDate, reqMin, weekDates){
+  function scRptBuildCard(student, rowsByDate, reqMin, weekDates, rank){
     var hasReq = (reqMin != null && reqMin > 0);
     var labels = ["월","화","수","목","금","토","일"];
-    var days = [], maxNet = 1, total = 0;
+    var days = [], maxNet = 1, total = 0, outTotal = 0;
     for(var i=0;i<7;i++){
       var row = rowsByDate[weekDates[i]] || null;
       var net = row ? scWkCalcDaily(row) : null;
       var dur = (net != null) ? net : 0;
-      var ci = (row && row.check_in_time) ? scMsgT(row.check_in_time) : "0:00";
-      var co = (row && row.check_out_time) ? scMsgT(row.check_out_time) : "0:00";
-      days.push({label:labels[i], dur:dur, ci:ci, co:co});
+      var hasIO = !!(row && (row.check_in_time || row.check_out_time));
+      var ci = (row && row.check_in_time) ? scMsgT(row.check_in_time) : "-";
+      var co = (row && row.check_out_time) ? scMsgT(row.check_out_time) : "-";
+      // 총 외출 = 체류시간(하원-등원) - 순공부 (인정된 식사·베스티안 외출은 제외됨)
+      if(net != null){
+        var _ciM = scWkT2M(row.check_in_time), _coM = scWkT2M(row.check_out_time);
+        if(row.check_out_is_next_day) _coM += 1440;
+        if(_coM < _ciM) _coM += 1440;
+        outTotal += Math.max(0, (_coM - _ciM) - net);
+      }
+      days.push({label:labels[i], dur:dur, io: hasIO ? (ci+' ~ '+co) : '—'});
       total += dur; if(dur > maxNet) maxNet = dur;
     }
     var dayHtml = days.map(function(d){
@@ -1674,9 +1699,26 @@
       var zero = (d.dur === 0) ? " rzero" : "";
       return '<div class="rpt-day'+zero+'"><span class="rd">'+d.label+'</span>'
         + '<div class="rbarcol"><div class="rbarwrap"><div class="rbar" style="width:'+pct+'%"></div></div>'
-        + '<span class="rio">'+d.ci+' ~ '+d.co+'</span></div>'
+        + '<span class="rio">등원 '+d.io+' 하원</span></div>'
         + '<span class="rt">'+scWkFmtDur(d.dur)+'</span></div>';
     }).join("");
+    // 랭킹 (전주 순공부 기준: 전체·학년 등수 + 학년 TOP5)
+    var rankHtml = "";
+    if(rank){
+      rankHtml = '<div class="rpt-rank"><div class="rr-t">🏆 주간 순공부 랭킹</div>'
+        + '<div class="rr-row"><span class="rr-k">전체</span><b>'+rank.allRank+'등</b> / '+rank.allCnt+'명</div>'
+        + '<div class="rr-row"><span class="rr-k">'+scWkEsc(rank.gLabel)+'</span><b>'+rank.gRank+'등</b> / '+rank.gCnt+'명</div>'
+        + (rank.top5 && rank.top5.length
+          ? '<div class="rr-top5"><div class="r5-t">'+scWkEsc(rank.gLabel)+' TOP 5</div>'
+            + rank.top5.map(function(t, i){
+                return '<div class="r5-row'+(t.isMe?' me':'')+'"><span class="r5-rk">'+(i+1)+'</span>'
+                  + '<span>'+scWkEsc(t.label)+(t.isMe?' ★':'')+'</span>'
+                  + '<span class="r5-min">'+scWkFmtDur(t.min)+'</span></div>';
+              }).join('')
+            + '</div>'
+          : '')
+        + '</div>';
+    }
     var dutyHtml = hasReq
       ? '<div class="rpt-duty"><span class="rlabel">의무 학습시간</span><span class="rval">'+scWkFmtDur(reqMin)+'</span><span class="rpt-badge '+(total>=reqMin?"ok":"no")+'">'+(total>=reqMin?"이행 완료":"미이행")+'</span></div>'
       : "";
@@ -1685,12 +1727,21 @@
       + '<div class="rpt-head"><div class="acad">베스티안 수학학원</div><div class="ttl">주간 학습 리포트</div></div>'
       + '<div class="rpt-body">'
       + '<div class="rpt-top"><span class="rpt-student">'+scWkEsc(student.name)+' 학생</span><span class="rpt-period">'+scMsgMD(weekDates[0])+' ~ '+scMsgMD(weekDates[6])+'</span></div>'
+      + rankHtml
       + dutyHtml
-      + '<div class="rpt-sec">요일별 순공부 시간</div>'
+      + '<div class="rpt-sec">요일별 순공부 시간 · 등하원</div>'
       + dayHtml
       + '<div class="rpt-total"><span class="rlabel">총 공부시간</span><span class="rval">'+scWkFmtDur(total)+'</span></div>'
+      + '<div class="rpt-out"><span class="rlabel">총 외출시간</span><span class="rval">'+scWkFmtDur(outTotal)+'</span></div>'
       + '<div class="rpt-note">'+noteHtml+'</div>'
       + '</div></div>';
+  }
+  // [리포트] 주간 전체 출결 로드 (랭킹 계산용 — 99명×7일이라 1,000행 상한 내)
+  async function scRptLoadWeekAll(dates){
+    var res = await db.from("reading_room_attendance").select("*")
+      .gte("attend_date", dates[0]).lte("attend_date", dates[dates.length-1]);
+    if(res.error) throw res.error;
+    return res.data || [];
   }
   // [리포트] 버튼: 지난주 카드 이미지 생성 → 클립보드 복사 (실패 시 다운로드)
   async function scRptLastWeek(sid, btn){
@@ -1706,11 +1757,44 @@
     if(btn){ btn.disabled = true; btn.textContent = "생성중…"; }
     var holder = null;
     try{
-      var rows = await scMsgLoadRange(sid, dates);
+      // 전체 학생 주간 출결 → 본인 날짜별 행 + 학생별 순공부 합계
+      var all = await scRptLoadWeekAll(dates);
+      var rows = {}, totals = {};
+      all.forEach(function(r){
+        if(r.student_id === sid) rows[r.attend_date] = r;
+        var n = scWkCalcDaily(r);
+        if(n != null) totals[r.student_id] = (totals[r.student_id]||0) + n;
+      });
+      // 랭킹 (분모: 독서실 재원 전체 / TOP5: 해당 학년, 이름은 로비처럼 마스킹)
+      function gnum(st){ var m = String(st.grade||"").match(/\d+/); return m ? m[0] : ""; }
+      function mask(name){
+        name = String(name||"");
+        if(name.length <= 1) return name;
+        var out = name[0];
+        for(var mi=1; mi<name.length; mi++) out += "○";
+        return out;
+      }
+      var myTotal = totals[sid] || 0;
+      var myG = gnum(student);
+      var gStus = _wkStudents.filter(function(s){ return gnum(s) === myG; });
+      function rankOf(list){
+        return 1 + list.filter(function(s){ return (totals[s.id]||0) > myTotal; }).length;
+      }
+      var top5 = gStus.map(function(s){ return { s:s, min: totals[s.id]||0 }; })
+        .filter(function(x){ return x.min > 0; })
+        .sort(function(a,b){ return b.min - a.min; }).slice(0,5)
+        .map(function(x){ return { label: ((x.s.school||"")+" "+mask(x.s.name)).trim(),
+                                   min: x.min, isMe: x.s.id === sid }; });
+      var rank = {
+        allRank: rankOf(_wkStudents), allCnt: _wkStudents.length,
+        gLabel: myG ? (myG+"학년") : "학년 미지정",
+        gRank: rankOf(gStus), gCnt: gStus.length,
+        top5: top5
+      };
       var reqMin = scWkEffectiveReq(sid, lastMon);
       holder = document.createElement("div");
       holder.style.cssText = "position:fixed; left:-9999px; top:0; z-index:-1;";
-      holder.innerHTML = scRptBuildCard(student, rows, reqMin, dates);
+      holder.innerHTML = scRptBuildCard(student, rows, reqMin, dates, rank);
       document.body.appendChild(holder);
       var card = holder.querySelector(".rpt-card");
       var canvas = await html2canvas(card, { scale:2, backgroundColor:"#ffffff", logging:false, useCORS:true });
