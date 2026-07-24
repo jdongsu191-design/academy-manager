@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>베스티안 스터디센터 · 실시간 학습 현황 [lobby v1.5-pgfix]</title>
+<title>베스티안 스터디센터 · 실시간 학습 현황 [lobby v1.6-homemeal]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <style>
@@ -126,14 +126,25 @@
   function t2m(t){ if(!t) return null; var p=String(t).split(':'); if(p.length<2) return null; return parseInt(p[0],10)*60+parseInt(p[1],10); }
   /* [멘토링 기간] studycenter와 동일 규칙:
      · 베스티안 사유 외출 = 전액 공부시간 인정
-     · 멘토링 기간 중 점심·저녁 사유 외출 = 식사 창(12:00~13:00, 17:30~18:30) 겹침만큼 인정 */
+     · 멘토링 기간 중 점심·저녁 사유 외출 = 식사 창 겹침만큼 인정
+       점심 12:00~13:00 / 점심(집) 12:00~13:30 · 저녁 17:30~18:30 / 저녁(집) 17:30~19:00 */
   var MENTOR_PERIODS=[];                              // [{start_date,end_date}]
-  var MEAL_WIN_M=[[720,780],[1050,1110]];             // 분 단위 창
-  var MEAL_WIN_S=[[43200,46800],[63000,66600]];       // 초 단위 창
   function mentorOn(date){ for(var i=0;i<MENTOR_PERIODS.length;i++){ var p=MENTOR_PERIODS[i]; if(p.start_date<=date&&date<=p.end_date) return true; } return false; }
   function isMealOut(r){ r=String(r||''); return r.indexOf('점심')===0||r.indexOf('저녁')===0; }
   function isStudyOut(r){ return !!r && String(r).indexOf('베스티안')===0; }
-  function mealOverlap(s,e,wins){ var ov=0; for(var i=0;i<wins.length;i++){ var w=wins[i]; ov+=Math.max(0,Math.min(e,w[1])-Math.max(s,w[0])); } return ov; }
+  // unit: 60=분 단위, 3600=초 단위. 점심·저녁 두 창 모두 인정 (집 90분 / 외부 60분)
+  function mealWindows(reason, unit){
+    if(!isMealOut(reason)) return null;
+    var len = (String(reason||'').indexOf('(집)')!==-1 ? 1.5 : 1) * unit;
+    return [[12*unit, 12*unit+len], [17.5*unit, 17.5*unit+len]];
+  }
+  function mealOverlap(s,e,reason,unit){
+    var ws=mealWindows(reason,unit);
+    if(!ws) return 0;
+    var ov=0;
+    for(var i=0;i<ws.length;i++){ ov+=Math.max(0,Math.min(e,ws[i][1])-Math.max(s,ws[i][0])); }
+    return ov;
+  }
   function calcDaily(row){
     if(!row||!row.check_in_time||!row.check_out_time) return null;
     var ci=t2m(row.check_in_time), co=t2m(row.check_out_time);
@@ -145,7 +156,7 @@
       var s=t2m(sT), e=t2m(eT);
       if(endNext) e+=1440; if(e<s) e+=1440;
       var d=e-s;
-      if(mentor&&isMealOut(reason)) d-=mealOverlap(s,e,MEAL_WIN_M);
+      if(mentor&&isMealOut(reason)) d-=mealOverlap(s,e,reason,60);
       return Math.max(0,d);
     }
     total-=ded(row.out_1_start,row.out_1_end,row.out_1_end_is_next_day,row.out_1_reason);
@@ -176,7 +187,7 @@
       var a=t2s(sT), b=t2s(eT);
       if(endNext) b+=86400; if(b<a) b+=86400;
       var d=b-a;
-      if(mentor&&isMealOut(reason)) d-=mealOverlap(a,b,MEAL_WIN_S);
+      if(mentor&&isMealOut(reason)) d-=mealOverlap(a,b,reason,3600);
       return Math.max(0,d);
     }
     return ded(row.out_1_start,row.out_1_end,row.out_1_end_is_next_day,row.out_1_reason)

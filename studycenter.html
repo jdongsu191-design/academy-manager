@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.47-rpt]</title>
+<title>BMAPS · 독서실 출결 [v0.48-homemeal]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -509,7 +509,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.47-rpt</span>
+    <span class="tb-ver" id="sc-ver">v0.48-homemeal</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -587,6 +587,14 @@
           <div id="os-subject-wrap" style="display:none">
             <div class="ts-title">과목</div>
             <div class="ts-grid" id="os-subject-grid"></div>
+          </div>
+          <!-- [멘토링] 점심·저녁 선택 시: 집에서 먹으면 1시간 30분, 외부는 1시간 공부시간 인정 -->
+          <div id="os-meal-wrap" style="display:none">
+            <div class="ts-title">어디서 식사하나요?</div>
+            <div class="ts-grid" id="os-meal-grid">
+              <button onclick="scPickMealPlace(this,'home')">🏠 집에서 식사</button>
+              <button onclick="scPickMealPlace(this,'out')">🍽️ 외부에서 식사</button>
+            </div>
           </div>
           <div class="ts-title">예상 복귀까지</div>
           <div class="ts-grid" id="os-dur"></div>
@@ -776,7 +784,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.47-rpt';
+  window.STUDYCENTER_VERSION = 'v0.48-homemeal';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1394,10 +1402,14 @@
   function scIsStudyOut(reason){ return !!reason && String(reason).indexOf("베스티안")===0; }
 
   /* ── [멘토링 기간] 사유가 점심·저녁인 외출은 식사 창과 겹치는 만큼 공부시간 인정 ──
-     식사 인정 창: 점심 12:00~13:00 · 저녁 17:30~18:30 (분 단위)
-     예) 17:00~18:00 외출 → 겹침 30분 → 30분만 차감 / 18:00~18:45 → 겹침 30분 → 15분만 차감 */
+     식사 인정 창 (시작 고정, 집에서 식사는 +30분):
+       점심 12:00~13:00 · 점심(집) 12:00~13:30
+       저녁 17:30~18:30 · 저녁(집) 17:30~19:00
+     예) 저녁 17:00~18:00 → 겹침 30분 → 30분만 차감 / 18:00~18:45 → 15분만 차감
+         점심(집) 11:30~13:30 → 12:00~13:30 인정 → 30분만 차감 */
   var _mentorPeriods = [];   // [{id, start_date, end_date, memo}]
-  var SC_MEAL_WINDOWS = [[720, 780], [1050, 1110]];
+  var SC_MEAL_LUNCH = 720, SC_MEAL_DINNER = 1050;   // 창 시작(분)
+  var SC_MEAL_OUT_MIN = 60, SC_MEAL_HOME_MIN = 90;  // 인정 길이(분)
   function scMentorOn(date){
     if(!date) return false;
     for(var i=0; i<_mentorPeriods.length; i++){
@@ -1410,13 +1422,20 @@
     var r = String(reason||"");
     return r.indexOf("점심")===0 || r.indexOf("저녁")===0;
   }
-  // 외출 [s,e)(분)과 식사 창의 겹침(분)
-  function scMealOverlap(s, e){
+  function scIsHomeMeal(reason){ return String(reason||"").indexOf("(집)") !== -1; }
+  // 점심·저녁 외출은 사유가 어느 쪽이든 점심·저녁 두 창 모두 인정 (학생 버튼 오입력 대비)
+  // 인정 길이: 집에서 식사 90분 / 외부 60분
+  function scMealWindows(reason){
+    if(!scIsMealOut(reason)) return null;
+    var len = scIsHomeMeal(reason) ? SC_MEAL_HOME_MIN : SC_MEAL_OUT_MIN;
+    return [[SC_MEAL_LUNCH, SC_MEAL_LUNCH + len], [SC_MEAL_DINNER, SC_MEAL_DINNER + len]];
+  }
+  // 외출 [s,e)(분)과 식사 창의 겹치는 시간(분)
+  function scMealOverlap(s, e, reason){
+    var ws = scMealWindows(reason);
+    if(!ws) return 0;
     var ov = 0;
-    for(var i=0; i<SC_MEAL_WINDOWS.length; i++){
-      var w = SC_MEAL_WINDOWS[i];
-      ov += Math.max(0, Math.min(e, w[1]) - Math.max(s, w[0]));
-    }
+    for(var i=0; i<ws.length; i++){ ov += Math.max(0, Math.min(e, ws[i][1]) - Math.max(s, ws[i][0])); }
     return ov;
   }
   async function scMentorLoad(){
@@ -1440,7 +1459,7 @@
       var s = scWkT2M(sT), e = scWkT2M(eT);
       if(endNext) e += 1440; if(e < s) e += 1440;
       var d = e - s;
-      if(mentor && scIsMealOut(reason)) d -= scMealOverlap(s, e);
+      if(mentor && scIsMealOut(reason)) d -= scMealOverlap(s, e, reason);
       return Math.max(0, d);
     }
     total -= ded(row.out_1_start, row.out_1_end, row.out_1_end_is_next_day, row.out_1_reason);
@@ -2075,6 +2094,13 @@
 
   /* ── 카톡 멘트 복사 (등원·외출·복귀) ── */
   function scKkHm(t){ if(!t) return ""; var p=String(t).split(":"); return parseInt(p[0],10)+"시 "+String(p[1]).padStart(2,"0")+"분"; }
+  // 사유 표기: 점심(집)→"점심 (집에서 식사)", 점심(외부)→"점심 (외부에서 식사)"
+  function scReasonLabel(r){
+    r = String(r||"");
+    if(r.indexOf("(집)") !== -1) return r.replace("(집)", " (집에서 식사)");
+    if(r.indexOf("(외부)") !== -1) return r.replace("(외부)", " (외부에서 식사)");
+    return r;
+  }
   function scWkCellVal(sid, field){ var el=document.querySelector('.wk-t[data-sid="'+sid+'"][data-field="'+field+'"]'); return el?el.value.trim():""; }
   function scWkMsgRow(sid){ return (_wkData[sid]||{})[_wkWeekDates[_wkSelectedDay]]||null; }
   function scWkMsgName(sid){ for(var i=0;i<_wkStudents.length;i++){ if(_wkStudents[i].id===sid) return _wkStudents[i].name; } return ""; }
@@ -2115,7 +2141,7 @@
     if(!expEnd && row && row.pending_out_start) expEnd=row.pending_out_expected_end;
     var reason=row?row["out_"+slot+"_reason"]:null;
     if(!reason && row && row.pending_out_start) reason=row.pending_out_reason;
-    var msg=scWkMsgName(sid)+" 학생 "+scKkHm(os)+" 외출하였습니다."+(expEnd?(" "+scKkHm(expEnd)+" 복귀 예정입니다."):"")+(reason?(" [사유: "+reason+"]"):"");
+    var msg=scWkMsgName(sid)+" 학생 "+scKkHm(os)+" 외출하였습니다."+(expEnd?(" "+scKkHm(expEnd)+" 복귀 예정입니다."):"")+(reason?(" [사유: "+scReasonLabel(reason)+"]"):"");
     scKkCopy(msg, btn);
   }
   function scMsgReturn(sid, slot, btn){
@@ -2257,7 +2283,7 @@
     var subj=document.getElementById("wk-exp-subj"+slot);
     var ret=document.getElementById("wk-exp-ret"+slot);
     var rc=document.getElementById("wk-exp-rcustom"+slot);
-    var PRESETS=["점심","저녁","타학원","병원","집","베스티안"];
+    var PRESETS=["점심","점심(집)","점심(외부)","저녁","저녁(집)","저녁(외부)","타학원","병원","집","베스티안"];
     var rsn="", sj="", custom="";
     if(reason){
       var m=String(reason).match(/^타학원\((.*)\)$/);
@@ -2724,7 +2750,7 @@
   var SC_OUT_REASONS = ["점심","저녁","타학원","병원","집","베스티안","기타"];
   var SC_OUT_SUBJECTS = ["국어","영어","수학","과학","기타"];
   var SC_OUT_DURS = [{l:"30분",m:30},{l:"1시간",m:60},{l:"1시간 30분",m:90},{l:"2시간",m:120},{l:"2시간 30분",m:150},{l:"3시간",m:180}];
-  var _scOutReason = null, _scOutDurMin = null, _scOutSubject = null;
+  var _scOutReason = null, _scOutDurMin = null, _scOutSubject = null, _scOutMealPlace = null;
   var _scOutCustomEnd = null, _scTimeMode = null;
 
   function scGenTimes(startMin, endMin){
@@ -2761,7 +2787,8 @@
   }
   // [외출] → 사유 + 예상복귀 화면
   function scShowOutScreen(){
-    _scOutReason=null; _scOutDurMin=null; _scOutSubject=null;
+    _scOutReason=null; _scOutDurMin=null; _scOutSubject=null; _scOutMealPlace=null;
+    { var _mw=document.getElementById("os-meal-wrap"); if(_mw) _mw.style.display="none"; }
     document.getElementById("kiosk-action-screen").style.display="none";
     document.getElementById("os-name").textContent=_scKioskStudent?_scKioskStudent.name:"";
     document.getElementById("os-reason").innerHTML=SC_OUT_REASONS.map(function(r){return '<button onclick="scPickReason(this,\''+r+'\')">'+r+'</button>';}).join("");
@@ -2781,6 +2808,21 @@
     if(grid){ Array.prototype.forEach.call(grid.children,function(b){ b.classList.remove("sel"); }); }
     document.getElementById("os-subject-wrap").style.display=(r==="타학원")?"":"none";
     var _orw=document.getElementById("os-reason-custom-wrap"); if(_orw) _orw.style.display=(r==="기타")?"":"none";
+    // [멘토링] 점심·저녁이면 식사 장소 선택 (기간 중에만 — 기간 밖에는 기존 흐름 유지)
+    _scOutMealPlace=null;
+    var mw=document.getElementById("os-meal-wrap");
+    if(mw){
+      var need = (r==="점심" || r==="저녁") && scMentorOn(scRrToday());
+      mw.style.display = need ? "" : "none";
+      var mg=document.getElementById("os-meal-grid");
+      if(mg){ Array.prototype.forEach.call(mg.children,function(b){ b.classList.remove("sel"); }); }
+    }
+  }
+  // 식사 장소: home = 집(90분 인정) / out = 외부(60분 인정)
+  function scPickMealPlace(btn, place){
+    _scOutMealPlace=place;
+    Array.prototype.forEach.call(btn.parentNode.children,function(b){ b.classList.remove("sel"); });
+    btn.classList.add("sel");
   }
   function scPickSubject(btn, s){
     _scOutSubject=s;
@@ -2797,6 +2839,8 @@
     if(_scActBusy) return;   // [순간 잠금] 처리 중이면 무시
     if(!_scOutReason){ alert("외출 사유를 선택해주세요."); return; }
     if(_scOutReason==="타학원" && !_scOutSubject){ alert("과목을 선택해주세요."); return; }
+    var _mealNeed = (_scOutReason==="점심" || _scOutReason==="저녁") && scMentorOn(scRrToday());
+    if(_mealNeed && !_scOutMealPlace){ alert("어디서 식사하는지 선택해주세요."); return; }
     var customReason="";
     if(_scOutReason==="기타"){
       customReason=(document.getElementById("os-reason-custom").value||"").trim();
@@ -2807,6 +2851,8 @@
     try{
       var now=scNowTime();
       var reason=(_scOutReason==="타학원") ? ("타학원("+_scOutSubject+")") : (_scOutReason==="기타" ? customReason : _scOutReason);
+      // 식사 장소 기록: 집 → "점심(집)"(90분 인정) / 외부 → "점심(외부)"(60분). 카톡 멘트에도 반영됨
+      if(_mealNeed) reason = _scOutReason + (_scOutMealPlace==="home" ? "(집)" : "(외부)");
       var expEnd=_scOutCustomEnd ? _scOutCustomEnd : scAddMinToTime(now,_scOutDurMin);
       _scActionRow = await scRrUpsert({ pending_out_start: now, pending_out_is_next_day:false, pending_out_reason:reason, pending_out_expected_end:expEnd });
       scShowActionBack();
@@ -3580,6 +3626,7 @@
   window.addEventListener('DOMContentLoaded', function(){
     // 기본은 키오스크 모드 (학생 무인용)
     scShowKiosk();
+    scMentorLoad();       // 멘토링 기간 (키오스크 식사 장소 선택 노출 판정용)
     scAutoReloadInit();   // 새벽 3시 자동 새로고침 타이머
     scReloadRestore();    // 자동 새로고침 후 화면 복원
     scReloadListen();     // 업데이트 버튼용 원격 리로드 수신
@@ -3618,7 +3665,7 @@
       <div class="wk-exp-out-block">
         <span class="wk-exp-out-lbl">외출1</span>
         <span class="wk-exp-start" id="wk-exp-start1"></span>
-        <select class="wk-exp-sel" id="wk-exp-r1" onchange="scWkExpReasonChange(1)"><option value="">— 사유 —</option><option>점심</option><option>저녁</option><option>타학원</option><option>병원</option><option>집</option><option>베스티안</option><option>직접입력</option></select>
+        <select class="wk-exp-sel" id="wk-exp-r1" onchange="scWkExpReasonChange(1)"><option value="">— 사유 —</option><option>점심</option><option>점심(집)</option><option>점심(외부)</option><option>저녁</option><option>저녁(집)</option><option>저녁(외부)</option><option>타학원</option><option>병원</option><option>집</option><option>베스티안</option><option>직접입력</option></select>
         <select class="wk-exp-subj" id="wk-exp-subj1" style="display:none"><option value="">과목</option><option>국어</option><option>영어</option><option>수학</option><option>과학</option><option>기타</option></select>
         <input type="text" class="wk-exp-rcustom" id="wk-exp-rcustom1" placeholder="사유 입력" maxlength="20" style="display:none">
         <input type="text" class="wk-exp-ret" id="wk-exp-ret1" placeholder="예상복귀 HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)">
@@ -3626,7 +3673,7 @@
       <div class="wk-exp-out-block">
         <span class="wk-exp-out-lbl">외출2</span>
         <span class="wk-exp-start" id="wk-exp-start2"></span>
-        <select class="wk-exp-sel" id="wk-exp-r2" onchange="scWkExpReasonChange(2)"><option value="">— 사유 —</option><option>점심</option><option>저녁</option><option>타학원</option><option>병원</option><option>집</option><option>베스티안</option><option>직접입력</option></select>
+        <select class="wk-exp-sel" id="wk-exp-r2" onchange="scWkExpReasonChange(2)"><option value="">— 사유 —</option><option>점심</option><option>점심(집)</option><option>점심(외부)</option><option>저녁</option><option>저녁(집)</option><option>저녁(외부)</option><option>타학원</option><option>병원</option><option>집</option><option>베스티안</option><option>직접입력</option></select>
         <select class="wk-exp-subj" id="wk-exp-subj2" style="display:none"><option value="">과목</option><option>국어</option><option>영어</option><option>수학</option><option>과학</option><option>기타</option></select>
         <input type="text" class="wk-exp-rcustom" id="wk-exp-rcustom2" placeholder="사유 입력" maxlength="20" style="display:none">
         <input type="text" class="wk-exp-ret" id="wk-exp-ret2" placeholder="예상복귀 HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)">
@@ -3644,9 +3691,10 @@
       <h3>&#127869;&#65039; 멘토링 기간</h3>
       <div class="wk-xout-sub">기간 중에는 사유가 <b>점심·저녁</b>인 외출이 식사 시간창과 겹치는 만큼 공부시간으로 인정됩니다</div>
       <div class="mentor-note">
-        식사 인정 창 — 점심 <b>12:00~13:00</b> · 저녁 <b>17:30~18:30</b><br>
-        예) 17:00 외출 → 18:00 복귀 = 30분만 차감 · 18:00 외출 → 18:45 복귀 = 15분만 차감<br>
-        타학원·병원 등 다른 사유는 기간과 무관하게 전체 차감됩니다
+        점심 <b>12:00</b>~ · 저녁 <b>17:30</b>~ 기준으로 외부 식사 <b>1시간</b>, 집 식사 <b>1시간 30분</b>까지 공부시간 인정<br>
+        예) 집에서 점심, 11:30 외출 → 13:30 복귀 = <b>30분만 차감</b> (11:30~12:00만 외출)<br>
+        기간 중에는 키오스크에서 점심·저녁을 누르면 <b>집/외부</b>를 고르게 됩니다 ·
+        타학원·병원 등 다른 사유는 전체 차감됩니다
       </div>
       <div id="sc-mentor-list" style="margin-bottom:12px"></div>
       <div class="wk-xout-frow"><label>시작일</label><input type="date" id="sc-mentor-start"></div>
