@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.58-cmporient]</title>
+<title>BMAPS · 독서실 출결 [v0.59-cmpdaily]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -494,6 +494,30 @@
                    padding:8px 15px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
   .cmp-bar button.pr{ background:#0369a1; border-color:#0369a1; color:#fff; }
   .cmp-bar button.on{ background:#1e3a5f; border-color:#1e3a5f; color:#fff; }
+  /* 요일별 서브 바 */
+  .cmp-daybar{ max-width:1100px; margin:0 auto 12px; display:flex; gap:8px; align-items:center; }
+  .cmp-daytabs{ display:flex; gap:5px; flex-wrap:wrap; }
+  .cmp-daytabs button{ border:1.5px solid #cbd5e1; background:#fff; color:#334155; border-radius:8px;
+                       padding:5px 12px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit;
+                       display:flex; flex-direction:column; align-items:center; line-height:1.15; }
+  .cmp-daytabs button span{ font-size:10px; font-weight:600; color:#94a3b8; }
+  .cmp-daytabs button.on{ background:#0369a1; border-color:#0369a1; color:#fff; }
+  .cmp-daytabs button.on span{ color:#cfe3f2; }
+  .cmp-daybar > button{ border:1.5px solid #cbd5e1; background:#fff; color:#334155; border-radius:8px;
+                        padding:8px 15px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
+  /* 요일별(하루치) 표 — 주간출결 입력표 컬럼 */
+  table.cmpd .d-no{ width:3%; }
+  table.cmpd .d-nm{ width:12%; }
+  table.cmpd .d-rq{ width:5.5%; }
+  table.cmpd .d-t{ width:6%; }
+  table.cmpd .d-ex{ width:5%; }
+  table.cmpd .d-n{ width:6.5%; }
+  table.cmpd .d-mm{ width:25.5%; }
+  table.cmp td.c-memo{ text-align:left; padding-left:8px; }
+  table.cmp .c-memo-v{ font-size:11px; color:#475569; }
+  table.cmp tr.absent td{ background:#fffbeb; }
+  table.cmp tr.absent td.c-sum{ background:#fef6da; }
+  .cmp-page + .cmp-page{ margin-top:24px; }
   .cmp-sheet{ max-width:1100px; margin:0 auto; background:#fff; padding:22px 26px; border-radius:8px; }
   .cmp-head{ display:flex; align-items:flex-end; justify-content:space-between; border-bottom:2.5px solid #1e3a5f;
              padding-bottom:12px; margin-bottom:14px; }
@@ -542,6 +566,9 @@
     .cmp-sheet.ori-p table.cmp td{ padding:2px 1px; }
     thead{ display:table-header-group; }             /* 페이지마다 헤더 반복 */
     table.cmp tr{ page-break-inside:avoid; }
+    .cmp-page{ break-before:page; }                  /* 전체 요일 인쇄: 요일마다 새 페이지 */
+    .cmp-page:first-child{ break-before:avoid; }
+    .cmp-page + .cmp-page{ margin-top:0; }
     table.cmp th{ background:#eef2f7 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     tr.miss td{ background:#fff5f5 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
@@ -581,7 +608,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.58-cmporient</span>
+    <span class="tb-ver" id="sc-ver">v0.59-cmpdaily</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -857,7 +884,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.58-cmporient';
+  window.STUDYCENTER_VERSION = 'v0.59-cmpdaily';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1548,8 +1575,110 @@
     var h = Math.floor(min/60), m = min%60;
     return h + ":" + String(m).padStart(2,"0");
   }
+  var _cmpMode = "week", _cmpDay = 0, _cmpCountText = "";
+  function scCmpT(t){ return t ? String(t).slice(0,5) : "-"; }   // 시각 HH:MM
   function scWkComplianceOpen(){
     if(!_wkWeekDates || !_wkWeekDates.length){ alert("먼저 주차를 불러와주세요."); return; }
+    _cmpMode = "week";
+    _cmpDay = (typeof _wkSelectedDay === "number") ? _wkSelectedDay : 0;
+    var sheetEl = document.getElementById("cmp-sheet");
+    if(!sheetEl.classList.contains("ori-p") && !sheetEl.classList.contains("ori-l")) sheetEl.classList.add("ori-p");
+    document.getElementById("cmp-mode-week").classList.add("on");
+    document.getElementById("cmp-mode-day").classList.remove("on");
+    document.getElementById("cmp-daybar").style.display = "none";
+    scWkCmpRender();
+    document.getElementById("sc-compliance-overlay").classList.add("open");
+  }
+  function scWkCmpMode(m){
+    _cmpMode = m;
+    document.getElementById("cmp-mode-week").classList.toggle("on", m === "week");
+    document.getElementById("cmp-mode-day").classList.toggle("on", m === "day");
+    document.getElementById("cmp-daybar").style.display = (m === "day") ? "flex" : "none";
+    if(m === "day") scWkCmpRenderDayTabs();
+    scWkCmpRender();
+  }
+  function scWkCmpDay(i){ _cmpDay = i; scWkCmpRenderDayTabs(); scWkCmpRender(); }
+  function scWkCmpRenderDayTabs(){
+    var box = document.getElementById("cmp-daytabs"); if(!box) return;
+    var nm = ["월","화","수","목","금","토","일"];
+    box.innerHTML = nm.map(function(d,i){
+      var md = _wkWeekDates[i].split("-");
+      return '<button class="'+(i===_cmpDay?"on":"")+'" onclick="scWkCmpDay('+i+')">'+d+'<span>'+md[1]+'/'+md[2]+'</span></button>';
+    }).join("");
+  }
+  function scWkCmpRender(){
+    var el = document.getElementById("cmp-sheet");
+    el.innerHTML = (_cmpMode === "day") ? scWkCmpBuildDay(_cmpDay) : scWkCmpBuildWeek();
+    var cc = document.getElementById("cmp-count"); if(cc) cc.textContent = _cmpCountText;
+  }
+  // 전체 요일(월~일) 한 번에 인쇄 — 요일마다 새 페이지
+  function scWkCmpPrintAll(){
+    var el = document.getElementById("cmp-sheet");
+    var parts = [];
+    for(var i=0;i<7;i++) parts.push('<section class="cmp-page">'+scWkCmpBuildDay(i)+'</section>');
+    el.innerHTML = parts.join("");
+    function restore(){ window.removeEventListener("afterprint", restore); scWkCmpRender(); }
+    window.addEventListener("afterprint", restore);
+    window.print();
+  }
+  // 하루치 시트 (주간출결 입력표 컬럼 미러)
+  function scWkCmpBuildDay(dayIdx){
+    var date = _wkWeekDates[dayIdx];
+    var dayNames = ["월","화","수","목","금","토","일"];
+    var rows = _wkStudents.map(function(st){
+      var row = (_wkData[st.id]||{})[date] || null;
+      var reqMin = scWkEffectiveReq(st.id, _wkWeekDates[0]);
+      var net = row ? scWkCalcDaily(row) : null;
+      var cum = 0;
+      for(var di=0; di<=dayIdx; di++){
+        var dr = (_wkData[st.id]||{})[_wkWeekDates[di]] || null;
+        var dn = dr ? scWkCalcDaily(dr) : null; if(dn != null) cum += dn;
+      }
+      var remain = (reqMin != null) ? (reqMin - cum) : null;
+      var status = (row && row.check_in_time && !row.check_out_time) ? 0     // 미하원/재실
+                 : ((!row || !row.check_in_time) ? 1 : 2);                   // 1=미등원, 2=완료
+      return { st:st, row:row, reqMin:reqMin, net:net, remain:remain, status:status };
+    });
+    rows.sort(function(a,b){ var d=a.status-b.status; if(d) return d; return String(a.st.name||"").localeCompare(String(b.st.name||""),"ko"); });
+    var noOut = rows.filter(function(r){ return r.status===0; }).length;    // 미하원
+    var noIn  = rows.filter(function(r){ return r.status===1; }).length;    // 미등원
+    _cmpCountText = date + " · 미등원 " + noIn + " · 미하원 " + noOut;
+    var body = rows.map(function(r, idx){
+      var st=r.st, row=r.row||{};
+      var sub=((st.school||"")+" "+(st.grade||"")).trim();
+      var cls = r.status===1 ? "absent" : (r.status===0 ? "miss" : "");
+      var remainTd = (r.remain==null) ? '<td>-</td>'
+        : (r.remain<=0 ? '<td class="cmp-ok">충족</td>' : '<td class="cmp-no">'+scCmpHM(r.remain)+'</td>');
+      return '<tr class="'+cls+'">'
+        + '<td>'+(idx+1)+'</td>'
+        + '<td class="c-name">'+(sub?('<span class="c-sub">'+scWkEsc(sub)+'</span> '):'')+scWkEsc(st.name)+'</td>'
+        + '<td class="c-req">'+(r.reqMin!=null?scCmpHM(r.reqMin):'-')+'</td>'
+        + '<td>'+scCmpT(row.check_in_time)+'</td>'
+        + '<td>'+scCmpT(row.out_1_start)+'</td><td>'+scCmpT(row.out_1_end)+'</td>'
+        + '<td>'+scCmpT(row.out_2_start)+'</td><td>'+scCmpT(row.out_2_end)+'</td>'
+        + '<td>'+(row.extra_out_minutes?row.extra_out_minutes:'-')+'</td>'
+        + '<td>'+scCmpT(row.check_out_time)+'</td>'
+        + '<td class="c-sum">'+(r.net!=null?scCmpHM(r.net):'-')+'</td>'
+        + remainTd
+        + '<td class="c-memo">'+(row.remark?('<span class="c-memo-v">'+scWkEsc(row.remark)+'</span>'):'')+'</td>'
+        + '</tr>';
+    }).join("");
+    return '<div class="cmp-head">'
+      + '<div><div class="ch-t">일일 학습 현황 <span style="color:#0369a1">'+dayNames[dayIdx]+'요일</span></div>'
+        + '<div class="ch-sub">'+date+'</div></div>'
+      + '<div class="ch-r">대상 <b>'+rows.length+'</b>명 · 미등원 <b style="color:#b45309">'+noIn+'</b> · 미하원 <b style="color:#dc2626">'+noOut+'</b><br>베스티안 수학학원 스터디센터</div>'
+      + '</div>'
+      + '<table class="cmp cmpd"><thead><tr>'
+      + '<th class="d-no">No.</th><th class="d-nm">이름</th><th class="d-rq">의무<br>시간</th>'
+      + '<th class="d-t">등원</th><th class="d-t">외출1<br>시작</th><th class="d-t">외출1<br>종료</th>'
+      + '<th class="d-t">외출2<br>시작</th><th class="d-t">외출2<br>종료</th>'
+      + '<th class="d-ex">추가<br>외출</th><th class="d-t">하원</th>'
+      + '<th class="d-n">순공부</th><th class="d-n">남은<br>시간</th><th class="d-mm">비고</th>'
+      + '</tr></thead><tbody>' + body + '</tbody></table>'
+      + '<div class="cmp-note">※ 순공부(외출 제외) · 남은시간=주간 누적 기준 · 시각 HH:MM · 추가외출 분<br>'
+      + '※ <b style="color:#b45309">미등원</b>=노란 · <b style="color:#dc2626">미하원</b>=붉은 배경 · 비고란 수기 작성</div>';
+  }
+  function scWkCmpBuildWeek(){
     var dayNames = ["월","화","수","목","금","토","일"];
     // 학생별 요일 순공부·주간합계·의무·이행 계산
     var rows = _wkStudents.map(function(st){
@@ -1614,13 +1743,8 @@
       + '</tr></thead><tbody>' + body + '</tbody></table>'
       + '<div class="cmp-note">※ 순공부시간(외출 제외) 기준 · 형식 <b>시:분</b> · 미달 학생은 붉은 배경으로 표시됩니다.'
       + '<br>※ 확인란은 근무자 서명·체크용, 비고란은 메모용 빈칸입니다.</div>';
-    var sheetEl = document.getElementById("cmp-sheet");
-    sheetEl.innerHTML = sheet;
-    // 인쇄 방향 클래스 유지 (기본 세로)
-    if(!sheetEl.classList.contains("ori-p") && !sheetEl.classList.contains("ori-l")) sheetEl.classList.add("ori-p");
-    var cc = document.getElementById("cmp-count");
-    if(cc) cc.textContent = "대상 "+rows.length+"명 · 미달 "+missCnt+"명";
-    document.getElementById("sc-compliance-overlay").classList.add("open");
+    _cmpCountText = "대상 "+rows.length+"명 · 미달 "+missCnt+"명";
+    return sheet;
   }
   function scWkComplianceClose(){ document.getElementById("sc-compliance-overlay").classList.remove("open"); }
   // 인쇄 방향 전환 (p=세로 / l=가로)
@@ -3872,12 +3996,19 @@
   <div class="cmp-ov" id="sc-compliance-overlay">
     <div class="cmp-bar no-print">
       <button onclick="scWkComplianceClose()">← 닫기</button>
+      <button id="cmp-mode-week" class="on" onclick="scWkCmpMode('week')">주간 요약</button>
+      <button id="cmp-mode-day" onclick="scWkCmpMode('day')">요일별</button>
       <span class="sp"></span>
       <span style="color:#e2e8f0;font-size:12px" id="cmp-count"></span>
-      <span style="color:#cbd5e1;font-size:12px;margin:0 2px 0 8px">인쇄 방향</span>
+      <span style="color:#cbd5e1;font-size:12px;margin:0 2px 0 8px">방향</span>
       <button id="cmp-ori-p" class="on" onclick="scWkCmpOri('p')">세로</button>
       <button id="cmp-ori-l" onclick="scWkCmpOri('l')">가로</button>
       <button class="pr" onclick="window.print()">🖨 인쇄</button>
+    </div>
+    <div class="cmp-daybar no-print" id="cmp-daybar" style="display:none">
+      <div class="cmp-daytabs" id="cmp-daytabs"></div>
+      <span class="sp"></span>
+      <button onclick="scWkCmpPrintAll()">🖨 전체 요일 인쇄</button>
     </div>
     <div class="cmp-sheet" id="cmp-sheet"></div>
   </div>
