@@ -1454,8 +1454,12 @@
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;padding:8px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px">
           <span style="font-size:12px;color:#166534;font-weight:600">📝 현재 시험명:</span>
           <span id="wn-current-testname" style="font-size:13px;font-weight:700;color:#14532d">N제 TEST</span>
+          <button id="wn-gcrit-btn" onclick="wnGradeCritOpen()"
+            style="margin-left:auto;display:none;padding:4px 12px;border:1px solid #16a34a;border-radius:6px;background:#16a34a;color:#fff;font-size:12px;font-weight:700;cursor:pointer">
+            ⚙ 등급기준
+          </button>
           <button id="wn-settings-toggle-btn" onclick="wnToggleTestNameSettings()"
-            style="margin-left:auto;padding:4px 12px;border:1px solid #bbf7d0;border-radius:6px;background:#fff;color:#166534;font-size:12px;font-weight:600;cursor:pointer">
+            style="padding:4px 12px;border:1px solid #bbf7d0;border-radius:6px;background:#fff;color:#166534;font-size:12px;font-weight:600;cursor:pointer">
             편집
           </button>
         </div>
@@ -3747,6 +3751,9 @@ window._wlIndividualData = {};
 var _wnStudents    = [];  // 로드된 학생 목록
 var _wnData        = {};  // { student_id: DB 레코드 }
 var _wnCarry       = {};  // { student_id: 직전 회차(forward-fill용) }
+var _wnGradeCrit    = null; // 등급 자동환산 기준(선생님별)
+var _wnManualResult = {};   // { sid:true } 결과 수동 덮어쓰기 → 자동갱신 중단
+var _wnStuCrit      = {};   // { student_id: 개별 예외 기준(부분 상속) }
 var _wnSnapshot    = {};  // { student_id: { field: "stringValue" } } — 변경감지용
 var _wnLoadedAt    = {};  // { student_id: updated_at }
 var _wnAllTeachers = [];  // 선생님 필터 캐시
@@ -5697,6 +5704,8 @@ async function initWeekendNaje() {
   try {
     await wnLoadTestNameSettingsFromDB();
     await wnRefreshTestNameDisplay();
+    await wnLoadGradeCriteria();
+    var _gcb = document.getElementById('wn-gcrit-btn'); if (_gcb) _gcb.style.display = ((currentUser?.role) === 'teacher') ? '' : 'none';
     if ((currentUser?.role) === 'vice_director') {
       await wnLoadFilters(document.getElementById('wn-branch-select')?.value || '__mine__');
     } else {
@@ -5893,7 +5902,7 @@ async function wnLoadData() {
       .sort((a, b) => (a.name||'').localeCompare(b.name||'', 'ko'));
 
     // weekend_naje 레코드 조회
-    _wnData = {}; _wnCarry = {};
+    _wnData = {}; _wnCarry = {}; _wnManualResult = {};
     if (_wnStudents.length) {
       var records = await fetchRowsByIds(function(chunk) {
         return db.from('weekend_naje').select('*').lte('session_date', date)
@@ -6108,6 +6117,8 @@ function wnRenderTable() {
   html += _wkPagerHtml('wnGoPage', _wnPg, '#166534');
   wrap.innerHTML = html;
   wnInitKeyNav();
+  wnBindAutoGrade();
+  wnInitialAutoFill();
 }
 
 /* ── 키보드 네비게이션 ────────────────────────────────────── */
@@ -6246,6 +6257,331 @@ function wnToggleSent(chk) {
     localStorage.removeItem('wn_sent_'+date+'_'+sid);
     if (row) row.style.background = '';
   }
+}
+
+async function wnLoadGradeCriteria() {
+  _wnGradeCrit = null; _wnStuCrit = {};
+  var tid = currentUser?.id; if (!tid) return;
+  try {
+    var { data } = await db.from('weekend_naje_grade_criteria')
+      .select('mode,pass_value,retry_as_a,total_q').eq('teacher_id', tid).maybeSingle();
+    if (data) _wnGradeCrit = {
+      mode: data.mode || 'wrong',
+      pass_value: Number(data.pass_value) || 0,
+      retry_as_a: data.retry_as_a !== false,
+      total_q: (data.total_q == null ? null : Number(data.total_q))
+    };
+    var { data: stu } = await db.from('weekend_naje_grade_criteria_student')
+      .select('student_id,mode,pass_value,retry_as_a,total_q').eq('teacher_id', tid);
+    (stu || []).forEach(function (r) {
+      _wnStuCrit[r.student_id] = {
+        mode: r.mode || null,
+        pass_value: (r.pass_value == null ? null : Number(r.pass_value)),
+        retry_as_a: (typeof r.retry_as_a === 'boolean' ? r.retry_as_a : null),
+        total_q: (r.total_q == null ? null : Number(r.total_q))
+      };
+    });
+  } catch (e) { console.error('[wnLoadGradeCriteria]', e); }
+}
+
+// 학생 유효 기준 = 개별 예외 ⊕ 선생님 기본 (null 필드는 기본값 상속)
+function wnEffCrit(sid) {
+  var base = _wnGradeCrit, ov = _wnStuCrit[sid];
+  if (!base && !ov) return null;
+  base = base || { mode: null, pass_value: null, retry_as_a: true, total_q: null };
+  ov = ov || {};
+  var eff = {
+    mode: ov.mode || base.mode,
+    pass_value: (ov.pass_value != null ? ov.pass_value : base.pass_value),
+    retry_as_a: (ov.retry_as_a != null ? ov.retry_as_a : base.retry_as_a),
+    total_q: (ov.total_q != null ? ov.total_q : base.total_q)
+  };
+  if (!eff.mode || eff.pass_value == null) return null;
+  return eff;
+}
+
+// 점수 문자열 → 통과 여부(true/false), 빈칸/판정불가 → null
+function wnScorePass(raw, c) {
+  if (!c) return null;
+  var s = String(raw == null ? '' : raw).trim(); if (!s) return null;
+  if (c.mode === 'ratio') {
+    var m = s.match(/(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)/);
+    if (m) {
+      var x = parseFloat(m[1]), y = parseFloat(m[2]);
+      if (y > 0) return (c.total_q && c.total_q > 0) ? ((x / y) >= (c.pass_value / c.total_q) - 1e-9) : (x >= c.pass_value - 1e-9);
+    }
+    var cnt = parseFloat(s.replace(/[^0-9.\-]/g, '')); if (isNaN(cnt)) return null;
+    return cnt >= c.pass_value - 1e-9;
+  }
+  if (c.mode === 'wrong') {
+    var vw = parseFloat(s.replace(/[^0-9.\-]/g, '')); if (isNaN(vw)) return null;
+    return Math.abs(vw) <= Math.abs(c.pass_value) + 1e-9;
+  }
+  var vs = parseFloat(s.replace(/[^0-9.\-]/g, '')); if (isNaN(vs)) return null;
+  return vs >= c.pass_value - 1e-9;
+}
+
+// 출결·숙제·본시·재시 → A~F (기준 미설정 시 A/B는 ''로 보류)
+function wnAutoGrade(att, hw, sf, sr, c) {
+  var hasScore = String(sf == null ? '' : sf).trim() !== '' || String(sr == null ? '' : sr).trim() !== '';
+  var hasHw = String(hw == null ? '' : hw).trim() !== '';
+  if (att === 'absent' && !hasScore && !hasHw) return 'F';
+  if (hasScore) {
+    if (!c) return '';
+    var fp = wnScorePass(sf, c), rp = wnScorePass(sr, c);
+    var pass = (fp === true) || (c.retry_as_a && rp === true);
+    return pass ? 'A' : 'B';
+  }
+  return (hw === 'true') ? 'C' : 'D';
+}
+
+function wnAutoGradeRow(sid, force) {
+  if ((currentUser?.role) !== 'teacher') return;
+  if (!force && _wnManualResult[sid]) return;
+  var g = function (f) { var el = document.querySelector('[data-sid="' + sid + '"][data-field="' + f + '"]'); return el ? el.value : ''; };
+  var auto = wnAutoGrade(g('attendance'), g('homework_done'), g('score_first'), g('score_retry'), wnEffCrit(sid));
+  if (auto === '') return;
+  var resEl = document.querySelector('[data-sid="' + sid + '"][data-field="result"]');
+  if (resEl && resEl.value !== auto) resEl.value = auto;
+}
+
+function wnInitialAutoFill() {
+  if ((currentUser?.role) !== 'teacher') return;
+  document.querySelectorAll('#wn-table-wrap tr[id^="wn-row-"]').forEach(function (tr) {
+    var sid = tr.id.replace('wn-row-', '');
+    var resEl = document.querySelector('[data-sid="' + sid + '"][data-field="result"]');
+    if (resEl && resEl.value === '') wnAutoGradeRow(sid, false);
+  });
+}
+
+function wnRecalcAllAuto() {
+  document.querySelectorAll('#wn-table-wrap tr[id^="wn-row-"]').forEach(function (tr) {
+    wnAutoGradeRow(tr.id.replace('wn-row-', ''), false);
+  });
+}
+
+function wnBindAutoGrade() {
+  if ((currentUser?.role) !== 'teacher') return;
+  var wrap = document.getElementById('wn-table-wrap'); if (!wrap || wrap._agBound) return;
+  wrap._agBound = true;
+  wrap.addEventListener('input', function (e) {
+    var el = e.target; if (!el || !el.getAttribute) return;
+    var f = el.getAttribute('data-field');
+    if (f === 'score_first' || f === 'score_retry') wnAutoGradeRow(el.getAttribute('data-sid'));
+  });
+  wrap.addEventListener('change', function (e) {
+    var el = e.target; if (!el || !el.getAttribute) return;
+    var f = el.getAttribute('data-field'), sid = el.getAttribute('data-sid');
+    if (f === 'attendance' || f === 'homework_done') wnAutoGradeRow(sid);
+    else if (f === 'result') _wnManualResult[sid] = true;
+  });
+}
+
+/* ── 기준값 파싱/표시 헬퍼 ───────────────────────────────── */
+// 입력문자열 → { pass_value, total_q }, 빈칸 → {null,null}, 오류 → null
+function wnParseCritInput(mode, str) {
+  str = String(str == null ? '' : str).trim();
+  if (str === '') return { pass_value: null, total_q: null };
+  if (mode === 'ratio') {
+    var m = str.match(/(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)/);
+    if (m) { var x = parseFloat(m[1]), y = parseFloat(m[2]); if (y > 0) return { pass_value: x, total_q: y }; }
+    var p = parseFloat(str); if (!isNaN(p)) return { pass_value: p, total_q: null };
+    return null;
+  }
+  if (mode === 'wrong') { var w = parseFloat(str); if (isNaN(w)) return null; return { pass_value: Math.abs(w), total_q: null }; }
+  var sv = parseFloat(str); if (isNaN(sv)) return null; return { pass_value: sv, total_q: null };
+}
+
+function wnCritDisplay(mode, pv, tq) {
+  if (pv == null) return '';
+  if (mode === 'ratio' && tq) return pv + '/' + tq;
+  return String(pv);
+}
+
+function wnCritPlaceholder(mode) {
+  return mode === 'ratio' ? '맞은/총 (예: 12/15)' : mode === 'score' ? '점수 (예: 85)' : '허용 오답 (예: 4)';
+}
+
+/* ── 등급 기준 설정 모달 ──────────────────────────────────── */
+function wnGradeCritOpen() {
+  var ex = document.getElementById('wn-gcrit-modal'); if (ex) ex.remove();
+  var c = _wnGradeCrit || { mode: 'wrong', pass_value: null, retry_as_a: true, total_q: null };
+  var inS = 'width:100%;padding:9px 12px;border:1.5px solid #bbf7d0;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box';
+  var lbS = 'font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:5px';
+  var hintS = 'color:#9ca3af;font-weight:400';
+  var modal = document.createElement('div');
+  modal.id = 'wn-gcrit-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto';
+  var radio = function (v, l) {
+    return '<label style="display:flex;align-items:center;gap:7px;padding:8px 11px;border:1.5px solid #bbf7d0;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600;color:#14532d">' +
+      '<input type="radio" name="wn-gc-mode" value="' + v + '"' + (c.mode === v ? ' checked' : '') + ' onchange="wnGradeCritModeChange()" style="accent-color:#16a34a"> ' + l + '</label>';
+  };
+  modal.innerHTML = '<div style="background:#fff;border-radius:16px;padding:24px;max-width:560px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2)">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+      '<div style="font-size:17px;font-weight:800;color:#166534">⚙ 일일N제 등급 기준</div>' +
+      '<button onclick="document.getElementById(\'wn-gcrit-modal\').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#9ca3af">&times;</button>' +
+    '</div>' +
+    '<div style="font-size:12px;color:#6b7280;margin-bottom:14px;line-height:1.6">A/B는 본시·재시 점수로 자동 판정됩니다.<br>C=숙제완료·미응시, D=숙제미완료·미응시, F=결석.</div>' +
+    '<div style="font-size:13px;font-weight:800;color:#166534;margin-bottom:8px">① 기본 기준 (전체 학생)</div>' +
+    '<div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:6px">채점 방식</div>' +
+    '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">' +
+      radio('wrong', '오답형 — 점수칸에 틀린 개수 (예: -4)') +
+      radio('ratio', '비율형 — 맞은/총 (예: 23/25)') +
+      radio('score', '점수형 — 단일 점수 (예: 85)') +
+    '</div>' +
+    '<div style="margin-bottom:14px">' +
+      '<div id="wn-gc-in-wrong" style="display:none">' +
+        '<label style="' + lbS + '">허용 오답 개수 <span style="' + hintS + '">(예: 4 · 부호 무관)</span></label>' +
+        '<input type="text" id="wn-gc-wrong" value="' + (c.mode === 'wrong' ? wnCritDisplay('wrong', c.pass_value, null) : '') + '" placeholder="예: 4" style="' + inS + '"></div>' +
+      '<div id="wn-gc-in-ratio" style="display:none">' +
+        '<label style="' + lbS + '">통과 기준 <span style="' + hintS + '">(맞은/총, 예: 12/15)</span></label>' +
+        '<input type="text" id="wn-gc-ratio" value="' + (c.mode === 'ratio' ? wnCritDisplay('ratio', c.pass_value, c.total_q) : '') + '" placeholder="예: 12/15" style="' + inS + '"></div>' +
+      '<div id="wn-gc-in-score" style="display:none">' +
+        '<label style="' + lbS + '">기준 점수 <span style="' + hintS + '">(이상 통과, 예: 85)</span></label>' +
+        '<input type="text" id="wn-gc-score" value="' + (c.mode === 'score' ? wnCritDisplay('score', c.pass_value, null) : '') + '" placeholder="예: 85" style="' + inS + '"></div>' +
+    '</div>' +
+    '<label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:13px;font-weight:600;color:#14532d;cursor:pointer">' +
+      '<input type="checkbox" id="wn-gc-retry"' + (c.retry_as_a ? ' checked' : '') + ' style="width:17px;height:17px;accent-color:#16a34a"> 재시(재시험) 통과 시 A로 인정' +
+    '</label>' +
+    '<button onclick="wnGradeCritSave()" style="width:100%;padding:11px;background:#166534;color:#fff;border:none;border-radius:9px;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:20px">기본 기준 저장</button>' +
+    '<div style="font-size:13px;font-weight:800;color:#166534;margin-bottom:4px">② 학생별 예외 (선택)</div>' +
+    '<div style="font-size:11px;color:#6b7280;margin-bottom:8px">빈칸은 기본값을 따릅니다. 다른 학생만 지정하세요.</div>' +
+    '<input type="text" id="wn-gc-search" oninput="wnGCRenderStu(this.value)" placeholder="🔍 학생 이름 검색" style="width:100%;padding:9px 12px;border:1.5px solid #bbf7d0;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box;margin-bottom:8px">' +
+    '<div id="wn-gc-stulist" style="max-height:260px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:8px"></div>' +
+  '</div>';
+  modal.addEventListener('click', function (e) { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+  wnGradeCritModeChange();
+  wnGCRenderStu('');
+}
+
+function wnGradeCritModeChange() {
+  var m = (document.querySelector('input[name="wn-gc-mode"]:checked') || {}).value || 'wrong';
+  ['wrong', 'ratio', 'score'].forEach(function (k) {
+    var el = document.getElementById('wn-gc-in-' + k); if (el) el.style.display = (k === m) ? '' : 'none';
+  });
+}
+
+async function wnGradeCritSave() {
+  var m = (document.querySelector('input[name="wn-gc-mode"]:checked') || {}).value || 'wrong';
+  var raw = m === 'ratio' ? document.getElementById('wn-gc-ratio')?.value
+    : m === 'score' ? document.getElementById('wn-gc-score')?.value
+    : document.getElementById('wn-gc-wrong')?.value;
+  var parsed = wnParseCritInput(m, raw);
+  if (!parsed || parsed.pass_value == null) { alert('통과 기준을 입력하세요' + (m === 'ratio' ? ' (예: 12/15)' : '')); return; }
+  var retry = !!document.getElementById('wn-gc-retry')?.checked;
+  try {
+    var { error } = await db.from('weekend_naje_grade_criteria')
+      .upsert({ teacher_id: currentUser.id, mode: m, pass_value: parsed.pass_value, retry_as_a: retry, total_q: parsed.total_q, updated_at: new Date().toISOString() }, { onConflict: 'teacher_id' });
+    if (error) throw error;
+    _wnGradeCrit = { mode: m, pass_value: parsed.pass_value, retry_as_a: retry, total_q: parsed.total_q };
+    wnRecalcAllAuto();
+    alert('✅ 기본 기준이 저장됐습니다!');
+  } catch (e) { console.error('[wnGradeCritSave]', e); alert('저장 오류: ' + (e.message || e)); }
+}
+
+/* ── 학생별 예외 목록 ─────────────────────────────────────── */
+function wnGCRenderStu(filter) {
+  var box = document.getElementById('wn-gc-stulist'); if (!box) return;
+  var f = String(filter || '').trim().toLowerCase();
+  var list = (_wnStudents || []).filter(function (s) { return !f || String(s.name || '').toLowerCase().indexOf(f) >= 0; });
+  if (!list.length) { box.innerHTML = '<div style="padding:14px;text-align:center;color:#9ca3af;font-size:12px">학생이 없습니다</div>'; return; }
+  var ML = { wrong: '오답형', ratio: '비율형', score: '점수형' };
+  var baseMode = (_wnGradeCrit && _wnGradeCrit.mode) || 'wrong';
+  box.innerHTML = list.map(function (s) {
+    var ov = _wnStuCrit[s.id];
+    var custom = ov && (ov.mode || ov.pass_value != null || ov.total_q != null || ov.retry_as_a != null);
+    var effMode = (ov && ov.mode) || baseMode;
+    var summary;
+    if (custom) {
+      summary = '<span style="color:#166534;font-weight:700">개별</span> ' + (ov.mode ? ML[ov.mode] : '기본방식')
+        + (ov.pass_value != null ? ' · ' + wnCritDisplay(effMode, ov.pass_value, ov.total_q) : '')
+        + (ov.retry_as_a != null ? (ov.retry_as_a ? ' · 재시A' : ' · 재시B') : '');
+    } else {
+      summary = '<span style="color:#9ca3af">기본값 사용</span>';
+    }
+    return '<div style="border-bottom:1px solid #f0f0f0;padding:8px 10px">' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<div style="flex:1;min-width:0"><span style="font-weight:700;color:#1e293b;font-size:13px">' + _esc(s.name) + '</span> ' +
+          '<span style="font-size:11px">' + summary + '</span></div>' +
+        '<button onclick="wnGCToggleEdit(\'' + s.id + '\')" style="padding:4px 10px;border:1px solid #bbf7d0;border-radius:6px;background:#f0fdf4;color:#166534;font-size:11px;font-weight:700;cursor:pointer">편집</button>' +
+      '</div>' +
+      '<div id="wn-gc-edit-' + s.id + '" style="display:none;margin-top:8px;padding:10px;background:#f8fafc;border-radius:8px"></div>' +
+    '</div>';
+  }).join('');
+}
+
+function wnGCToggleEdit(sid) {
+  var box = document.getElementById('wn-gc-edit-' + sid); if (!box) return;
+  if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+  var ML = { wrong: '오답형', ratio: '비율형', score: '점수형' };
+  var ov = _wnStuCrit[sid] || {};
+  var baseMode = (_wnGradeCrit && _wnGradeCrit.mode) || 'wrong';
+  var curMode = ov.mode || '';
+  var effMode = curMode || baseMode;
+  var curRetry = (ov.retry_as_a === true ? 'yes' : ov.retry_as_a === false ? 'no' : '');
+  var critVal = wnCritDisplay(effMode, (ov.pass_value != null ? ov.pass_value : null), ov.total_q);
+  var st = 'width:100%;padding:7px 9px;border:1.5px solid #bbf7d0;border-radius:7px;font-size:12px;outline:none;box-sizing:border-box';
+  var mopt = function (v, l) { return '<option value="' + v + '"' + (curMode === v ? ' selected' : '') + '>' + l + '</option>'; };
+  var ropt = function (v, l) { return '<option value="' + v + '"' + (curRetry === v ? ' selected' : '') + '>' + l + '</option>'; };
+  box.innerHTML =
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">' +
+      '<div><div style="font-size:11px;color:#6b7280;margin-bottom:3px">채점 방식</div>' +
+        '<select id="wn-gce-mode-' + sid + '" onchange="wnGCEditModeChange(\'' + sid + '\')" style="' + st + '">' + mopt('', '기본값(' + ML[baseMode] + ')') + mopt('wrong', '오답형') + mopt('ratio', '비율형') + mopt('score', '점수형') + '</select></div>' +
+      '<div><div style="font-size:11px;color:#6b7280;margin-bottom:3px">재시 인정</div>' +
+        '<select id="wn-gce-retry-' + sid + '" style="' + st + '">' + ropt('', '기본값') + ropt('yes', '인정') + ropt('no', '미인정') + '</select></div>' +
+    '</div>' +
+    '<div style="margin-bottom:8px"><div id="wn-gce-crit-lb-' + sid + '" style="font-size:11px;color:#6b7280;margin-bottom:3px">통과 기준 <span style="color:#9ca3af">(' + wnCritPlaceholder(effMode) + ')</span></div>' +
+      '<input type="text" id="wn-gce-crit-' + sid + '" value="' + critVal + '" placeholder="기본값" style="' + st + '"></div>' +
+    '<div style="display:flex;gap:6px">' +
+      '<button onclick="wnStuCritReset(\'' + sid + '\')" style="flex:1;padding:8px;background:#f5f6fa;border:1.5px solid #e5e7eb;border-radius:7px;font-size:12px;font-weight:700;color:#6b7280;cursor:pointer">기본값으로</button>' +
+      '<button onclick="wnStuCritSave(\'' + sid + '\')" style="flex:1;padding:8px;background:#166534;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:800;cursor:pointer">저장</button>' +
+    '</div>';
+  box.style.display = 'block';
+}
+
+function wnGCEditModeChange(sid) {
+  var sel = document.getElementById('wn-gce-mode-' + sid);
+  var baseMode = (_wnGradeCrit && _wnGradeCrit.mode) || 'wrong';
+  var effMode = (sel && sel.value) || baseMode;
+  var lb = document.getElementById('wn-gce-crit-lb-' + sid);
+  if (lb) lb.innerHTML = '통과 기준 <span style="color:#9ca3af">(' + wnCritPlaceholder(effMode) + ')</span>';
+}
+
+async function wnStuCritSave(sid) {
+  var mEl = document.getElementById('wn-gce-mode-' + sid);
+  var cEl = document.getElementById('wn-gce-crit-' + sid);
+  var rEl = document.getElementById('wn-gce-retry-' + sid);
+  var selMode = (mEl && mEl.value) ? mEl.value : null;
+  var baseMode = (_wnGradeCrit && _wnGradeCrit.mode) || 'wrong';
+  var effMode = selMode || baseMode;
+  var critStr = cEl ? String(cEl.value).trim() : '';
+  var parsed = wnParseCritInput(effMode, critStr);
+  if (critStr !== '' && parsed === null) { alert('기준 형식을 확인하세요' + (effMode === 'ratio' ? ' (예: 12/15)' : '')); return; }
+  var pv = parsed ? parsed.pass_value : null;
+  var tq = parsed ? parsed.total_q : null;
+  var rv = rEl ? rEl.value : ''; var retry = rv === 'yes' ? true : rv === 'no' ? false : null;
+  if (selMode == null && pv == null && retry == null) { wnStuCritReset(sid); return; }
+  try {
+    var { error } = await db.from('weekend_naje_grade_criteria_student')
+      .upsert({ teacher_id: currentUser.id, student_id: sid, mode: selMode, pass_value: pv, total_q: tq, retry_as_a: retry, updated_at: new Date().toISOString() }, { onConflict: 'teacher_id,student_id' });
+    if (error) throw error;
+    _wnStuCrit[sid] = { mode: selMode, pass_value: pv, total_q: tq, retry_as_a: retry };
+    wnGCRenderStu(document.getElementById('wn-gc-search')?.value || '');
+    wnAutoGradeRow(sid);
+    alert('✅ 저장됐습니다.');
+  } catch (e) { console.error('[wnStuCritSave]', e); alert('저장 오류: ' + (e.message || e)); }
+}
+
+async function wnStuCritReset(sid) {
+  try {
+    var { error } = await db.from('weekend_naje_grade_criteria_student')
+      .delete().eq('teacher_id', currentUser.id).eq('student_id', sid);
+    if (error) throw error;
+    delete _wnStuCrit[sid];
+    wnGCRenderStu(document.getElementById('wn-gc-search')?.value || '');
+    wnAutoGradeRow(sid);
+  } catch (e) { console.error('[wnStuCritReset]', e); alert('삭제 오류: ' + (e.message || e)); }
 }
 
 /* ── 메시지 복사 ─────────────────────────────────────────── */
