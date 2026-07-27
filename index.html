@@ -6319,17 +6319,19 @@ function wnScorePass(raw, c) {
   var s = String(raw == null ? '' : raw).trim(); if (!s) return null;
   if (c.mode === 'ratio') {
     var m = s.match(/(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)/);
-    if (m) { var num = parseFloat(m[1]), den = parseFloat(m[2]); if (den > 0) return (num / den * 100) >= c.pass_value; }
+    if (m) {
+      var x = parseFloat(m[1]), y = parseFloat(m[2]);
+      if (y > 0) return (c.total_q && c.total_q > 0) ? ((x / y) >= (c.pass_value / c.total_q) - 1e-9) : (x >= c.pass_value - 1e-9);
+    }
     var cnt = parseFloat(s.replace(/[^0-9.\-]/g, '')); if (isNaN(cnt)) return null;
-    if (c.total_q && c.total_q > 0) return (cnt / c.total_q * 100) >= c.pass_value;
-    return cnt >= c.pass_value;
+    return cnt >= c.pass_value - 1e-9;
   }
   if (c.mode === 'wrong') {
     var vw = parseFloat(s.replace(/[^0-9.\-]/g, '')); if (isNaN(vw)) return null;
-    return Math.abs(vw) <= c.pass_value;
+    return Math.abs(vw) <= Math.abs(c.pass_value) + 1e-9;
   }
   var vs = parseFloat(s.replace(/[^0-9.\-]/g, '')); if (isNaN(vs)) return null;
-  return vs >= c.pass_value;
+  return vs >= c.pass_value - 1e-9;
 }
 
 // 출결·숙제·본시·재시 → A~F (기준 미설정 시 A/B는 ''로 보류)
@@ -6388,10 +6390,38 @@ function wnBindAutoGrade() {
   });
 }
 
+/* ── 기준값 파싱/표시 헬퍼 ───────────────────────────────── */
+// 입력문자열 → { pass_value, total_q }, 빈칸 → {null,null}, 오류 → null
+function wnParseCritInput(mode, str) {
+  str = String(str == null ? '' : str).trim();
+  if (str === '') return { pass_value: null, total_q: null };
+  if (mode === 'ratio') {
+    var m = str.match(/(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)/);
+    if (m) { var x = parseFloat(m[1]), y = parseFloat(m[2]); if (y > 0) return { pass_value: x, total_q: y }; }
+    var p = parseFloat(str); if (!isNaN(p)) return { pass_value: p, total_q: null };
+    return null;
+  }
+  if (mode === 'wrong') { var w = parseFloat(str); if (isNaN(w)) return null; return { pass_value: Math.abs(w), total_q: null }; }
+  var sv = parseFloat(str); if (isNaN(sv)) return null; return { pass_value: sv, total_q: null };
+}
+
+function wnCritDisplay(mode, pv, tq) {
+  if (pv == null) return '';
+  if (mode === 'ratio' && tq) return pv + '/' + tq;
+  return String(pv);
+}
+
+function wnCritPlaceholder(mode) {
+  return mode === 'ratio' ? '맞은/총 (예: 12/15)' : mode === 'score' ? '점수 (예: 85)' : '허용 오답 (예: 4)';
+}
+
 /* ── 등급 기준 설정 모달 ──────────────────────────────────── */
 function wnGradeCritOpen() {
   var ex = document.getElementById('wn-gcrit-modal'); if (ex) ex.remove();
-  var c = _wnGradeCrit || { mode: 'wrong', pass_value: 0, retry_as_a: true, total_q: null };
+  var c = _wnGradeCrit || { mode: 'wrong', pass_value: null, retry_as_a: true, total_q: null };
+  var inS = 'width:100%;padding:9px 12px;border:1.5px solid #bbf7d0;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box';
+  var lbS = 'font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:5px';
+  var hintS = 'color:#9ca3af;font-weight:400';
   var modal = document.createElement('div');
   modal.id = 'wn-gcrit-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto';
@@ -6412,11 +6442,16 @@ function wnGradeCritOpen() {
       radio('ratio', '비율형 — 맞은/총 (예: 23/25)') +
       radio('score', '점수형 — 단일 점수 (예: 85)') +
     '</div>' +
-    '<div style="display:flex;gap:10px;margin-bottom:14px">' +
-      '<div style="flex:1"><label id="wn-gc-vlabel" style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:5px">통과 기준</label>' +
-        '<input type="number" id="wn-gc-value" value="' + c.pass_value + '" step="any" style="width:100%;padding:9px 12px;border:1.5px solid #bbf7d0;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box"></div>' +
-      '<div id="wn-gc-total-wrap" style="flex:1;display:none"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:5px">총문제수(기본)</label>' +
-        '<input type="number" id="wn-gc-total" value="' + (c.total_q != null ? c.total_q : '') + '" step="any" placeholder="예: 25" style="width:100%;padding:9px 12px;border:1.5px solid #bbf7d0;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box"></div>' +
+    '<div style="margin-bottom:14px">' +
+      '<div id="wn-gc-in-wrong" style="display:none">' +
+        '<label style="' + lbS + '">허용 오답 개수 <span style="' + hintS + '">(예: 4 · 부호 무관)</span></label>' +
+        '<input type="text" id="wn-gc-wrong" value="' + (c.mode === 'wrong' ? wnCritDisplay('wrong', c.pass_value, null) : '') + '" placeholder="예: 4" style="' + inS + '"></div>' +
+      '<div id="wn-gc-in-ratio" style="display:none">' +
+        '<label style="' + lbS + '">통과 기준 <span style="' + hintS + '">(맞은/총, 예: 12/15)</span></label>' +
+        '<input type="text" id="wn-gc-ratio" value="' + (c.mode === 'ratio' ? wnCritDisplay('ratio', c.pass_value, c.total_q) : '') + '" placeholder="예: 12/15" style="' + inS + '"></div>' +
+      '<div id="wn-gc-in-score" style="display:none">' +
+        '<label style="' + lbS + '">기준 점수 <span style="' + hintS + '">(이상 통과, 예: 85)</span></label>' +
+        '<input type="text" id="wn-gc-score" value="' + (c.mode === 'score' ? wnCritDisplay('score', c.pass_value, null) : '') + '" placeholder="예: 85" style="' + inS + '"></div>' +
     '</div>' +
     '<label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:13px;font-weight:600;color:#14532d;cursor:pointer">' +
       '<input type="checkbox" id="wn-gc-retry"' + (c.retry_as_a ? ' checked' : '') + ' style="width:17px;height:17px;accent-color:#16a34a"> 재시(재시험) 통과 시 A로 인정' +
@@ -6435,25 +6470,24 @@ function wnGradeCritOpen() {
 
 function wnGradeCritModeChange() {
   var m = (document.querySelector('input[name="wn-gc-mode"]:checked') || {}).value || 'wrong';
-  var lab = document.getElementById('wn-gc-vlabel');
-  if (lab) lab.textContent = m === 'wrong' ? '허용 오답 개수 (이하 통과)'
-    : m === 'ratio' ? '기준 정답률 % (이상 통과)'
-    : '기준 점수 (이상 통과)';
-  var tw = document.getElementById('wn-gc-total-wrap');
-  if (tw) tw.style.display = (m === 'ratio') ? '' : 'none';
+  ['wrong', 'ratio', 'score'].forEach(function (k) {
+    var el = document.getElementById('wn-gc-in-' + k); if (el) el.style.display = (k === m) ? '' : 'none';
+  });
 }
 
 async function wnGradeCritSave() {
   var m = (document.querySelector('input[name="wn-gc-mode"]:checked') || {}).value || 'wrong';
-  var v = parseFloat(document.getElementById('wn-gc-value')?.value); if (isNaN(v)) v = 0;
-  var totRaw = document.getElementById('wn-gc-total')?.value;
-  var tq = (totRaw != null && String(totRaw).trim() !== '') ? parseFloat(totRaw) : null; if (tq != null && isNaN(tq)) tq = null;
+  var raw = m === 'ratio' ? document.getElementById('wn-gc-ratio')?.value
+    : m === 'score' ? document.getElementById('wn-gc-score')?.value
+    : document.getElementById('wn-gc-wrong')?.value;
+  var parsed = wnParseCritInput(m, raw);
+  if (!parsed || parsed.pass_value == null) { alert('통과 기준을 입력하세요' + (m === 'ratio' ? ' (예: 12/15)' : '')); return; }
   var retry = !!document.getElementById('wn-gc-retry')?.checked;
   try {
     var { error } = await db.from('weekend_naje_grade_criteria')
-      .upsert({ teacher_id: currentUser.id, mode: m, pass_value: v, retry_as_a: retry, total_q: tq, updated_at: new Date().toISOString() }, { onConflict: 'teacher_id' });
+      .upsert({ teacher_id: currentUser.id, mode: m, pass_value: parsed.pass_value, retry_as_a: retry, total_q: parsed.total_q, updated_at: new Date().toISOString() }, { onConflict: 'teacher_id' });
     if (error) throw error;
-    _wnGradeCrit = { mode: m, pass_value: v, retry_as_a: retry, total_q: tq };
+    _wnGradeCrit = { mode: m, pass_value: parsed.pass_value, retry_as_a: retry, total_q: parsed.total_q };
     wnRecalcAllAuto();
     alert('✅ 기본 기준이 저장됐습니다!');
   } catch (e) { console.error('[wnGradeCritSave]', e); alert('저장 오류: ' + (e.message || e)); }
@@ -6466,14 +6500,19 @@ function wnGCRenderStu(filter) {
   var list = (_wnStudents || []).filter(function (s) { return !f || String(s.name || '').toLowerCase().indexOf(f) >= 0; });
   if (!list.length) { box.innerHTML = '<div style="padding:14px;text-align:center;color:#9ca3af;font-size:12px">학생이 없습니다</div>'; return; }
   var ML = { wrong: '오답형', ratio: '비율형', score: '점수형' };
+  var baseMode = (_wnGradeCrit && _wnGradeCrit.mode) || 'wrong';
   box.innerHTML = list.map(function (s) {
     var ov = _wnStuCrit[s.id];
     var custom = ov && (ov.mode || ov.pass_value != null || ov.total_q != null || ov.retry_as_a != null);
-    var summary = custom
-      ? '<span style="color:#166534;font-weight:700">개별</span> ' + (ov.mode ? ML[ov.mode] : '기본방식')
-          + (ov.pass_value != null ? ' · 기준 ' + ov.pass_value : '')
-          + (ov.total_q != null ? ' · 총 ' + ov.total_q : '')
-      : '<span style="color:#9ca3af">기본값 사용</span>';
+    var effMode = (ov && ov.mode) || baseMode;
+    var summary;
+    if (custom) {
+      summary = '<span style="color:#166534;font-weight:700">개별</span> ' + (ov.mode ? ML[ov.mode] : '기본방식')
+        + (ov.pass_value != null ? ' · ' + wnCritDisplay(effMode, ov.pass_value, ov.total_q) : '')
+        + (ov.retry_as_a != null ? (ov.retry_as_a ? ' · 재시A' : ' · 재시B') : '');
+    } else {
+      summary = '<span style="color:#9ca3af">기본값 사용</span>';
+    }
     return '<div style="border-bottom:1px solid #f0f0f0;padding:8px 10px">' +
       '<div style="display:flex;align-items:center;gap:8px">' +
         '<div style="flex:1;min-width:0"><span style="font-weight:700;color:#1e293b;font-size:13px">' + _esc(s.name) + '</span> ' +
@@ -6488,23 +6527,25 @@ function wnGCRenderStu(filter) {
 function wnGCToggleEdit(sid) {
   var box = document.getElementById('wn-gc-edit-' + sid); if (!box) return;
   if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+  var ML = { wrong: '오답형', ratio: '비율형', score: '점수형' };
   var ov = _wnStuCrit[sid] || {};
+  var baseMode = (_wnGradeCrit && _wnGradeCrit.mode) || 'wrong';
   var curMode = ov.mode || '';
+  var effMode = curMode || baseMode;
   var curRetry = (ov.retry_as_a === true ? 'yes' : ov.retry_as_a === false ? 'no' : '');
+  var critVal = wnCritDisplay(effMode, (ov.pass_value != null ? ov.pass_value : null), ov.total_q);
   var st = 'width:100%;padding:7px 9px;border:1.5px solid #bbf7d0;border-radius:7px;font-size:12px;outline:none;box-sizing:border-box';
   var mopt = function (v, l) { return '<option value="' + v + '"' + (curMode === v ? ' selected' : '') + '>' + l + '</option>'; };
   var ropt = function (v, l) { return '<option value="' + v + '"' + (curRetry === v ? ' selected' : '') + '>' + l + '</option>'; };
   box.innerHTML =
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">' +
       '<div><div style="font-size:11px;color:#6b7280;margin-bottom:3px">채점 방식</div>' +
-        '<select id="wn-gce-mode-' + sid + '" style="' + st + '">' + mopt('', '기본값') + mopt('wrong', '오답형') + mopt('ratio', '비율형') + mopt('score', '점수형') + '</select></div>' +
+        '<select id="wn-gce-mode-' + sid + '" onchange="wnGCEditModeChange(\'' + sid + '\')" style="' + st + '">' + mopt('', '기본값(' + ML[baseMode] + ')') + mopt('wrong', '오답형') + mopt('ratio', '비율형') + mopt('score', '점수형') + '</select></div>' +
       '<div><div style="font-size:11px;color:#6b7280;margin-bottom:3px">재시 인정</div>' +
         '<select id="wn-gce-retry-' + sid + '" style="' + st + '">' + ropt('', '기본값') + ropt('yes', '인정') + ropt('no', '미인정') + '</select></div>' +
-      '<div><div style="font-size:11px;color:#6b7280;margin-bottom:3px">통과 기준값</div>' +
-        '<input type="number" id="wn-gce-val-' + sid + '" step="any" value="' + (ov.pass_value != null ? ov.pass_value : '') + '" placeholder="기본값" style="' + st + '"></div>' +
-      '<div><div style="font-size:11px;color:#6b7280;margin-bottom:3px">총문제수(비율형)</div>' +
-        '<input type="number" id="wn-gce-total-' + sid + '" step="any" value="' + (ov.total_q != null ? ov.total_q : '') + '" placeholder="기본값" style="' + st + '"></div>' +
     '</div>' +
+    '<div style="margin-bottom:8px"><div id="wn-gce-crit-lb-' + sid + '" style="font-size:11px;color:#6b7280;margin-bottom:3px">통과 기준 <span style="color:#9ca3af">(' + wnCritPlaceholder(effMode) + ')</span></div>' +
+      '<input type="text" id="wn-gce-crit-' + sid + '" value="' + critVal + '" placeholder="기본값" style="' + st + '"></div>' +
     '<div style="display:flex;gap:6px">' +
       '<button onclick="wnStuCritReset(\'' + sid + '\')" style="flex:1;padding:8px;background:#f5f6fa;border:1.5px solid #e5e7eb;border-radius:7px;font-size:12px;font-weight:700;color:#6b7280;cursor:pointer">기본값으로</button>' +
       '<button onclick="wnStuCritSave(\'' + sid + '\')" style="flex:1;padding:8px;background:#166534;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:800;cursor:pointer">저장</button>' +
@@ -6512,21 +6553,33 @@ function wnGCToggleEdit(sid) {
   box.style.display = 'block';
 }
 
+function wnGCEditModeChange(sid) {
+  var sel = document.getElementById('wn-gce-mode-' + sid);
+  var baseMode = (_wnGradeCrit && _wnGradeCrit.mode) || 'wrong';
+  var effMode = (sel && sel.value) || baseMode;
+  var lb = document.getElementById('wn-gce-crit-lb-' + sid);
+  if (lb) lb.innerHTML = '통과 기준 <span style="color:#9ca3af">(' + wnCritPlaceholder(effMode) + ')</span>';
+}
+
 async function wnStuCritSave(sid) {
   var mEl = document.getElementById('wn-gce-mode-' + sid);
-  var vEl = document.getElementById('wn-gce-val-' + sid);
-  var tEl = document.getElementById('wn-gce-total-' + sid);
+  var cEl = document.getElementById('wn-gce-crit-' + sid);
   var rEl = document.getElementById('wn-gce-retry-' + sid);
-  var mode = (mEl && mEl.value) ? mEl.value : null;
-  var pv = (vEl && String(vEl.value).trim() !== '') ? parseFloat(vEl.value) : null; if (pv != null && isNaN(pv)) pv = null;
-  var tq = (tEl && String(tEl.value).trim() !== '') ? parseFloat(tEl.value) : null; if (tq != null && isNaN(tq)) tq = null;
+  var selMode = (mEl && mEl.value) ? mEl.value : null;
+  var baseMode = (_wnGradeCrit && _wnGradeCrit.mode) || 'wrong';
+  var effMode = selMode || baseMode;
+  var critStr = cEl ? String(cEl.value).trim() : '';
+  var parsed = wnParseCritInput(effMode, critStr);
+  if (critStr !== '' && parsed === null) { alert('기준 형식을 확인하세요' + (effMode === 'ratio' ? ' (예: 12/15)' : '')); return; }
+  var pv = parsed ? parsed.pass_value : null;
+  var tq = parsed ? parsed.total_q : null;
   var rv = rEl ? rEl.value : ''; var retry = rv === 'yes' ? true : rv === 'no' ? false : null;
-  if (mode == null && pv == null && tq == null && retry == null) { wnStuCritReset(sid); return; }
+  if (selMode == null && pv == null && retry == null) { wnStuCritReset(sid); return; }
   try {
     var { error } = await db.from('weekend_naje_grade_criteria_student')
-      .upsert({ teacher_id: currentUser.id, student_id: sid, mode: mode, pass_value: pv, total_q: tq, retry_as_a: retry, updated_at: new Date().toISOString() }, { onConflict: 'teacher_id,student_id' });
+      .upsert({ teacher_id: currentUser.id, student_id: sid, mode: selMode, pass_value: pv, total_q: tq, retry_as_a: retry, updated_at: new Date().toISOString() }, { onConflict: 'teacher_id,student_id' });
     if (error) throw error;
-    _wnStuCrit[sid] = { mode: mode, pass_value: pv, total_q: tq, retry_as_a: retry };
+    _wnStuCrit[sid] = { mode: selMode, pass_value: pv, total_q: tq, retry_as_a: retry };
     wnGCRenderStu(document.getElementById('wn-gc-search')?.value || '');
     wnAutoGradeRow(sid);
     alert('✅ 저장됐습니다.');
