@@ -1454,8 +1454,12 @@
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;padding:8px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px">
           <span style="font-size:12px;color:#166534;font-weight:600">📝 현재 시험명:</span>
           <span id="wn-current-testname" style="font-size:13px;font-weight:700;color:#14532d">N제 TEST</span>
+          <button id="wn-gcrit-btn" onclick="wnGradeCritOpen()"
+            style="margin-left:auto;display:none;padding:4px 12px;border:1px solid #16a34a;border-radius:6px;background:#16a34a;color:#fff;font-size:12px;font-weight:700;cursor:pointer">
+            ⚙ 등급기준
+          </button>
           <button id="wn-settings-toggle-btn" onclick="wnToggleTestNameSettings()"
-            style="margin-left:auto;padding:4px 12px;border:1px solid #bbf7d0;border-radius:6px;background:#fff;color:#166534;font-size:12px;font-weight:600;cursor:pointer">
+            style="padding:4px 12px;border:1px solid #bbf7d0;border-radius:6px;background:#fff;color:#166534;font-size:12px;font-weight:600;cursor:pointer">
             편집
           </button>
         </div>
@@ -3750,6 +3754,8 @@ window._wlIndividualData = {};
 var _wnStudents    = [];  // 로드된 학생 목록
 var _wnData        = {};  // { student_id: DB 레코드 }
 var _wnCarry       = {};  // { student_id: 직전 회차(forward-fill용) }
+var _wnGradeCrit    = null; // 등급 자동환산 기준(선생님별)
+var _wnManualResult = {};   // { sid:true } 결과 수동 덮어쓰기 → 자동갱신 중단
 var _wnSnapshot    = {};  // { student_id: { field: "stringValue" } } — 변경감지용
 var _wnLoadedAt    = {};  // { student_id: updated_at }
 var _wnAllTeachers = [];  // 선생님 필터 캐시
@@ -5709,6 +5715,8 @@ async function initWeekendNaje() {
   try {
     await wnLoadTestNameSettingsFromDB();
     await wnRefreshTestNameDisplay();
+    await wnLoadGradeCriteria();
+    var _gcb = document.getElementById('wn-gcrit-btn'); if (_gcb) _gcb.style.display = ((currentUser?.role) === 'teacher') ? '' : 'none';
     if ((currentUser?.role) === 'vice_director') {
       await wnLoadFilters(document.getElementById('wn-branch-select')?.value || '__mine__');
     } else {
@@ -5905,7 +5913,7 @@ async function wnLoadData() {
       .sort((a, b) => (a.name||'').localeCompare(b.name||'', 'ko'));
 
     // weekend_naje 레코드 조회
-    _wnData = {}; _wnCarry = {};
+    _wnData = {}; _wnCarry = {}; _wnManualResult = {};
     if (_wnStudents.length) {
       var records = await fetchRowsByIds(function(chunk) {
         return db.from('weekend_naje').select('*').lte('session_date', date)
@@ -6120,6 +6128,8 @@ function wnRenderTable() {
   html += _wkPagerHtml('wnGoPage', _wnPg, '#166534');
   wrap.innerHTML = html;
   wnInitKeyNav();
+  wnBindAutoGrade();
+  wnInitialAutoFill();
 }
 
 /* ── 키보드 네비게이션 ────────────────────────────────────── */
@@ -6258,6 +6268,158 @@ function wnToggleSent(chk) {
     localStorage.removeItem('wn_sent_'+date+'_'+sid);
     if (row) row.style.background = '';
   }
+}
+
+/* ── 등급 자동 환산 (선생님별 기준) ───────────────────────── */
+async function wnLoadGradeCriteria() {
+  _wnGradeCrit = null;
+  var tid = currentUser?.id; if (!tid) return;
+  try {
+    var { data } = await db.from('weekend_naje_grade_criteria')
+      .select('mode,pass_value,retry_as_a').eq('teacher_id', tid).maybeSingle();
+    if (data) _wnGradeCrit = {
+      mode: data.mode || 'wrong',
+      pass_value: Number(data.pass_value) || 0,
+      retry_as_a: data.retry_as_a !== false
+    };
+  } catch (e) { console.error('[wnLoadGradeCriteria]', e); }
+}
+
+// 점수 문자열 → 통과 여부(true/false), 빈칸/판정불가 → null
+function wnScorePass(raw) {
+  var c = _wnGradeCrit; if (!c) return null;
+  var s = String(raw == null ? '' : raw).trim(); if (!s) return null;
+  if (c.mode === 'ratio') {
+    var m = s.match(/(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)/);
+    if (m) { var num = parseFloat(m[1]), den = parseFloat(m[2]); if (den > 0) return (num / den * 100) >= c.pass_value; }
+    var vr = parseFloat(s.replace(/[^0-9.\-]/g, '')); if (isNaN(vr)) return null;
+    return vr >= c.pass_value;
+  }
+  if (c.mode === 'wrong') {
+    var vw = parseFloat(s.replace(/[^0-9.\-]/g, '')); if (isNaN(vw)) return null;
+    return Math.abs(vw) <= c.pass_value;
+  }
+  var vs = parseFloat(s.replace(/[^0-9.\-]/g, '')); if (isNaN(vs)) return null;
+  return vs >= c.pass_value;
+}
+
+// 출결·숙제·본시·재시 → A~F (기준 미설정 시 A/B는 ''로 보류)
+function wnAutoGrade(att, hw, sf, sr) {
+  var hasScore = String(sf == null ? '' : sf).trim() !== '' || String(sr == null ? '' : sr).trim() !== '';
+  var hasHw = String(hw == null ? '' : hw).trim() !== '';
+  if (att === 'absent' && !hasScore && !hasHw) return 'F';
+  if (hasScore) {
+    if (!_wnGradeCrit) return '';
+    var fp = wnScorePass(sf), rp = wnScorePass(sr);
+    var pass = (fp === true) || (_wnGradeCrit.retry_as_a && rp === true);
+    return pass ? 'A' : 'B';
+  }
+  return (hw === 'true') ? 'C' : 'D';
+}
+
+function wnAutoGradeRow(sid, force) {
+  if ((currentUser?.role) !== 'teacher') return;
+  if (!force && _wnManualResult[sid]) return;
+  var g = function (f) { var el = document.querySelector('[data-sid="' + sid + '"][data-field="' + f + '"]'); return el ? el.value : ''; };
+  var auto = wnAutoGrade(g('attendance'), g('homework_done'), g('score_first'), g('score_retry'));
+  if (auto === '') return;
+  var resEl = document.querySelector('[data-sid="' + sid + '"][data-field="result"]');
+  if (resEl && resEl.value !== auto) resEl.value = auto;
+}
+
+function wnInitialAutoFill() {
+  if ((currentUser?.role) !== 'teacher') return;
+  document.querySelectorAll('#wn-table-wrap tr[id^="wn-row-"]').forEach(function (tr) {
+    var sid = tr.id.replace('wn-row-', '');
+    var resEl = document.querySelector('[data-sid="' + sid + '"][data-field="result"]');
+    if (resEl && resEl.value === '') wnAutoGradeRow(sid, false);
+  });
+}
+
+function wnRecalcAllAuto() {
+  document.querySelectorAll('#wn-table-wrap tr[id^="wn-row-"]').forEach(function (tr) {
+    wnAutoGradeRow(tr.id.replace('wn-row-', ''), false);
+  });
+}
+
+function wnBindAutoGrade() {
+  if ((currentUser?.role) !== 'teacher') return;
+  var wrap = document.getElementById('wn-table-wrap'); if (!wrap || wrap._agBound) return;
+  wrap._agBound = true;
+  wrap.addEventListener('input', function (e) {
+    var el = e.target; if (!el || !el.getAttribute) return;
+    var f = el.getAttribute('data-field');
+    if (f === 'score_first' || f === 'score_retry') wnAutoGradeRow(el.getAttribute('data-sid'));
+  });
+  wrap.addEventListener('change', function (e) {
+    var el = e.target; if (!el || !el.getAttribute) return;
+    var f = el.getAttribute('data-field'), sid = el.getAttribute('data-sid');
+    if (f === 'attendance' || f === 'homework_done') wnAutoGradeRow(sid);
+    else if (f === 'result') _wnManualResult[sid] = true;
+  });
+}
+
+/* ── 등급 기준 설정 모달 ──────────────────────────────────── */
+function wnGradeCritOpen() {
+  var ex = document.getElementById('wn-gcrit-modal'); if (ex) ex.remove();
+  var c = _wnGradeCrit || { mode: 'wrong', pass_value: 0, retry_as_a: true };
+  var modal = document.createElement('div');
+  modal.id = 'wn-gcrit-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+  var radio = function (v, l) {
+    return '<label style="display:flex;align-items:center;gap:7px;padding:9px 12px;border:1.5px solid #bbf7d0;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;color:#14532d">' +
+      '<input type="radio" name="wn-gc-mode" value="' + v + '"' + (c.mode === v ? ' checked' : '') + ' onchange="wnGradeCritModeChange()" style="accent-color:#16a34a"> ' + l + '</label>';
+  };
+  modal.innerHTML = '<div style="background:#fff;border-radius:16px;padding:26px;max-width:440px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2)">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">' +
+      '<div style="font-size:17px;font-weight:800;color:#166534">\u2699 \uc77c\uc77cN\uc81c \ub4f1\uae09 \uae30\uc900</div>' +
+      '<button onclick="document.getElementById(\'wn-gcrit-modal\').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#9ca3af">&times;</button>' +
+    '</div>' +
+    '<div style="font-size:12px;color:#6b7280;margin-bottom:14px;line-height:1.6">A/B\ub294 \ubcf8\uc2dc\u00b7\uc7ac\uc2dc \uc810\uc218\ub85c \uc790\ub3d9 \ud310\uc815\ub429\ub2c8\ub2e4.<br>C=\uc219\uc81c\uc644\ub8cc\u00b7\ubbf8\uc751\uc2dc, D=\uc219\uc81c\ubbf8\uc644\ub8cc\u00b7\ubbf8\uc751\uc2dc, F=\uacb0\uc11d.</div>' +
+    '<div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:6px">\ucc44\uc810 \ubc29\uc2dd</div>' +
+    '<div style="display:flex;flex-direction:column;gap:7px;margin-bottom:16px">' +
+      radio('wrong', '\uc624\ub2f5\ud615 \u2014 \uc810\uc218\uce78\uc5d0 \ud2c0\ub9b0 \uac1c\uc218 (\uc608: -4)') +
+      radio('ratio', '\ube44\uc728\ud615 \u2014 \ub9de\uc740/\ucd1d (\uc608: 23/25)') +
+      radio('score', '\uc810\uc218\ud615 \u2014 \ub2e8\uc77c \uc810\uc218 (\uc608: 85)') +
+    '</div>' +
+    '<div style="margin-bottom:16px">' +
+      '<label id="wn-gc-vlabel" style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:6px">\ud1b5\uacfc \uae30\uc900</label>' +
+      '<input type="number" id="wn-gc-value" value="' + c.pass_value + '" step="any" style="width:100%;padding:9px 12px;border:1.5px solid #bbf7d0;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box">' +
+    '</div>' +
+    '<label style="display:flex;align-items:center;gap:8px;margin-bottom:20px;font-size:13px;font-weight:600;color:#14532d;cursor:pointer">' +
+      '<input type="checkbox" id="wn-gc-retry"' + (c.retry_as_a ? ' checked' : '') + ' style="width:17px;height:17px;accent-color:#16a34a"> \uc7ac\uc2dc(\uc7ac\uc2dc\ud5d8) \ud1b5\uacfc \uc2dc A\ub85c \uc778\uc815' +
+    '</label>' +
+    '<div style="display:flex;gap:8px">' +
+      '<button onclick="document.getElementById(\'wn-gcrit-modal\').remove()" style="flex:1;padding:11px;background:#f5f6fa;border:1.5px solid #e5e7eb;border-radius:9px;font-size:13px;font-weight:700;color:#6b7280;cursor:pointer">\ucde8\uc18c</button>' +
+      '<button onclick="wnGradeCritSave()" style="flex:2;padding:11px;background:#166534;color:#fff;border:none;border-radius:9px;font-size:13px;font-weight:800;cursor:pointer">\uc800\uc7a5</button>' +
+    '</div>' +
+  '</div>';
+  modal.addEventListener('click', function (e) { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+  wnGradeCritModeChange();
+}
+
+function wnGradeCritModeChange() {
+  var m = (document.querySelector('input[name="wn-gc-mode"]:checked') || {}).value || 'wrong';
+  var lab = document.getElementById('wn-gc-vlabel'); if (!lab) return;
+  lab.textContent = m === 'wrong' ? '\ud5c8\uc6a9 \uc624\ub2f5 \uac1c\uc218 (\uc774\ud558 \ud1b5\uacfc)'
+    : m === 'ratio' ? '\uae30\uc900 \uc815\ub2f5\ub960 % (\uc774\uc0c1 \ud1b5\uacfc)'
+    : '\uae30\uc900 \uc810\uc218 (\uc774\uc0c1 \ud1b5\uacfc)';
+}
+
+async function wnGradeCritSave() {
+  var m = (document.querySelector('input[name="wn-gc-mode"]:checked') || {}).value || 'wrong';
+  var v = parseFloat(document.getElementById('wn-gc-value')?.value); if (isNaN(v)) v = 0;
+  var retry = !!document.getElementById('wn-gc-retry')?.checked;
+  try {
+    var { error } = await db.from('weekend_naje_grade_criteria')
+      .upsert({ teacher_id: currentUser.id, mode: m, pass_value: v, retry_as_a: retry, updated_at: new Date().toISOString() }, { onConflict: 'teacher_id' });
+    if (error) throw error;
+    _wnGradeCrit = { mode: m, pass_value: v, retry_as_a: retry };
+    document.getElementById('wn-gcrit-modal')?.remove();
+    wnRecalcAllAuto();
+    alert('\u2705 \ub4f1\uae09 \uae30\uc900\uc774 \uc800\uc7a5\ub410\uc2b5\ub2c8\ub2e4!');
+  } catch (e) { console.error('[wnGradeCritSave]', e); alert('\uc800\uc7a5 \uc624\ub958: ' + (e.message || e)); }
 }
 
 /* ── 메시지 복사 ─────────────────────────────────────────── */
