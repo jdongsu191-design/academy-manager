@@ -3757,6 +3757,8 @@ var _wnCarry       = {};  // { student_id: 직전 회차(forward-fill용) }
 var _wnGradeCrit    = null; // 등급 자동환산 기준(선생님별)
 var _wnManualResult = {};   // { sid:true } 결과 수동 덮어쓰기 → 자동갱신 중단
 var _wnStuCrit      = {};   // { student_id: 개별 예외 기준(부분 상속) }
+var _wnCritByTeacher = {};  // { teacher_id: 기본기준 } (데스크=여러 선생님)
+var _wnStuTeacher    = {};  // { student_id: teacher_id }
 var _wnSnapshot    = {};  // { student_id: { field: "stringValue" } } — 변경감지용
 var _wnLoadedAt    = {};  // { student_id: updated_at }
 var _wnAllTeachers = [];  // 선생님 필터 캐시
@@ -5934,6 +5936,7 @@ async function wnLoadData() {
       if (tIds.length) await wnLoadTestNamesForTeachers(tIds);
     }
 
+    await wnLoadGradeCriteria();
     wnRenderTable();
 
     // 스냅샷 캡처 (렌더링 완료 후)
@@ -6273,20 +6276,30 @@ function wnToggleSent(chk) {
 
 /* ── 등급 자동 환산 (선생님별 기준) ───────────────────────── */
 async function wnLoadGradeCriteria() {
-  _wnGradeCrit = null; _wnStuCrit = {};
-  var tid = currentUser?.id; if (!tid) return;
+  _wnCritByTeacher = {}; _wnStuCrit = {}; _wnStuTeacher = {}; _wnGradeCrit = null;
+  if (!currentUser) return;
+  var role = currentUser.role;
+  (_wnStudents || []).forEach(function (s) { if (s && s.teacher_id) _wnStuTeacher[s.id] = s.teacher_id; });
+  var tset = {};
+  if (role === 'teacher') { tset[currentUser.id] = 1; }
+  else { (_wnStudents || []).forEach(function (s) { if (s && s.teacher_id) tset[s.teacher_id] = 1; }); }
+  var tids = Object.keys(tset);
+  if (!tids.length) return;
   try {
-    var { data } = await db.from('weekend_naje_grade_criteria')
-      .select('mode,pass_value,retry_as_a,total_q').eq('teacher_id', tid).maybeSingle();
-    if (data) _wnGradeCrit = {
-      mode: data.mode || 'wrong',
-      pass_value: Number(data.pass_value) || 0,
-      retry_as_a: data.retry_as_a !== false,
-      total_q: (data.total_q == null ? null : Number(data.total_q))
-    };
-    var { data: stu } = await db.from('weekend_naje_grade_criteria_student')
-      .select('student_id,mode,pass_value,retry_as_a,total_q').eq('teacher_id', tid);
-    (stu || []).forEach(function (r) {
+    var base = await db.from('weekend_naje_grade_criteria')
+      .select('teacher_id,mode,pass_value,retry_as_a,total_q').in('teacher_id', tids);
+    (base.data || []).forEach(function (d) {
+      _wnCritByTeacher[d.teacher_id] = {
+        mode: d.mode || 'wrong',
+        pass_value: Number(d.pass_value) || 0,
+        retry_as_a: d.retry_as_a !== false,
+        total_q: (d.total_q == null ? null : Number(d.total_q))
+      };
+    });
+    if (role === 'teacher') _wnGradeCrit = _wnCritByTeacher[currentUser.id] || null;
+    var stu = await db.from('weekend_naje_grade_criteria_student')
+      .select('student_id,mode,pass_value,retry_as_a,total_q').in('teacher_id', tids);
+    (stu.data || []).forEach(function (r) {
       _wnStuCrit[r.student_id] = {
         mode: r.mode || null,
         pass_value: (r.pass_value == null ? null : Number(r.pass_value)),
@@ -6297,9 +6310,14 @@ async function wnLoadGradeCriteria() {
   } catch (e) { console.error('[wnLoadGradeCriteria]', e); }
 }
 
-// 학생 유효 기준 = 개별 예외 ⊕ 선생님 기본 (null 필드는 기본값 상속)
+// 자동채점 사용 역할 (선생님 + 데스크)
+function wnCanAuto() { var r = currentUser && currentUser.role; return r === 'teacher' || r === 'desk'; }
+
+// 학생 유효 기준 = 개별 예외 ⊕ 담당 선생님 기본 (null 필드는 기본값 상속)
 function wnEffCrit(sid) {
-  var base = _wnGradeCrit, ov = _wnStuCrit[sid];
+  var tid = _wnStuTeacher[sid] || ((currentUser && currentUser.role === 'teacher') ? currentUser.id : null);
+  var base = tid ? _wnCritByTeacher[tid] : null;
+  var ov = _wnStuCrit[sid];
   if (!base && !ov) return null;
   base = base || { mode: null, pass_value: null, retry_as_a: true, total_q: null };
   ov = ov || {};
@@ -6349,7 +6367,7 @@ function wnAutoGrade(att, hw, sf, sr, c) {
 }
 
 function wnAutoGradeRow(sid, force) {
-  if ((currentUser?.role) !== 'teacher') return;
+  if (!wnCanAuto()) return;
   if (!force && _wnManualResult[sid]) return;
   var g = function (f) { var el = document.querySelector('[data-sid="' + sid + '"][data-field="' + f + '"]'); return el ? el.value : ''; };
   var auto = wnAutoGrade(g('attendance'), g('homework_done'), g('score_first'), g('score_retry'), wnEffCrit(sid));
@@ -6359,7 +6377,7 @@ function wnAutoGradeRow(sid, force) {
 }
 
 function wnInitialAutoFill() {
-  if ((currentUser?.role) !== 'teacher') return;
+  if (!wnCanAuto()) return;
   document.querySelectorAll('#wn-table-wrap tr[id^="wn-row-"]').forEach(function (tr) {
     var sid = tr.id.replace('wn-row-', '');
     var resEl = document.querySelector('[data-sid="' + sid + '"][data-field="result"]');
@@ -6374,7 +6392,7 @@ function wnRecalcAllAuto() {
 }
 
 function wnBindAutoGrade() {
-  if ((currentUser?.role) !== 'teacher') return;
+  if (!wnCanAuto()) return;
   var wrap = document.getElementById('wn-table-wrap'); if (!wrap || wrap._agBound) return;
   wrap._agBound = true;
   wrap.addEventListener('input', function (e) {
