@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.65-seatmap]</title>
+<title>BMAPS · 독서실 출결 [v0.67-seatedit]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -707,7 +707,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.65-seatmap</span>
+    <span class="tb-ver" id="sc-ver">v0.67-seatedit</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -993,7 +993,9 @@
           <div class="tp-box">
             <div class="tp-head">
               <span class="tp-t">🪑 열람실 좌석 배치도</span>
-              <div class="tp-head-r"><span class="tp-now" style="font-size:12px;color:#64748b">열람실별 좌석 배치 · 실시간 상태는 추후</span></div>
+              <div class="tp-head-r"><span class="tp-now" id="sc-seat-updated" style="font-size:12px;color:#64748b"></span>
+                <button class="tp-refresh" onclick="scSeatSeed()">🌱 이름으로 초기배정</button>
+                <button class="tp-refresh" onclick="scSeatLoad()">🔄 새로고침</button></div>
             </div>
             <div class="tp-body">
               <div id="sc-seat-tabs" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:18px"></div>
@@ -1033,7 +1035,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.65-seatmap';
+  window.STUDYCENTER_VERSION = 'v0.67-seatedit';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1062,14 +1064,15 @@
     }
     else if(tab==="timeplan"){ scTpInit(); }
     else if(tab==="points"){ scPtSummaryLoad(); }
-    else if(tab==="seatmap"){ scSeatRender(); }
+    else if(tab==="seatmap"){ scSeatLoad(); }
     else { scListLoad(); }
   }
 
   /* ============================================================
-     [SEATMAP] 열람실 좌석 배치도 (번호·이름 확인용, 실시간 상태는 추후)
-     · 이미지 배치를 코드에 고정. gap=통로, x=막힌자리, door=출입구, 문
-     · SC_SEAT_NAMES: 좌석번호→이름 (빈칸=빈자리)
+     [SEATMAP] 열람실 좌석 배치도 + 키오스크 실시간 + 편집(DB)
+     · 배치/번호는 코드 고정(SC_SEAT_ROOMS). 좌석↔학생은 reading_room_seats(DB)
+     · 좌석 클릭 → 학생 배정(이름/코드 검색). 상태는 student_id로 정확 매칭
+     · SC_SEAT_NAMES: 초기배정 시드용(이름 매칭). 렌더는 DB 기준
   ============================================================ */
   var SC_SEAT_ROOMS = [
     { name:"1열람실", cols:6, rows:[
@@ -1113,7 +1116,77 @@
     76:"윤대현",77:"강하민",78:"임호준",79:"이도경",80:"진재민",81:"김동건",82:"김승준",83:"조민우",84:"김현호",85:"이동후",86:"김수현",87:"김민결",
     88:"김혜빈",89:"연예지",90:"김지윤",91:"김아현",92:"김서윤",93:"신수민",94:"권태린",95:"신지우",96:"천유진",97:"노희수",98:"강서연",99:"임지우"
   };
+
   var _scSeatSel = 0;
+  var _scSeatRoster = {};      // id → {name,code}
+  var _scSeatRosterList = [];  // [{id,name,code}]
+  var _scSeatByNo = {};        // seat_no → student_id
+  var _scSeatAtt = {};         // id → 오늘 출결 row
+  var _scSeatLoaded = false;
+  var _scSeatChannel = null;
+  var _scSeatRt = null;
+  var _scSeatUpdated = "";
+
+  function scSeatHHMM(t){ return String(t||"").slice(0,5); }
+  function scSeatNow(){ var d=new Date(); return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")+":"+String(d.getSeconds()).padStart(2,"0"); }
+
+  // 좌석번호 → 표시정보 {cls,name,code,sub,empty}
+  function scSeatInfo(seatNo){
+    var sid = _scSeatByNo[seatNo];
+    if(!sid) return { empty:true };
+    var stu = _scSeatRoster[sid];
+    var name = stu ? stu.name : "(미확인)";
+    var code = stu ? stu.code : "";
+    var row = _scSeatAtt[sid];
+    var st;
+    if(!row || !row.check_in_time) st={ cls:"seat-none", sub:"미입실" };
+    else if(row.check_out_time) st={ cls:"seat-done", sub:"하원 "+scSeatHHMM(row.check_out_time) };
+    else if(row.pending_out_start){
+      var rsn=row.pending_out_reason||""; var back=row.pending_out_expected_end?scSeatHHMM(row.pending_out_expected_end):"";
+      st={ cls:"seat-out", sub:"외출"+(rsn?" · "+rsn:"")+(back?'<br>↩ '+back+" 복귀":"") };
+    } else {
+      var lv=row.expected_check_out?scSeatHHMM(row.expected_check_out):"";
+      st={ cls:"seat-in", sub: lv?"🏠 "+lv+" 하원예정":"재실" };
+    }
+    return { empty:false, cls:st.cls, name:name, code:code, sub:st.sub };
+  }
+
+  async function scSeatLoadSeats(){
+    try{
+      var r=await db.from("reading_room_seats").select("seat_no,student_id");
+      _scSeatByNo={}; (r.data||[]).forEach(function(x){ if(x.student_id) _scSeatByNo[x.seat_no]=x.student_id; });
+    }catch(e){ console.error("[scSeatLoadSeats]",e); }
+  }
+  async function scSeatLoad(){
+    try{
+      var ur=await db.from("users").select("id,name,reading_room_code,status,deleted_at,reading_room_withdrawn_at").eq("reading_room_yn",true);
+      var roster=(ur.data||[]).filter(function(u){ return u.status!=="inactive" && !u.deleted_at && !u.reading_room_withdrawn_at; });
+      _scSeatRoster={}; _scSeatRosterList=[];
+      roster.forEach(function(u){ _scSeatRoster[u.id]={name:u.name,code:u.reading_room_code||""}; _scSeatRosterList.push({id:u.id,name:u.name,code:u.reading_room_code||""}); });
+      _scSeatRosterList.sort(function(a,b){ return (a.name||"").localeCompare(b.name||"","ko"); });
+      await scSeatLoadSeats();
+      var ar=await db.from("reading_room_attendance").select("*").eq("attend_date",scRrToday());
+      _scSeatAtt={}; (ar.data||[]).forEach(function(r){ _scSeatAtt[r.student_id]=r; });
+      _scSeatLoaded=true; _scSeatUpdated=scSeatNow();
+    }catch(e){ console.error("[scSeatLoad]",e); }
+    scSeatRender(); scSeatSubscribe();
+  }
+  async function scSeatReloadLive(){
+    await scSeatLoadSeats();
+    try{ var ar=await db.from("reading_room_attendance").select("*").eq("attend_date",scRrToday()); _scSeatAtt={}; (ar.data||[]).forEach(function(r){ _scSeatAtt[r.student_id]=r; }); }catch(e){}
+    _scSeatUpdated=scSeatNow(); scSeatRender();
+  }
+  function scSeatSubscribe(){
+    if(_scSeatChannel) return;
+    var deb=function(){ clearTimeout(_scSeatRt); _scSeatRt=setTimeout(scSeatReloadLive, 400); };
+    try{
+      _scSeatChannel = db.channel("sc-seatmap")
+        .on("postgres_changes",{ event:"*", schema:"public", table:"reading_room_attendance" }, deb)
+        .on("postgres_changes",{ event:"*", schema:"public", table:"reading_room_seats" }, deb)
+        .subscribe();
+    }catch(e){ console.error("[scSeatSubscribe]",e); }
+  }
+
   function scSeatSelect(v){ _scSeatSel = v; scSeatRender(); }
   function scSeatRender(){
     var wrap=document.getElementById('sc-seat-wrap'); if(!wrap) return;
@@ -1123,40 +1196,133 @@
       SC_SEAT_ROOMS.forEach(function(r,i){ t+='<button class="seat-tab'+(_scSeatSel===i?' on':'')+'" onclick="scSeatSelect('+i+')">'+r.name+'</button>'; });
       tabsEl.innerHTML=t;
     }
+    var updEl=document.getElementById('sc-seat-updated'); if(updEl) updEl.textContent = _scSeatUpdated ? ("갱신 "+_scSeatUpdated) : "";
     var css='<style>'+
-      '.seat-room-wrap{max-width:880px;margin:0 auto}'+
+      '.seat-legend{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-bottom:8px;font-size:12px;color:#475569;font-weight:700}'+
+      '.seat-legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px;border:1px solid #cbd5e1}'+
+      '.seat-legend .lg-in{background:#ecfdf5;border-color:#6ee7b7}.seat-legend .lg-out{background:#fff7ed;border-color:#fdba74}'+
+      '.seat-legend .lg-done{background:#f1f5f9}.seat-legend .lg-none{background:#fff}'+
+      '.seat-hint{text-align:center;font-size:11px;color:#94a3b8;margin-bottom:16px}'+
+      '.seat-room-wrap{max-width:900px;margin:0 auto}'+
       '.seat-room-title{text-align:center;font-size:19px;font-weight:800;color:#0f766e;margin-bottom:12px}'+
       '.seat-room-title .tag{font-size:13px;color:#64748b;font-weight:700;margin-left:6px}'+
       '.seat-floor{position:relative;border:3px solid #7c8794;border-radius:8px;background:linear-gradient(#f8fafc,#eef2f6);padding:26px 22px;box-shadow:0 8px 24px rgba(15,23,42,.12),inset 0 0 0 1px #fff}'+
       '.seat-grid{display:grid;gap:10px;justify-content:center}'+
-      '.seat{background:#fff;border:1px solid #cbd5e1;border-radius:7px;box-shadow:0 2px 5px rgba(15,23,42,.10);padding:8px 6px;text-align:center;min-height:52px;display:flex;flex-direction:column;justify-content:center}'+
+      '.seat{background:#fff;border:1px solid #cbd5e1;border-radius:7px;box-shadow:0 2px 5px rgba(15,23,42,.10);padding:8px 6px;text-align:center;min-height:58px;display:flex;flex-direction:column;justify-content:center;cursor:pointer}'+
+      '.seat:hover{outline:2px solid #5eead4;outline-offset:1px}'+
       '.seat .no{font-size:11px;color:#94a3b8;font-weight:700}'+
+      '.seat .no .cd{color:#cbd5e1;font-weight:600;font-size:10px;margin-left:3px}'+
       '.seat .nm{font-size:14px;font-weight:800;color:#1e293b;margin-top:2px;white-space:nowrap}'+
-      '.seat.vacant{background:#f8fafc;border-style:dashed}'+
-      '.seat.vacant .nm{color:#cbd5e1}'+
-      '.seat-x{border:1px dashed #e2e8f0;border-radius:7px;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-weight:700;min-height:52px}'+
-      '.seat-door{display:flex;align-items:center;justify-content:center;min-height:52px;color:#475569;font-size:12px;font-weight:800;border:2px dashed #94a3b8;border-radius:7px;background:repeating-linear-gradient(45deg,#e9eef4,#e9eef4 6px,#f6f8fb 6px,#f6f8fb 12px)}'+
-      '.seat-gap{min-height:52px}'+
+      '.seat .sub{font-size:10px;font-weight:700;margin-top:3px;line-height:1.35}'+
+      '.seat .add{font-size:12px;color:#94a3b8;font-weight:700;margin-top:4px}'+
+      '.seat.seat-in{background:#ecfdf5;border-color:#6ee7b7}.seat.seat-in .sub{color:#059669}'+
+      '.seat.seat-out{background:#fff7ed;border-color:#fdba74}.seat.seat-out .sub{color:#c2410c}'+
+      '.seat.seat-done{background:#f1f5f9;border-color:#cbd5e1}.seat.seat-done .nm{color:#94a3b8}.seat.seat-done .sub{color:#94a3b8}'+
+      '.seat.seat-none .sub{color:#cbd5e1}'+
+      '.seat.seat-empty{background:#fafafa;border-style:dashed}'+
+      '.seat-x{border:1px dashed #e2e8f0;border-radius:7px;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-weight:700;min-height:58px}'+
+      '.seat-door{display:flex;align-items:center;justify-content:center;min-height:58px;color:#475569;font-size:12px;font-weight:800;border:2px dashed #94a3b8;border-radius:7px;background:repeating-linear-gradient(45deg,#e9eef4,#e9eef4 6px,#f6f8fb 6px,#f6f8fb 12px)}'+
+      '.seat-gap{min-height:58px}'+
       '.seat-tab{padding:8px 16px;border:1.5px solid #cbd5e1;border-radius:20px;background:#fff;color:#475569;font-size:13px;font-weight:700;cursor:pointer}'+
       '.seat-tab.on{background:#0f766e;color:#fff;border-color:#0f766e}'+
       '</style>';
+    var legend='<div class="seat-legend"><span><i class="lg-in"></i>재실</span><span><i class="lg-out"></i>외출</span><span><i class="lg-done"></i>하원</span><span><i class="lg-none"></i>미입실</span></div><div class="seat-hint">좌석을 클릭하면 학생을 배정·변경할 수 있습니다</div>';
     var list = (_scSeatSel==='all') ? SC_SEAT_ROOMS : [SC_SEAT_ROOMS[_scSeatSel]];
-    var html=css;
+    var html=css+legend;
     list.forEach(function(room){
       if(!room) return;
       html+='<div class="seat-room-wrap"><div class="seat-room-title">'+room.name+(room.tag?'<span class="tag">['+room.tag+']</span>':'')+'</div>';
-      html+='<div class="seat-floor"><div class="seat-grid" style="grid-template-columns:repeat('+room.cols+',minmax(66px,1fr))">';
+      html+='<div class="seat-floor"><div class="seat-grid" style="grid-template-columns:repeat('+room.cols+',minmax(70px,1fr))">';
       room.rows.forEach(function(row){ row.forEach(function(c){
         if(c==="gap"||c==="blank") html+='<div class="seat-gap"></div>';
         else if(c==="x") html+='<div class="seat-x">\u2715</div>';
         else if(c==="door") html+='<div class="seat-door">\ud83d\udeaa 출입구</div>';
         else if(c==="문") html+='<div class="seat-door">\ud83d\udeaa 문</div>';
-        else { var nm=SC_SEAT_NAMES[c]||''; var vac=(nm===''); html+='<div class="seat'+(vac?' vacant':'')+'"><div class="no">'+c+'</div><div class="nm">'+(vac?'(빈자리)':nm)+'</div></div>'; }
+        else {
+          var info=scSeatInfo(c);
+          if(info.empty){ html+='<div class="seat seat-empty" onclick="scSeatEditOpen('+c+')"><div class="no">'+c+'</div><div class="add">＋ 배정</div></div>'; }
+          else { html+='<div class="seat '+info.cls+'" onclick="scSeatEditOpen('+c+')"><div class="no">'+c+(info.code?' <span class="cd">'+info.code+'</span>':'')+'</div><div class="nm">'+scWkEsc(info.name)+'</div>'+(info.sub?'<div class="sub">'+info.sub+'</div>':'')+'</div>'; }
+        }
       }); });
       html+='</div></div></div>';
       if(_scSeatSel==='all') html+='<div style="height:24px"></div>';
     });
     wrap.innerHTML=html;
+  }
+
+  /* ── 좌석 배정 편집 ─────────────────────────────────────── */
+  function scSeatEditOpen(seatNo){
+    var ex=document.getElementById('sc-seatedit-overlay'); if(ex) ex.remove();
+    var curSid=_scSeatByNo[seatNo];
+    var cur=curSid?_scSeatRoster[curSid]:null;
+    var ov=document.createElement('div'); ov.id='sc-seatedit-overlay';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:5000;display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto';
+    ov.innerHTML='<div style="background:#fff;border-radius:16px;padding:22px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:17px;font-weight:800;color:#0f766e">좌석 '+seatNo+' 배정</div>'+
+      '<button onclick="document.getElementById(\'sc-seatedit-overlay\').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#9ca3af">&times;</button></div>'+
+      '<div style="font-size:13px;color:#475569;margin-bottom:12px">현재: '+(cur?'<b>'+scWkEsc(cur.name)+'</b> <span style="color:#0369a1;font-weight:700;font-family:monospace">'+(cur.code||'')+'</span>':'<span style="color:#94a3b8">미배정</span>')+
+        (curSid?' <button onclick="scSeatClear('+seatNo+')" style="margin-left:8px;padding:4px 10px;border:1px solid #fecaca;background:#fef2f2;color:#dc2626;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">비우기</button>':'')+'</div>'+
+      '<input type="text" id="sc-seatedit-search" oninput="scSeatEditFilter('+seatNo+')" placeholder="🔍 이름 또는 코드 검색" style="width:100%;padding:10px 12px;border:1.5px solid #cbd5e1;border-radius:9px;font-size:14px;outline:none;box-sizing:border-box;margin-bottom:10px">'+
+      '<div id="sc-seatedit-list" style="max-height:320px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px"></div>'+
+    '</div>';
+    ov.addEventListener('click',function(e){ if(e.target===ov) ov.remove(); });
+    document.body.appendChild(ov);
+    scSeatEditFilter(seatNo);
+    var si=document.getElementById('sc-seatedit-search'); if(si) si.focus();
+  }
+  function scSeatEditFilter(seatNo){
+    var box=document.getElementById('sc-seatedit-list'); if(!box) return;
+    var q=((document.getElementById('sc-seatedit-search')||{}).value||"").trim().toLowerCase();
+    var seatOf={}; Object.keys(_scSeatByNo).forEach(function(no){ var sid=_scSeatByNo[no]; if(sid) seatOf[sid]=no; });
+    var listAll=_scSeatRosterList.filter(function(s){ if(!q) return true; return (s.name&&s.name.toLowerCase().indexOf(q)>=0)||(s.code&&String(s.code).indexOf(q)>=0); });
+    var list=listAll.slice(0,80);
+    if(!list.length){ box.innerHTML='<div style="padding:16px;text-align:center;color:#9ca3af;font-size:13px">결과 없음</div>'; return; }
+    box.innerHTML=list.map(function(s){
+      var at=seatOf[s.id]; var badge= at? ' <span style="font-size:11px;color:#b45309">('+at+'번 배정중)</span>':'';
+      return '<div onclick="scSeatAssign('+seatNo+',\''+s.id+'\')" style="padding:9px 11px;border-bottom:1px solid #f1f5f9;cursor:pointer;display:flex;justify-content:space-between;gap:8px" onmouseover="this.style.background=\'#f0fdfa\'" onmouseout="this.style.background=\'\'">'+
+        '<span style="font-weight:700;color:#1e293b">'+scWkEsc(s.name)+badge+'</span><span style="color:#0369a1;font-weight:700;font-family:monospace">'+(s.code||'')+'</span></div>';
+    }).join('');
+  }
+  async function scSeatAssign(seatNo, sid){
+    try{
+      await db.from("reading_room_seats").delete().eq("student_id", sid);
+      var r=await db.from("reading_room_seats").upsert({ seat_no:seatNo, student_id:sid, updated_at:new Date().toISOString() }, { onConflict:"seat_no" });
+      if(r.error) throw r.error;
+    }catch(e){ alert("배정 오류: "+(e.message||e)); return; }
+    var ov=document.getElementById('sc-seatedit-overlay'); if(ov) ov.remove();
+    await scSeatLoadSeats(); scSeatRender();
+  }
+  async function scSeatClear(seatNo){
+    try{ var r=await db.from("reading_room_seats").delete().eq("seat_no", seatNo); if(r.error) throw r.error; }
+    catch(e){ alert("오류: "+(e.message||e)); return; }
+    var ov=document.getElementById('sc-seatedit-overlay'); if(ov) ov.remove();
+    await scSeatLoadSeats(); scSeatRender();
+  }
+
+  /* ── 이름으로 초기배정(시드) — 미배정 좌석만 채움 ── */
+  async function scSeatSeed(){
+    if(!_scSeatLoaded){ alert("먼저 새로고침으로 로스터를 불러오세요."); return; }
+    if(!confirm("현재 좌석 이름표를 학생과 이름 매칭해\n미배정 좌석을 채웁니다. 진행할까요?")) return;
+    var nmeMap={}, dup={};
+    _scSeatRosterList.forEach(function(s){ if(nmeMap[s.name]!==undefined) dup[s.name]=1; nmeMap[s.name]=s.id; });
+    var seatedIds={}; Object.keys(_scSeatByNo).forEach(function(no){ seatedIds[_scSeatByNo[no]]=1; });
+    var toIns=[], matched=0, skipped=0, ambiguous=0, already=0;
+    Object.keys(SC_SEAT_NAMES).forEach(function(noStr){
+      var no=parseInt(noStr,10), nm=SC_SEAT_NAMES[no];
+      if(!nm) return;
+      if(_scSeatByNo[no]){ already++; return; }
+      if(dup[nm]){ ambiguous++; return; }
+      var sid=nmeMap[nm];
+      if(!sid){ skipped++; return; }
+      if(seatedIds[sid]){ skipped++; return; }
+      toIns.push({ seat_no:no, student_id:sid, updated_at:new Date().toISOString() }); seatedIds[sid]=1; matched++;
+    });
+    if(toIns.length){
+      try{ var r=await db.from("reading_room_seats").upsert(toIns,{ onConflict:"seat_no" }); if(r.error) throw r.error; }
+      catch(e){ alert("초기배정 오류: "+(e.message||e)); return; }
+    }
+    await scSeatLoadSeats(); scSeatRender();
+    alert("초기 배정 완료\n· 신규 배정: "+matched+"명\n· 이미 배정된 좌석: "+already+"\n· 이름 미매칭: "+skipped+"\n· 동명이인(수동 필요): "+ambiguous);
   }
 
   /* ============================================================
