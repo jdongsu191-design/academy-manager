@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.69-seatprint]</title>
+<title>BMAPS · 독서실 출결 [v0.70-seatwarn]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -707,7 +707,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.69-seatprint</span>
+    <span class="tb-ver" id="sc-ver">v0.70-seatwarn</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1036,7 +1036,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.69-seatprint';
+  window.STUDYCENTER_VERSION = 'v0.70-seatwarn';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1127,9 +1127,13 @@
   var _scSeatChannel = null;
   var _scSeatRt = null;
   var _scSeatUpdated = "";
+  var _scSeatTick = null;
 
   function scSeatHHMM(t){ return String(t||"").slice(0,5); }
   function scSeatNow(){ var d=new Date(); return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")+":"+String(d.getSeconds()).padStart(2,"0"); }
+
+  // 예정시각 t가 현재보다 지났으면 true (기존 tpToMin/tpNowMin 재사용)
+  function scSeatOverdue(t){ if(!t) return false; try{ return tpToMin(t) < tpNowMin(); }catch(e){ return false; } }
 
   // 좌석번호 → 표시정보 {cls,name,code,sub,empty}
   function scSeatInfo(seatNo){
@@ -1140,11 +1144,16 @@
     var code = stu ? stu.code : "";
     var row = _scSeatAtt[sid];
     var st;
-    if(!row || !row.check_in_time){ var eci=(row&&row.expected_check_in)?scSeatHHMM(row.expected_check_in):""; st={ cls: eci?"seat-none seat-eta":"seat-none", sub: eci?"미입실<br>⏰ "+eci+" 등원예정":"미입실" }; }
+    if(!row || !row.check_in_time){
+      var eci=(row&&row.expected_check_in)?scSeatHHMM(row.expected_check_in):"";
+      if(eci && scSeatOverdue(row.expected_check_in)) st={ cls:"seat-warn", sub:"⚠ 미등원<br>예정 "+eci+" 초과" };
+      else st={ cls: eci?"seat-none seat-eta":"seat-none", sub: eci?"미입실<br>⏰ "+eci+" 등원예정":"미입실" };
+    }
     else if(row.check_out_time) st={ cls:"seat-done", sub:"하원 "+scSeatHHMM(row.check_out_time) };
     else if(row.pending_out_start){
       var rsn=row.pending_out_reason||""; var back=row.pending_out_expected_end?scSeatHHMM(row.pending_out_expected_end):"";
-      st={ cls:"seat-out", sub:"외출"+(rsn?" · "+rsn:"")+(back?'<br>↩ '+back+" 복귀":"") };
+      if(row.pending_out_expected_end && scSeatOverdue(row.pending_out_expected_end)) st={ cls:"seat-warn", sub:"⚠ 미복귀"+(rsn?" · "+rsn:"")+"<br>예정 "+back+" 초과" };
+      else st={ cls:"seat-out", sub:"외출"+(rsn?" · "+rsn:"")+(back?'<br>↩ '+back+" 복귀":"") };
     } else {
       var lv=row.expected_check_out?scSeatHHMM(row.expected_check_out):"";
       st={ cls:"seat-in", sub: lv?"🏠 "+lv+" 하원예정":"재실" };
@@ -1178,6 +1187,7 @@
     _scSeatUpdated=scSeatNow(); scSeatRender();
   }
   function scSeatSubscribe(){
+    if(!_scSeatTick){ _scSeatTick = setInterval(function(){ var p=document.getElementById('admin-tab-seatmap'); if(p && p.style.display!=='none' && _scSeatLoaded) scSeatRender(); }, 60000); }
     if(_scSeatChannel) return;
     var deb=function(){ clearTimeout(_scSeatRt); _scSeatRt=setTimeout(scSeatReloadLive, 400); };
     try{
@@ -1202,7 +1212,7 @@
       '.seat-legend{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-bottom:8px;font-size:12px;color:#475569;font-weight:700}'+
       '.seat-legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px;border:1px solid #cbd5e1}'+
       '.seat-legend .lg-in{background:#ecfdf5;border-color:#6ee7b7}.seat-legend .lg-out{background:#fff7ed;border-color:#fdba74}'+
-      '.seat-legend .lg-done{background:#f1f5f9}.seat-legend .lg-none{background:#fff}.seat-legend .lg-eta{background:#eff6ff;border-color:#bfdbfe}'+
+      '.seat-legend .lg-done{background:#f1f5f9}.seat-legend .lg-none{background:#fff}.seat-legend .lg-eta{background:#eff6ff;border-color:#bfdbfe}.seat-legend .lg-warn{background:#fef2f2;border-color:#ef4444}'+
       '.seat-hint{text-align:center;font-size:11px;color:#94a3b8;margin-bottom:16px}'+
       '.seat-room-wrap{max-width:900px;margin:0 auto}'+
       '.seat-room-title{text-align:center;font-size:19px;font-weight:800;color:#0f766e;margin-bottom:12px}'+
@@ -1221,6 +1231,8 @@
       '.seat.seat-done{background:#f1f5f9;border-color:#cbd5e1}.seat.seat-done .nm{color:#94a3b8}.seat.seat-done .sub{color:#94a3b8}'+
       '.seat.seat-none .sub{color:#cbd5e1}'+
       '.seat.seat-eta{background:#eff6ff;border-color:#bfdbfe}.seat.seat-eta .sub{color:#2563eb}'+
+      '.seat.seat-warn{background:#fef2f2;border-color:#ef4444;box-shadow:0 0 0 2px rgba(239,68,68,.35);animation:seatpulse 1.4s ease-in-out infinite}.seat.seat-warn .nm{color:#b91c1c}.seat.seat-warn .sub{color:#dc2626;font-weight:800}'+
+      '@keyframes seatpulse{0%,100%{box-shadow:0 0 0 2px rgba(239,68,68,.30)}50%{box-shadow:0 0 0 4px rgba(239,68,68,.55)}}'+
       '.seat.seat-empty{background:#fafafa;border-style:dashed}'+
       '.seat-x{border:1px dashed #e2e8f0;border-radius:7px;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-weight:700;min-height:58px}'+
       '.seat-door{display:flex;align-items:center;justify-content:center;min-height:58px;color:#475569;font-size:12px;font-weight:800;border:2px dashed #94a3b8;border-radius:7px;background:repeating-linear-gradient(45deg,#e9eef4,#e9eef4 6px,#f6f8fb 6px,#f6f8fb 12px)}'+
@@ -1228,7 +1240,7 @@
       '.seat-tab{padding:8px 16px;border:1.5px solid #cbd5e1;border-radius:20px;background:#fff;color:#475569;font-size:13px;font-weight:700;cursor:pointer}'+
       '.seat-tab.on{background:#0f766e;color:#fff;border-color:#0f766e}'+
       '</style>';
-    var legend='<div class="seat-legend"><span><i class="lg-in"></i>재실</span><span><i class="lg-out"></i>외출</span><span><i class="lg-done"></i>하원</span><span><i class="lg-none"></i>미입실</span><span><i class="lg-eta"></i>등원예정</span></div><div class="seat-hint">좌석을 클릭하면 학생을 배정·변경할 수 있습니다</div>';
+    var legend='<div class="seat-legend"><span><i class="lg-in"></i>재실</span><span><i class="lg-out"></i>외출</span><span><i class="lg-done"></i>하원</span><span><i class="lg-none"></i>미입실</span><span><i class="lg-eta"></i>등원예정</span><span><i class="lg-warn"></i>시간초과</span></div><div class="seat-hint">좌석을 클릭하면 학생을 배정·변경할 수 있습니다</div>';
     var list = (_scSeatSel==='all') ? SC_SEAT_ROOMS : [SC_SEAT_ROOMS[_scSeatSel]];
     var html=css+legend;
     list.forEach(function(room){
