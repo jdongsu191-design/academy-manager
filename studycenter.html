@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.64-ptsort]</title>
+<title>BMAPS · 독서실 출결 [v0.65-seatmap]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -707,7 +707,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.64-ptsort</span>
+    <span class="tb-ver" id="sc-ver">v0.65-seatmap</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -821,6 +821,7 @@
           <button class="admin-tab" id="admin-tab-btn-weekly" onclick="scAdminTab('weekly')">&#127979; 주간 출결</button>
           <button class="admin-tab" id="admin-tab-btn-timeplan" onclick="scAdminTab('timeplan')">&#9201; 시간 계획</button>
           <button class="admin-tab" id="admin-tab-btn-points" onclick="scAdminTab('points')">&#11088; 상벌점</button>
+          <button class="admin-tab" id="admin-tab-btn-seatmap" onclick="scAdminTab('seatmap')">&#129681; 좌석 배치도</button>
         </div>
 
         <!-- [탭] 학생 등록 -->
@@ -986,6 +987,21 @@
           </div>
         </div>
         <!-- /admin-tab-points -->
+
+        <!-- [탭] 좌석 배치도 -->
+        <div id="admin-tab-seatmap" style="display:none">
+          <div class="tp-box">
+            <div class="tp-head">
+              <span class="tp-t">🪑 열람실 좌석 배치도</span>
+              <div class="tp-head-r"><span class="tp-now" style="font-size:12px;color:#64748b">열람실별 좌석 배치 · 실시간 상태는 추후</span></div>
+            </div>
+            <div class="tp-body">
+              <div id="sc-seat-tabs" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:18px"></div>
+              <div id="sc-seat-wrap"></div>
+            </div>
+          </div>
+        </div>
+        <!-- /admin-tab-seatmap -->
       </div>
     </div>
   </div>
@@ -1017,7 +1033,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.64-ptsort';
+  window.STUDYCENTER_VERSION = 'v0.65-seatmap';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1032,8 +1048,8 @@
      [ADMIN TABS] 관리자 화면 탭 전환
   ============================================================ */
   function scAdminTab(tab){
-    var panels={register:"admin-tab-register", weekly:"admin-tab-weekly", timeplan:"admin-tab-timeplan", points:"admin-tab-points"};
-    var btns={register:"admin-tab-btn-register", weekly:"admin-tab-btn-weekly", timeplan:"admin-tab-btn-timeplan", points:"admin-tab-btn-points"};
+    var panels={register:"admin-tab-register", weekly:"admin-tab-weekly", timeplan:"admin-tab-timeplan", points:"admin-tab-points", seatmap:"admin-tab-seatmap"};
+    var btns={register:"admin-tab-btn-register", weekly:"admin-tab-btn-weekly", timeplan:"admin-tab-btn-timeplan", points:"admin-tab-btn-points", seatmap:"admin-tab-btn-seatmap"};
     Object.keys(panels).forEach(function(k){
       var p=document.getElementById(panels[k]); if(p) p.style.display=(k===tab?"":"none");
       var b=document.getElementById(btns[k]); if(b){ if(k===tab) b.classList.add("active"); else b.classList.remove("active"); }
@@ -1046,7 +1062,101 @@
     }
     else if(tab==="timeplan"){ scTpInit(); }
     else if(tab==="points"){ scPtSummaryLoad(); }
+    else if(tab==="seatmap"){ scSeatRender(); }
     else { scListLoad(); }
+  }
+
+  /* ============================================================
+     [SEATMAP] 열람실 좌석 배치도 (번호·이름 확인용, 실시간 상태는 추후)
+     · 이미지 배치를 코드에 고정. gap=통로, x=막힌자리, door=출입구, 문
+     · SC_SEAT_NAMES: 좌석번호→이름 (빈칸=빈자리)
+  ============================================================ */
+  var SC_SEAT_ROOMS = [
+    { name:"1열람실", cols:6, rows:[
+      [16,17,18,"gap",14,15],
+      [19,20,21,"gap",12,13],
+      [22,23,24,"gap",11,"x"],
+      [25,26,27,"gap",9,10],
+      [28,29,30,"gap",7,8],
+      [31,32,33,"gap",5,6],
+      [34,35,36,"gap",3,4],
+      [37,38,"x","door",2,1]
+    ]},
+    { name:"2열람실", cols:6, rows:[
+      ["blank",52,53,"gap",50,51],
+      [54,55,56,"gap",48,49],
+      [57,58,59,"gap","blank",47],
+      [60,61,62,"gap",45,46],
+      [63,64,65,"gap",43,44],
+      [66,67,68,"gap",41,42],
+      [69,70,71,"gap",39,40],
+      [72,73,74,75,"blank","door"]
+    ]},
+    { name:"3열람실", tag:"남자", cols:7, rows:[
+      ["blank",82,83,84,85,86,87],
+      ["문",76,77,78,79,80,81]
+    ]},
+    { name:"4열람실", tag:"여자", cols:7, rows:[
+      [96,95,94,"gap",93,92,91],
+      [97,98,99,"문",88,89,90]
+    ]}
+  ];
+  var SC_SEAT_NAMES = {
+    1:"양지원",2:"강진호",3:"송민찬",4:"박성훈",5:"윤현지",6:"김예일",7:"권하윤",8:"권별",9:"정소율",10:"김분홍",
+    11:"최지원",12:"김세훈",13:"이서윤",14:"김예은",15:"박다원",16:"이도윤",17:"신민하",18:"김준수",19:"임지아",20:"최문성",
+    21:"이서연",22:"정래현",23:"김성은",24:"양민영",25:"김나운",26:"김도윤",27:"김아영",28:"최인아",29:"박채은",30:"곽예찬",
+    31:"박소윤",32:"김기윤",33:"박하음",34:"이현서",35:"신승원",36:"지승헌",37:"임찬유",38:"정민재",
+    39:"김종호",40:"김미르",41:"이승현",42:"박지율",43:"",44:"김규진",45:"김민주",46:"황라희",47:"김도훈",48:"송현율",
+    49:"정예은",50:"정유은",51:"박원준",52:"이지모",53:"손승현",54:"고준수",55:"조민유",56:"하가은",57:"이윤아",58:"유소민",
+    59:"이수민",60:"강민채",61:"허진성",62:"최강인",63:"김수하",64:"노태현",65:"김희재",66:"신호빈",67:"유한주",68:"허주향",
+    69:"이준환",70:"임찬우",71:"정보견",72:"이형우",73:"최상아",74:"하승윤",75:"이준오",
+    76:"윤대현",77:"강하민",78:"임호준",79:"이도경",80:"진재민",81:"김동건",82:"김승준",83:"조민우",84:"김현호",85:"이동후",86:"김수현",87:"김민결",
+    88:"김혜빈",89:"연예지",90:"김지윤",91:"김아현",92:"김서윤",93:"신수민",94:"권태린",95:"신지우",96:"천유진",97:"노희수",98:"강서연",99:"임지우"
+  };
+  var _scSeatSel = 0;
+  function scSeatSelect(v){ _scSeatSel = v; scSeatRender(); }
+  function scSeatRender(){
+    var wrap=document.getElementById('sc-seat-wrap'); if(!wrap) return;
+    var tabsEl=document.getElementById('sc-seat-tabs');
+    if(tabsEl){
+      var t='<button class="seat-tab'+(_scSeatSel==='all'?' on':'')+'" onclick="scSeatSelect(\'all\')">전체</button>';
+      SC_SEAT_ROOMS.forEach(function(r,i){ t+='<button class="seat-tab'+(_scSeatSel===i?' on':'')+'" onclick="scSeatSelect('+i+')">'+r.name+'</button>'; });
+      tabsEl.innerHTML=t;
+    }
+    var css='<style>'+
+      '.seat-room-wrap{max-width:880px;margin:0 auto}'+
+      '.seat-room-title{text-align:center;font-size:19px;font-weight:800;color:#0f766e;margin-bottom:12px}'+
+      '.seat-room-title .tag{font-size:13px;color:#64748b;font-weight:700;margin-left:6px}'+
+      '.seat-floor{position:relative;border:3px solid #7c8794;border-radius:8px;background:linear-gradient(#f8fafc,#eef2f6);padding:26px 22px;box-shadow:0 8px 24px rgba(15,23,42,.12),inset 0 0 0 1px #fff}'+
+      '.seat-grid{display:grid;gap:10px;justify-content:center}'+
+      '.seat{background:#fff;border:1px solid #cbd5e1;border-radius:7px;box-shadow:0 2px 5px rgba(15,23,42,.10);padding:8px 6px;text-align:center;min-height:52px;display:flex;flex-direction:column;justify-content:center}'+
+      '.seat .no{font-size:11px;color:#94a3b8;font-weight:700}'+
+      '.seat .nm{font-size:14px;font-weight:800;color:#1e293b;margin-top:2px;white-space:nowrap}'+
+      '.seat.vacant{background:#f8fafc;border-style:dashed}'+
+      '.seat.vacant .nm{color:#cbd5e1}'+
+      '.seat-x{border:1px dashed #e2e8f0;border-radius:7px;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-weight:700;min-height:52px}'+
+      '.seat-door{display:flex;align-items:center;justify-content:center;min-height:52px;color:#475569;font-size:12px;font-weight:800;border:2px dashed #94a3b8;border-radius:7px;background:repeating-linear-gradient(45deg,#e9eef4,#e9eef4 6px,#f6f8fb 6px,#f6f8fb 12px)}'+
+      '.seat-gap{min-height:52px}'+
+      '.seat-tab{padding:8px 16px;border:1.5px solid #cbd5e1;border-radius:20px;background:#fff;color:#475569;font-size:13px;font-weight:700;cursor:pointer}'+
+      '.seat-tab.on{background:#0f766e;color:#fff;border-color:#0f766e}'+
+      '</style>';
+    var list = (_scSeatSel==='all') ? SC_SEAT_ROOMS : [SC_SEAT_ROOMS[_scSeatSel]];
+    var html=css;
+    list.forEach(function(room){
+      if(!room) return;
+      html+='<div class="seat-room-wrap"><div class="seat-room-title">'+room.name+(room.tag?'<span class="tag">['+room.tag+']</span>':'')+'</div>';
+      html+='<div class="seat-floor"><div class="seat-grid" style="grid-template-columns:repeat('+room.cols+',minmax(66px,1fr))">';
+      room.rows.forEach(function(row){ row.forEach(function(c){
+        if(c==="gap"||c==="blank") html+='<div class="seat-gap"></div>';
+        else if(c==="x") html+='<div class="seat-x">\u2715</div>';
+        else if(c==="door") html+='<div class="seat-door">\ud83d\udeaa 출입구</div>';
+        else if(c==="문") html+='<div class="seat-door">\ud83d\udeaa 문</div>';
+        else { var nm=SC_SEAT_NAMES[c]||''; var vac=(nm===''); html+='<div class="seat'+(vac?' vacant':'')+'"><div class="no">'+c+'</div><div class="nm">'+(vac?'(빈자리)':nm)+'</div></div>'; }
+      }); });
+      html+='</div></div></div>';
+      if(_scSeatSel==='all') html+='<div style="height:24px"></div>';
+    });
+    wrap.innerHTML=html;
   }
 
   /* ============================================================
@@ -4104,7 +4214,7 @@
     try{
       var onAdmin = !!(document.getElementById('sc-admin') && document.getElementById('sc-admin').classList.contains('active'));
       var tab='weekly';
-      if(onAdmin){ ['weekly','register','timeplan','points'].forEach(function(t){ var b=document.getElementById('admin-tab-btn-'+t); if(b && b.classList.contains('active')) tab=t; }); }
+      if(onAdmin){ ['weekly','register','timeplan','points','seatmap'].forEach(function(t){ var b=document.getElementById('admin-tab-btn-'+t); if(b && b.classList.contains('active')) tab=t; }); }
       localStorage.setItem('sc_reload_restore','1');
       localStorage.setItem('sc_reload_screen', onAdmin?'admin':'kiosk');
       localStorage.setItem('sc_reload_tab', tab);
@@ -4340,7 +4450,7 @@
       var onAdmin = document.getElementById('sc-admin').classList.contains('active');
       var tab = 'weekly';
       if(onAdmin){
-        ['weekly','register','timeplan','points'].forEach(function(t){
+        ['weekly','register','timeplan','points','seatmap'].forEach(function(t){
           var b=document.getElementById('admin-tab-btn-'+t);
           if(b && b.classList.contains('active')) tab=t;
         });
