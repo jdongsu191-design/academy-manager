@@ -602,6 +602,11 @@
     .ho-ed:focus{background:#fcfdff}
     .ho-ed input[type=checkbox]{width:14px;height:14px;vertical-align:-2px;margin:0 4px 0 0;accent-color:#2563eb;cursor:pointer}
     .ho-tb button:hover,.ho-tb label:hover,.ho-tb select:hover{background:#eef4ff !important;border-color:#93c5fd !important}
+    .ho-ed ul{margin:4px 0 4px 22px;padding:0;list-style:disc}
+    .ho-ed ol{margin:4px 0 4px 22px;padding:0;list-style:decimal}
+    .ho-ed li{margin:2px 0}
+    .ho-sw{width:20px;height:20px;border:1px solid rgba(0,0,0,.18);border-radius:4px;cursor:pointer;padding:0}
+    .ho-sw:hover{outline:2px solid #2563eb;outline-offset:1px}
 
   </style>
 </head>
@@ -12978,6 +12983,37 @@ function hoEdBlur(el){
   clearTimeout(_hoTimers[id]);
   hoFldSave(id);
 }
+/* 체크박스는 contenteditable=false 라 브라우저가 지우지 못하는 경우가 있어
+   백스페이스/딜리트로 직접 삭제해 준다. */
+function _hoIsCheck(n){
+  return !!(n && n.nodeType === 1 && n.tagName === 'INPUT' && String(n.type || '').toLowerCase() === 'checkbox');
+}
+function hoEdKey(ev, el){
+  if(ev.key !== 'Backspace' && ev.key !== 'Delete') return;
+  var sel = window.getSelection();
+  if(!sel || !sel.rangeCount || !sel.isCollapsed) return;
+  var r = sel.getRangeAt(0), c = r.startContainer, off = r.startOffset, t = null;
+  if(ev.key === 'Backspace'){
+    if(c.nodeType === 3){
+      if(off > 0) return;                 // 앞에 글자가 있으면 기본 동작
+      t = c.previousSibling;
+    } else {
+      t = c.childNodes[off - 1] || null;
+    }
+  } else {
+    if(c.nodeType === 3){
+      if(off < String(c.nodeValue || '').length) return;
+      t = c.nextSibling;
+    } else {
+      t = c.childNodes[off] || null;
+    }
+  }
+  if(!_hoIsCheck(t)) return;
+  ev.preventDefault();
+  t.parentNode.removeChild(t);
+  hoEdInput(el);
+}
+
 /* 체크박스 클릭도 저장 대상 (checked 는 innerHTML 에 자동 반영되지 않음) */
 function hoEdClick(ev, el){
   var t = ev && ev.target;
@@ -13005,20 +13041,63 @@ async function hoFldSave(id){
 
 var _HO_ED = 'background:transparent';
 
+/* PPT 처럼 미리 정해진 색 + 직접 선택 */
+var HO_COLORS = [
+  '#000000','#404040','#7f7f7f','#bfbfbf','#ffffff',
+  '#c00000','#ff0000','#ff6600','#ffc000','#ffff00',
+  '#92d050','#00b050','#00b0f0','#0070c0','#7030a0'
+];
+var _hoPalBound = false;
+function hoPalCloseAll(){
+  Array.prototype.forEach.call(document.querySelectorAll('.ho-pal'), function(x){ x.style.display = 'none'; });
+}
+function hoPalToggle(btn){
+  var pal = btn.parentNode.querySelector('.ho-pal');
+  if(!pal) return;
+  var wasOpen = (pal.style.display === 'block');
+  hoPalCloseAll();
+  pal.style.display = wasOpen ? 'none' : 'block';
+  if(!_hoPalBound){
+    _hoPalBound = true;
+    document.addEventListener('mousedown', function(ev){
+      var t = ev.target;
+      if(!t || !t.closest) return;
+      if(!t.closest('.ho-pal') && !t.closest('.ho-pal-btn')) hoPalCloseAll();
+    });
+  }
+}
+function hoPickColor(c){ hoPalCloseAll(); hoCmd('foreColor', c); }
+
 function _hoToolbar(){
   var btn = function(cmd, label, style, title){
     return '<button type="button" title="' + title + '" onmousedown="event.preventDefault()" onclick="hoCmd(\'' + cmd + '\')"'
       + ' style="min-width:26px;height:24px;padding:0 7px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;color:#475569;font-size:12px;cursor:pointer;line-height:1;' + (style || '') + '">' + label + '</button>';
   };
+  var sep = '<span style="width:1px;height:16px;background:#dde5ee;margin:0 2px"></span>';
+  var swatches = HO_COLORS.map(function(c){
+    return '<button type="button" class="ho-sw" title="' + c + '" onmousedown="event.preventDefault()"'
+      + ' onclick="hoPickColor(\'' + c + '\')" style="background:' + c + '"></button>';
+  }).join('');
+
   return '<div class="ho-tb" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:5px 10px;background:#fafcff;border-bottom:1px solid #eef2f7">'
-    + btn('bold',          'B', 'font-weight:900',                '굵게')
-    + btn('underline',     'U', 'text-decoration:underline',      '밑줄')
-    + btn('strikeThrough', 'S', 'text-decoration:line-through',   '취소선')
-    + '<label title="글자 색" style="display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 7px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;cursor:pointer">'
-      + '<span style="font-size:11px;color:#475569">색</span>'
-      + '<input type="color" value="#1e293b" onchange="hoCmd(\'foreColor\', this.value)"'
-        + ' style="width:18px;height:16px;border:none;background:none;padding:0;cursor:pointer">'
-    + '</label>'
+    + btn('bold',          'B', 'font-weight:900',              '굵게')
+    + btn('underline',     'U', 'text-decoration:underline',    '밑줄')
+    + btn('strikeThrough', 'S', 'text-decoration:line-through', '취소선')
+    + sep
+    /* 글자 색 — 지정 색 팔레트 + 직접 선택 */
+    + '<span style="position:relative;display:inline-flex">'
+      + '<button type="button" class="ho-pal-btn" title="글자 색" onmousedown="event.preventDefault()" onclick="hoPalToggle(this)"'
+        + ' style="height:24px;padding:0 8px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;color:#475569;font-size:11px;cursor:pointer;line-height:1">🎨 색 ▾</button>'
+      + '<div class="ho-pal" style="display:none;position:absolute;top:27px;left:0;z-index:60;background:#fff;border:1px solid #cbd5e1;border-radius:9px;padding:9px;box-shadow:0 10px 28px rgba(0,0,0,.16);width:158px">'
+        + '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:5px">' + swatches + '</div>'
+        + '<label style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:9px;padding-top:8px;border-top:1px solid #eef2f7;font-size:11px;color:#475569;cursor:pointer">'
+          + '<span>직접 선택</span>'
+          + '<input type="color" value="#1e293b" onchange="hoPalCloseAll(); hoCmd(\'foreColor\', this.value)"'
+            + ' style="width:26px;height:20px;border:none;background:none;padding:0;cursor:pointer">'
+        + '</label>'
+      + '</div>'
+    + '</span>'
+    /* 글자 크기 */
     + '<select title="글자 크기" onchange="hoCmd(\'fontSize\', this.value); this.selectedIndex = 0;"'
       + ' style="height:24px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;color:#475569;font-size:11px;cursor:pointer">'
       + '<option value="">크기</option>'
@@ -13027,8 +13106,12 @@ function _hoToolbar(){
       + '<option value="5">크게</option>'
       + '<option value="6">아주 크게</option>'
     + '</select>'
-    + '<button type="button" title="체크박스 넣기" onmousedown="event.preventDefault()" onclick="hoInsertCheck()"'
-      + ' style="height:24px;padding:0 9px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;color:#475569;font-size:12px;cursor:pointer;line-height:1">☑ 체크</button>'
+    + sep
+    /* 글머리 */
+    + btn('insertUnorderedList', '• 글머리', 'padding:0 9px;font-size:11px', '글머리 기호')
+    + btn('insertOrderedList',   '1. 번호',  'padding:0 9px;font-size:11px', '번호 매기기')
+    + '<button type="button" title="체크박스 넣기 (백스페이스로 삭제)" onmousedown="event.preventDefault()" onclick="hoInsertCheck()"'
+      + ' style="height:24px;padding:0 9px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;color:#475569;font-size:11px;cursor:pointer;line-height:1">☑ 체크</button>'
   + '</div>';
 }
 
@@ -13039,7 +13122,7 @@ function _hoDayHTML(r){
   var f = function(field, ph, minH, extra){
     return '<div class="ho-ed" contenteditable="true" data-id="' + r.id + '" data-f="' + field + '" data-ph="' + ph + '"'
       + ' onfocus="hoEdFocus(this)" oninput="hoEdInput(this)" onblur="hoEdBlur(this)"'
-      + ' onkeyup="hoEdSaveSel()" onmouseup="hoEdSaveSel()" onclick="hoEdClick(event,this)"'
+      + ' onkeyup="hoEdSaveSel()" onmouseup="hoEdSaveSel()" onclick="hoEdClick(event,this)" onkeydown="hoEdKey(event,this)"'
       + ' style="' + _HO_ED + ';min-height:' + minH + 'px' + (extra || '') + '">' + _hoToHtml(r[field]) + '</div>';
   };
   var lbl = function(txt, color){
