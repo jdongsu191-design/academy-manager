@@ -12541,6 +12541,10 @@ var _hoTimers     = {};     // 자동저장 디바운스 타이머 (id별)
 var _hoDirty      = {};     // 저장 대기 중인 변경 필드 (id별)
 var _hoScrollTo   = null;   // 지정 시 그 날짜 칸으로 스크롤 (1회성)
 var _hoRemindOn   = false;  // 어제 확인 알람 기동 여부
+var _hoLiveOn     = false;  // 실시간 갱신 기동 여부
+var _hoLiveCh     = null;   // realtime 채널
+var _hoLiveTimer  = null;   // 갱신 디바운스
+var _hoScrolled   = false;  // 진입 후 오늘 칸으로 한 번 이동했는지
 
 function _hoEsc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function _hoNl(s){ return _hoEsc(s).replace(/\n/g,'<br>'); }
@@ -12681,6 +12685,45 @@ function hoRemindStart(){
   }, next - now);
 }
 
+/* ── [실시간] 다른 사람이 올린 공지·인수인계를 새로고침 없이 반영 ──
+   · realtime(postgres_changes) 구독 + 60초 주기 백업 갱신
+     publication 에 테이블이 없어도 주기 갱신으로 동작한다
+   · 인수인계는 인라인 자동저장 중이라, 편집 중이면 다시 그리지 않는다
+     (그리면 입력 중인 글자가 날아간다). 공지는 모달 편집이라 항상 안전 */
+function _hoEditing(){
+  var d = _hoDirty || {};
+  for(var k in d){ if(d[k] && Object.keys(d[k]).length) return true; }
+  var a = document.activeElement;
+  return !!(a && a.classList && a.classList.contains('ho-ed'));
+}
+function _hoPanelOn(){
+  var el = document.getElementById('panel-handover');
+  return !!(el && el.offsetParent !== null);
+}
+async function hoLiveRefresh(){
+  if(!_hoPanelOn()) return;
+  if(!(currentUser && (currentUser.role === 'desk' || currentUser.role === 'admin'))) return;
+  try{
+    await hoLoadNotices(true);                  // 공지는 언제나 안전
+    if(!_hoEditing()) await hoLoadNotes(true);  // 인수인계는 편집 중이 아닐 때만
+  }catch(e){}
+}
+function hoLiveKick(){
+  clearTimeout(_hoLiveTimer);
+  _hoLiveTimer = setTimeout(hoLiveRefresh, 800);   // 연속 이벤트 묶기
+}
+function hoLiveStart(){
+  if(_hoLiveOn) return;
+  _hoLiveOn = true;
+  try{
+    _hoLiveCh = db.channel('handover_live')
+      .on('postgres_changes', { event:'*', schema:'public', table:'handover_notices' }, hoLiveKick)
+      .on('postgres_changes', { event:'*', schema:'public', table:'handover_notes'   }, hoLiveKick)
+      .subscribe();
+  }catch(e){ /* realtime 불가해도 아래 주기 갱신으로 커버 */ }
+  setInterval(hoLiveRefresh, 60000);
+}
+
 /* ── 초기화 ── */
 async function hoInit(){
   var wrap = document.getElementById('ho-wrap');
@@ -12701,8 +12744,10 @@ async function hoInit(){
   var _c2 = document.getElementById('ho-notice-2col');
   if(_c2) _c2.className = _hoIsAdmin() ? 'ho-1col' : '';
   hoRestoreFold();
+  _hoScrolled = false;          // 패널 진입 시 오늘 칸으로 한 번 이동
   await hoLoadNotices();
   await hoLoadNotes();
+  hoLiveStart();
 }
 
 function hoRenderDeskSel(){
@@ -12735,9 +12780,9 @@ function _hoNoticeMsg(html){
     if(el) el.innerHTML = html;
   });
 }
-async function hoLoadNotices(){
+async function hoLoadNotices(silent){
   if(!document.getElementById('ho-nlist-admin')) return;
-  _hoNoticeMsg('<div style="padding:10px;text-align:center;color:#9ca3af;font-size:12px">불러오는 중...</div>');
+  if(!silent) _hoNoticeMsg('<div style="padding:10px;text-align:center;color:#9ca3af;font-size:12px">불러오는 중...</div>');
   try{
     var r = await db.from('handover_notices').select('*').is('deleted_at', null)
       .order('is_pinned', { ascending:false }).order('created_at', { ascending:false }).limit(50);
@@ -12881,10 +12926,10 @@ async function hoNoticeDelete(id){
 }
 
 /* ── 인수인계 (문서형 인라인 편집) ──────────────────────── */
-async function hoLoadNotes(){
+async function hoLoadNotes(silent){
   var el = document.getElementById('ho-note-days');
   if(!el) return;
-  el.innerHTML = '<div style="padding:10px;text-align:center;color:#9ca3af;font-size:12px">불러오는 중...</div>';
+  if(!silent) el.innerHTML = '<div style="padding:10px;text-align:center;color:#9ca3af;font-size:12px">불러오는 중...</div>';
   try{
     var scope = _hoIsDesk() ? _hoMyDeskId() : _hoDesk;
     if(scope) await hoEnsureWeek(scope);
@@ -13217,6 +13262,7 @@ function _hoOlderCount(){
 function hoRenderNotes(){
   var box = document.getElementById('ho-note-days');
   if(!box) return;
+  var keepTop = box.scrollTop;   // 배경 갱신 후에도 보던 위치를 유지
   hoRenderBanner();
   var rows = _hoNotes || [];
   if(!rows.length){
@@ -13236,6 +13282,7 @@ function hoRenderNotes(){
   }
   box.innerHTML = html;
   hoRenderFooter();
+  if(_hoScrolled && !_hoScrollTo) box.scrollTop = keepTop;
   hoScrollToDay();
 }
 
@@ -13244,9 +13291,13 @@ function hoRenderNotes(){
 function hoScrollToDay(){
   var box = document.getElementById('ho-note-days');
   if(!box) return;
-  var target = _hoScrollTo || _hoToday();
+  // 진입 직후 또는 명시적 이동일 때만 스크롤한다.
+  // (60초 주기 갱신 때마다 오늘 칸으로 튀면 과거 기록을 읽을 수 없다)
+  var target = _hoScrollTo || (_hoScrolled ? null : _hoToday());
   var jumped = !!_hoScrollTo;
   _hoScrollTo = null;
+  if(!target) return;
+  _hoScrolled = true;
   var rec = (_hoNotes || []).find(function(r){ return r.work_date === target; });
   if(!rec) return;
   var el = document.getElementById('ho-day-' + rec.id);
