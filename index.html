@@ -4345,6 +4345,9 @@ function buildTeacherSidebar() {
       ${(currentUser.role === 'vice_director' && currentUser.permissions && currentUser.permissions.consult_manage)
         ? '<button class="menu-item" id="tmenu-consult" onclick="openConsultPage()"><span class="mi-icon">📋</span><span class="mi-label">입퇴원 상담</span></button>'
         : ''}
+      ${currentUser.role === 'vice_director'
+        ? menuItem('handover', '📋', '인수인계서', 'switchPanel')
+        : ''}
       <button class="menu-item" id="tmenu-syllabus" onclick="openSyllabusPage()">
         <span class="mi-icon">📑</span>
         <span class="mi-label">진도계획서</span>
@@ -4852,6 +4855,7 @@ function applyViceFilter() {
 }
 function viceHasTabAccess(tabId) {
   if (!currentUser || currentUser.role !== 'vice_director') return true;
+  if (tabId === 'handover') return true;   // 인수인계서 확인은 담당 분원 범위에서 기본 허용
   var permKeys = getVicePermKeys(currentUser);
   for (var i = 0; i < permKeys.length; i++) {
     var tabs = VICE_PERM_TO_TABS[permKeys[i]] || [];
@@ -12565,6 +12569,38 @@ function _hoNl(s){ return _hoEsc(s).replace(/\n/g,'<br>'); }
 function _hoIsAdmin(){ return !!(currentUser && currentUser.role === 'admin'); }
 function _hoIsDesk(){ return !!(currentUser && currentUser.role === 'desk'); }
 function _hoMyDeskId(){ return _hoIsDesk() ? (currentUser.id || '') : ''; }
+function _hoIsVice(){ return !!(currentUser && currentUser.role === 'vice_director'); }
+/* 행정팀장 칸에 글을 쓸 수 있는 역할 (관리자 · 부원장) */
+function _hoCanNotice(){ return _hoIsAdmin() || _hoIsVice(); }
+/* 부원장이 볼 수 있는 관 = 담당 분원(branch_ids)과 겹치는 데스크 계정.
+   정렬: 겹치는 분원 많은 순 → 동점이면 담당 분원이 더 넓은 관 → 이름순.
+   (예: '하안 고등'만 담당해도 하안1관·하안2관 중 범위가 넓은 하안2관이 기본) */
+function _hoViceDesks(){
+  if(!_hoIsVice()) return [];
+  var mine = Array.isArray(currentUser.branch_ids) ? currentUser.branch_ids : [];
+  if(!mine.length) return [];
+  var list = (_hoDesks || []).filter(function(d){
+    return (d.branch_ids || []).some(function(x){ return mine.indexOf(x) !== -1; });
+  }).map(function(d){
+    return { d:d,
+             ov:(d.branch_ids || []).filter(function(x){ return mine.indexOf(x) !== -1; }).length,
+             tot:(d.branch_ids || []).length };
+  });
+  list.sort(function(a, c){
+    return (c.ov - a.ov) || (c.tot - a.tot)
+        || String(a.d.username || '').localeCompare(String(c.d.username || ''));
+  });
+  return list.map(function(x){ return x.d; });
+}
+/* 공지 수정·삭제 권한 */
+function _hoCanEditNotice(r){
+  if(!r) return false;
+  if(r.author_role === 'admin'){
+    if(_hoIsAdmin()) return true;
+    return _hoIsVice() && r.created_by === (currentUser ? currentUser.id : null);
+  }
+  return _hoIsDesk();          // 근무자 공지는 근무자만
+}
 function _hoDeskName(id){
   if(!id) return '전체 공통';
   var d = (_hoDesks || []).find(function(x){ return x.id === id; });
@@ -12622,7 +12658,7 @@ async function hoEnsureWeek(deskId){
 
 async function hoLoadDesks(){
   try{
-    var r = await db.from('users').select('id,username,name').eq('role','desk').order('username');
+    var r = await db.from('users').select('id,username,name,branch_ids').eq('role','desk').order('username');
     _hoDesks = r.error ? [] : (r.data || []);
   }catch(e){ _hoDesks = []; }
 }
@@ -12716,7 +12752,7 @@ function _hoPanelOn(){
 }
 async function hoLiveRefresh(){
   if(!_hoPanelOn()) return;
-  if(!(currentUser && (currentUser.role === 'desk' || currentUser.role === 'admin'))) return;
+  if(!(currentUser && ['desk','admin','vice_director'].indexOf(currentUser.role) !== -1)) return;
   try{
     await hoLoadNotices(true);                  // 공지는 언제나 안전
     if(!_hoEditing()) await hoLoadNotes(true);  // 인수인계는 편집 중이 아닐 때만
@@ -12743,13 +12779,17 @@ async function hoInit(){
   var wrap = document.getElementById('ho-wrap');
   if(!wrap) return;
   var role = currentUser && currentUser.role;
-  if(role !== 'desk' && role !== 'admin'){ wrap.style.display = 'none'; return; }
+  if(role !== 'desk' && role !== 'admin' && role !== 'vice_director'){ wrap.style.display = 'none'; return; }
   wrap.style.display = '';
   if(!(_hoDesks || []).length) await hoLoadDesks();
-  if(_hoDesk === null) _hoDesk = _hoIsDesk() ? _hoMyDeskId() : '';
+  if(_hoDesk === null){
+    if(_hoIsDesk())      _hoDesk = _hoMyDeskId();
+    else if(_hoIsVice()){ var _vd = _hoViceDesks(); _hoDesk = _vd.length ? _vd[0].id : ''; }
+    else                 _hoDesk = '';
+  }
   hoRenderDeskSel();
   var _ba = document.getElementById('ho-nb-admin');
-  if(_ba) _ba.style.display = _hoIsAdmin() ? '' : 'none';
+  if(_ba) _ba.style.display = _hoCanNotice() ? '' : 'none';
   var _bd = document.getElementById('ho-nb-desk');
   if(_bd) _bd.style.display = _hoIsDesk() ? '' : 'none';
   // 관리자에게는 근무자 공지 칸을 숨기고 왼쪽을 전체폭으로
@@ -12772,6 +12812,19 @@ function hoRenderDeskSel(){
     sel.innerHTML = '<option value="' + me + '">' + _hoEsc(currentUser.name || currentUser.username || '') + '</option>';
     sel.value = me;
     sel.disabled = true;
+    return;
+  }
+  if(_hoIsVice()){
+    var vd = _hoViceDesks();
+    if(!vd.length){
+      sel.innerHTML = '<option value="">담당 분원 없음</option>';
+      sel.disabled = true;
+      return;
+    }
+    sel.innerHTML = vd.map(function(d){ return '<option value="' + d.id + '">' + _hoEsc(d.name || d.username || '') + '</option>'; }).join('');
+    if(!_hoDesk) _hoDesk = vd[0].id;
+    sel.value = _hoDesk;
+    sel.disabled = (vd.length <= 1);
     return;
   }
   var html = '<option value="">전체 관</option>';
@@ -12831,7 +12884,7 @@ function hoRenderNoticeCol(kind){
   var more = isAdminCol ? _hoNoticeMoreA : _hoNoticeMoreD;
   var show = more ? rows : rows.slice(0, 5);
   var html = show.map(function(r){
-    var canEdit = isAdminCol ? _hoIsAdmin() : true;
+    var canEdit = _hoCanEditNotice(r);
     var pin  = r.is_pinned ? '<span style="font-size:12px">📌</span>' : '';
     var scopeChip = !r.desk_id
       ? '<span style="background:#f1f5f9;color:#475569;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700">전체 공통</span>'
@@ -12867,7 +12920,8 @@ function hoNoticeOpen(id, kind){
   var rec = id ? (_hoNotices || []).find(function(x){ return x.id === id; }) : null;
   if(id && !rec) return;
   var isOrder = rec ? (rec.author_role === 'admin') : (kind === 'admin');
-  if(isOrder && !_hoIsAdmin()){ alert('행정팀장 공지사항은 관리자만 작성·수정할 수 있습니다.'); return; }
+  if(isOrder && !_hoCanNotice()){ alert('행정팀장 공지사항은 관리자·부원장만 작성할 수 있습니다.'); return; }
+  if(rec && !_hoCanEditNotice(rec)){ alert('이 공지는 작성자만 수정할 수 있습니다.'); return; }
   _hoEditNotice = id || null;
   _hoNoticeKind = isOrder ? 'admin' : 'desk';
   var t = document.getElementById('ho-notice-modal-title');
@@ -12884,6 +12938,11 @@ function hoNoticeOpen(id, kind){
       var me = _hoMyDeskId();
       sel.innerHTML = '<option value="' + me + '">' + _hoEsc(currentUser.name || currentUser.username || '') + ' (본인 관)</option>';
       sel.value = me; sel.disabled = true;
+    }else if(_hoIsVice()){
+      var vdm = _hoViceDesks();
+      sel.innerHTML = vdm.map(function(d){ return '<option value="' + d.id + '">' + _hoEsc(d.name || d.username || '') + '</option>'; }).join('');
+      sel.value = (rec && rec.desk_id) ? rec.desk_id : (_hoDesk || (vdm[0] ? vdm[0].id : ''));
+      sel.disabled = false;      // 부원장은 담당 관에만 공지 가능(전체 공통 없음)
     }else{
       var html = '<option value="">전체 공통 (모든 관)</option>';
       (_hoDesks || []).forEach(function(d){ html += '<option value="' + d.id + '">' + _hoEsc(d.name || d.username || '') + '</option>'; });
@@ -12904,6 +12963,7 @@ async function hoNoticeSave(){
   var sel = document.getElementById('ho-notice-desk');
   var pin = document.getElementById('ho-notice-pin');
   var deskId = _hoIsDesk() ? _hoMyDeskId() : ((sel && sel.value) ? sel.value : null);
+  if(_hoIsVice() && !deskId){ alert('담당 관을 선택해 주세요.'); return; }
   var rec = {
     desk_id   : deskId || null,
     desk_name : deskId ? _hoDeskName(deskId) : null,
@@ -12916,7 +12976,7 @@ async function hoNoticeSave(){
       var u = await db.from('handover_notices').update(rec).eq('id', _hoEditNotice);
       if(u.error) throw u.error;
     }else{
-      rec.author_role     = (_hoNoticeKind === 'admin' && _hoIsAdmin()) ? 'admin' : 'desk';
+      rec.author_role     = (_hoNoticeKind === 'admin' && _hoCanNotice()) ? 'admin' : 'desk';
       rec.created_by      = currentUser ? currentUser.id : null;
       rec.created_by_name = currentUser ? (currentUser.name || '') : '';
       var i = await db.from('handover_notices').insert(rec);
@@ -12930,7 +12990,7 @@ async function hoNoticeSave(){
 
 async function hoNoticeDelete(id){
   var rec = (_hoNotices || []).find(function(x){ return x.id === id; });
-  if(rec && rec.author_role === 'admin' && !_hoIsAdmin()){ alert('행정팀장 공지사항은 관리자만 삭제할 수 있습니다.'); return; }
+  if(!_hoCanEditNotice(rec)){ alert('이 공지는 작성자만 삭제할 수 있습니다.'); return; }
   if(!confirm('이 공지사항을 삭제할까요?')) return;
   try{
     var r = await db.from('handover_notices').update({ deleted_at: new Date().toISOString() }).eq('id', id);
@@ -13214,10 +13274,15 @@ function _hoToolbar(){
 }
 
 function _hoDayHTML(r){
-  var chip = _hoIsAdmin()
+  var chip = (_hoIsAdmin() || _hoIsVice())
     ? '<span style="background:#e0e7ff;color:#4338ca;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:700">' + _hoEsc(r.desk_name || _hoDeskName(r.desk_id)) + '</span>'
     : '';
+  var ro = _hoIsVice();          // 부원장은 확인 전용(수정 불가)
   var f = function(field, ph, minH, extra){
+    if(ro){
+      return '<div class="ho-ed" data-f="' + field + '" data-ph="' + ph + '"'
+        + ' style="' + _HO_ED + ';min-height:' + minH + 'px' + (extra || '') + '">' + _hoToHtml(r[field]) + '</div>';
+    }
     return '<div class="ho-ed" contenteditable="true" data-id="' + r.id + '" data-f="' + field + '" data-ph="' + ph + '"'
       + ' onfocus="hoEdFocus(this)" oninput="hoEdInput(this)" onblur="hoEdBlur(this)"'
       + ' onkeyup="hoEdSaveSel()" onmouseup="hoEdSaveSel()" onclick="hoEdClick(event,this)" onkeydown="hoEdKey(event,this)"'
@@ -13236,7 +13301,7 @@ function _hoDayHTML(r){
       + chip
       + '<span id="ho-st-' + r.id + '" style="margin-left:auto;font-size:10px;color:#94a3b8"></span>'
     + '</div>'
-    + _hoToolbar()
+    + (ro ? '' : _hoToolbar())
     /* 근무 내용 (주 작성칸) */
     + '<div>'
       + lbl('근무 내용', '#64748b')
