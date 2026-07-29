@@ -1658,6 +1658,10 @@
               style="padding:8px 14px;background:#f5f3ff;color:#5b21b6;border:1.5px solid #c4b5fd;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">
               🖨️ 출석부
             </button>
+            <button onclick="ptAddStuOpen()" title="입학일이 회차보다 늦어 명단에 없는 학생을 이 회차에 추가"
+              style="padding:8px 14px;background:#fff;color:#5b21b6;border:1.5px dashed #c4b5fd;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">
+              ＋ 학생 추가
+            </button>
             <!-- 리포트 버튼 (선생님/데스크/관리자 공통, 기본 숨김 → initPotential/initAdminWeekendPotential에서 표시) -->
             <button id="pt-report-btn" onclick="ptOpenReportModal()"
               style="display:none;padding:8px 14px;background:#fff;color:#7c3aed;border:2px solid #7c3aed;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">
@@ -7967,6 +7971,97 @@ function ptOnBranchChange() {
   try { wsRenderBadge('potential'); wsFillRoundSelect('potential'); } catch(e) {}
 }
 
+/* ── [늦은 입학 예외] 회차에 학생 수동 추가 ──────────────────
+   입학일이 회차보다 늦어 명단에 안 뜨는 학생을 그 회차에만 편입한다.
+   추가 = 해당 회차의 weekend_potential 레코드 생성 → 이후 ptLoadData 가
+   기록을 보고 명단에 계속 유지한다(별도 예외 테이블 불필요).
+   잘못 넣었으면 그 회차 레코드를 지우면 명단에서 빠진다. */
+var _ptAddTimer = null;
+
+function ptAddStuOpen() {
+  var date = (document.getElementById('pt-date') || {}).value || '';
+  if (!date) { alert('먼저 회차 날짜를 선택하세요.'); return; }
+  var sub = document.getElementById('pt-add-sub');
+  if (sub) sub.innerHTML = '<b>' + _esc(date) + '</b> 회차에 학생을 추가합니다. 입학일이 회차보다 늦어 명단에 없는 학생도 검색됩니다.';
+  var q = document.getElementById('pt-add-q'); if (q) q.value = '';
+  var list = document.getElementById('pt-add-list');
+  if (list) list.innerHTML = '<div style="padding:22px;text-align:center;color:#9ca3af;font-size:12px">학생 이름을 입력하세요</div>';
+  openModal('ptAddStu');
+  if (q) setTimeout(function(){ q.focus(); }, 50);
+}
+
+function ptAddSearch() {
+  clearTimeout(_ptAddTimer);
+  _ptAddTimer = setTimeout(ptAddSearchRun, 300);
+}
+
+async function ptAddSearchRun() {
+  var list = document.getElementById('pt-add-list');
+  if (!list) return;
+  var q = ((document.getElementById('pt-add-q') || {}).value || '').trim();
+  if (!q) { list.innerHTML = '<div style="padding:22px;text-align:center;color:#9ca3af;font-size:12px">학생 이름을 입력하세요</div>'; return; }
+  var date = (document.getElementById('pt-date') || {}).value || '';
+  list.innerHTML = '<div style="padding:18px;text-align:center;color:#9ca3af;font-size:12px">검색 중...</div>';
+  try {
+    var tids = ptGetSelectedTeacherIds();
+    if (!tids.length) tids = (_ptAllTeachers || []).map(function(t){ return t.id; });
+    if (!tids.length && currentUser && currentUser.role === 'teacher') tids = [currentUser.id];
+    var r = await db.from('users').select('id,name,school,grade,teacher_id,enrolled_at,potential_yn')
+      .eq('role','student').eq('status','active').ilike('name', '%' + q + '%').order('name').limit(30);
+    if (r.error) throw r.error;
+    var rows = (r.data || []).filter(function(s){ return tids.indexOf(s.teacher_id) !== -1; });
+    if (!rows.length) {
+      list.innerHTML = '<div style="padding:22px;text-align:center;color:#9ca3af;font-size:12px">검색 결과가 없습니다'
+        + '<br><span style="font-size:11px">현재 선택된 선생님의 학생만 검색됩니다</span></div>';
+      return;
+    }
+    var inRoster = new Set((_ptStudents || []).map(function(s){ return s.id; }));
+    var tmap = {}; (_ptAllTeachers || []).forEach(function(t){ tmap[t.id] = t.name; });
+    list.innerHTML = rows.map(function(s){
+      var already = inRoster.has(s.id);
+      var late    = !!(s.enrolled_at && date && s.enrolled_at > date);
+      return '<div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px">'
+        + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:13px;font-weight:700;color:#1e293b">' + _esc(s.name)
+            + (late ? ' <span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700">입학 ' + _esc(s.enrolled_at) + '</span>' : '')
+            + (s.potential_yn === true ? '' : ' <span style="background:#f1f5f9;color:#64748b;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700">포텐셜 미대상</span>')
+          + '</div>'
+          + '<div style="font-size:11px;color:#64748b;margin-top:2px">' + _esc(s.school || '') + ' ' + _esc(s.grade || '') + ' · ' + _esc(tmap[s.teacher_id] || '') + '</div>'
+        + '</div>'
+        + (already
+            ? '<span style="font-size:11px;color:#94a3b8;white-space:nowrap">이미 명단에 있음</span>'
+            : '<button onclick="ptAddStuConfirm(\'' + s.id + '\')" style="padding:5px 13px;border:none;border-radius:7px;background:#7c3aed;color:#fff;font-size:12px;font-weight:700;cursor:pointer">추가</button>')
+      + '</div>';
+    }).join('');
+  } catch(e) {
+    list.innerHTML = '<div style="padding:10px;color:#dc2626;font-size:12px">검색 오류: ' + _esc(e.message || e) + '</div>';
+  }
+}
+
+async function ptAddStuConfirm(sid) {
+  var date = (document.getElementById('pt-date') || {}).value || '';
+  if (!date) return;
+  try {
+    var ex = await db.from('weekend_potential').select('id').eq('student_id', sid).eq('session_date', date);
+    if (ex.error) throw ex.error;
+    if (!(ex.data || []).length) {
+      var u = await db.from('users').select('potential_level,potential_attend_time').eq('id', sid).single();
+      var d = String(date).split('-');
+      var ins = await db.from('weekend_potential').insert({
+        student_id  : sid,
+        session_date: date,
+        level       : u.data ? u.data.potential_level : null,
+        attend_time : u.data ? u.data.potential_attend_time : null,
+        weekday     : new Date(Number(d[0]), Number(d[1]) - 1, Number(d[2])).getDay(),
+        created_by  : currentUser ? currentUser.id : null
+      });
+      if (ins.error) throw ins.error;
+    }
+    closeModal('ptAddStu');
+    await ptLoadData();
+  } catch(e) { alert('추가 오류: ' + (e.message || e)); }
+}
+
 /* ── 데이터 로드 ─────────────────────────────────────────── */
 async function ptLoadData() {
   var date = document.getElementById('pt-date')?.value || '';
@@ -8015,10 +8110,30 @@ async function ptLoadData() {
     var _ptSeen = new Set(allStudents.map(function(x){ return x.id; }));
     (ptDelegRes.data || []).forEach(function(ds){ if (!_ptSeen.has(ds.id)) { allStudents.push(ds); _ptSeen.add(ds.id); } });
 
+    /* [늦은 입학 예외] 회차 이후에 입학했더라도 그 회차에 이미 기록이 있으면 명단에 유지한다.
+       (예: 7/15 입학 학생이 7/11 1회차를 응시한 경우 — enrolled_at 필터에 걸려 사라지던 문제)
+       담당 선생님(또는 공동관리 위임) 범위는 그대로 지킨다. */
+    var _ptForce = new Set();
+    try {
+      var _ptRecRes = await db.from('weekend_potential').select('student_id').eq('session_date', date);
+      var _ptRecIds = [...new Set((_ptRecRes.data || []).map(function(x){ return x.student_id; }))]
+                        .filter(function(id){ return !_ptSeen.has(id); });
+      if (_ptRecIds.length) {
+        var _ptExtra = await fetchRowsByIds(function(chunk) {
+          return db.from('users').select(_ptSel).eq('role','student').eq('status','active').in('id', chunk);
+        }, _ptRecIds);
+        (_ptExtra || []).forEach(function(s){
+          var mine = (selectedIds.indexOf(s.teacher_id) !== -1) || (_ptDeleg.studentIds.indexOf(s.id) !== -1);
+          if (mine && !_ptSeen.has(s.id)) { allStudents.push(s); _ptSeen.add(s.id); _ptForce.add(s.id); }
+        });
+      }
+    } catch(e) { console.warn('[ptLoadData] 회차 기록 예외 조회 실패', e); }
+
     // 이력 기반 필터 + 값 덮어쓰기
     // 인수인계서 원칙: _ptStudents에만 할당, 전역 students 불변
+    // _ptForce = 그 회차에 실제 기록이 있는 학생 → potential_yn 필터를 우회한다
     _ptStudents = (allStudents || [])
-      .filter(s => histMap[s.id] ? histMap[s.id].potential_yn === true : s.potential_yn === true)
+      .filter(s => _ptForce.has(s.id) || (histMap[s.id] ? histMap[s.id].potential_yn === true : s.potential_yn === true))
       .map(s => {
         var h = histMap[s.id];
         if (!h) return s;
@@ -27276,6 +27391,19 @@ tryAutoLogin();
 </div>
 
 <!-- 관리자 계정 추가 -->
+<!-- ── [포텐셜] 회차에 학생 추가 (늦은 입학 예외) ── -->
+<div class="modal-backdrop" id="modal-ptAddStu">
+  <div class="modal" style="max-width:560px;width:96vw;max-height:90vh;display:flex;flex-direction:column">
+    <div class="modal-handle"></div>
+    <div class="modal-title">＋ 회차에 학생 추가</div>
+    <div id="pt-add-sub" style="font-size:12px;color:#6b7280;margin-bottom:12px;line-height:1.5"></div>
+    <input type="text" id="pt-add-q" placeholder="학생 이름 검색" oninput="ptAddSearch()"
+      style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
+    <div id="pt-add-list" style="flex:1;overflow-y:auto;margin-top:10px;min-height:140px"></div>
+    <div style="margin-top:10px"><button class="btn btn-full" onclick="closeModal('ptAddStu')">닫기</button></div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="modal-addAdmin">
   <div class="modal">
     <div class="modal-handle"></div>
