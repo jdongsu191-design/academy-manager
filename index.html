@@ -4543,6 +4543,7 @@ function enterFirstPanel() {
   } else if (role === 'desk') {
     // 데스크 첫 화면 = 인수인계서 (권한 불필요 · 전 데스크 공통)
     switchPanel('handover', document.getElementById('amenu-handover'));
+    if (typeof hoRemindStart === 'function') hoRemindStart();
     return;
   } else if (role === '__desk_legacy__') {
     var _deskPermKeys = getDeskPermKeys(currentUser);
@@ -12509,6 +12510,8 @@ var _hoExpand     = false;  // 인수인계 전체 펼침 여부
 var _hoEditNotice = null;
 var _hoTimers     = {};     // 자동저장 디바운스 타이머 (id별)
 var _hoDirty      = {};     // 저장 대기 중인 변경 필드 (id별)
+var _hoScrollTo   = null;   // 지정 시 그 날짜 칸으로 스크롤 (1회성)
+var _hoRemindOn   = false;  // 어제 확인 알람 기동 여부
 
 function _hoEsc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function _hoNl(s){ return _hoEsc(s).replace(/\n/g,'<br>'); }
@@ -12520,7 +12523,9 @@ function _hoDeskName(id){
   var d = (_hoDesks || []).find(function(x){ return x.id === id; });
   return d ? (d.name || d.username || '-') : '-';
 }
-function _hoToday(){ var d = new Date(); var z = function(n){ return (n < 10 ? '0' : '') + n; }; return d.getFullYear() + '-' + z(d.getMonth()+1) + '-' + z(d.getDate()); }
+function _hoYMD(d){ var z = function(n){ return (n < 10 ? '0' : '') + n; }; return d.getFullYear() + '-' + z(d.getMonth()+1) + '-' + z(d.getDate()); }
+function _hoToday(){ return _hoYMD(new Date()); }
+function _hoYesterday(){ var d = new Date(); d.setDate(d.getDate() - 1); return _hoYMD(d); }
 function _hoDateLabel(ymd){
   if(!ymd) return '';
   var a = String(ymd).split('-'); if(a.length < 3) return String(ymd);
@@ -12595,6 +12600,56 @@ function hoRestoreFold(){
     body.style.display = folded ? 'none' : '';
     if(btn) btn.textContent = folded ? '펼치기 ▼' : '접기 ▲';
   });
+}
+
+/* ── [알람] 매일 오전 8시 "어제 인수인계 확인" (데스크 전용) ────
+   · 한 번 확인하면 그날은 다시 뜨지 않음(localStorage에 날짜 기록)
+   · 확인을 누르면 인수인계서 패널로 이동해 어제 칸으로 스크롤
+   · 앱을 8시 이전부터 켜둬도 8시 정각에 뜨도록 타이머 예약 */
+var HO_REMIND_HOUR = 8;
+function _hoRemindKey(){ return 'ho_remind_ack_' + (currentUser ? currentUser.id : 'anon'); }
+function _hoRemindAcked(){
+  try { return localStorage.getItem(_hoRemindKey()) === _hoToday(); } catch(e){ return false; }
+}
+function hoRemindShow(){
+  var o = document.getElementById('ho-remind-overlay');
+  if(!o) return;
+  var d = document.getElementById('ho-remind-date');
+  if(d) d.textContent = _hoDateLabel(_hoYesterday());
+  o.style.display = 'flex';
+}
+function hoRemindClose(){
+  var o = document.getElementById('ho-remind-overlay');
+  if(o) o.style.display = 'none';
+  try { localStorage.setItem(_hoRemindKey(), _hoToday()); } catch(e){}
+}
+function hoRemindGo(){
+  hoRemindClose();
+  var y = _hoYesterday();
+  _hoScrollTo = y;
+  // 어제가 이번 주 밖(월요일에 열람 등)이면 이전 기록까지 펼쳐야 칸이 그려진다
+  if(_hoWeekDates().indexOf(y) === -1) _hoExpand = true;
+  var btn = document.getElementById('amenu-handover');
+  if(typeof switchPanel === 'function') switchPanel('handover', btn);
+}
+function hoRemindTick(){
+  if(!(currentUser && currentUser.role === 'desk')) return;
+  if(new Date().getHours() < HO_REMIND_HOUR) return;
+  if(_hoRemindAcked()) return;
+  hoRemindShow();
+}
+function hoRemindStart(){
+  if(_hoRemindOn) return;
+  if(!(currentUser && currentUser.role === 'desk')) return;
+  _hoRemindOn = true;
+  hoRemindTick();                       // 이미 8시가 지났으면 즉시
+  var now  = new Date();
+  var next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), HO_REMIND_HOUR, 0, 0, 0);
+  if(next <= now) next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, HO_REMIND_HOUR, 0, 0, 0);
+  setTimeout(function(){
+    hoRemindTick();
+    setInterval(hoRemindTick, 24 * 60 * 60 * 1000);
+  }, next - now);
 }
 
 /* ── 초기화 ── */
@@ -12911,9 +12966,6 @@ function _hoDayHTML(r){
         + ' oninput="hoFld(\'' + r.id + '\',\'work_date\',this)" onblur="hoFldBlur(\'' + r.id + '\')"'
         + ' style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:11px;background:#fff;color:#475569;outline:none">'
       + '<span id="ho-dl-' + r.id + '" style="font-size:13px;font-weight:800;color:#0f172a">' + _hoDateLabel(r.work_date) + '</span>'
-      + '<input type="text" placeholder="시간대" value="' + _hoEsc(r.time_slot || '') + '"'
-        + ' oninput="hoFld(\'' + r.id + '\',\'time_slot\',this)" onblur="hoFldBlur(\'' + r.id + '\')"'
-        + ' style="width:110px;padding:3px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:11px;background:#fff;outline:none">'
       + chip
       + '<span id="ho-st-' + r.id + '" style="margin-left:auto;font-size:10px;color:#94a3b8"></span>'
       + '<button onclick="hoNoteDelete(\'' + r.id + '\')" title="이 날짜 삭제"'
@@ -12978,19 +13030,26 @@ function hoRenderNotes(){
   box.innerHTML = html;
   _hoGrowAll();
   hoRenderFooter();
-  hoScrollToToday();
+  hoScrollToDay();
 }
 
-/* 오늘 날짜 칸으로 박스 내부 스크롤 이동 (페이지 전체는 건드리지 않음) */
-function hoScrollToToday(){
+/* 지정 날짜(_hoScrollTo, 없으면 오늘) 칸으로 박스 내부 스크롤 이동.
+   페이지 전체 스크롤은 건드리지 않는다. */
+function hoScrollToDay(){
   var box = document.getElementById('ho-note-days');
   if(!box) return;
-  var today = _hoToday();
-  var rec = (_hoNotes || []).find(function(r){ return r.work_date === today; });
+  var target = _hoScrollTo || _hoToday();
+  var jumped = !!_hoScrollTo;
+  _hoScrollTo = null;
+  var rec = (_hoNotes || []).find(function(r){ return r.work_date === target; });
   if(!rec) return;
   var el = document.getElementById('ho-day-' + rec.id);
   if(!el) return;
   box.scrollTop = Math.max(0, el.offsetTop - 6);
+  if(jumped){
+    el.style.boxShadow = '0 0 0 3px rgba(37,99,235,.35)';
+    setTimeout(function(){ el.style.boxShadow = ''; }, 2200);
+  }
 }
 
 function hoRenderFooter(){
@@ -27974,6 +28033,22 @@ tryAutoLogin();
 
 <!-- 관리자 계정 추가 -->
 <!-- ── [HANDOVER] 공지사항 작성/수정 ── -->
+<!-- ── [HANDOVER] 매일 오전 8시 · 어제 인수인계 확인 알람 (데스크 전용) ── -->
+<div id="ho-remind-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;align-items:center;justify-content:center">
+  <div style="background:#fff;padding:30px 34px;border-radius:16px;text-align:center;box-shadow:0 14px 50px rgba(0,0,0,.35);max-width:400px;margin:16px">
+    <div style="font-size:44px;line-height:1">📋</div>
+    <div style="font-size:19px;font-weight:800;margin:12px 0 8px;color:#0f172a">어제 인수인계 확인</div>
+    <div style="color:#475569;font-size:14px;margin-bottom:8px;line-height:1.6">
+      <b id="ho-remind-date" style="color:#1d4ed8"></b> 에 작성된<br>인수인계서를 확인해 주세요.
+    </div>
+    <div style="color:#94a3b8;font-size:12px;margin-bottom:20px">확인을 누르면 어제 인수인계로 이동합니다</div>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button onclick="hoRemindClose()" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:11px 20px;border-radius:9px;font-weight:700;font-size:14px;cursor:pointer">나중에</button>
+      <button onclick="hoRemindGo()" style="background:#1d4ed8;color:#fff;border:none;padding:11px 30px;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer">확인했습니다</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── [포텐셜] 회차에 학생 추가 (늦은 입학 예외) ── -->
 <div class="modal-backdrop" id="modal-ptAddStu">
   <div class="modal" style="max-width:560px;width:96vw;max-height:90vh;display:flex;flex-direction:column">
