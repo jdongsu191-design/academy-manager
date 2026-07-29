@@ -2338,11 +2338,22 @@
               <div id="ho-notice-2col">
                 <!-- 왼쪽: 행정팀장 -->
                 <div class="ho-nc" id="ho-nc-admin">
-                  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
-                    <div id="ho-nc-admin-title" style="font-size:12.5px;font-weight:800;color:#b91c1c">📢 행정팀장 공지사항</div>
-                    <button id="ho-nb-admin" onclick="hoNoticeOpen(null,'admin')" style="display:none;padding:4px 10px;border:1px solid #fecaca;border-radius:7px;background:#fff5f5;color:#b91c1c;font-size:11px;font-weight:700;cursor:pointer">＋ 작성</button>
+                  <!-- 위: 행정팀장 -->
+                  <div id="ho-sec-admin">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+                      <div style="font-size:12.5px;font-weight:800;color:#b91c1c">📢 행정팀장 공지사항</div>
+                      <button id="ho-nb-admin" onclick="hoNoticeOpen(null,'admin')" style="display:none;padding:4px 10px;border:1px solid #fecaca;border-radius:7px;background:#fff5f5;color:#b91c1c;font-size:11px;font-weight:700;cursor:pointer">＋ 작성</button>
+                    </div>
+                    <div id="ho-nlist-admin"></div>
                   </div>
-                  <div id="ho-nlist-admin"></div>
+                  <!-- 아래: 부원장 -->
+                  <div id="ho-sec-vice" style="display:none;margin-top:14px;padding-top:12px;border-top:1px dashed #d8d3f0">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+                      <div style="font-size:12.5px;font-weight:800;color:#6d28d9">📝 부원장 공지사항</div>
+                      <button id="ho-nb-vice" onclick="hoNoticeOpen(null,'vice')" style="display:none;padding:4px 10px;border:1px solid #ddd6fe;border-radius:7px;background:#faf8ff;color:#6d28d9;font-size:11px;font-weight:700;cursor:pointer">＋ 작성</button>
+                    </div>
+                    <div id="ho-nlist-vice"></div>
+                  </div>
                 </div>
                 <!-- 오른쪽: 근무자 -->
                 <div class="ho-nc" id="ho-nc-desk">
@@ -12550,8 +12561,7 @@ var _hoDesk       = null;   // 선택된 관(데스크 계정 id). 관리자 '' 
 var _hoDesks      = [];     // 관 목록 (데스크 계정)
 var _hoNotes      = [];
 var _hoNotices    = [];
-var _hoNoticeMoreA = false;   // 행정팀장 칸 더보기
-var _hoNoticeMoreD = false;   // 근무자 칸 더보기
+var _hoNoticeMore = { admin:false, vice:false, desk:false };   // 구역별 더보기
 var _hoNoticeKind  = 'desk';  // 지금 작성 중인 공지 구분
 var _hoExpand     = false;  // 인수인계 전체 펼침 여부
 var _hoEditNotice = null;
@@ -12570,10 +12580,14 @@ function _hoIsAdmin(){ return !!(currentUser && currentUser.role === 'admin'); }
 function _hoIsDesk(){ return !!(currentUser && currentUser.role === 'desk'); }
 function _hoMyDeskId(){ return _hoIsDesk() ? (currentUser.id || '') : ''; }
 function _hoIsVice(){ return !!(currentUser && currentUser.role === 'vice_director'); }
-/* 왼쪽 칸 표기: 부원장 계정에서는 '부원장 공지사항'으로 보인다 */
-function _hoNoticeLabel(){ return _hoIsVice() ? '부원장 공지사항' : '행정팀장 공지사항'; }
-/* 행정팀장 칸에 글을 쓸 수 있는 역할 (관리자 · 부원장) */
-function _hoCanNotice(){ return _hoIsAdmin() || _hoIsVice(); }
+/* 공지 구분 표기 (author_role 값과 1:1) */
+var HO_NLBL = { admin:'행정팀장', vice:'부원장', desk:'근무자' };
+function _hoNoticeKindOf(r){
+  if(!r) return 'desk';
+  if(r.author_role === 'admin') return 'admin';
+  if(r.author_role === 'vice')  return 'vice';
+  return 'desk';
+}
 /* 부원장이 볼 수 있는 관 = 담당 분원(branch_ids)과 겹치는 데스크 계정.
    정렬: 겹치는 분원 많은 순 → 동점이면 담당 분원이 더 넓은 관 → 이름순.
    (예: '하안 고등'만 담당해도 하안1관·하안2관 중 범위가 넓은 하안2관이 기본) */
@@ -12597,11 +12611,11 @@ function _hoViceDesks(){
 /* 공지 수정·삭제 권한 */
 function _hoCanEditNotice(r){
   if(!r) return false;
-  if(r.author_role === 'admin'){
-    if(_hoIsAdmin()) return true;
-    return _hoIsVice() && r.created_by === (currentUser ? currentUser.id : null);
-  }
-  return _hoIsDesk();          // 근무자 공지는 근무자만
+  var k = _hoNoticeKindOf(r);
+  if(k === 'admin') return _hoIsAdmin();                    // 행정팀장 공지 = 관리자만
+  if(k === 'vice')  return _hoIsAdmin()                     // 부원장 공지 = 관리자 또는 작성 본인
+      || (_hoIsVice() && r.created_by === (currentUser ? currentUser.id : null));
+  return _hoIsDesk();                                       // 근무자 공지 = 근무자만
 }
 function _hoDeskName(id){
   if(!id) return '전체 공통';
@@ -12791,9 +12805,9 @@ async function hoInit(){
   }
   hoRenderDeskSel();
   var _ba = document.getElementById('ho-nb-admin');
-  var _at = document.getElementById('ho-nc-admin-title');
-  if(_at) _at.textContent = '📢 ' + _hoNoticeLabel();
-  if(_ba) _ba.style.display = _hoCanNotice() ? '' : 'none';
+  if(_ba) _ba.style.display = _hoIsAdmin() ? '' : 'none';
+  var _bv = document.getElementById('ho-nb-vice');
+  if(_bv) _bv.style.display = _hoIsVice() ? '' : 'none';
   var _bd = document.getElementById('ho-nb-desk');
   if(_bd) _bd.style.display = _hoIsDesk() ? '' : 'none';
   // 관리자에게는 근무자 공지 칸을 숨기고 왼쪽을 전체폭으로
@@ -12870,35 +12884,43 @@ async function hoLoadNotices(silent){
 
 function hoRenderNotices(){
   hoRenderNoticeCol('admin');
+  hoRenderNoticeCol('vice');
   hoRenderNoticeCol('desk');
+  /* 부원장 구역은 부원장 본인이거나 실제 글이 있을 때만 보여준다
+     (관리자·근무자 화면에 빈 구역이 늘 떠 있지 않도록) */
+  var sec = document.getElementById('ho-sec-vice');
+  if(sec){
+    var has = (_hoNotices || []).some(function(r){ return _hoNoticeKindOf(r) === 'vice'; });
+    sec.style.display = (_hoIsVice() || has) ? '' : 'none';
+  }
 }
 
-/* kind: 'admin' = 행정팀장 공지 / 'desk' = 근무자 공지 */
+/* kind: 'admin' 행정팀장 / 'vice' 부원장 / 'desk' 근무자 */
 function hoRenderNoticeCol(kind){
   var el = document.getElementById('ho-nlist-' + kind);
   if(!el) return;
-  var isAdminCol = (kind === 'admin');
-  var rows = (_hoNotices || []).filter(function(r){
-    return isAdminCol ? (r.author_role === 'admin') : (r.author_role !== 'admin');
-  });
+  var rows = (_hoNotices || []).filter(function(r){ return _hoNoticeKindOf(r) === kind; });
   if(!rows.length){
-    el.innerHTML = '<div style="padding:14px;text-align:center;color:#9ca3af;font-size:12px">등록된 공지가 없습니다</div>';
+    el.innerHTML = '<div style="padding:12px;text-align:center;color:#9ca3af;font-size:12px">등록된 공지가 없습니다</div>';
     return;
   }
-  var more = isAdminCol ? _hoNoticeMoreA : _hoNoticeMoreD;
+  var tone = { admin:{ bd:'#fecaca', bg:'#fff8f8' },
+               vice :{ bd:'#ddd6fe', bg:'#faf8ff' },
+               desk :{ bd:'#dbeafe', bg:'#f8fbff' } }[kind];
+  var more = !!_hoNoticeMore[kind];
   var show = more ? rows : rows.slice(0, 5);
   var html = show.map(function(r){
     var canEdit = _hoCanEditNotice(r);
     var pin  = r.is_pinned ? '<span style="font-size:12px">📌</span>' : '';
     var scopeChip = !r.desk_id
       ? '<span style="background:#f1f5f9;color:#475569;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700">전체 공통</span>'
-      : (_hoIsAdmin() ? '<span style="background:#f1f5f9;color:#64748b;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700">' + _hoEsc(r.desk_name || _hoDeskName(r.desk_id)) + '</span>' : '');
+      : ((_hoIsAdmin() || _hoIsVice()) ? '<span style="background:#f1f5f9;color:#64748b;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700">' + _hoEsc(r.desk_name || _hoDeskName(r.desk_id)) + '</span>' : '');
     var meta = _hoEsc(r.created_by_name || '') + ' · ' + String(r.created_at || '').slice(0,10);
     var btns = canEdit
       ? '<button onclick="hoNoticeOpen(\'' + r.id + '\')" style="padding:3px 8px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;color:#475569;font-size:11px;cursor:pointer;font-weight:600">수정</button>'
         + '<button onclick="hoNoticeDelete(\'' + r.id + '\')" style="padding:3px 8px;border:1px solid #fecaca;border-radius:6px;background:#fff5f5;color:#dc2626;font-size:11px;cursor:pointer;font-weight:600">삭제</button>'
       : '<span style="font-size:10px;color:#cbd5e1;white-space:nowrap">읽기 전용</span>';
-    return '<div style="display:flex;gap:8px;align-items:flex-start;padding:9px 10px;border-radius:8px;border:1px solid ' + (isAdminCol ? '#fecaca' : '#dbeafe') + ';background:' + (isAdminCol ? '#fff8f8' : '#f8fbff') + ';margin-bottom:6px">'
+    return '<div style="display:flex;gap:8px;align-items:flex-start;padding:9px 10px;border-radius:8px;border:1px solid ' + tone.bd + ';background:' + tone.bg + ';margin-bottom:6px">'
       + '<div style="flex:1;min-width:0">'
         + '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:4px">' + pin + scopeChip
           + '<span style="font-size:10px;color:#94a3b8">' + meta + '</span></div>'
@@ -12915,26 +12937,28 @@ function hoRenderNoticeCol(kind){
   el.innerHTML = html;
 }
 function hoNoticeMore(kind){
-  if(kind === 'admin') _hoNoticeMoreA = !_hoNoticeMoreA;
-  else                 _hoNoticeMoreD = !_hoNoticeMoreD;
+  _hoNoticeMore[kind] = !_hoNoticeMore[kind];
   hoRenderNoticeCol(kind);
 }
 
 function hoNoticeOpen(id, kind){
   var rec = id ? (_hoNotices || []).find(function(x){ return x.id === id; }) : null;
   if(id && !rec) return;
-  var isOrder = rec ? (rec.author_role === 'admin') : (kind === 'admin');
-  if(isOrder && !_hoCanNotice()){ alert('행정팀장 공지사항은 관리자·부원장만 작성할 수 있습니다.'); return; }
+  var k = rec ? _hoNoticeKindOf(rec) : (kind || 'desk');
+  if(k === 'admin' && !_hoIsAdmin()){ alert('행정팀장 공지사항은 관리자만 작성·수정할 수 있습니다.'); return; }
+  if(k === 'vice'  && !(_hoIsVice() || _hoIsAdmin())){ alert('부원장 공지사항은 부원장만 작성할 수 있습니다.'); return; }
   if(rec && !_hoCanEditNotice(rec)){ alert('이 공지는 작성자만 수정할 수 있습니다.'); return; }
   _hoEditNotice = id || null;
-  _hoNoticeKind = isOrder ? 'admin' : 'desk';
+  _hoNoticeKind = k;
   var t = document.getElementById('ho-notice-modal-title');
-  if(t) t.textContent = (id ? '공지 수정' : '공지 작성') + ' — ' + (isOrder ? ('📢 ' + _hoNoticeLabel().replace(' 공지사항','')) : '👥 근무자');
+  if(t) t.textContent = (id ? '공지 수정' : '공지 작성') + ' — ' + HO_NLBL[k] + ' 공지사항';
   var kindEl = document.getElementById('ho-notice-kind');
   if(kindEl){
-    kindEl.innerHTML = isOrder
-      ? '<span style="background:#fee2e2;color:#b91c1c;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:800">' + _hoNoticeLabel() + '</span> <span style="font-size:11px;color:#6b7280">근무자는 읽기만 가능합니다</span>'
-      : '<span style="background:#dbeafe;color:#1d4ed8;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:800">근무자 공지사항</span> <span style="font-size:11px;color:#6b7280">근무자끼리 공유하는 사항입니다</span>';
+    var TONE = { admin:['#fee2e2','#b91c1c','근무자는 읽기만 가능합니다'],
+                 vice :['#ede9fe','#6d28d9','담당 관에만 공지되며, 작성한 본인만 수정할 수 있습니다'],
+                 desk :['#dbeafe','#1d4ed8','근무자끼리 공유하는 사항입니다'] }[k];
+    kindEl.innerHTML = '<span style="background:' + TONE[0] + ';color:' + TONE[1] + ';padding:2px 9px;border-radius:6px;font-size:11px;font-weight:800">'
+      + HO_NLBL[k] + ' 공지사항</span> <span style="font-size:11px;color:#6b7280">' + TONE[2] + '</span>';
   }
   var sel = document.getElementById('ho-notice-desk');
   if(sel){
@@ -12980,7 +13004,8 @@ async function hoNoticeSave(){
       var u = await db.from('handover_notices').update(rec).eq('id', _hoEditNotice);
       if(u.error) throw u.error;
     }else{
-      rec.author_role     = (_hoNoticeKind === 'admin' && _hoCanNotice()) ? 'admin' : 'desk';
+      rec.author_role     = (_hoNoticeKind === 'admin' && _hoIsAdmin()) ? 'admin'
+                          : ((_hoNoticeKind === 'vice' && _hoIsVice()) ? 'vice' : 'desk');
       rec.created_by      = currentUser ? currentUser.id : null;
       rec.created_by_name = currentUser ? (currentUser.name || '') : '';
       var i = await db.from('handover_notices').insert(rec);
