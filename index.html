@@ -2121,13 +2121,14 @@
                 <select id="ho-note-desk" onchange="hoDeskChange()" style="padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-weight:600;outline:none;background:#fff;cursor:pointer"></select>
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap">
-                <button onclick="hoNoteOpen()" style="padding:5px 11px;border:1px solid #93c5fd;border-radius:7px;background:#dbeafe;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer">＋ 작성</button>
-                <button onclick="hoAllOpen()" style="padding:5px 11px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#475569;font-size:12px;font-weight:600;cursor:pointer">전체 보기</button>
+                <button onclick="hoNoteAddToday()" style="padding:5px 11px;border:1px solid #93c5fd;border-radius:7px;background:#dbeafe;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer">＋ 오늘 작성</button>
                 <button id="ho-note-toggle" onclick="hoToggle('note')" style="padding:5px 11px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#64748b;font-size:12px;font-weight:600;cursor:pointer">접기 ▲</button>
               </div>
             </div>
             <div id="ho-note-body" style="margin-top:10px">
-              <div id="ho-note-list"></div>
+              <div id="ho-note-banner"></div>
+              <div id="ho-note-days"></div>
+              <div id="ho-note-footer"></div>
             </div>
           </div>
 
@@ -12368,9 +12369,11 @@ function switchAcctTab(tab) {
    - 단위는 "관" = 데스크 계정(users.role='desk') 1개.
      branch_ids(학생 분원)는 관끼리 겹칠 수 있어 분리 기준으로 쓸 수 없음
      (예: 하안1관·하안2관이 '하안 고등'을 공유) → desk_id 기준으로 분리
-   - handover_notes   : 관별 근무 인수인계 로그 (누구나 수정/삭제)
+   - 인수인계는 구글 닥스와 동일한 "문서형" — 날짜별 표(근무자/근무 내용)를
+     화면에서 바로 타이핑하고 자동 저장한다(모달 없음).
+     ※ 자동저장 중에는 목록을 다시 그리지 않는다(포커스 유실 방지)
    - handover_notices : 이달의 공지 (desk_id null = 전체 관 공통)
-       · 관리자 작성 = 지시사항 → 관리자만 수정/삭제, 전체/특정 관 지정 가능
+       · 관리자 작성 = 지시사항 → 관리자만 수정/삭제
        · 데스크 작성 = 공유사항 → 누구나 수정/삭제, 본인 관 고정
    - 삭제는 전부 soft-delete(deleted_at)
 ============================================================ */
@@ -12379,8 +12382,10 @@ var _hoDesks      = [];     // 관 목록 (데스크 계정)
 var _hoNotes      = [];
 var _hoNotices    = [];
 var _hoNoticeMore = false;
-var _hoEditNote   = null;
+var _hoExpand     = false;  // 인수인계 전체 펼침 여부
 var _hoEditNotice = null;
+var _hoTimers     = {};     // 자동저장 디바운스 타이머 (id별)
+var _hoDirty      = {};     // 저장 대기 중인 변경 필드 (id별)
 
 function _hoEsc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function _hoNl(s){ return _hoEsc(s).replace(/\n/g,'<br>'); }
@@ -12398,9 +12403,8 @@ function _hoDateLabel(ymd){
   var a = String(ymd).split('-'); if(a.length < 3) return String(ymd);
   var d = new Date(Number(a[0]), Number(a[1])-1, Number(a[2]));
   var w = ['일','월','화','수','목','금','토'][d.getDay()] || '';
-  return a[1] + '/' + a[2] + '(' + w + ')';
+  return a[0] + '.' + a[1] + '.' + a[2] + '(' + w + ')';
 }
-function _hoModalOpen(id){ var el = document.getElementById('modal-' + id); return !!(el && el.style.display === 'flex'); }
 
 async function hoLoadDesks(){
   try{
@@ -12510,7 +12514,6 @@ async function hoLoadNotices(){
       .order('is_pinned', { ascending:false }).order('created_at', { ascending:false }).limit(50);
     if(r.error) throw r.error;
     var rows = r.data || [];
-    // 데스크: 본인 관 + 전체 공통만 / 관리자: 특정 관 선택 시 그 관 + 전체 공통
     var scope = _hoIsDesk() ? _hoMyDeskId() : _hoDesk;
     if(scope) rows = rows.filter(function(x){ return !x.desk_id || x.desk_id === scope; });
     _hoNotices = rows;
@@ -12636,174 +12639,203 @@ async function hoNoticeDelete(id){
   }catch(e){ alert('삭제 오류: ' + (e.message || e)); }
 }
 
-/* ── 인수인계 ────────────────────────────────────────────── */
+/* ── 인수인계 (문서형 인라인 편집) ──────────────────────── */
 async function hoLoadNotes(){
-  var el = document.getElementById('ho-note-list');
+  var el = document.getElementById('ho-note-days');
   if(!el) return;
   el.innerHTML = '<div style="padding:10px;text-align:center;color:#9ca3af;font-size:12px">불러오는 중...</div>';
   try{
     var q = db.from('handover_notes').select('*').is('deleted_at', null)
-      .order('work_date', { ascending:false }).order('created_at', { ascending:false }).limit(60);
+      .order('work_date', { ascending:false }).order('created_at', { ascending:false }).limit(120);
     var scope = _hoIsDesk() ? _hoMyDeskId() : _hoDesk;
     if(scope) q = q.eq('desk_id', scope);
     var r = await q;
     if(r.error) throw r.error;
     _hoNotes = r.data || [];
     hoRenderNotes();
-    if(_hoModalOpen('hoAll')) hoAllRender();
   }catch(e){
     el.innerHTML = '<div style="padding:8px;color:#dc2626;font-size:12px">인수인계 불러오기 오류: ' + _hoEsc(e.message || e) + '</div>';
   }
 }
 
-function _hoNoteCard(r){
-  var head = _hoDateLabel(r.work_date)
-    + (r.time_slot   ? ' · ' + _hoEsc(r.time_slot)   : '')
-    + (r.worker_name ? ' · ' + _hoEsc(r.worker_name) : '');
-  // 관 칩은 관리자에게만 (데스크는 항상 본인 관이라 불필요)
-  var chip = _hoIsAdmin()
-    ? ' <span style="background:#f1f5f9;color:#64748b;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700">' + _hoEsc(r.desk_name || _hoDeskName(r.desk_id)) + '</span>'
-    : '';
-  var body = '';
-  if((r.content || '').trim())
-    body += '<div style="margin-top:5px;font-size:12.5px;color:#334155;line-height:1.55;word-break:break-word">' + _hoNl(r.content) + '</div>';
-  if((r.student_notes || '').trim())
-    body += '<div style="margin-top:6px;padding:7px 9px;border-radius:7px;background:#f0f9ff;border:1px solid #bae6fd">'
-          + '<div style="font-size:10px;font-weight:800;color:#0369a1;margin-bottom:2px">학생 특이사항</div>'
-          + '<div style="font-size:12.5px;color:#0c4a6e;line-height:1.55;word-break:break-word">' + _hoNl(r.student_notes) + '</div></div>';
-  if((r.handover_to_next || '').trim())
-    body += '<div style="margin-top:6px;padding:7px 9px;border-radius:7px;background:#fffbeb;border:1px solid #fde68a">'
-          + '<div style="font-size:10px;font-weight:800;color:#92400e;margin-bottom:2px">다음 근무자 인계사항</div>'
-          + '<div style="font-size:12.5px;color:#78350f;line-height:1.55;word-break:break-word">' + _hoNl(r.handover_to_next) + '</div></div>';
-  return '<div style="padding:10px 11px;border:1px solid #e2e8f0;border-radius:9px;background:#fff;margin-bottom:7px">'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">'
-      + '<div style="font-size:12.5px;font-weight:800;color:#1e293b">' + head + chip + '</div>'
-      + '<div style="display:flex;gap:4px;flex-shrink:0">'
-        + '<button onclick="hoNoteOpen(\'' + r.id + '\')" style="padding:3px 8px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;color:#475569;font-size:11px;cursor:pointer;font-weight:600">수정</button>'
-        + '<button onclick="hoNoteDelete(\'' + r.id + '\')" style="padding:3px 8px;border:1px solid #fecaca;border-radius:6px;background:#fff5f5;color:#dc2626;font-size:11px;cursor:pointer;font-weight:600">삭제</button>'
-      + '</div>'
-    + '</div>' + body + '</div>';
+/* 자동 높이 조절 */
+function _hoGrow(el){
+  if(!el || el.tagName !== 'TEXTAREA') return;
+  el.style.height = 'auto';
+  el.style.height = (el.scrollHeight + 2) + 'px';
+}
+function _hoGrowAll(){
+  var box = document.getElementById('ho-note-days');
+  if(!box) return;
+  Array.prototype.forEach.call(box.querySelectorAll('textarea'), _hoGrow);
+}
+function _hoStatus(id, txt, color){
+  var e = document.getElementById('ho-st-' + id);
+  if(e){ e.textContent = txt; e.style.color = color || '#94a3b8'; }
 }
 
-function hoRenderNotes(){
-  var el = document.getElementById('ho-note-list');
-  if(!el) return;
-  var rows = _hoNotes || [];
-  var html = '';
-  var nx = rows.find(function(r){ return (r.handover_to_next || '').trim(); });
-  if(nx){
-    html += '<div style="padding:10px 12px;border-radius:9px;background:#fff7ed;border:1.5px solid #fb923c;margin-bottom:9px">'
-      + '<div style="font-size:11px;font-weight:800;color:#c2410c;margin-bottom:3px">⚠️ 다음 근무자 인계사항 '
-        + '<span style="font-weight:600;color:#9a3412">· ' + _hoDateLabel(nx.work_date) + (nx.worker_name ? ' ' + _hoEsc(nx.worker_name) : '') + '</span></div>'
-      + '<div style="font-size:13px;color:#7c2d12;line-height:1.6;word-break:break-word">' + _hoNl(nx.handover_to_next) + '</div></div>';
-  }
-  if(!rows.length){
-    el.innerHTML = html + '<div style="padding:14px;text-align:center;color:#9ca3af;font-size:12px">작성된 인수인계가 없습니다</div>';
-    return;
-  }
-  html += rows.slice(0, 3).map(_hoNoteCard).join('');
-  if(rows.length > 3){
-    html += '<div style="text-align:center;margin-top:2px"><button onclick="hoAllOpen()" style="padding:4px 12px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#64748b;font-size:11px;cursor:pointer;font-weight:600">전체 ' + rows.length + '건 보기 →</button></div>';
-  }
-  el.innerHTML = html;
+/* 입력 → 디바운스 자동저장 (재렌더 없음: 포커스 유지) */
+function hoFld(id, field, el){
+  var rec = (_hoNotes || []).find(function(x){ return x.id === id; });
+  if(rec) rec[field] = el.value;
+  _hoGrow(el);
+  if(!_hoDirty[id]) _hoDirty[id] = {};
+  _hoDirty[id][field] = el.value;
+  _hoStatus(id, '입력 중...', '#94a3b8');
+  clearTimeout(_hoTimers[id]);
+  _hoTimers[id] = setTimeout(function(){ hoFldSave(id); }, 900);
 }
+function hoFldBlur(id){ clearTimeout(_hoTimers[id]); hoFldSave(id); }
 
-function hoNoteOpen(id){
-  var rec = id ? (_hoNotes || []).find(function(x){ return x.id === id; }) : null;
-  if(id && !rec) return;
-  _hoEditNote = id || null;
-  var t = document.getElementById('ho-note-modal-title');
-  if(t) t.textContent = id ? '📋 인수인계 수정' : '📋 인수인계 작성';
-  var sel = document.getElementById('ho-note-desk-in');
-  if(sel){
-    if(_hoIsDesk()){
-      var me = _hoMyDeskId();
-      sel.innerHTML = '<option value="' + me + '">' + _hoEsc(currentUser.name || currentUser.username || '') + '</option>';
-      sel.value = me; sel.disabled = true;
-    }else{
-      sel.innerHTML = (_hoDesks || []).map(function(d){ return '<option value="' + d.id + '">' + _hoEsc(d.name || d.username || '') + '</option>'; }).join('');
-      sel.value = rec ? (rec.desk_id || '') : (_hoDesk || ((_hoDesks || [])[0] ? _hoDesks[0].id : ''));
-      sel.disabled = false;
-    }
-  }
-  var set = function(eid, v){ var e = document.getElementById(eid); if(e) e.value = v; };
-  set('ho-note-date',    rec ? (rec.work_date || _hoToday()) : _hoToday());
-  set('ho-note-time',    rec ? (rec.time_slot || '') : '');
-  set('ho-note-worker',  rec ? (rec.worker_name || '') : '');
-  set('ho-note-content', rec ? (rec.content || '') : '');
-  set('ho-note-stu',     rec ? (rec.student_notes || '') : '');
-  set('ho-note-next',    rec ? (rec.handover_to_next || '') : '');
-  openModal('hoNote');
-}
-
-async function hoNoteSave(){
-  var g = function(eid){ var e = document.getElementById(eid); return e ? e.value.trim() : ''; };
-  var date = g('ho-note-date');
-  if(!date){ alert('날짜를 입력하세요'); return; }
-  var sel = document.getElementById('ho-note-desk-in');
-  var deskId = _hoIsDesk() ? _hoMyDeskId() : (sel ? sel.value : '');
-  if(!deskId){ alert('관을 선택하세요'); return; }
-  var rec = {
-    desk_id         : deskId,
-    desk_name       : _hoDeskName(deskId),
-    work_date       : date,
-    time_slot       : g('ho-note-time')    || null,
-    worker_name     : g('ho-note-worker')  || null,
-    content         : g('ho-note-content') || null,
-    student_notes   : g('ho-note-stu')     || null,
-    handover_to_next: g('ho-note-next')    || null,
-    updated_at      : new Date().toISOString()
-  };
+async function hoFldSave(id){
+  var patch = _hoDirty[id];
+  if(!patch || !Object.keys(patch).length) return;
+  _hoDirty[id] = {};
+  patch.updated_at = new Date().toISOString();
+  _hoStatus(id, '저장 중...', '#94a3b8');
   try{
-    if(_hoEditNote){
-      var u = await db.from('handover_notes').update(rec).eq('id', _hoEditNote);
-      if(u.error) throw u.error;
-    }else{
-      rec.created_by      = currentUser ? currentUser.id : null;
-      rec.created_by_name = currentUser ? (currentUser.name || '') : '';
-      var i = await db.from('handover_notes').insert(rec);
-      if(i.error) throw i.error;
-    }
-    closeModal('hoNote');
-    _hoEditNote = null;
+    var r = await db.from('handover_notes').update(patch).eq('id', id);
+    if(r.error) throw r.error;
+    _hoStatus(id, '저장됨 ✓', '#16a34a');
+    hoRenderBanner();
+    var rec = (_hoNotes || []).find(function(x){ return x.id === id; });
+    var lab = document.getElementById('ho-dl-' + id);
+    if(lab && rec) lab.textContent = _hoDateLabel(rec.work_date);
+  }catch(e){
+    _hoDirty[id] = Object.assign(_hoDirty[id] || {}, patch);
+    _hoStatus(id, '저장 실패 — 다시 입력해 주세요', '#dc2626');
+  }
+}
+
+/* 오늘 날짜 문서 추가 (이미 있으면 그 칸으로 이동) */
+async function hoNoteAddToday(){
+  var deskId = _hoIsDesk() ? _hoMyDeskId() : (_hoDesk || '');
+  if(!deskId){ alert('먼저 관을 선택해 주세요.'); return; }
+  var today = _hoToday();
+  var dup = (_hoNotes || []).find(function(x){ return x.work_date === today && x.desk_id === deskId; });
+  if(dup){ _hoFocus(dup.id); return; }
+  try{
+    var i = await db.from('handover_notes').insert({
+      desk_id        : deskId,
+      desk_name      : _hoDeskName(deskId),
+      work_date      : today,
+      created_by     : currentUser ? currentUser.id : null,
+      created_by_name: currentUser ? (currentUser.name || '') : ''
+    }).select();
+    if(i.error) throw i.error;
     await hoLoadNotes();
-  }catch(e){ alert('저장 오류: ' + (e.message || e)); }
+    _hoFocus(i.data[0].id);
+  }catch(e){ alert('추가 오류: ' + (e.message || e)); }
+}
+function _hoFocus(id){
+  var el = document.getElementById('ho-day-' + id);
+  if(!el) return;
+  if(el.scrollIntoView) el.scrollIntoView({ block:'center' });
+  var ta = el.querySelector('textarea[data-f="content"]');
+  if(ta) ta.focus();
 }
 
 async function hoNoteDelete(id){
-  if(!confirm('이 인수인계를 삭제할까요?')) return;
+  if(!confirm('이 날짜의 인수인계를 삭제할까요?')) return;
   try{
+    clearTimeout(_hoTimers[id]);
+    delete _hoDirty[id];
     var r = await db.from('handover_notes').update({ deleted_at: new Date().toISOString() }).eq('id', id);
     if(r.error) throw r.error;
     await hoLoadNotes();
   }catch(e){ alert('삭제 오류: ' + (e.message || e)); }
 }
 
-/* ── 전체 보기 ── */
-function hoAllOpen(){ openModal('hoAll'); hoAllRender(); }
-function hoAllRender(){
-  var el = document.getElementById('ho-all-list');
+var _HO_TA = 'width:100%;border:none;outline:none;resize:none;padding:8px 10px;font-size:12.5px;line-height:1.65;font-family:inherit;background:transparent;overflow:hidden;min-height:36px;color:#334155;display:block';
+
+function _hoDayHTML(r){
+  var chip = _hoIsAdmin()
+    ? '<span style="background:#e0e7ff;color:#4338ca;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:700">' + _hoEsc(r.desk_name || _hoDeskName(r.desk_id)) + '</span>'
+    : '';
+  var f = function(field, ph, extra){
+    return '<textarea data-f="' + field + '" rows="1" placeholder="' + ph + '"'
+      + ' oninput="hoFld(\'' + r.id + '\',\'' + field + '\',this)" onblur="hoFldBlur(\'' + r.id + '\')"'
+      + ' style="' + _HO_TA + (extra || '') + '">' + _hoEsc(r[field] || '') + '</textarea>';
+  };
+  return ''
+  + '<div id="ho-day-' + r.id + '" style="border:1px solid #dbe3ec;border-radius:10px;background:#fff;margin-bottom:12px;overflow:hidden">'
+    /* 날짜 헤더 */
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 10px;background:#f1f5f9;border-bottom:1px solid #dbe3ec">'
+      + '<input type="date" value="' + _hoEsc(r.work_date || '') + '"'
+        + ' oninput="hoFld(\'' + r.id + '\',\'work_date\',this)" onblur="hoFldBlur(\'' + r.id + '\')"'
+        + ' style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:11px;background:#fff;color:#475569;outline:none">'
+      + '<span id="ho-dl-' + r.id + '" style="font-size:13px;font-weight:800;color:#0f172a">' + _hoDateLabel(r.work_date) + '</span>'
+      + '<input type="text" placeholder="시간대" value="' + _hoEsc(r.time_slot || '') + '"'
+        + ' oninput="hoFld(\'' + r.id + '\',\'time_slot\',this)" onblur="hoFldBlur(\'' + r.id + '\')"'
+        + ' style="width:96px;padding:3px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:11px;background:#fff;outline:none">'
+      + chip
+      + '<span id="ho-st-' + r.id + '" style="margin-left:auto;font-size:10px;color:#94a3b8"></span>'
+      + '<button onclick="hoNoteDelete(\'' + r.id + '\')" title="이 날짜 삭제"'
+        + ' style="padding:2px 8px;border:1px solid #fecaca;border-radius:6px;background:#fff5f5;color:#dc2626;font-size:11px;cursor:pointer;font-weight:600">삭제</button>'
+    + '</div>'
+    /* 근무자 | 근무 내용 (닥스 표 형식) */
+    + '<div style="display:flex;align-items:stretch">'
+      + '<div style="width:104px;flex-shrink:0;border-right:1px solid #eef2f7;background:#fbfdff">'
+        + '<div style="padding:5px 8px;font-size:10px;font-weight:800;color:#64748b;border-bottom:1px solid #eef2f7;text-align:center">근무자</div>'
+        + f('worker_name', '이름')
+      + '</div>'
+      + '<div style="flex:1;min-width:0">'
+        + '<div style="padding:5px 10px;font-size:10px;font-weight:800;color:#64748b;border-bottom:1px solid #eef2f7">근무 내용</div>'
+        + f('content', '근무 중 있었던 일, 처리한 업무 등')
+      + '</div>'
+    + '</div>'
+    /* 학생 특이사항 */
+    + '<div style="border-top:1px solid #eef2f7;background:#f6fbff">'
+      + '<div style="padding:5px 10px;font-size:10px;font-weight:800;color:#0369a1">학생 특이사항</div>'
+      + f('student_notes', '학생 관련 특이사항', ';color:#0c4a6e')
+    + '</div>'
+    /* 다음 근무자 인계사항 */
+    + '<div style="border-top:1px solid #eef2f7;background:#fffdf5">'
+      + '<div style="padding:5px 10px;font-size:10px;font-weight:800;color:#92400e">다음 근무자 인계사항</div>'
+      + f('handover_to_next', '다음 근무자가 반드시 알아야 할 미처리 사항', ';color:#78350f')
+    + '</div>'
+  + '</div>';
+}
+
+/* 최근 미처리 인계 배너 (자동저장 시 이 부분만 갱신) */
+function hoRenderBanner(){
+  var el = document.getElementById('ho-note-banner');
   if(!el) return;
+  var nx = (_hoNotes || []).find(function(r){ return (r.handover_to_next || '').trim(); });
+  if(!nx){ el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="padding:10px 12px;border-radius:9px;background:#fff7ed;border:1.5px solid #fb923c;margin-bottom:10px">'
+    + '<div style="font-size:11px;font-weight:800;color:#c2410c;margin-bottom:3px">⚠️ 다음 근무자 인계사항 '
+      + '<span style="font-weight:600;color:#9a3412">· ' + _hoDateLabel(nx.work_date) + (nx.worker_name ? ' ' + _hoEsc(nx.worker_name) : '') + '</span></div>'
+    + '<div style="font-size:13px;color:#7c2d12;line-height:1.6;word-break:break-word">' + _hoNl(nx.handover_to_next) + '</div></div>';
+}
+
+function hoRenderNotes(){
+  var box = document.getElementById('ho-note-days');
+  if(!box) return;
+  hoRenderBanner();
   var rows = _hoNotes || [];
-  var sub = document.getElementById('ho-all-sub');
-  if(sub){
-    var scope = _hoIsDesk() ? _hoMyDeskId() : _hoDesk;
-    sub.textContent = (scope ? _hoDeskName(scope) : '전체 관') + ' · 최근 ' + rows.length + '건';
-  }
   if(!rows.length){
-    el.innerHTML = '<div style="padding:24px;text-align:center;color:#9ca3af;font-size:13px">작성된 인수인계가 없습니다</div>';
+    box.innerHTML = '<div style="padding:18px;text-align:center;color:#9ca3af;font-size:12px;border:1px dashed #cbd5e1;border-radius:10px">'
+      + '작성된 인수인계가 없습니다<br><span style="font-size:11px">위 <b>＋ 오늘 작성</b>을 눌러 시작하세요</span></div>';
+    hoRenderFooter();
     return;
   }
-  var cur = '', html = '';
-  rows.forEach(function(r){
-    if(r.work_date !== cur){
-      cur = r.work_date;
-      html += '<div style="margin:12px 0 6px;font-size:12px;font-weight:800;color:#1e40af">' + _hoDateLabel(cur) + '</div>';
-    }
-    html += _hoNoteCard(r);
-  });
-  el.innerHTML = html;
+  var show = _hoExpand ? rows : rows.slice(0, 3);
+  box.innerHTML = show.map(_hoDayHTML).join('');
+  _hoGrowAll();
+  hoRenderFooter();
 }
+
+function hoRenderFooter(){
+  var el = document.getElementById('ho-note-footer');
+  if(!el) return;
+  var n = (_hoNotes || []).length;
+  if(n <= 3){ el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="text-align:center"><button onclick="hoExpandToggle()"'
+    + ' style="padding:5px 14px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#475569;font-size:11px;cursor:pointer;font-weight:600">'
+    + (_hoExpand ? '접기 ▲' : ('이전 인수인계 ' + (n - 3) + '건 더 보기 ▼')) + '</button></div>';
+}
+function hoExpandToggle(){ _hoExpand = !_hoExpand; hoRenderNotes(); }
 
 /* ── 통계 카드 업데이트 ─────────────────────────────────── */
 function updateAcctStats() {
@@ -27793,47 +27825,6 @@ tryAutoLogin();
       <button class="btn btn-full" onclick="closeModal('hoNotice')">취소</button>
       <button class="btn btn-primary btn-full" onclick="hoNoticeSave()">저장</button>
     </div>
-  </div>
-</div>
-
-<!-- ── [HANDOVER] 인수인계 작성/수정 ── -->
-<div class="modal-backdrop" id="modal-hoNote">
-  <div class="modal" style="max-width:640px;width:96vw;max-height:92vh;overflow-y:auto">
-    <div class="modal-handle"></div>
-    <div class="modal-title" id="ho-note-modal-title">📋 인수인계 작성</div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <div class="form-group" style="flex:1;min-width:140px"><label>날짜 <span style="color:#dc2626">*</span></label>
-        <input type="date" id="ho-note-date"></div>
-      <div class="form-group" style="flex:1;min-width:140px"><label>시간대</label>
-        <input type="text" id="ho-note-time" placeholder="예: 오전 / 오후 / 야간"></div>
-    </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <div class="form-group" style="flex:1;min-width:140px"><label>근무자</label>
-        <input type="text" id="ho-note-worker" placeholder="근무자 이름"></div>
-      <div class="form-group" style="flex:1;min-width:140px"><label>관 <span style="color:#dc2626">*</span></label>
-        <select id="ho-note-desk-in" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#f9fafb;cursor:pointer"></select></div>
-    </div>
-    <div class="form-group"><label>내용</label>
-      <textarea id="ho-note-content" rows="4" placeholder="근무 중 있었던 일, 처리한 업무 등" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;font-family:inherit;line-height:1.6;resize:vertical;background:#f9fafb"></textarea></div>
-    <div class="form-group"><label>학생 특이사항</label>
-      <textarea id="ho-note-stu" rows="3" placeholder="학생 관련 특이사항" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;font-family:inherit;line-height:1.6;resize:vertical;background:#f9fafb"></textarea></div>
-    <div class="form-group"><label>다음 근무자 인계사항</label>
-      <textarea id="ho-note-next" rows="3" placeholder="다음 근무자가 반드시 알아야 할 미처리 사항" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;font-family:inherit;line-height:1.6;resize:vertical;background:#f9fafb"></textarea></div>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="btn btn-full" onclick="closeModal('hoNote')">취소</button>
-      <button class="btn btn-primary btn-full" onclick="hoNoteSave()">저장</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── [HANDOVER] 인수인계 전체 보기 ── -->
-<div class="modal-backdrop" id="modal-hoAll">
-  <div class="modal" style="max-width:740px;width:96vw;max-height:90vh;display:flex;flex-direction:column">
-    <div class="modal-handle"></div>
-    <div class="modal-title" style="margin-bottom:2px">📋 인수인계 전체 보기</div>
-    <div id="ho-all-sub" style="font-size:12px;color:#6b7280;margin-bottom:10px"></div>
-    <div id="ho-all-list" style="flex:1;overflow-y:auto;padding-right:2px"></div>
-    <div style="margin-top:10px"><button class="btn btn-full" onclick="closeModal('hoAll')">닫기</button></div>
   </div>
 </div>
 
