@@ -596,6 +596,13 @@
     }
     .ho-glow { animation: hoGlow 1s ease-in-out 3; }
 
+    /* [HANDOVER] 서식 편집 영역 */
+    .ho-ed{width:100%;padding:9px 11px;font-size:12.5px;line-height:1.7;color:#334155;outline:none;word-break:break-word;white-space:pre-wrap}
+    .ho-ed:empty::before{content:attr(data-ph);color:#c3ccd8;pointer-events:none}
+    .ho-ed:focus{background:#fcfdff}
+    .ho-ed input[type=checkbox]{width:14px;height:14px;vertical-align:-2px;margin:0 4px 0 0;accent-color:#2563eb;cursor:pointer}
+    .ho-tb button:hover,.ho-tb label:hover,.ho-tb select:hover{background:#eef4ff !important;border-color:#93c5fd !important}
+
   </style>
 </head>
 <body>
@@ -2327,9 +2334,6 @@
                 <select id="ho-note-desk" onchange="hoDeskChange()" style="padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-weight:600;outline:none;background:#fff;cursor:pointer"></select>
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap">
-                <input type="date" id="ho-add-date" style="padding:4px 7px;border:1px solid #cbd5e1;border-radius:7px;font-size:11px;background:#fff;color:#475569;outline:none">
-                <button onclick="hoNoteAdd()" style="padding:5px 11px;border:1px solid #93c5fd;border-radius:7px;background:#dbeafe;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer">＋ 날짜 추가</button>
-                <button id="ho-note-toggle" onclick="hoToggle('note')" style="padding:5px 11px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#64748b;font-size:12px;font-weight:600;cursor:pointer">접기 ▲</button>
               </div>
             </div>
             <div id="ho-note-body" style="margin-top:10px">
@@ -12598,7 +12602,7 @@ function hoToggle(which){
   try{ localStorage.setItem('ho_fold_' + which, willFold ? '1' : '0'); }catch(e){}
 }
 function hoRestoreFold(){
-  ['notice','note'].forEach(function(w){
+  ['notice'].forEach(function(w){
     var v = null; try{ v = localStorage.getItem('ho_fold_' + w); }catch(e){}
     var body = document.getElementById('ho-' + w + '-body');
     var btn  = document.getElementById('ho-' + w + '-toggle');
@@ -12670,8 +12674,6 @@ async function hoInit(){
   if(_hoDesk === null) _hoDesk = _hoIsDesk() ? _hoMyDeskId() : '';
   hoRenderDeskSel();
   hoRestoreFold();
-  var ad = document.getElementById('ho-add-date');
-  if(ad && !ad.value) ad.value = _hoToday();
   await hoLoadNotices();
   await hoLoadNotes();
 }
@@ -12854,34 +12856,135 @@ async function hoLoadNotes(){
   }
 }
 
-/* 자동 높이 조절 */
-function _hoGrow(el){
-  if(!el || el.tagName !== 'TEXTAREA') return;
-  el.style.height = 'auto';
-  el.style.height = (el.scrollHeight + 2) + 'px';
+/* ── 서식 편집 (contenteditable) ─────────────────────────
+   저장 형식은 HTML. 예전에 저장된 평문은 _hoToHtml 이 자동 변환한다.
+   저장·표시 양쪽에서 _hoSafe 로 허용 태그만 남긴다(스크립트 주입 차단). */
+var HO_TAGS = { B:1, STRONG:1, I:1, EM:1, U:1, S:1, STRIKE:1, DEL:1,
+                SPAN:1, FONT:1, DIV:1, P:1, BR:1, UL:1, OL:1, LI:1, INPUT:1 };
+var HO_ATTR = { SPAN:['style'], FONT:['color','size','face'], DIV:['style'],
+                P:['style'], LI:['style'], INPUT:['type','checked','contenteditable'] };
+/* 내용까지 통째로 버릴 태그 (글자로도 남기지 않는다) */
+var HO_DROP = { SCRIPT:1, STYLE:1, IFRAME:1, OBJECT:1, EMBED:1, NOSCRIPT:1, TEMPLATE:1, LINK:1, META:1, SVG:1, MATH:1 };
+
+function _hoSafe(html){
+  var box = document.createElement('div');
+  box.innerHTML = String(html == null ? '' : html);
+  (function walk(node){
+    Array.prototype.slice.call(node.childNodes).forEach(function(n){
+      if(n.nodeType === 3) return;                       // 텍스트는 그대로
+      if(n.nodeType !== 1){ if(n.parentNode) n.parentNode.removeChild(n); return; }
+      var tag = n.tagName;
+      var bad = !HO_TAGS[tag] ||
+                (tag === 'INPUT' && String(n.getAttribute('type') || '').toLowerCase() !== 'checkbox');
+      if(HO_DROP[tag]){                                  // 위험 태그 → 내용까지 제거
+        n.parentNode.removeChild(n);
+        return;
+      }
+      if(bad){                                           // 허용 안 된 태그 → 글자만 남김
+        n.parentNode.replaceChild(document.createTextNode(n.textContent || ''), n);
+        return;
+      }
+      var allow = HO_ATTR[tag] || [];
+      Array.prototype.slice.call(n.attributes).forEach(function(a){
+        if(allow.indexOf(a.name.toLowerCase()) === -1) n.removeAttribute(a.name);
+      });
+      var st = n.getAttribute && n.getAttribute('style');
+      if(st && /expression|javascript:|url\s*\(/i.test(st)) n.removeAttribute('style');
+      walk(n);
+    });
+  })(box);
+  return box.innerHTML;
 }
-function _hoGrowAll(){
-  var box = document.getElementById('ho-note-days');
-  if(!box) return;
-  Array.prototype.forEach.call(box.querySelectorAll('textarea'), _hoGrow);
+/* 저장값 → 편집기에 넣을 HTML (예전 평문 레코드 호환) */
+function _hoToHtml(v){
+  var t = String(v == null ? '' : v);
+  if(!t) return '';
+  if(t.indexOf('<') === -1) return _hoEsc(t).replace(/\n/g, '<br>');
+  return _hoSafe(t);
 }
+/* 실제 내용이 있는지 (빈 <br> 만 남은 경우 제외) */
+function _hoHasText(v){
+  var t = String(v == null ? '' : v);
+  if(!t) return false;
+  if(/<input/i.test(t)) return true;
+  var d = document.createElement('div'); d.innerHTML = t;
+  return !!String(d.textContent || '').trim();
+}
+
 function _hoStatus(id, txt, color){
   var e = document.getElementById('ho-st-' + id);
   if(e){ e.textContent = txt; e.style.color = color || '#94a3b8'; }
 }
 
-/* 입력 → 디바운스 자동저장 (재렌더 없음: 포커스 유지) */
-function hoFld(id, field, el){
+/* ── 툴바 ── */
+var _hoActiveEd = null;   // 마지막으로 포커스된 편집 영역
+var _hoRange    = null;   // 툴바 조작 중에도 유지할 선택 영역
+
+function hoEdFocus(el){ _hoActiveEd = el; }
+function hoEdSaveSel(){
+  var sel = window.getSelection();
+  if(sel && sel.rangeCount && _hoActiveEd && _hoActiveEd.contains(sel.anchorNode)){
+    _hoRange = sel.getRangeAt(0).cloneRange();
+  }
+}
+function _hoEdRestore(){
+  if(!_hoActiveEd) return false;
+  _hoActiveEd.focus();
+  if(_hoRange){
+    try{ var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(_hoRange); }catch(e){}
+  }
+  return true;
+}
+function hoCmd(cmd, val){
+  if(!_hoEdRestore()) return;
+  try{ document.execCommand(cmd, false, (val === undefined || val === '') ? null : val); }catch(e){}
+  hoEdSaveSel();
+  hoEdInput(_hoActiveEd);
+}
+function hoInsertCheck(){
+  if(!_hoEdRestore()) return;
+  try{ document.execCommand('insertHTML', false, '<input type="checkbox" contenteditable="false">&nbsp;'); }catch(e){}
+  hoEdSaveSel();
+  hoEdInput(_hoActiveEd);
+}
+
+/* ── 입력 → 디바운스 자동저장 (재렌더 없음: 포커스 유지) ── */
+function _hoSyncChecks(el){
+  Array.prototype.forEach.call(el.querySelectorAll('input[type="checkbox"]'), function(c){
+    if(c.checked) c.setAttribute('checked', ''); else c.removeAttribute('checked');
+  });
+}
+function hoEdInput(el){
+  if(!el) return;
+  var id    = el.getAttribute('data-id');
+  var field = el.getAttribute('data-f');
+  if(!id || !field) return;
+  _hoSyncChecks(el);
+  var html = el.innerHTML;
+  if(/^(\s|&nbsp;|<br\s*\/?>|<div><br\s*\/?><\/div>)*$/i.test(html)) html = '';
+  else html = _hoSafe(html);
   var rec = (_hoNotes || []).find(function(x){ return x.id === id; });
-  if(rec) rec[field] = el.value;
-  _hoGrow(el);
+  if(rec) rec[field] = html;
   if(!_hoDirty[id]) _hoDirty[id] = {};
-  _hoDirty[id][field] = el.value;
+  _hoDirty[id][field] = html;
   _hoStatus(id, '입력 중...', '#94a3b8');
   clearTimeout(_hoTimers[id]);
   _hoTimers[id] = setTimeout(function(){ hoFldSave(id); }, 900);
 }
-function hoFldBlur(id){ clearTimeout(_hoTimers[id]); hoFldSave(id); }
+function hoEdBlur(el){
+  if(!el) return;
+  var id = el.getAttribute('data-id');
+  if(!id) return;
+  clearTimeout(_hoTimers[id]);
+  hoFldSave(id);
+}
+/* 체크박스 클릭도 저장 대상 (checked 는 innerHTML 에 자동 반영되지 않음) */
+function hoEdClick(ev, el){
+  var t = ev && ev.target;
+  if(t && t.tagName === 'INPUT' && String(t.type || '').toLowerCase() === 'checkbox'){
+    setTimeout(function(){ hoEdInput(el); }, 0);
+  }
+}
 
 async function hoFldSave(id){
   var patch = _hoDirty[id];
@@ -12894,71 +12997,50 @@ async function hoFldSave(id){
     if(r.error) throw r.error;
     _hoStatus(id, '저장됨 ✓', '#16a34a');
     hoRenderBanner();
-    var rec = (_hoNotes || []).find(function(x){ return x.id === id; });
-    var lab = document.getElementById('ho-dl-' + id);
-    if(lab && rec) lab.textContent = _hoDateLabel(rec.work_date);
   }catch(e){
     _hoDirty[id] = Object.assign(_hoDirty[id] || {}, patch);
     _hoStatus(id, '저장 실패 — 다시 입력해 주세요', '#dc2626');
   }
 }
 
-/* 임의 날짜 양식 추가 (최근 7일은 자동 생성되므로 주로 지난 날짜 보충용).
-   같은 날짜가 이미 있으면 그 칸으로 이동한다. */
-async function hoNoteAdd(){
-  var deskId = _hoIsDesk() ? _hoMyDeskId() : (_hoDesk || '');
-  if(!deskId){ alert('먼저 관을 선택해 주세요.'); return; }
-  var el   = document.getElementById('ho-add-date');
-  var date = (el && el.value) ? el.value : _hoToday();
-  var dup = (_hoNotes || []).find(function(x){ return x.work_date === date && x.desk_id === deskId; });
-  if(dup){
-    if(!_hoExpand && _hoWeekDates().indexOf(date) === -1){ _hoExpand = true; hoRenderNotes(); }
-    _hoFocus(dup.id);
-    return;
-  }
-  try{
-    var i = await db.from('handover_notes').insert({
-      desk_id        : deskId,
-      desk_name      : _hoDeskName(deskId),
-      work_date      : date,
-      created_by     : currentUser ? currentUser.id : null,
-      created_by_name: currentUser ? (currentUser.name || '') : ''
-    }).select();
-    if(i.error) throw i.error;
-    if(_hoWeekDates().indexOf(date) === -1) _hoExpand = true;
-    await hoLoadNotes();
-    _hoFocus(i.data[0].id);
-  }catch(e){ alert('추가 오류: ' + (e.message || e)); }
-}
-function _hoFocus(id){
-  var el = document.getElementById('ho-day-' + id);
-  if(!el) return;
-  if(el.scrollIntoView) el.scrollIntoView({ block:'center' });
-  var ta = el.querySelector('textarea[data-f="content"]');
-  if(ta) ta.focus();
-}
+var _HO_ED = 'background:transparent';
 
-async function hoNoteDelete(id){
-  if(!confirm('이 날짜의 인수인계를 삭제할까요?')) return;
-  try{
-    clearTimeout(_hoTimers[id]);
-    delete _hoDirty[id];
-    var r = await db.from('handover_notes').update({ deleted_at: new Date().toISOString() }).eq('id', id);
-    if(r.error) throw r.error;
-    await hoLoadNotes();
-  }catch(e){ alert('삭제 오류: ' + (e.message || e)); }
+function _hoToolbar(){
+  var btn = function(cmd, label, style, title){
+    return '<button type="button" title="' + title + '" onmousedown="event.preventDefault()" onclick="hoCmd(\'' + cmd + '\')"'
+      + ' style="min-width:26px;height:24px;padding:0 7px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;color:#475569;font-size:12px;cursor:pointer;line-height:1;' + (style || '') + '">' + label + '</button>';
+  };
+  return '<div class="ho-tb" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:5px 10px;background:#fafcff;border-bottom:1px solid #eef2f7">'
+    + btn('bold',          'B', 'font-weight:900',                '굵게')
+    + btn('underline',     'U', 'text-decoration:underline',      '밑줄')
+    + btn('strikeThrough', 'S', 'text-decoration:line-through',   '취소선')
+    + '<label title="글자 색" style="display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 7px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;cursor:pointer">'
+      + '<span style="font-size:11px;color:#475569">색</span>'
+      + '<input type="color" value="#1e293b" onchange="hoCmd(\'foreColor\', this.value)"'
+        + ' style="width:18px;height:16px;border:none;background:none;padding:0;cursor:pointer">'
+    + '</label>'
+    + '<select title="글자 크기" onchange="hoCmd(\'fontSize\', this.value); this.selectedIndex = 0;"'
+      + ' style="height:24px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;color:#475569;font-size:11px;cursor:pointer">'
+      + '<option value="">크기</option>'
+      + '<option value="2">작게</option>'
+      + '<option value="3">보통</option>'
+      + '<option value="5">크게</option>'
+      + '<option value="6">아주 크게</option>'
+    + '</select>'
+    + '<button type="button" title="체크박스 넣기" onmousedown="event.preventDefault()" onclick="hoInsertCheck()"'
+      + ' style="height:24px;padding:0 9px;border:1px solid #d7dfe8;border-radius:5px;background:#fff;color:#475569;font-size:12px;cursor:pointer;line-height:1">☑ 체크</button>'
+  + '</div>';
 }
-
-var _HO_TA = 'width:100%;border:none;outline:none;resize:none;padding:9px 11px;font-size:12.5px;line-height:1.7;font-family:inherit;background:transparent;overflow:hidden;color:#334155;display:block';
 
 function _hoDayHTML(r){
   var chip = _hoIsAdmin()
     ? '<span style="background:#e0e7ff;color:#4338ca;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:700">' + _hoEsc(r.desk_name || _hoDeskName(r.desk_id)) + '</span>'
     : '';
   var f = function(field, ph, minH, extra){
-    return '<textarea data-f="' + field + '" rows="1" placeholder="' + ph + '"'
-      + ' oninput="hoFld(\'' + r.id + '\',\'' + field + '\',this)" onblur="hoFldBlur(\'' + r.id + '\')"'
-      + ' style="' + _HO_TA + ';min-height:' + minH + 'px' + (extra || '') + '">' + _hoEsc(r[field] || '') + '</textarea>';
+    return '<div class="ho-ed" contenteditable="true" data-id="' + r.id + '" data-f="' + field + '" data-ph="' + ph + '"'
+      + ' onfocus="hoEdFocus(this)" oninput="hoEdInput(this)" onblur="hoEdBlur(this)"'
+      + ' onkeyup="hoEdSaveSel()" onmouseup="hoEdSaveSel()" onclick="hoEdClick(event,this)"'
+      + ' style="' + _HO_ED + ';min-height:' + minH + 'px' + (extra || '') + '">' + _hoToHtml(r[field]) + '</div>';
   };
   var lbl = function(txt, color){
     return '<div style="padding:5px 11px;font-size:10px;font-weight:800;color:' + color + ';border-bottom:1px solid #eef2f7">' + txt + '</div>';
@@ -12966,18 +13048,14 @@ function _hoDayHTML(r){
   var isToday = (r.work_date === _hoToday());
   return ''
   + '<div id="ho-day-' + r.id + '" style="border:' + (isToday ? '2px solid #2563eb' : '1px solid #dbe3ec') + ';border-radius:10px;background:#fff;margin-bottom:12px;overflow:hidden">'
-    /* 날짜 헤더 */
+    /* 날짜 헤더 (날짜 변경·삭제 없음) */
     + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 10px;background:' + (isToday ? '#dbeafe' : '#f1f5f9') + ';border-bottom:1px solid #dbe3ec">'
       + (isToday ? '<span style="background:#2563eb;color:#fff;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:800">오늘</span>' : '')
-      + '<input type="date" value="' + _hoEsc(r.work_date || '') + '"'
-        + ' oninput="hoFld(\'' + r.id + '\',\'work_date\',this)" onblur="hoFldBlur(\'' + r.id + '\')"'
-        + ' style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:11px;background:#fff;color:#475569;outline:none">'
       + '<span id="ho-dl-' + r.id + '" style="font-size:13px;font-weight:800;color:#0f172a">' + _hoDateLabel(r.work_date) + '</span>'
       + chip
       + '<span id="ho-st-' + r.id + '" style="margin-left:auto;font-size:10px;color:#94a3b8"></span>'
-      + '<button onclick="hoNoteDelete(\'' + r.id + '\')" title="이 날짜 삭제"'
-        + ' style="padding:2px 8px;border:1px solid #fecaca;border-radius:6px;background:#fff5f5;color:#dc2626;font-size:11px;cursor:pointer;font-weight:600">삭제</button>'
     + '</div>'
+    + _hoToolbar()
     /* 근무 내용 (주 작성칸) */
     + '<div>'
       + lbl('근무 내용', '#64748b')
@@ -13000,12 +13078,12 @@ function _hoDayHTML(r){
 function hoRenderBanner(){
   var el = document.getElementById('ho-note-banner');
   if(!el) return;
-  var nx = (_hoNotes || []).find(function(r){ return (r.handover_to_next || '').trim(); });
+  var nx = (_hoNotes || []).find(function(r){ return _hoHasText(r.handover_to_next); });
   if(!nx){ el.innerHTML = ''; return; }
   el.innerHTML = '<div style="padding:10px 12px;border-radius:9px;background:#fff7ed;border:1.5px solid #fb923c;margin-bottom:10px">'
     + '<div style="font-size:11px;font-weight:800;color:#c2410c;margin-bottom:3px">⚠️ 다음 근무자 인계사항 '
       + '<span style="font-weight:600;color:#9a3412">· ' + _hoDateLabel(nx.work_date) + '</span></div>'
-    + '<div style="font-size:13px;color:#7c2d12;line-height:1.6;word-break:break-word">' + _hoNl(nx.handover_to_next) + '</div></div>';
+    + '<div style="font-size:13px;color:#7c2d12;line-height:1.6;word-break:break-word">' + _hoToHtml(nx.handover_to_next) + '</div></div>';
 }
 
 /* 기본 표시 = 최근 7일치 양식. 그보다 오래된 기록은 '더 보기'로 펼친다. */
@@ -13035,7 +13113,6 @@ function hoRenderNotes(){
           + older.map(_hoDayHTML).join('');
   }
   box.innerHTML = html;
-  _hoGrowAll();
   hoRenderFooter();
   hoScrollToDay();
 }
