@@ -2372,6 +2372,7 @@
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                 <div class="card-title" style="margin:0">📋 인수인계</div>
                 <select id="ho-note-desk" onchange="hoDeskChange()" style="padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-weight:600;outline:none;background:#fff;cursor:pointer"></select>
+                <div id="ho-week-nav" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap"></div>
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap">
               </div>
@@ -2379,7 +2380,6 @@
             <div id="ho-note-body" style="margin-top:10px">
               <div id="ho-note-banner"></div>
               <div id="ho-note-days" style="position:relative;max-height:64vh;overflow-y:auto;padding-right:4px"></div>
-              <div id="ho-note-footer"></div>
             </div>
           </div>
 
@@ -12569,7 +12569,7 @@ var _hoNotes      = [];
 var _hoNotices    = [];
 var _hoNoticeMore = { admin:false, vice:false, desk:false };   // 구역별 더보기
 var _hoNoticeKind  = 'desk';  // 지금 작성 중인 공지 구분
-var _hoExpand     = false;  // 인수인계 전체 펼침 여부
+var _hoWeekOffset = 0;      // 보고 있는 주 (0=이번 주, +1=다음 주, -1=지난 주)
 var _hoEditNotice = null;
 var _hoTimers     = {};     // 자동저장 디바운스 타이머 (id별)
 var _hoDirty      = {};     // 저장 대기 중인 변경 필드 (id별)
@@ -12640,24 +12640,34 @@ function _hoDateLabel(ymd){
 }
 
 /* 이번 주 월요일 ~ 일요일 (오름차순) */
-function _hoWeekDates(){
+function _hoWeekDates(offset){
+  if(offset === undefined) offset = _hoWeekOffset;
   var n = new Date();
   var dow  = n.getDay();                  // 0=일 … 6=토
   var back = (dow === 0) ? 6 : dow - 1;   // 이번 주 월요일까지 되돌아갈 일수
   var z = function(x){ return (x < 10 ? '0' : '') + x; };
   var out = [];
   for(var k = 0; k < 7; k++){
-    var d = new Date(n.getFullYear(), n.getMonth(), n.getDate() - back + k);
+    var d = new Date(n.getFullYear(), n.getMonth(), n.getDate() - back + (offset * 7) + k);
     out.push(d.getFullYear() + '-' + z(d.getMonth()+1) + '-' + z(d.getDate()));
   }
   return out;
+}
+/* 특정 날짜(ymd)가 이번 주 기준 몇 주 오프셋인지 (알람 이동용) */
+function _hoWeekOfDate(ymd){
+  var a = String(ymd).split('-'); if(a.length < 3) return 0;
+  var t = _hoWeekDates(0);
+  var mon0 = new Date(Number(t[0].split('-')[0]), Number(t[0].split('-')[1])-1, Number(t[0].split('-')[2]));
+  var d = new Date(Number(a[0]), Number(a[1])-1, Number(a[2]));
+  return Math.floor((d - mon0) / (7 * 24 * 3600 * 1000));
 }
 
 /* 최근 7일치 빈 양식을 미리 만들어 둔다 (구글 닥스가 날짜를 미리 깔아두던 방식).
    soft-delete 된 날짜는 have 에 잡히므로 다시 만들지 않는다. */
 async function hoEnsureWeek(deskId){
   if(!deskId) return;
-  var week = _hoWeekDates();
+  if(_hoWeekOffset < 0) return;          // 지난 주는 빈 양식을 새로 만들지 않음(기존 기록만 표시)
+  var week = _hoWeekDates(_hoWeekOffset);
   try{
     var r = await db.from('handover_notes').select('work_date').eq('desk_id', deskId).in('work_date', week);
     if(r.error) return;
@@ -12732,8 +12742,7 @@ function hoRemindGo(){
   hoRemindClose();
   var y = _hoYesterday();
   _hoScrollTo = y;
-  // 어제가 이번 주 밖(월요일에 열람 등)이면 이전 기록까지 펼쳐야 칸이 그려진다
-  if(_hoWeekDates().indexOf(y) === -1) _hoExpand = true;
+  _hoWeekOffset = _hoWeekOfDate(y);   // 어제가 속한 주로 이동(월요일 열람 시 지난 주)
   var btn = document.getElementById('amenu-handover');
   if(typeof switchPanel === 'function') switchPanel('handover', btn);
 }
@@ -12822,6 +12831,7 @@ async function hoInit(){
   var _c2 = document.getElementById('ho-notice-2col');
   if(_c2) _c2.className = _hoIsAdmin() ? 'ho-1col' : '';
   hoRestoreFold();
+  _hoWeekOffset = 0;            // 진입 시 이번 주
   _hoScrolled = false;          // 패널 진입 시 오늘 칸으로 한 번 이동
   await hoLoadNotices();
   await hoLoadNotes();
@@ -13043,7 +13053,7 @@ async function hoLoadNotes(silent){
     var scope = _hoIsDesk() ? _hoMyDeskId() : _hoDesk;
     if(scope) await hoEnsureWeek(scope);
     var q = db.from('handover_notes').select('*').is('deleted_at', null)
-      .order('work_date', { ascending:false }).order('created_at', { ascending:false }).limit(120);
+      .order('work_date', { ascending:false }).order('created_at', { ascending:false }).limit(500);
     if(scope) q = q.eq('desk_id', scope);
     var r = await q;
     if(r.error) throw r.error;
@@ -13368,36 +13378,55 @@ function hoRenderBanner(){
 }
 
 /* 기본 표시 = 최근 7일치 양식. 그보다 오래된 기록은 '더 보기'로 펼친다. */
-function _hoOlderCount(){
-  var week = _hoWeekDates();
-  return (_hoNotes || []).filter(function(r){ return week.indexOf(r.work_date) === -1; }).length;
-}
-
 function hoRenderNotes(){
+  hoRenderWeekNav();
   var box = document.getElementById('ho-note-days');
   if(!box) return;
   var keepTop = box.scrollTop;   // 배경 갱신 후에도 보던 위치를 유지
   hoRenderBanner();
-  var rows = _hoNotes || [];
+  var week = _hoWeekDates(_hoWeekOffset);
+  var rows = (_hoNotes || [])
+    .filter(function(r){ return week.indexOf(r.work_date) !== -1; })
+    .sort(function(a, b){ return String(a.work_date).localeCompare(String(b.work_date)); });
   if(!rows.length){
     box.innerHTML = '<div style="padding:18px;text-align:center;color:#9ca3af;font-size:12px;border:1px dashed #cbd5e1;border-radius:10px">'
-      + '표시할 인수인계가 없습니다<br><span style="font-size:11px">관을 선택하면 최근 7일치 양식이 자동으로 만들어집니다</span></div>';
-    hoRenderFooter();
+      + '이 주에는 인수인계가 없습니다'
+      + (_hoWeekOffset < 0 ? '' : '<br><span style="font-size:11px">관을 선택하면 이번 주 7일치 양식이 자동으로 만들어집니다</span>')
+      + '</div>';
     return;
   }
-  var week   = _hoWeekDates();
-  var inWeek = rows.filter(function(r){ return week.indexOf(r.work_date) !== -1; })
-                   .sort(function(a, b){ return String(a.work_date).localeCompare(String(b.work_date)); });
-  var older  = rows.filter(function(r){ return week.indexOf(r.work_date) === -1; });  // 이미 최신순
-  var html = inWeek.map(_hoDayHTML).join('');
-  if(_hoExpand && older.length){
-    html += '<div style="margin:14px 0 8px;padding-top:10px;border-top:1px dashed #cbd5e1;font-size:11px;font-weight:800;color:#94a3b8">이전 기록 (최신순)</div>'
-          + older.map(_hoDayHTML).join('');
-  }
-  box.innerHTML = html;
-  hoRenderFooter();
+  box.innerHTML = rows.map(_hoDayHTML).join('');
   if(_hoScrolled && !_hoScrollTo) box.scrollTop = keepTop;
   hoScrollToDay();
+}
+
+/* 주간 네비게이션: ◀ 지난주 | 범위·이번주 | 다음주 ▶ */
+function hoRenderWeekNav(){
+  var el = document.getElementById('ho-week-nav');
+  if(!el) return;
+  var wk = _hoWeekDates(_hoWeekOffset);
+  var fmt = function(ymd){ var a = ymd.split('-'); return a[1] + '/' + a[2]; };
+  var off = _hoWeekOffset;
+  var badge = (off === 0) ? '이번 주' : (off === 1) ? '다음 주' : (off === -1) ? '지난 주'
+            : (off > 0 ? (off + '주 후') : ((-off) + '주 전'));
+  var badgeColor = (off === 0) ? '#166534' : (off > 0) ? '#1d4ed8' : '#92400e';
+  var nav = 'width:26px;height:26px;padding:0;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#475569;font-size:13px;font-weight:800;cursor:pointer;line-height:1;flex-shrink:0';
+  el.innerHTML =
+      '<button onclick="hoWeekNav(-1)" title="지난주" style="' + nav + '">◀</button>'
+    + '<button onclick="hoWeekNav(1)" title="다음주" style="' + nav + '">▶</button>'
+    + '<span onclick="hoWeekNav(0)" title="이번 주로" style="cursor:pointer;white-space:nowrap">'
+      + '<span style="font-size:11.5px;font-weight:800;color:#1e293b">' + fmt(wk[0]) + '~' + fmt(wk[6]) + '</span>'
+      + '<span style="font-size:10px;font-weight:800;color:' + badgeColor + ';background:#f1f5f9;padding:1px 6px;border-radius:5px;margin-left:5px">' + badge + '</span>'
+    + '</span>';
+}
+
+/* delta: -1 지난주 / +1 다음주 / 0 이번 주로 */
+async function hoWeekNav(delta){
+  _hoWeekOffset = (delta === 0) ? 0 : (_hoWeekOffset + delta);
+  _hoScrolled = true;               // 주 이동 시엔 오늘로 자동 스크롤하지 않음
+  var box = document.getElementById('ho-note-days');
+  await hoLoadNotes();              // 보는 주 양식 생성(미래·현재) + 재조회 + 재렌더
+  if(box) box.scrollTop = 0;        // 새 주는 맨 위(월요일)부터
 }
 
 /* 지정 날짜(_hoScrollTo, 없으면 오늘) 칸으로 박스 내부 스크롤 이동.
@@ -13425,16 +13454,6 @@ function hoScrollToDay(){
   }
 }
 
-function hoRenderFooter(){
-  var el = document.getElementById('ho-note-footer');
-  if(!el) return;
-  var older = _hoOlderCount();
-  if(!older){ el.innerHTML = ''; return; }
-  el.innerHTML = '<div style="text-align:center"><button onclick="hoExpandToggle()"'
-    + ' style="padding:5px 14px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#475569;font-size:11px;cursor:pointer;font-weight:600">'
-    + (_hoExpand ? '최근 7일만 보기 ▲' : ('이전 인수인계 ' + older + '건 더 보기 ▼')) + '</button></div>';
-}
-function hoExpandToggle(){ _hoExpand = !_hoExpand; hoRenderNotes(); }
 
 /* ── 통계 카드 업데이트 ─────────────────────────────────── */
 function updateAcctStats() {
