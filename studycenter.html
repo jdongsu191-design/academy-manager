@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.73-deskout]</title>
+<title>BMAPS · 독서실 출결 [v0.74-wkremark]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -150,6 +150,9 @@
   .wk-tbl td.wk-remark-cell { min-width: 150px; padding: 4px 6px; }
   .wk-tbl .wk-remark { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 5px; background: #fff; color: #334155; }
   .wk-tbl .wk-remark:focus { outline: none; border-color: #475569; }
+  .wk-tbl .wk-remark-stack { display: flex; flex-direction: column; gap: 4px; }
+  .wk-tbl .wk-remark-week { background: #fffbeb; border-color: #fcd34d; }
+  .wk-tbl .wk-remark-week:focus { border-color: #d97706; }
   .wk-tbl input.wk-t { width: 64px; border: 1.5px solid #cbd5e1; background: #fff; padding: 5px 3px; font-size: 13px; text-align: center; outline: none; font-family: "SF Mono","Menlo","Consolas",monospace; border-radius: 5px; font-weight: 600; }
   .wk-tbl input.wk-t:focus { border-color: #0369a1; box-shadow: 0 0 0 2px rgba(3,105,161,0.15); }
   .wk-tbl input.wk-t.dirty { background: #fef9c3; border-color: #facc15; }
@@ -614,6 +617,9 @@
   table.cmpd .d-mm{ width:25.5%; }
   table.cmp td.c-memo{ text-align:left; padding-left:8px; }
   table.cmp .c-memo-v{ font-size:11px; color:#475569; }
+  table.cmp .c-memo-w{ display:block; font-size:11px; color:#92400e; margin-top:2px; }
+  table.cmp .c-memo-w::before{ content:"주 "; font-weight:800; color:#b45309; }
+  table.cmp td.c-mm{ text-align:left; padding-left:8px; font-size:11px; color:#92400e; }
   table.cmp tr.absent td{ background:#fffbeb; }
   table.cmp tr.absent td.c-sum{ background:#fef6da; }
   .cmp-page + .cmp-page{ margin-top:24px; }
@@ -707,7 +713,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.73-deskout</span>
+    <span class="tb-ver" id="sc-ver">v0.74-wkremark</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1036,7 +1042,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.73-deskout';
+  window.STUDYCENTER_VERSION = 'v0.74-wkremark';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1739,6 +1745,7 @@
   var _wkSelectedDay = 0;     // 0=월 ~ 6=일
   var _wkStudents = [];       // reading_room_yn 학생
   var _wkData = {};           // { studentId: { date: row } }
+  var _wkWeeklyRemark = {};   // { studentId: 주간 고정 비고 } — 보고 있는 주(week_start=_wkWeekDates[0]) 기준
   var _wkReqHistory = {};     // { studentId: [{effective_week_start, required_minutes}] }
 
   // Monday-start week calc
@@ -1893,6 +1900,12 @@
         if(!_wkData[row.student_id]) _wkData[row.student_id] = {};
         _wkData[row.student_id][row.attend_date] = row;
       });
+      // 주간 고정 비고 (그 주 월요일 기준)
+      _wkWeeklyRemark = {};
+      try {
+        var wrRes = await db.from("reading_room_weekly_remark").select("student_id,remark").eq("week_start", _wkWeekDates[0]);
+        (wrRes.data || []).forEach(function(w){ _wkWeeklyRemark[w.student_id] = w.remark || ""; });
+      } catch(e){ console.warn("주간 비고 로드 실패:", e); }
       // 의무시간 이력 로드
       var histRes = await db.from("reading_room_required_history").select("student_id,effective_week_start,required_minutes");
       _wkReqHistory = {};
@@ -2122,7 +2135,8 @@
         + '<td>'+scCmpT(row.check_out_time)+'</td>'
         + '<td class="c-sum">'+(r.net!=null?scCmpHM(r.net):'-')+'</td>'
         + remainTd
-        + '<td class="c-memo">'+(row.remark?('<span class="c-memo-v">'+scWkEsc(row.remark)+'</span>'):'')+'</td>'
+        + '<td class="c-memo">'+(row.remark?('<span class="c-memo-v">'+scWkEsc(row.remark)+'</span>'):'')
+            +((_wkWeeklyRemark[st.id])?('<span class="c-memo-w">'+scWkEsc(_wkWeeklyRemark[st.id])+'</span>'):'')+'</td>'
         + '</tr>';
     }).join("");
     return '<div class="cmp-head">'
@@ -2187,7 +2201,7 @@
         + '<td class="c-sum">'+scCmpHM(r.total)+'</td>'
         + meetTd
         + '<td class="c-ck"></td>'
-        + '<td class="c-mm"></td>'
+        + '<td class="c-mm">'+scWkEsc(_wkWeeklyRemark[r.st.id]||"")+'</td>'
         + '</tr>';
     }).join("");
 
@@ -2759,7 +2773,10 @@
         + '<td>'+cell("check_out_time", row?row.check_out_time:"")+'</td>'
         + '<td class="wk-total">'+(net!=null?scWkFmtDur(net):"-")+'</td>'
         + '<td class="'+remainCls+'">'+remainHtml+'</td>'
-        + '<td class="wk-remark-cell"><input class="wk-remark" data-sid="'+sid+'" value="'+scWkEsc(row&&row.remark!=null?row.remark:"")+'" placeholder="비고" maxlength="200" oninput="scWkCellEdit(this)"></td>'
+        + '<td class="wk-remark-cell"><div class="wk-remark-stack">'
+            + '<input class="wk-remark wk-remark-day" data-sid="'+sid+'" value="'+scWkEsc(row&&row.remark!=null?row.remark:"")+'" placeholder="일간 비고" maxlength="200" oninput="scWkCellEdit(this)">'
+            + '<input class="wk-remark wk-remark-week" data-sid="'+sid+'" value="'+scWkEsc(_wkWeeklyRemark[sid]||"")+'" placeholder="주간 비고(그 주 고정)" maxlength="200" oninput="scWkCellEdit(this)" title="이 주 전체에 적용되는 고정 비고입니다">'
+          + '</div></td>'
         + '<td><button class="wk-save-btn" data-sid="'+sid+'" onclick="scWkSaveRow(\''+sid+'\')">저장</button></td>'
         + '</tr>';
     });
@@ -3290,7 +3307,7 @@
     nd("out_2_start","out_2_end","out_2_end_is_next_day");
     var ciM = scWkT2M(patch.check_in_time), coM = scWkT2M(patch.check_out_time);
     patch.check_out_is_next_day = (ciM!=null && coM!=null && coM < ciM);
-    var _rmk = document.querySelector('.wk-remark[data-sid="'+sid+'"]');
+    var _rmk = document.querySelector('.wk-remark-day[data-sid="'+sid+'"]');
     if(_rmk) patch.remark = (_rmk.value||"").trim() || null;
     // [외출 복귀 정산] 직접입력으로 외출종료를 넣었으면 진행중(pending) 외출을 out 슬롯에 정산하고 '외출중' 해제
     var _curRow = (_wkData[sid] || {})[date] || {};
@@ -3317,6 +3334,16 @@
       if(res.error) throw res.error;
       if(!_wkData[sid]) _wkData[sid] = {};
       _wkData[sid][date] = res.data;
+      // 주간 고정 비고 저장 (그 주 월요일 기준, 학생별 1건)
+      var _wrk = document.querySelector('.wk-remark-week[data-sid="'+sid+'"]');
+      if(_wrk){
+        var _wv = (_wrk.value||"").trim();
+        var _wr = await db.from("reading_room_weekly_remark").upsert(
+          { student_id: sid, week_start: _wkWeekDates[0], remark: _wv || null, updated_at: new Date().toISOString() },
+          { onConflict: "student_id,week_start" });
+        if(_wr.error) console.warn("주간 비고 저장 실패:", _wr.error);
+        else _wkWeeklyRemark[sid] = _wv;
+      }
       if(btn){ btn.textContent = "✓ 저장됨"; btn.classList.add("saved"); btn.disabled = false; }
       // dirty 해제 + 순공부/남은시간 갱신
       if(!skipRender) scWkRenderTable();
