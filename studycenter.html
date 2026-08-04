@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.78-lateui]</title>
+<title>BMAPS · 독서실 출결 [v0.79-latemsg]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -700,6 +700,13 @@
   table.lt td{ border:1px solid #dde4ec; padding:8px 6px; text-align:center; color:#1e293b; vertical-align:middle; }
   table.lt td.lt-nm{ text-align:left; font-weight:800; }
   table.lt .lt-sub{ display:block; font-size:11px; color:#64748b; font-weight:600; }
+  /* 이름 | (여유 공간) | 카톡 멘트 복사 버튼 */
+  .lt-name-row{ display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  .lt-name-info{ line-height:1.35; }
+  .lt-msg-btn{ flex-shrink:0; border:1.5px solid #0369a1; background:#fff; color:#0369a1; border-radius:7px;
+               padding:5px 10px; font-size:11.5px; font-weight:800; cursor:pointer; font-family:inherit; white-space:nowrap; }
+  .lt-msg-btn:hover{ background:#e0f2fe; }
+  .lt-msg-btn.copied{ background:#16a34a; border-color:#16a34a; color:#fff; }
   table.lt td.lt-list{ text-align:left; }
   table.lt td.lt-sum{ font-weight:800; color:#c2410c; white-space:nowrap; }
   table.lt td.lt-tot{ font-weight:800; color:#0f172a; white-space:nowrap; }
@@ -756,7 +763,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.78-lateui</span>
+    <span class="tb-ver" id="sc-ver">v0.79-latemsg</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1106,7 +1113,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.78-lateui';
+  window.STUDYCENTER_VERSION = 'v0.79-latemsg';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2505,7 +2512,10 @@
       }).join("");
       return '<tr>'
         + '<td>' + (idx+1) + '</td>'
-        + '<td class="lt-nm">' + scWkEsc(st.name) + (sub ? ('<span class="lt-sub">' + scWkEsc(sub) + '</span>') : '') + '</td>'
+        + '<td class="lt-nm"><div class="lt-name-row">'
+            + '<div class="lt-name-info">' + scWkEsc(st.name) + (sub ? ('<span class="lt-sub">' + scWkEsc(sub) + '</span>') : '') + '</div>'
+            + (info.extra > 0 ? ('<button class="lt-msg-btn" onclick="scLtCopyMsg(\'' + st.id + '\',this)" title="지각 안내 카톡 멘트를 클립보드로 복사">💬 멘트</button>') : '')
+          + '</div></td>'
         + '<td class="lt-list">' + items + '</td>'
         + '<td class="lt-sum">' + (info.lateMin > 0 ? scWkFmtDur(info.lateMin) : '-') + '</td>'
         + '<td class="lt-sum">' + (info.extra > 0 ? ('+' + scWkFmtDur(info.extra)) : '-') + '</td>'
@@ -2516,12 +2526,34 @@
     }).join("");
     wrap.innerHTML = banner
       + '<div class="lt-scroll"><table class="lt"><thead><tr>'
-      + '<th style="width:40px">No.</th><th style="width:130px">이름</th>'
+      + '<th style="width:40px">No.</th><th style="width:220px">이름</th>'
       + '<th>지각 내역 · 면제 처리</th>'
       + '<th style="width:96px">지각 합계</th><th style="width:110px">추가 학습<br>(×3)</th>'
       + '<th style="width:96px">기본 의무</th><th style="width:120px">총 의무시간</th>'
       + '</tr></thead><tbody>' + body + '</tbody></table></div>';
   }
+  // 카톡 멘트 — 이번주 지각시간 → 일요일에 채워야 할 시간(×3) 안내
+  function scLtBuildMsg(st, info){
+    var sp = _ltDates[6].split("-");
+    var sunday = parseInt(sp[1],10) + "/" + parseInt(sp[2],10);   // 예: 8/2
+    return "[베스티안 스터디센터]\n"
+      + "이번주 " + st.name + " 학생의 지각시간은 " + scWkFmtDur(info.lateMin) + "입니다.\n"
+      + "★일요일(" + sunday + ")에 추가로 채워야 하는 공부시간은 " + scWkFmtDur(info.extra) + "입니다.\n"
+      + "\n"
+      + "'(지각시간) x3 = (일요일에 채워야 하는 공부시간)'입니다.\n"
+      + "\n"
+      + "정당한 사유에 의한 지각은 데스크에 말씀해 주시길 바랍니다.\n"
+      + "지각시간 미수행 시 <경고> 전 원장님과 상담합니다.";
+  }
+  // 버튼 클릭 → 곧바로 클립보드 복사 (scMsgCopy = 복사 + 폴백 + 버튼 피드백)
+  function scLtCopyMsg(sid, btn){
+    var st = _wkStudents.find(function(s){ return s.id === sid; });
+    if(!st){ alert("학생 정보를 찾을 수 없습니다."); return; }
+    var info = scReqWithLate(sid, _ltDates, _ltData[sid] || {});
+    if(!(info.extra > 0)){ alert("부과된 지각이 없어 보낼 멘트가 없습니다."); return; }
+    scMsgCopy(scLtBuildMsg(st, info), btn, btn ? btn.textContent : "");
+  }
+
   // 면제 토글 — 행 존재 = 면제
   async function scLtWaive(sid, date, kind, on, el){
     var key = scLateKey(sid, date, kind);
