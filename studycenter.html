@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.81-latecap]</title>
+<title>BMAPS · 독서실 출결 [v0.82-lategrace]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -725,6 +725,10 @@
   .lt-cap{ font-size:11px; font-weight:800; color:#b45309; background:#fef3c7; border:1px solid #fcd34d;
            border-radius:5px; padding:1px 6px; white-space:nowrap; }
   .lt-item.off .lt-cap{ background:#f1f5f9; border-color:#e2e8f0; color:#94a3b8; }
+  /* 예정이 9시 이전이라 9시를 판정 기준으로 삼은 건 */
+  .lt-grace{ font-size:10.5px; font-weight:800; color:#0369a1; background:#e0f2fe; border:1px solid #bae6fd;
+             border-radius:5px; padding:0 5px; margin-left:4px; white-space:nowrap; }
+  .lt-item.off .lt-grace{ background:#f1f5f9; border-color:#e2e8f0; color:#94a3b8; }
   table.lt .lt-raw{ display:block; font-size:10.5px; font-weight:700; color:#94a3b8; }
   .lt-reason{ flex:1; min-width:120px; border:1.5px solid #cbd5e1; border-radius:6px; padding:3px 8px;
               font-size:12px; font-family:inherit; color:#334155; }
@@ -771,7 +775,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.81-latecap</span>
+    <span class="tb-ver" id="sc-ver">v0.82-lategrace</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1123,7 +1127,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.81-latecap';
+  window.STUDYCENTER_VERSION = 'v0.82-lategrace';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2105,24 +2109,27 @@
     }catch(e){ console.warn("멘토링 기간 로드 실패:", e); }
   }
 
-  /* ── [멘토링 지각] 월~토 지각 시간 × 3배 = 그 주 추가 의무학습(일요일 이행) ──────
+  /* ── [멘토링 지각] 월~토 등원 지각 × 3배 = 그 주 추가 의무학습(일요일 이행) ──────
      · 멘토링 기간(scMentorOn)에 해당하는 월~토 날짜만 집계. 일요일=이행일이라 제외
-     · 지각 = 예정 등원(expected_check_in) / 예정 복귀(out_N_expected_end)를 1분이라도 초과
-     · 미등원(실제 등원 없음)·미복귀(외출 진행중)는 확정 불가라 집계 제외
+     · [등원만] 외출 복귀 지각은 부과하지 않는다(근무자 운영 방침). 등원 지각만 본다
+     · [09:00 유예] 9시 이전 등원은 예정시간을 못 지켜도 지각이 아니다.
+       판정 기준 = max(예정 등원, 09:00) → 지각 = 실제 − 기준 (1분이라도 넘으면 지각)
+       예) 예정 08:40 · 실제 08:59 → 0분 / 실제 09:10 → 10분 / 예정 09:20 · 실제 09:30 → 10분
+     · 미등원(실제 등원 없음)은 확정 불가라 집계 제외
      · 면제(reading_room_late_waiver)된 건은 부과 제외 — 근무자가 "멘토링 지각" 탭에서 관리
      · [1회 상한] 지각 1건이 2시간(SC_LATE_CAP)을 넘어도 2시간까지만 계산에 반영하고
        초과분은 버린다. 예) 3시간 20분 지각 → 2시간만 반영. 지각 "횟수" 제한은 없다
      · 가산분 = (면제 제외 · 건별 상한 적용 합계) × 3 → 의무시간에 더해 이행/미이행 판정
      · item.min = 실제 지각 분 / item.counted = 상한 적용 후 실제 부과되는 분 */
   var SC_LATE_MULT = 3;
-  var SC_LATE_CAP = 120;   // 1회 지각당 계산 상한(분) = 2시간
-  var _lateWaivers = {};   // "sid|YYYY-MM-DD|kind" → { reason }
+  var SC_LATE_CAP = 120;     // 1회 지각당 계산 상한(분) = 2시간
+  var SC_LATE_GRACE = 540;   // 09:00 — 이 시각 전 등원은 지각으로 보지 않음
+  var _lateWaivers = {};     // "sid|YYYY-MM-DD|kind" → { reason }
   var SC_LATE_KINDS = [
-    { kind:"in",   label:"등원",       exp:"expected_check_in",  act:"check_in_time", next:null },
-    { kind:"out1", label:"외출1 복귀", exp:"out_1_expected_end", act:"out_1_end",     next:"out_1_end_is_next_day" },
-    { kind:"out2", label:"외출2 복귀", exp:"out_2_expected_end", act:"out_2_end",     next:"out_2_end_is_next_day" }
+    { kind:"in", label:"등원", exp:"expected_check_in", act:"check_in_time", next:null, grace:SC_LATE_GRACE }
   ];
   function scLateKey(sid, date, kind){ return sid + "|" + date + "|" + kind; }
+  function scLateHM(min){ return String(Math.floor(min/60)).padStart(2,"0") + ":" + String(min%60).padStart(2,"0"); }
   // 하루치 지각 건 목록 (멘토링 기간이 아니면 빈 배열)
   function scLateItemsOf(sid, date, row, wmap){
     var out = [];
@@ -2134,12 +2141,16 @@
       var e = scWkT2M(expT), a = scWkT2M(actT);
       if(e == null || a == null) return;
       if(k.next && row[k.next]) a += 1440;             // 자정 넘긴 복귀
+      // [09:00 유예] 예정이 9시 이전이면 9시를 판정 기준으로 삼는다
+      var graced = (k.grace != null && e < k.grace);
+      if(graced) e = k.grace;
       var d = a - e;
-      if(d <= 0) return;                               // 1분이라도 늦으면 지각
+      if(d <= 0) return;                               // 기준을 1분이라도 넘으면 지각
       var w = wmap[scLateKey(sid, date, k.kind)];
-      var c = Math.min(d, SC_LATE_CAP);                  // 1회 상한 2시간 (초과분 버림)
+      var c = Math.min(d, SC_LATE_CAP);                // 1회 상한 2시간 (초과분 버림)
       out.push({ sid:sid, date:date, kind:k.kind, label:k.label, min:d, counted:c, capped:(c < d),
                  exp:String(expT).slice(0,5), act:String(actT).slice(0,5),
+                 graced:graced, expEff:scLateHM(e),
                  waived: !!w, reason: (w && w.reason) || "" });
     });
     return out;
@@ -2311,8 +2322,8 @@
         + '<td class="c-req">'+(r.reqMin!=null?scCmpHM(r.reqMin):'-')
             +(r.lt.extra>0?('<span class="c-lt-x">지각+'+scCmpHM(r.lt.extra)+'</span>'):'')+'</td>'
         + '<td>'+scCmpT(row.check_in_time)+lateMark('in')+'</td>'
-        + '<td>'+scCmpT(row.out_1_start)+'</td><td>'+scCmpT(row.out_1_end)+lateMark('out1')+'</td>'
-        + '<td>'+scCmpT(row.out_2_start)+'</td><td>'+scCmpT(row.out_2_end)+lateMark('out2')+'</td>'
+        + '<td>'+scCmpT(row.out_1_start)+'</td><td>'+scCmpT(row.out_1_end)+'</td>'
+        + '<td>'+scCmpT(row.out_2_start)+'</td><td>'+scCmpT(row.out_2_end)+'</td>'
         + '<td>'+(row.extra_out_minutes?row.extra_out_minutes:'-')+'</td>'
         + '<td>'+scCmpT(row.check_out_time)+'</td>'
         + '<td class="c-sum">'+(r.net!=null?scCmpHM(r.net):'-')+'</td>'
@@ -2335,8 +2346,8 @@
       + '</tr></thead><tbody>' + body + '</tbody></table>'
       + '<div class="cmp-note">※ 순공부(외출 제외) · 남은시간=주간 누적 기준 · 시각 HH:MM · 추가외출 분<br>'
       + '※ <b style="color:#b45309">미등원</b>=노란 · <b style="color:#dc2626">미하원</b>=붉은 배경 · 비고란 수기 작성'
-      + (ltCnt ? ('<br>※ <b style="color:#c2410c">멘토링 기간</b> — 월~토 지각 시간의 3배가 그 주 의무시간에 가산됩니다 (등원·복귀 칸의 <b style="color:#dc2626">+분</b> 표시). '
-                  + '<b>1회 최대 2시간</b>까지만 반영되며, <b style="color:#dc2626">*</b>는 상한이 적용된 건입니다') : '')
+      + (ltCnt ? ('<br>※ <b style="color:#c2410c">멘토링 기간</b> — 월~토 <b>등원 지각</b> 시간의 3배가 그 주 의무시간에 가산됩니다 (등원 칸의 <b style="color:#dc2626">+분</b> 표시). '
+                  + '오전 9시 이전 등원은 지각이 아니며, <b>1회 최대 2시간</b>까지만 반영됩니다 (<b style="color:#dc2626">*</b>=상한 적용)') : '')
       + '</div>';
   }
   function scWkCmpBuildWeek(){
@@ -2415,8 +2426,8 @@
       + '</tr></thead><tbody>' + body + '</tbody></table>'
       + '<div class="cmp-note">※ 순공부시간(외출 제외) 기준 · 형식 <b>시:분</b> · 미달 학생은 붉은 배경으로 표시됩니다.'
       + '<br>※ 확인란은 근무자 서명·체크용, 비고란은 메모용 빈칸입니다.'
-      + (ltCnt ? ('<br>※ <b style="color:#c2410c">멘토링 기간</b> — 월~토 지각 시간의 <b>3배</b>가 의무시간에 가산되며 일요일에 이행합니다 (일요일 칸 <b style="color:#c2410c">지각 +시:분</b>). '
-                  + '지각 1회당 최대 <b>2시간</b>까지만 계산에 반영됩니다') : '')
+      + (ltCnt ? ('<br>※ <b style="color:#c2410c">멘토링 기간</b> — 월~토 <b>등원 지각</b> 시간의 <b>3배</b>가 의무시간에 가산되며 일요일에 이행합니다 (일요일 칸 <b style="color:#c2410c">지각 +시:분</b>). '
+                  + '오전 9시 이전 등원은 지각이 아니며, 1회당 최대 <b>2시간</b>까지만 반영됩니다') : '')
       + '</div>';
     _cmpCountText = "대상 "+rows.length+"명 · 미달 "+missCnt+"명" + (ltCnt ? (" · 지각가산 "+ltCnt+"명") : "");
     return sheet;
@@ -2518,8 +2529,9 @@
           || String(r.st.reading_room_code||"").toLowerCase().indexOf(q) >= 0;
     }) : all;
     var banner = '<div class="lt-banner on">⏰ <b>멘토링 기간</b> — 적용일 ' + onDays.join("·") + ' &nbsp;|&nbsp; '
-      + '월~토 지각 시간의 <b>3배</b>가 그 주 의무시간에 가산되어 <b>일요일</b>에 이행합니다. '
-      + '<b>1회 지각당 최대 2시간</b>까지만 계산에 반영됩니다(초과분 버림, 횟수 제한 없음).<br>'
+      + '월~토 <b>등원 지각</b> 시간의 <b>3배</b>가 그 주 의무시간에 가산되어 <b>일요일</b>에 이행합니다. '
+      + '<b>오전 9시 이전 등원은 지각이 아니며</b>(예정이 9시 이전이면 9시가 기준), '
+      + '<b>1회당 최대 2시간</b>까지만 반영됩니다(초과분 버림·횟수 제한 없음). 외출 복귀 지각은 부과하지 않습니다.<br>'
       + '학부모 확인 등 특별 사유는 <b>면제</b>에 체크하면 부과에서 제외되며, 이행현황·리포트에 즉시 반영됩니다. '
       + (q ? ('검색 <b>' + rows.length + '</b>명 / 대상 <b>' + all.length + '</b>명')
            : ('대상 <b>' + all.length + '</b>명'))
@@ -2542,7 +2554,7 @@
             + ' onchange="scLtWaive(' + k + ',this.checked,this)">면제</label>'
           + '<span class="lt-day">' + it.dayName + '</span>'
           + '<span class="lt-kind">' + it.label + '</span>'
-          + '<span class="lt-time">' + it.exp + ' → ' + it.act + '</span>'
+          + '<span class="lt-time">' + it.exp + (it.graced ? ('<span class="lt-grace">기준 ' + it.expEff + '</span>') : '') + ' → ' + it.act + '</span>'
           + '<b class="lt-min">+' + scWkFmtDur(it.min) + '</b>'
           + (it.capped ? ('<span class="lt-cap">1회 상한 → ' + scWkFmtDur(it.counted) + ' 반영</span>') : '')
           + (it.waived
@@ -3251,7 +3263,7 @@
         : '<div class="rpt-tile duty"><div class="tval" style="font-size:20px;color:#93a0b0">미설정</div></div>')
       + '</div>';
     var noteHtml = "※ 외출시간을 제외한 순공부시간입니다.<br>"
-      + (lateExtra>0 ? ("※ 월~토 지각 "+scWkFmtDur(lateMin)+"의 <b>3배</b>인 "+scWkFmtDur(lateExtra)+"이 의무 학습시간에 가산되었습니다."
+      + (lateExtra>0 ? ("※ 월~토 등원 지각 "+scWkFmtDur(lateMin)+"의 <b>3배</b>인 "+scWkFmtDur(lateExtra)+"이 의무 학습시간에 가산되었습니다."
                         + ((lateInfo && lateInfo.cappedCnt>0) ? " (지각 1회당 최대 2시간까지 반영)" : "") + "<br>") : "")
       + "※ 반복적인 "+(hasReq?"의무 학습시간 미이행 및 ":"")+"스터디센터 규칙 미이행 시 퇴실 조치됩니다.";
     return '<div class="rpt-card">'
