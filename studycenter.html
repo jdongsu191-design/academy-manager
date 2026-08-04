@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.79-latemsg]</title>
+<title>BMAPS · 독서실 출결 [v0.80-latesearch]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -726,6 +726,9 @@
   .lt-reason:focus{ outline:none; border-color:#0369a1; }
   .lt-reason.saved{ border-color:#16a34a; background:#f0fdf4; }
   .lt-empty{ padding:34px 16px; text-align:center; color:#94a3b8; font-size:14px; font-weight:600; }
+  .lt-search{ border:1.5px solid #cbd5e1; border-radius:8px; padding:6px 11px; font-size:13px;
+              font-family:inherit; color:#334155; width:150px; }
+  .lt-search:focus{ outline:none; border-color:#0369a1; box-shadow:0 0 0 3px rgba(3,105,161,.13); }
   .lt-wklabel{ font-size:13px; font-weight:800; color:#0f172a; margin-right:4px; }
   .tp-exp-chips{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; }
   .tp-exp-chips button{ padding:5px 9px; border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:7px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; }
@@ -763,7 +766,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.79-latemsg</span>
+    <span class="tb-ver" id="sc-ver">v0.80-latesearch</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1069,6 +1072,8 @@
             <div class="tp-head">
               <span class="tp-t">⏰ 멘토링 지각 관리</span>
               <div class="tp-head-r">
+                <input type="text" id="lt-search" class="lt-search" placeholder="🔍 이름 검색" maxlength="20"
+                       oninput="scLtSearch(this.value)" autocomplete="off">
                 <span class="lt-wklabel" id="lt-week-label"></span>
                 <button class="tp-refresh" onclick="scLtWeek(-1)">◀ 지난주</button>
                 <button class="tp-refresh" onclick="scLtThisWeek()">이번주</button>
@@ -1113,7 +1118,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.79-latemsg';
+  window.STUDYCENTER_VERSION = 'v0.80-latesearch';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2412,7 +2417,9 @@
      · 여기서 면제한 건은 이행현황·주간리포트의 가산에서 즉시 빠진다
      · 주간출결 탭과 데이터를 분리 로드(_ltData)해 서로의 주차를 건드리지 않음
   ============================================================ */
-  var _ltMonday = null, _ltDates = [], _ltData = {};
+  var _ltMonday = null, _ltDates = [], _ltData = {}, _ltQuery = "";
+  // 이름 검색 (표만 다시 그리므로 입력 포커스는 유지된다)
+  function scLtSearch(v){ _ltQuery = v || ""; scLtRender(); }
   function scLtInit(){
     if(!_ltMonday) _ltMonday = scWkMonday(scWkFmtDate(new Date()));
     scLtLoad();
@@ -2477,19 +2484,31 @@
         + '지각 가산은 멘토링 기간에만 적용됩니다.</div>';
       return;
     }
-    var rows = _wkStudents.map(function(st){
+    var all = _wkStudents.map(function(st){
       return { st:st, info: scReqWithLate(st.id, _ltDates, _ltData[st.id] || {}) };
     }).filter(function(r){ return r.info.items.length > 0; });
-    rows.sort(function(a,b){
+    all.sort(function(a,b){
       var d = b.info.extra - a.info.extra; if(d) return d;
       return String(a.st.name||"").localeCompare(String(b.st.name||""), "ko");
     });
+    // 이름(또는 독서실 코드) 검색
+    var q = String(_ltQuery || "").trim().toLowerCase();
+    var rows = q ? all.filter(function(r){
+      return String(r.st.name||"").toLowerCase().indexOf(q) >= 0
+          || String(r.st.reading_room_code||"").toLowerCase().indexOf(q) >= 0;
+    }) : all;
     var banner = '<div class="lt-banner on">⏰ <b>멘토링 기간</b> — 적용일 ' + onDays.join("·") + ' &nbsp;|&nbsp; '
       + '월~토 지각 시간의 <b>3배</b>가 그 주 의무시간에 가산되어 <b>일요일</b>에 이행합니다.<br>'
       + '학부모 확인 등 특별 사유는 <b>면제</b>에 체크하면 부과에서 제외되며, 이행현황·리포트에 즉시 반영됩니다. '
-      + '대상 <b>' + rows.length + '</b>명</div>';
-    if(!rows.length){
+      + (q ? ('검색 <b>' + rows.length + '</b>명 / 대상 <b>' + all.length + '</b>명')
+           : ('대상 <b>' + all.length + '</b>명'))
+      + '</div>';
+    if(!all.length){
       wrap.innerHTML = banner + '<div class="lt-empty">이 주에 집계된 지각이 없습니다.</div>';
+      return;
+    }
+    if(!rows.length){
+      wrap.innerHTML = banner + '<div class="lt-empty">\'' + scWkEsc(_ltQuery) + '\' 검색 결과가 없습니다.</div>';
       return;
     }
     var body = rows.map(function(r, idx){
