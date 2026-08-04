@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.83-lateout]</title>
+<title>BMAPS · 독서실 출결 [v0.84-latesort]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -735,6 +735,13 @@
   .lt-reason:focus{ outline:none; border-color:#0369a1; }
   .lt-reason.saved{ border-color:#16a34a; background:#f0fdf4; }
   .lt-empty{ padding:34px 16px; text-align:center; color:#94a3b8; font-size:14px; font-weight:600; }
+  /* 정렬 전환 — 최신순은 오직 최신순(크기로 다시 묶지 않음) */
+  .lt-sort{ display:inline-flex; gap:0; border:1.5px solid #cbd5e1; border-radius:8px; overflow:hidden; }
+  .lt-sortb{ border:none; background:#fff; color:#475569; padding:6px 11px; font-size:12.5px;
+             font-weight:800; cursor:pointer; font-family:inherit; white-space:nowrap; }
+  .lt-sortb + .lt-sortb{ border-left:1px solid #e2e8f0; }
+  .lt-sortb:hover{ background:#f1f5f9; }
+  .lt-sortb.on{ background:#0369a1; color:#fff; }
   .lt-search{ border:1.5px solid #cbd5e1; border-radius:8px; padding:6px 11px; font-size:13px;
               font-family:inherit; color:#334155; width:150px; }
   .lt-search:focus{ outline:none; border-color:#0369a1; box-shadow:0 0 0 3px rgba(3,105,161,.13); }
@@ -775,7 +782,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.83-lateout</span>
+    <span class="tb-ver" id="sc-ver">v0.84-latesort</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1081,6 +1088,11 @@
             <div class="tp-head">
               <span class="tp-t">⏰ 멘토링 지각 관리</span>
               <div class="tp-head-r">
+                <span class="lt-sort">
+                  <button class="lt-sortb on" id="lt-sort-recent" onclick="scLtSortSet('recent')">최신순</button>
+                  <button class="lt-sortb" id="lt-sort-name" onclick="scLtSortSet('name')">이름순</button>
+                  <button class="lt-sortb" id="lt-sort-late" onclick="scLtSortSet('late')">누적지각순</button>
+                </span>
                 <input type="text" id="lt-search" class="lt-search" placeholder="🔍 이름 검색" maxlength="20"
                        oninput="scLtSearch(this.value)" autocomplete="off">
                 <span class="lt-wklabel" id="lt-week-label"></span>
@@ -1127,7 +1139,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.83-lateout';
+  window.STUDYCENTER_VERSION = 'v0.84-latesort';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2452,8 +2464,20 @@
      · 주간출결 탭과 데이터를 분리 로드(_ltData)해 서로의 주차를 건드리지 않음
   ============================================================ */
   var _ltMonday = null, _ltDates = [], _ltData = {}, _ltQuery = "";
+  var _ltSort = "recent";   // recent(최신순) | name(이름순) | late(누적지각순)
+  var _ltOrder = null;      // 직전 렌더 순서(학생 id) — 면제 토글 때 행이 튀지 않게 고정
   // 이름 검색 (표만 다시 그리므로 입력 포커스는 유지된다)
-  function scLtSearch(v){ _ltQuery = v || ""; scLtRender(); }
+  function scLtSearch(v){ _ltQuery = v || ""; _ltOrder = null; scLtRender(); }
+  function scLtSortSet(m){ _ltSort = m; _ltOrder = null; scLtRender(); }
+  // 그 학생의 "가장 최근 지각" 시각 (YYYYMMDD*1440 + 실제시각 분)
+  function scLtLastAt(info){
+    var m = -1;
+    (info.items || []).forEach(function(it){
+      var v = parseInt(String(it.date).replace(/-/g,""), 10) * 1440 + (scWkT2M(it.act) || 0);
+      if(v > m) m = v;
+    });
+    return m;
+  }
   function scLtInit(){
     if(!_ltMonday) _ltMonday = scWkMonday(scWkFmtDate(new Date()));
     scLtLoad();
@@ -2506,10 +2530,15 @@
       if(wrap) wrap.innerHTML = '<div class="lt-empty">불러오기 실패: ' + scWkEsc(e.message || e) + '</div>';
     }
   }
-  function scLtRender(){
+  // keepOrder=true → 직전 렌더 순서를 그대로 유지 (면제 토글 시 행 이동 방지)
+  function scLtRender(keepOrder){
     var wrap = document.getElementById("sc-late-wrap"); if(!wrap) return;
     var lbl = document.getElementById("lt-week-label");
     if(lbl) lbl.textContent = _ltDates[0] + " ~ " + _ltDates[6];
+    ["recent","name","late"].forEach(function(m){
+      var b = document.getElementById("lt-sort-" + m);
+      if(b) b.classList.toggle("on", _ltSort === m);
+    });
     // 이 주의 멘토링 적용일 (월~토)
     var names = ["월","화","수","목","금","토"], onDays = [];
     for(var i=0; i<6; i++) if(scMentorOn(_ltDates[i])) onDays.push(names[i]);
@@ -2521,10 +2550,24 @@
     var all = _wkStudents.map(function(st){
       return { st:st, info: scReqWithLate(st.id, _ltDates, _ltData[st.id] || {}) };
     }).filter(function(r){ return r.info.items.length > 0; });
-    all.sort(function(a,b){
-      var d = b.info.extra - a.info.extra; if(d) return d;
-      return String(a.st.name||"").localeCompare(String(b.st.name||""), "ko");
-    });
+    function byName(a,b){ return String(a.st.name||"").localeCompare(String(b.st.name||""), "ko"); }
+    if(keepOrder && _ltOrder){
+      // 면제 토글 직후 — 순서를 새로 계산하지 않고 그대로 둔다
+      var pos = {}; _ltOrder.forEach(function(id, i){ pos[id] = i; });
+      all.sort(function(a,b){
+        var pa = (pos[a.st.id] == null) ? 99999 : pos[a.st.id];
+        var pb = (pos[b.st.id] == null) ? 99999 : pos[b.st.id];
+        return (pa - pb) || byName(a,b);
+      });
+    } else if(_ltSort === "name"){
+      all.sort(byName);
+    } else if(_ltSort === "late"){
+      all.sort(function(a,b){ return (b.info.lateMin - a.info.lateMin) || byName(a,b); });
+    } else {
+      // [최신순] 오직 가장 최근 지각 시각만 본다. 지각 크기로 다시 묶지 않는다
+      all.sort(function(a,b){ return (scLtLastAt(b.info) - scLtLastAt(a.info)) || byName(a,b); });
+    }
+    _ltOrder = all.map(function(r){ return r.st.id; });
     // 이름(또는 독서실 코드) 검색
     var q = String(_ltQuery || "").trim().toLowerCase();
     var rows = q ? all.filter(function(r){
@@ -2561,7 +2604,8 @@
           + '<b class="lt-min">+' + scWkFmtDur(it.min) + '</b>'
           + (it.capped ? ('<span class="lt-cap">1회 상한 → ' + scWkFmtDur(it.counted) + ' 반영</span>') : '')
           + (it.waived
-              ? '<input class="lt-reason" value="' + scWkEsc(it.reason) + '" maxlength="100" placeholder="면제 사유 (예: 학부모 확인 - 병원)"'
+              ? '<input class="lt-reason" data-k="' + scWkEsc(scLateKey(st.id, it.date, it.kind)) + '"'
+                + ' value="' + scWkEsc(it.reason) + '" maxlength="100" placeholder="면제 사유 (예: 학부모 확인 - 병원)"'
                 + ' onchange="scLtReason(' + k + ',this.value,this)">'
               : '')
           + '</div>';
@@ -2626,7 +2670,13 @@
         if(r2.error) throw r2.error;
         delete _lateWaivers[key];
       }
-      scLtRender();
+      // 순서 고정 재렌더 → 면제해도 행이 위아래로 튀지 않는다
+      scLtRender(true);
+      // 방금 면제한 건의 사유칸으로 바로 커서 이동
+      if(on){
+        var ri = document.querySelector('.lt-reason[data-k="' + key + '"]');
+        if(ri) ri.focus();
+      }
     }catch(e){
       if(el) el.checked = !on;
       alert("면제 저장 실패: " + (e.message || e));
