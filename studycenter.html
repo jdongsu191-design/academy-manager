@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.89-ptedit]</title>
+<title>BMAPS · 독서실 출결 [v0.90-aptrange]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -704,6 +704,10 @@
   .apt-range{ display:flex; align-items:center; gap:6px; flex:1; font-size:12px; color:#64748b; }
   .apt-range input{ width:100%; min-width:0; border:1.5px solid #cbd5e1; border-radius:6px; padding:6px 8px;
                     font-size:13px; font-family:inherit; }
+  .apt-range .apt-unit{ font-size:12.5px; font-weight:700; color:#475569; flex-shrink:0; }
+  .apt-range select{ border:1.5px solid #cbd5e1; border-radius:6px; padding:6px 8px; font-size:13px;
+                     font-family:inherit; font-weight:700; color:#334155; background:#fff; flex-shrink:0; cursor:pointer; }
+  .apt-prev{ font-size:11.5px; font-weight:700; color:#0369a1; margin:-4px 0 10px 74px; min-height:15px; }
   .apt-item{ display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid #e2e8f0;
              border-radius:8px; background:#fff; margin-bottom:5px; }
   .apt-item.off{ opacity:.5; }
@@ -820,7 +824,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.89-ptedit</span>
+    <span class="tb-ver" id="sc-ver">v0.90-aptrange</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1177,7 +1181,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.89-ptedit';
+  window.STUDYCENTER_VERSION = 'v0.90-aptrange';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -3037,6 +3041,7 @@
     // 키오스크 자동 벌점 항목도 함께
     scAptKind("in");
     document.getElementById("apt-msg").textContent = "";
+    scAptPreview();
     await scAptLoadRules(true);
     scAptRenderList();
     document.getElementById("sc-ptpreset-overlay").classList.add("open");
@@ -3111,9 +3116,31 @@
     if(a) a.classList.toggle("on", k === "in");
     if(b) b.classList.toggle("on", k === "out");
   }
+  /* 숫자+연산자 → 실제 구간(min~max). max=null 은 무제한 */
+  function scAptToRange(n, op){
+    if(op === "lte") return { lo:1,     hi:n };
+    if(op === "lt")  return { lo:1,     hi:n - 1 };
+    if(op === "gte") return { lo:n,     hi:null };
+    return               { lo:n + 1, hi:null };   // gt(초과)
+  }
+  /* 구간 → 사람이 읽는 문구 */
   function scAptRangeText(r){
     var lo = (r.min_minutes == null) ? 1 : r.min_minutes;
-    return (r.max_minutes == null) ? (lo + "분~") : (lo + "~" + r.max_minutes + "분");
+    var hi = r.max_minutes;
+    if(hi == null) return (lo <= 1) ? "전체" : (lo + "분 이상");
+    if(lo <= 1)    return hi + "분 이하";
+    return lo + "~" + hi + "분";
+  }
+  /* 입력 중 실제 적용 구간 미리보기 */
+  function scAptPreview(){
+    var el = document.getElementById("apt-prev"); if(!el) return;
+    var n  = parseInt(document.getElementById("apt-num").value, 10);
+    var op = document.getElementById("apt-op").value;
+    if(isNaN(n) || n < 1){ el.textContent = ""; return; }
+    var rg = scAptToRange(n, op);
+    if(rg.hi != null && rg.hi < 1){ el.textContent = "적용 구간이 없습니다 (1분 이상이어야 합니다)"; el.style.color = "#dc2626"; return; }
+    el.style.color = "";
+    el.textContent = "→ 실제 적용: " + scAptRangeText({ min_minutes:rg.lo, max_minutes:rg.hi });
   }
   function scAptRenderList(){
     var box = document.getElementById("apt-list"); if(!box) return;
@@ -3134,24 +3161,25 @@
   }
   async function scAptAdd(){
     var msg = document.getElementById("apt-msg");
-    var lo  = parseInt(document.getElementById("apt-min").value, 10);
-    var hiV = document.getElementById("apt-max").value.trim();
-    var hi  = hiV === "" ? null : parseInt(hiV, 10);
+    var n   = parseInt(document.getElementById("apt-num").value, 10);
+    var op  = document.getElementById("apt-op").value;
     var pt  = parseInt(document.getElementById("apt-score").value, 10);
     var lbl = document.getElementById("apt-label").value.trim();
     msg.style.color = "";
-    if(isNaN(lo) || lo < 1){ msg.style.color = "#dc2626"; msg.textContent = "구간 시작을 1분 이상으로 입력하세요"; return; }
-    if(hi != null && (isNaN(hi) || hi < lo)){ msg.style.color = "#dc2626"; msg.textContent = "구간 끝은 시작보다 커야 합니다"; return; }
+    if(isNaN(n) || n < 1){ msg.style.color = "#dc2626"; msg.textContent = "지각 시간을 1분 이상으로 입력하세요"; return; }
+    var rg = scAptToRange(n, op);
+    var lo = rg.lo, hi = rg.hi;
+    if(hi != null && hi < 1){ msg.style.color = "#dc2626"; msg.textContent = "적용 구간이 없습니다 (1분 이상이어야 합니다)"; return; }
     if(isNaN(pt) || pt <= 0){ msg.style.color = "#dc2626"; msg.textContent = "벌점을 1 이상 입력하세요"; return; }
     if(!lbl){ msg.style.color = "#dc2626"; msg.textContent = "사유를 입력하세요"; return; }
-    // 같은 종류 안에서 구간이 겹치면 먼저 걸리는 규칙만 적용되므로 미리 막는다
-    var dup = (_aptRules || []).filter(function(x){ return x.kind === _aptKind && x.active !== false; })
-      .find(function(x){
-        var xl = (x.min_minutes == null) ? 1 : x.min_minutes;
-        var xh = (x.max_minutes == null) ? Infinity : x.max_minutes;
-        return Math.max(xl, lo) <= Math.min(xh, (hi == null ? Infinity : hi));
-      });
-    if(dup){ msg.style.color = "#dc2626"; msg.textContent = "이미 있는 구간(" + scAptRangeText(dup) + ")과 겹칩니다"; return; }
+    // 구간이 겹쳐도 좁은 쪽이 우선 적용되므로 막지 않는다. 완전히 같은 구간만 차단
+    var dup = (_aptRules || []).find(function(x){
+      var xl = (x.min_minutes == null) ? 1 : x.min_minutes;
+      return x.kind === _aptKind && xl === lo
+        && ((x.max_minutes == null) === (hi == null))
+        && (hi == null || x.max_minutes === hi);
+    });
+    if(dup){ msg.style.color = "#dc2626"; msg.textContent = "같은 구간(" + scAptRangeText(dup) + ")이 이미 있습니다"; return; }
     var btn = document.getElementById("apt-save"); btn.disabled = true;
     try{
       var ord = (_aptRules || []).filter(function(x){ return x.kind === _aptKind; }).length;
@@ -3160,9 +3188,9 @@
         label: lbl, active: true, sort_order: ord
       });
       if(r.error) throw r.error;
-      document.getElementById("apt-min").value = "";
-      document.getElementById("apt-max").value = "";
+      document.getElementById("apt-num").value = "";
       document.getElementById("apt-score").value = "";
+      scAptPreview();
       document.getElementById("apt-label").value = "";
       msg.style.color = "#15803d"; msg.textContent = "✓ 추가되었습니다";
       await scAptLoadRules(true); scAptRenderList();
@@ -3255,15 +3283,20 @@
     return _aptRules;
   }
   /* 지각 분 → 해당 구간 규칙 (활성 규칙 중 min <= n <= max) */
+  /* 구간이 겹치면 "가장 좁은(구체적인)" 규칙을 쓴다.
+     예) '10분 이하'(1~10) 와 '30분 이하'(1~30) 를 함께 두면
+         5분 → 10분 이하 / 20분 → 30분 이하 로 자연스럽게 갈린다. */
   function scAptMatch(rules, kind, mins){
-    var list = (rules || []).filter(function(x){ return x.active !== false && x.kind === kind; });
-    for(var i=0; i<list.length; i++){
-      var r = list[i];
+    var best = null, bestW = Infinity;
+    (rules || []).forEach(function(r){
+      if(r.active === false || r.kind !== kind) return;
       var lo = (r.min_minutes == null) ? 1 : r.min_minutes;
       var hi = (r.max_minutes == null) ? Infinity : r.max_minutes;
-      if(mins >= lo && mins <= hi) return r;
-    }
-    return null;
+      if(mins < lo || mins > hi) return;
+      var w = hi - lo;   // 상한 없는 규칙은 Infinity — 첫 매칭은 무조건 채택해야 놓치지 않는다
+      if(best === null || w < bestW){ best = r; bestW = w; }
+    });
+    return best;
   }
   /* 등원 지각 분 — 9시 이전 등원은 지각으로 보지 않는다 */
   function scAptLateIn(expT, actT){
@@ -5638,19 +5671,27 @@
       <!-- 키오스크 자동 벌점 항목 -->
       <div id="ppt-auto" style="display:none">
         <div class="apt-desc">학생이 키오스크로 <b>입실·복귀</b>할 때 지각 시간을 구간별로 판정해 자동으로 벌점을 부여합니다.<br>
-          등원은 <b>오전 9시 이전이면 지각으로 보지 않으며</b>, 같은 건에 중복 부여되지 않습니다.</div>
+          등원은 <b>오전 9시 이전이면 지각으로 보지 않으며</b>, 같은 건에 중복 부여되지 않습니다.<br>
+          구간이 겹치면 <b>더 좁은 구간</b>이 적용됩니다 — 예: <b>10분 이하 −1</b>, <b>30분 이하 −2</b>, <b>30분 초과 −3</b> 으로 단계를 만들 수 있습니다.</div>
         <div id="apt-list" style="margin-bottom:10px"></div>
         <div class="apt-add">
           <div class="apt-kindbtns">
             <button type="button" id="apt-k-in"  onclick="scAptKind('in')">🚪 등원 지각</button>
             <button type="button" id="apt-k-out" onclick="scAptKind('out')">↩️ 복귀 지각</button>
           </div>
-          <div class="wk-xout-frow"><label>구간(분)</label>
+          <div class="wk-xout-frow"><label>지각 시간</label>
             <span class="apt-range">
-              <input type="number" id="apt-min" min="1" max="600" placeholder="1"> ~
-              <input type="number" id="apt-max" min="1" max="600" placeholder="비우면 무제한">
+              <input type="number" id="apt-num" min="1" max="600" placeholder="예: 10" oninput="scAptPreview()">
+              <span class="apt-unit">분</span>
+              <select id="apt-op" onchange="scAptPreview()">
+                <option value="lte">이하</option>
+                <option value="lt">미만</option>
+                <option value="gte">이상</option>
+                <option value="gt">초과</option>
+              </select>
             </span>
           </div>
+          <div class="apt-prev" id="apt-prev"></div>
           <div class="wk-xout-frow"><label>벌점</label><input type="number" id="apt-score" min="1" max="100" placeholder="예: 1"></div>
           <div class="wk-xout-frow"><label>사유</label><input type="text" id="apt-label" placeholder="예: 10분이하 지각" maxlength="20"></div>
           <div class="wk-xout-preview" id="apt-msg"></div>
