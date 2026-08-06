@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.88-autopoint]</title>
+<title>BMAPS · 독서실 출결 [v0.89-ptedit]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -529,7 +529,7 @@
   .pt-item{ display:flex; align-items:center; gap:10px; font-size:12.5px; padding:3px 0; }
   .pt-item .pi-date{ width:56px; color:#94a3b8; font-variant-numeric:tabular-nums; flex-shrink:0; }
   .pt-item .pi-pt{ width:40px; text-align:right; font-weight:800; flex-shrink:0; font-variant-numeric:tabular-nums; }
-  .pt-item .pi-rsn{ flex:1; color:#334155; }
+  .pt-item .pi-rsn{ flex:1; min-width:0; color:#334155; }
   /* 누적벌점 배지 (모달) + 상태·경고 */
   .pt-cum{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:2px 0 12px; }
   .pt-cum-net{ font-size:14px; font-weight:800; padding:4px 11px; border-radius:8px; }
@@ -689,7 +689,12 @@
     tr.miss td{ background:#fff5f5 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
   /* ── [키오스크 자동 벌점] 항목 설정 ── */
-  .apt-sec{ margin-top:16px; padding-top:14px; border-top:2px solid #e2e8f0; }
+  /* 모달이 길어져 화면에서 잘리던 문제 — 탭 전환 + 높이 상한 */
+  .ppt-card{ max-height:88vh; overflow-y:auto; }
+  .ppt-tabs{ display:flex; gap:6px; margin:2px 0 12px; }
+  .ppt-tabs button{ flex:1; padding:8px 10px; border:1.5px solid #cbd5e1; background:#fff; color:#475569;
+                    border-radius:8px; font-size:12.5px; font-weight:800; cursor:pointer; font-family:inherit; }
+  .ppt-tabs button.on{ background:#0369a1; border-color:#0369a1; color:#fff; }
   .apt-title{ font-size:14px; font-weight:800; color:#0f172a; margin-bottom:4px; }
   .apt-desc{ font-size:11.5px; color:#64748b; line-height:1.6; margin-bottom:10px; }
   .apt-kindbtns{ display:flex; gap:6px; margin-bottom:8px; }
@@ -815,7 +820,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.88-autopoint</span>
+    <span class="tb-ver" id="sc-ver">v0.89-ptedit</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1172,7 +1177,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.88-autopoint';
+  window.STUDYCENTER_VERSION = 'v0.89-ptedit';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2973,7 +2978,12 @@
         var neg = p.points < 0;
         return '<div class="pt-item"><span class="pi-date">'+scWkEsc(String(p.award_date).slice(2).replace(/-/g,"/"))+'</span>'
           + '<span class="pi-pt" style="color:'+(neg?"#dc2626":"#1d4ed8")+'">'+(p.points>0?"+":"")+p.points+'</span>'
-          + '<span class="pi-rsn">'+scWkEsc(p.reason||"-")+'</span></div>';
+          + '<span class="pi-rsn">'+scWkEsc(p.reason||"-")
+            + (p.source === "auto" ? '<span class="ph-auto">자동</span>' : '')
+            + (p.note ? '<span class="ph-note">📝 '+scWkEsc(p.note)+'</span>' : '')
+          + '</span>'
+          + '<button class="ph-edit" onclick="scPtEditOpen(\''+p.id+'\')">편집</button>'
+          + '<button class="ph-del" onclick="scPtDelete(\''+p.id+'\')">삭제</button></div>';
       }).join("");
       var kkBtn = r.lastDemerit ? '<button class="pt-kk-btn" onclick="scPtKakaoOpen(\''+r.sid+'\')">💬 카톡</button>' : '<span style="color:#cbd5e1;font-size:12px">-</span>';
       return '<tr class="pt-sum-row'+(warn?" rowwarn":"")+'">'
@@ -3020,6 +3030,7 @@
     document.getElementById("ppa-label").value = "";
     document.getElementById("ppa-score").value = "";
     document.getElementById("ppa-msg").textContent = "";
+    scPtPresetTab("manual");
     scPtPresetType("minus");
     await scPtLoadPresets(true);
     scPtPresetRenderList();
@@ -3078,6 +3089,18 @@
       await scPtLoadPresets(true);
       scPtPresetRenderList();
     }catch(e){ alert("삭제 실패: "+(e.message||e)); }
+  }
+
+  /* ── [항목 설정] 수동/자동 탭 전환 (모달이 길어 잘리는 것 방지) ── */
+  function scPtPresetTab(t){
+    var m = document.getElementById("ppt-manual"), a = document.getElementById("ppt-auto");
+    if(m) m.style.display = (t === "manual") ? "" : "none";
+    if(a) a.style.display = (t === "auto")   ? "" : "none";
+    var bm = document.getElementById("ppt-tab-manual"), ba = document.getElementById("ppt-tab-auto");
+    if(bm) bm.classList.toggle("on", t === "manual");
+    if(ba) ba.classList.toggle("on", t === "auto");
+    var card = document.querySelector("#sc-ptpreset-overlay .ppt-card");
+    if(card) card.scrollTop = 0;
   }
 
   /* ── [자동 벌점 항목] 설정 UI ── */
@@ -3164,8 +3187,19 @@
 
   /* ── [상벌점 편집] 근무자가 점수·사유를 조정하고 비고를 남긴다 ── */
   var _pteId = null;
-  function scPtEditOpen(id){
+  /* 부여 모달 이력 / 상벌점 요약 탭 어느 쪽에서 눌러도 찾을 수 있게 두 캐시를 모두 본다 */
+  function scPtFindRec(id){
     var p = (_scPtHistCache || []).find(function(x){ return x.id === id; });
+    if(p) return p;
+    var all = (_ptSum || []);
+    for(var i=0; i<all.length; i++){
+      var hit = (all[i].items || []).find(function(x){ return x.id === id; });
+      if(hit) return hit;
+    }
+    return null;
+  }
+  function scPtEditOpen(id){
+    var p = scPtFindRec(id);
     if(!p){ alert("항목을 찾을 수 없습니다."); return; }
     _pteId = id;
     document.getElementById("pte-head").textContent =
@@ -5576,8 +5610,14 @@
   </div>
   <!-- [상벌점] 프리셋 항목 설정 -->
   <div class="wk-xout-overlay" id="sc-ptpreset-overlay" onclick="if(event.target===this)scPtPresetClose()">
-    <div class="wk-xout-card" style="width:440px">
+    <div class="wk-xout-card ppt-card" style="width:440px">
       <h3>⚙ 상벌점 항목 설정</h3>
+      <div class="ppt-tabs">
+        <button type="button" id="ppt-tab-manual" class="on" onclick="scPtPresetTab('manual')">✍️ 수동 항목</button>
+        <button type="button" id="ppt-tab-auto" onclick="scPtPresetTab('auto')">🤖 키오스크 자동</button>
+      </div>
+
+      <div id="ppt-manual">
       <div class="wk-xout-sub">자주 쓰는 사유·점수를 등록하면 부여 모달에서 원터치로 쓸 수 있습니다</div>
       <div id="pt-preset-list" style="margin-bottom:12px"></div>
       <div class="pt-preset-add">
@@ -5593,10 +5633,10 @@
           <button type="button" class="wk-xout-add" id="ppa-save" onclick="scPtPresetAdd()">항목 추가</button>
         </div>
       </div>
+      </div><!-- /ppt-manual -->
 
       <!-- 키오스크 자동 벌점 항목 -->
-      <div class="apt-sec">
-        <div class="apt-title">🤖 키오스크 자동 벌점 항목</div>
+      <div id="ppt-auto" style="display:none">
         <div class="apt-desc">학생이 키오스크로 <b>입실·복귀</b>할 때 지각 시간을 구간별로 판정해 자동으로 벌점을 부여합니다.<br>
           등원은 <b>오전 9시 이전이면 지각으로 보지 않으며</b>, 같은 건에 중복 부여되지 않습니다.</div>
         <div id="apt-list" style="margin-bottom:10px"></div>
@@ -5615,6 +5655,7 @@
           <div class="wk-xout-frow"><label>사유</label><input type="text" id="apt-label" placeholder="예: 10분이하 지각" maxlength="20"></div>
           <div class="wk-xout-preview" id="apt-msg"></div>
           <div class="wk-xout-btns">
+            <button type="button" class="wk-xout-cancel" onclick="scPtPresetClose()">닫기</button>
             <button type="button" class="wk-xout-add" id="apt-save" onclick="scAptAdd()">자동 항목 추가</button>
           </div>
         </div>
