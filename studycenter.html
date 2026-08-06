@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.87-remainmsg]</title>
+<title>BMAPS · 독서실 출결 [v0.88-autopoint]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -688,6 +688,38 @@
     table.cmp th{ background:#eef2f7 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     tr.miss td{ background:#fff5f5 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
+  /* ── [키오스크 자동 벌점] 항목 설정 ── */
+  .apt-sec{ margin-top:16px; padding-top:14px; border-top:2px solid #e2e8f0; }
+  .apt-title{ font-size:14px; font-weight:800; color:#0f172a; margin-bottom:4px; }
+  .apt-desc{ font-size:11.5px; color:#64748b; line-height:1.6; margin-bottom:10px; }
+  .apt-kindbtns{ display:flex; gap:6px; margin-bottom:8px; }
+  .apt-kindbtns button{ flex:1; padding:6px 8px; border:1.5px solid #cbd5e1; background:#fff; color:#475569;
+                        border-radius:7px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .apt-kindbtns button.on{ background:#0369a1; border-color:#0369a1; color:#fff; }
+  .apt-range{ display:flex; align-items:center; gap:6px; flex:1; font-size:12px; color:#64748b; }
+  .apt-range input{ width:100%; min-width:0; border:1.5px solid #cbd5e1; border-radius:6px; padding:6px 8px;
+                    font-size:13px; font-family:inherit; }
+  .apt-item{ display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid #e2e8f0;
+             border-radius:8px; background:#fff; margin-bottom:5px; }
+  .apt-item.off{ opacity:.5; }
+  .apt-kind{ font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:5px; white-space:nowrap; }
+  .apt-kind.in{ background:#dbeafe; color:#1d4ed8; }
+  .apt-kind.out{ background:#fef3c7; color:#92400e; }
+  .apt-rng{ font-size:12px; font-weight:700; color:#334155; white-space:nowrap; }
+  .apt-lbl{ flex:1; min-width:0; font-size:12px; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .apt-pt{ font-size:12.5px; font-weight:800; color:#dc2626; white-space:nowrap; }
+  .apt-act{ border:1px solid #cbd5e1; background:#fff; color:#475569; border-radius:5px; padding:2px 7px;
+            font-size:11px; font-weight:700; cursor:pointer; font-family:inherit; white-space:nowrap; }
+  .apt-act.del{ border-color:#fca5a5; background:#fef2f2; color:#dc2626; }
+  .apt-empty{ padding:14px; text-align:center; color:#94a3b8; font-size:12px; }
+  /* 상벌점 편집 모달 */
+  .pte-hint{ font-size:11px; color:#94a3b8; margin:-6px 0 10px 74px; }
+  /* 상벌점 이력 — 자동 배지·비고·편집 */
+  .ph-auto{ font-size:9.5px; font-weight:800; background:#e0f2fe; color:#0369a1; border-radius:4px; padding:1px 5px; margin-left:4px; }
+  .ph-note{ display:block; font-size:10.5px; color:#0e7490; margin-top:2px; }
+  .ph-edit{ border:1px solid #cbd5e1; background:#fff; color:#475569; border-radius:5px; padding:2px 7px;
+            font-size:11px; font-weight:700; cursor:pointer; font-family:inherit; margin-right:4px; }
+
   /* ── [멘토링 지각] 관리 탭 ── */
   .lt-banner{ border-radius:10px; padding:11px 14px; font-size:13px; font-weight:700; margin-bottom:14px; line-height:1.6; }
   .lt-banner.on{ background:#fff7ed; border:1.5px solid #fdba74; color:#9a3412; }
@@ -783,7 +815,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.87-remainmsg</span>
+    <span class="tb-ver" id="sc-ver">v0.88-autopoint</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1140,7 +1172,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.87-remainmsg';
+  window.STUDYCENTER_VERSION = 'v0.88-autopoint';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2700,6 +2732,7 @@
   var SC_PT_WARN = 30, SC_PT_CAUTION = 20;
   var _scPtSid = null, _scPtType = "plus";
   var _ptPresets = null;   // 프리셋 항목 캐시
+  var _scPtHistCache = [];  // 이력 원본 (편집 모달용)
   // 누적벌점 배지 HTML (모달 상단)
   function scPtCumBadge(net, merit, demerit){
     var warn = net >= SC_PT_WARN, caution = !warn && net >= SC_PT_CAUTION;
@@ -2809,11 +2842,16 @@
       if(cumEl) cumEl.innerHTML = scPtCumBadge(demerit - merit, merit, demerit);
       if(!rows.length){ box.innerHTML = '<div class="pt-hist-empty">상벌점 내역이 없습니다</div>'; return; }
       var recent = rows.slice(0, 8);
+      _scPtHistCache = rows;   // 편집 모달에서 원본 값을 읽어 쓴다
       box.innerHTML = recent.map(function(p){
         var neg = p.points < 0;
         return '<div class="pt-hist-row"><span class="ph-date">'+scWkEsc(String(p.award_date).slice(5).replace("-","/"))+'</span>'
           + '<span class="ph-pt '+(neg?"minus":"plus")+'">'+(p.points>0?"+":"")+p.points+'</span>'
-          + '<span class="ph-rsn">'+scWkEsc(p.reason||"-")+'</span>'
+          + '<span class="ph-rsn">'+scWkEsc(p.reason||"-")
+            + (p.source === "auto" ? '<span class="ph-auto">자동</span>' : '')
+            + (p.note ? '<span class="ph-note">📝 '+scWkEsc(p.note)+'</span>' : '')
+          + '</span>'
+          + '<button class="ph-edit" onclick="scPtEditOpen(\''+p.id+'\')">편집</button>'
           + '<button class="ph-del" onclick="scPtDelete(\''+p.id+'\')">삭제</button></div>';
       }).join("") + (rows.length > 8 ? ('<div class="pt-hist-empty">외 '+(rows.length-8)+'건 (전체 요약 탭 참고)</div>') : "");
     }catch(e){ box.innerHTML = '<div class="pt-hist-empty" style="color:#dc2626">불러오기 실패: '+scWkEsc(e.message||e)+'</div>'; }
@@ -2985,6 +3023,11 @@
     scPtPresetType("minus");
     await scPtLoadPresets(true);
     scPtPresetRenderList();
+    // 키오스크 자동 벌점 항목도 함께
+    scAptKind("in");
+    document.getElementById("apt-msg").textContent = "";
+    await scAptLoadRules(true);
+    scAptRenderList();
     document.getElementById("sc-ptpreset-overlay").classList.add("open");
   }
   function scPtPresetClose(){
@@ -3035,6 +3078,197 @@
       await scPtLoadPresets(true);
       scPtPresetRenderList();
     }catch(e){ alert("삭제 실패: "+(e.message||e)); }
+  }
+
+  /* ── [자동 벌점 항목] 설정 UI ── */
+  var _aptKind = "in";
+  function scAptKind(k){
+    _aptKind = k;
+    var a = document.getElementById("apt-k-in"), b = document.getElementById("apt-k-out");
+    if(a) a.classList.toggle("on", k === "in");
+    if(b) b.classList.toggle("on", k === "out");
+  }
+  function scAptRangeText(r){
+    var lo = (r.min_minutes == null) ? 1 : r.min_minutes;
+    return (r.max_minutes == null) ? (lo + "분~") : (lo + "~" + r.max_minutes + "분");
+  }
+  function scAptRenderList(){
+    var box = document.getElementById("apt-list"); if(!box) return;
+    if(!_aptRules || !_aptRules.length){
+      box.innerHTML = '<div class="apt-empty">등록된 자동 항목이 없습니다 · 아래에서 추가하세요</div>'; return;
+    }
+    box.innerHTML = _aptRules.map(function(r){
+      var on = (r.active !== false);
+      return '<div class="apt-item' + (on ? '' : ' off') + '">'
+        + '<span class="apt-kind ' + (r.kind === 'in' ? 'in' : 'out') + '">' + (r.kind === 'in' ? '등원' : '복귀') + '</span>'
+        + '<span class="apt-rng">' + scAptRangeText(r) + '</span>'
+        + '<span class="apt-lbl">' + scWkEsc(r.label || '') + '</span>'
+        + '<span class="apt-pt">' + r.points + '</span>'
+        + '<button class="apt-act" onclick="scAptToggle(\'' + r.id + '\',' + (on ? 'false' : 'true') + ')">' + (on ? '사용중' : '중지') + '</button>'
+        + '<button class="apt-act del" onclick="scAptDelete(\'' + r.id + '\')">삭제</button>'
+        + '</div>';
+    }).join("");
+  }
+  async function scAptAdd(){
+    var msg = document.getElementById("apt-msg");
+    var lo  = parseInt(document.getElementById("apt-min").value, 10);
+    var hiV = document.getElementById("apt-max").value.trim();
+    var hi  = hiV === "" ? null : parseInt(hiV, 10);
+    var pt  = parseInt(document.getElementById("apt-score").value, 10);
+    var lbl = document.getElementById("apt-label").value.trim();
+    msg.style.color = "";
+    if(isNaN(lo) || lo < 1){ msg.style.color = "#dc2626"; msg.textContent = "구간 시작을 1분 이상으로 입력하세요"; return; }
+    if(hi != null && (isNaN(hi) || hi < lo)){ msg.style.color = "#dc2626"; msg.textContent = "구간 끝은 시작보다 커야 합니다"; return; }
+    if(isNaN(pt) || pt <= 0){ msg.style.color = "#dc2626"; msg.textContent = "벌점을 1 이상 입력하세요"; return; }
+    if(!lbl){ msg.style.color = "#dc2626"; msg.textContent = "사유를 입력하세요"; return; }
+    // 같은 종류 안에서 구간이 겹치면 먼저 걸리는 규칙만 적용되므로 미리 막는다
+    var dup = (_aptRules || []).filter(function(x){ return x.kind === _aptKind && x.active !== false; })
+      .find(function(x){
+        var xl = (x.min_minutes == null) ? 1 : x.min_minutes;
+        var xh = (x.max_minutes == null) ? Infinity : x.max_minutes;
+        return Math.max(xl, lo) <= Math.min(xh, (hi == null ? Infinity : hi));
+      });
+    if(dup){ msg.style.color = "#dc2626"; msg.textContent = "이미 있는 구간(" + scAptRangeText(dup) + ")과 겹칩니다"; return; }
+    var btn = document.getElementById("apt-save"); btn.disabled = true;
+    try{
+      var ord = (_aptRules || []).filter(function(x){ return x.kind === _aptKind; }).length;
+      var r = await db.from("reading_room_auto_point_rules").insert({
+        kind: _aptKind, min_minutes: lo, max_minutes: hi, points: -Math.abs(pt),
+        label: lbl, active: true, sort_order: ord
+      });
+      if(r.error) throw r.error;
+      document.getElementById("apt-min").value = "";
+      document.getElementById("apt-max").value = "";
+      document.getElementById("apt-score").value = "";
+      document.getElementById("apt-label").value = "";
+      msg.style.color = "#15803d"; msg.textContent = "✓ 추가되었습니다";
+      await scAptLoadRules(true); scAptRenderList();
+    }catch(e){ msg.style.color = "#dc2626"; msg.textContent = "추가 실패: " + (e.message || e); }
+    finally{ btn.disabled = false; }
+  }
+  async function scAptToggle(id, on){
+    try{
+      var r = await db.from("reading_room_auto_point_rules").update({ active: on }).eq("id", id);
+      if(r.error) throw r.error;
+      await scAptLoadRules(true); scAptRenderList();
+    }catch(e){ alert("변경 실패: " + (e.message || e)); }
+  }
+  async function scAptDelete(id){
+    if(!confirm("이 자동 항목을 삭제할까요?\n이미 부여된 벌점은 그대로 남습니다.")) return;
+    try{
+      var r = await db.from("reading_room_auto_point_rules").delete().eq("id", id);
+      if(r.error) throw r.error;
+      await scAptLoadRules(true); scAptRenderList();
+    }catch(e){ alert("삭제 실패: " + (e.message || e)); }
+  }
+
+  /* ── [상벌점 편집] 근무자가 점수·사유를 조정하고 비고를 남긴다 ── */
+  var _pteId = null;
+  function scPtEditOpen(id){
+    var p = (_scPtHistCache || []).find(function(x){ return x.id === id; });
+    if(!p){ alert("항목을 찾을 수 없습니다."); return; }
+    _pteId = id;
+    document.getElementById("pte-head").textContent =
+      String(p.award_date) + " · " + (p.source === "auto" ? "키오스크 자동 부여" : "수동 부여");
+    document.getElementById("pte-score").value  = p.points;
+    document.getElementById("pte-reason").value = p.reason || "";
+    document.getElementById("pte-note").value   = p.note || "";
+    document.getElementById("pte-msg").textContent = "";
+    document.getElementById("sc-ptedit-overlay").classList.add("open");
+  }
+  function scPtEditClose(){ document.getElementById("sc-ptedit-overlay").classList.remove("open"); _pteId = null; }
+  async function scPtEditSave(){
+    if(!_pteId) return;
+    var msg = document.getElementById("pte-msg");
+    var pt  = parseInt(document.getElementById("pte-score").value, 10);
+    var rsn = document.getElementById("pte-reason").value.trim();
+    var nt  = document.getElementById("pte-note").value.trim();
+    msg.style.color = "";
+    if(isNaN(pt) || pt === 0){ msg.style.color = "#dc2626"; msg.textContent = "점수를 0이 아닌 값으로 입력하세요"; return; }
+    if(!rsn){ msg.style.color = "#dc2626"; msg.textContent = "사유를 입력하세요"; return; }
+    var btn = document.getElementById("pte-save"); btn.disabled = true;
+    try{
+      var r = await db.from("reading_room_points").update({
+        points: pt, reason: rsn, note: nt || null,
+        edited_by: (scCurrentUser ? scCurrentUser.id : null),
+        edited_at: new Date().toISOString()
+      }).eq("id", _pteId);
+      if(r.error) throw r.error;
+      scPtEditClose();
+      if(_scPtSid) scPtLoadHist(_scPtSid);
+      var tab = document.getElementById("admin-tab-points");
+      if(tab && tab.style.display !== "none") scPtSummaryLoad();
+    }catch(e){ msg.style.color = "#dc2626"; msg.textContent = "저장 실패: " + (e.message || e); }
+    finally{ btn.disabled = false; }
+  }
+
+  /* ── [키오스크 자동 벌점] ────────────────────────────────
+     항목 설정에서 등록한 "구간 규칙"에 따라 키오스크 입력 시점에 지각을 판정해
+     벌점을 자동 부여한다.
+     · 대상 = 등원(kind='in') · 외출 복귀(kind='out')
+     · 등원은 9시 유예 적용(SC_LATE_GRACE) — 멘토링 지각과 같은 기준
+     · 복귀는 유예 없음(예정 복귀시각 그대로)
+     · auto_key(학생|날짜|종류|회차)로 하루 1회만. DB unique index 가 최종 방어선
+     · 자동 부여가 실패해도 키오스크 흐름은 절대 막지 않는다 */
+  var _aptRules = null;
+  async function scAptLoadRules(force){
+    if(_aptRules && !force) return _aptRules;
+    try{
+      var r = await db.from("reading_room_auto_point_rules").select("*")
+        .order("kind").order("sort_order").order("min_minutes");
+      _aptRules = r.error ? [] : (r.data || []);
+    }catch(e){ _aptRules = []; }
+    return _aptRules;
+  }
+  /* 지각 분 → 해당 구간 규칙 (활성 규칙 중 min <= n <= max) */
+  function scAptMatch(rules, kind, mins){
+    var list = (rules || []).filter(function(x){ return x.active !== false && x.kind === kind; });
+    for(var i=0; i<list.length; i++){
+      var r = list[i];
+      var lo = (r.min_minutes == null) ? 1 : r.min_minutes;
+      var hi = (r.max_minutes == null) ? Infinity : r.max_minutes;
+      if(mins >= lo && mins <= hi) return r;
+    }
+    return null;
+  }
+  /* 등원 지각 분 — 9시 이전 등원은 지각으로 보지 않는다 */
+  function scAptLateIn(expT, actT){
+    if(!expT || !actT) return 0;
+    var e = scTimeToMin(expT), a = scTimeToMin(actT);
+    if(e == null || a == null) return 0;
+    if(e < SC_LATE_GRACE) e = SC_LATE_GRACE;
+    var d = a - e;
+    return d > 0 ? d : 0;
+  }
+  /* 복귀 지각 분 — 유예 없음 */
+  function scAptLateOut(expT, actT){
+    if(!expT || !actT) return 0;
+    var e = scTimeToMin(expT), a = scTimeToMin(actT);
+    if(e == null || a == null) return 0;
+    var d = a - e;
+    if(d < -720) d += 1440;            // 자정 넘겨 복귀
+    return d > 0 ? d : 0;
+  }
+  /* 자동 부여 (중복은 auto_key 로 차단) */
+  async function scAptAward(sid, date, kind, mins, seq){
+    try{
+      if(!sid || !date || !(mins > 0)) return;
+      var rules = await scAptLoadRules();
+      var rule = scAptMatch(rules, kind, mins);
+      if(!rule) return;
+      var key = sid + "|" + date + "|" + kind + (seq ? ("|" + seq) : "");
+      var base = rule.label || (kind === "in" ? "등원 지각" : "복귀 지각");
+      var r = await db.from("reading_room_points").insert({
+        student_id : sid,
+        points     : rule.points,
+        reason     : base + " (" + mins + "분)",
+        award_date : date,
+        source     : "auto",
+        auto_key   : key
+      });
+      // 23505 = unique 위반 → 이미 부여된 건이므로 조용히 통과
+      if(r.error && r.error.code !== "23505") console.warn("자동 벌점 실패:", r.error);
+    }catch(e){ console.warn("자동 벌점 오류:", e); }
   }
 
   /* ── 멘토링 기간 설정 모달 ── */
@@ -4303,6 +4537,10 @@
     try {
       _scActionRow = await scRrUpsert({ check_in_time: scNowTime(), expected_check_out: expCheckout || null });
       scKioskMark("in");
+      // [자동 벌점] 등원 지각 (9시 유예). await 하지 않아 학생 화면을 붙잡지 않는다
+      scAptAward(_scKioskStudent && _scKioskStudent.id, scRrToday(), "in",
+                 scAptLateIn(_scActionRow && _scActionRow.expected_check_in,
+                             _scActionRow && _scActionRow.check_in_time));
       scActDone("입실", scNowTime());
     } catch(e){ scActError(e); }
     finally { _scActBusy = false; }
@@ -4341,6 +4579,10 @@
       }
       _scActionRow = await scRrUpsert(patch);
       scKioskMark("return");
+      // [자동 벌점] 복귀 지각 — 나갈 때 정한 예정 복귀시각 기준(유예 없음)
+      var _aSeq = patch.out_1_end ? "1" : (patch.out_2_end ? "2" : ("x" + String(startT).replace(/:/g, "")));
+      scAptAward(_scKioskStudent && _scKioskStudent.id, scRrToday(), "out",
+                 scAptLateOut(row.pending_out_expected_end, now), _aSeq);
       scActDone("복귀", now);
     } catch(e){ scActError(e); }
     finally { _scActBusy = false; }
@@ -5232,7 +5474,7 @@
       var d = new Date();
       if(d.getHours() < 3) return;                       // 새벽 3시 이전 대기
       if(scRrToday() === _scAutoReloadBizDay) return;    // 영업일 안 바뀌면 대기
-      var modalOpen = ['wk-xout-overlay','wk-exp-overlay','tp-exp-overlay','sc-mentor-overlay','sc-compliance-overlay','sc-pt-overlay','sc-ptkk-overlay','sc-ptpreset-overlay'].some(function(id){
+      var modalOpen = ['wk-xout-overlay','wk-exp-overlay','tp-exp-overlay','sc-mentor-overlay','sc-compliance-overlay','sc-pt-overlay','sc-ptkk-overlay','sc-ptpreset-overlay','sc-ptedit-overlay'].some(function(id){
         var e=document.getElementById(id); return e && e.classList.contains('open');
       });
       if(modalOpen) return;                              // 모달 편집 중이면 보류
@@ -5350,6 +5592,49 @@
           <button type="button" class="wk-xout-cancel" onclick="scPtPresetClose()">닫기</button>
           <button type="button" class="wk-xout-add" id="ppa-save" onclick="scPtPresetAdd()">항목 추가</button>
         </div>
+      </div>
+
+      <!-- 키오스크 자동 벌점 항목 -->
+      <div class="apt-sec">
+        <div class="apt-title">🤖 키오스크 자동 벌점 항목</div>
+        <div class="apt-desc">학생이 키오스크로 <b>입실·복귀</b>할 때 지각 시간을 구간별로 판정해 자동으로 벌점을 부여합니다.<br>
+          등원은 <b>오전 9시 이전이면 지각으로 보지 않으며</b>, 같은 건에 중복 부여되지 않습니다.</div>
+        <div id="apt-list" style="margin-bottom:10px"></div>
+        <div class="apt-add">
+          <div class="apt-kindbtns">
+            <button type="button" id="apt-k-in"  onclick="scAptKind('in')">🚪 등원 지각</button>
+            <button type="button" id="apt-k-out" onclick="scAptKind('out')">↩️ 복귀 지각</button>
+          </div>
+          <div class="wk-xout-frow"><label>구간(분)</label>
+            <span class="apt-range">
+              <input type="number" id="apt-min" min="1" max="600" placeholder="1"> ~
+              <input type="number" id="apt-max" min="1" max="600" placeholder="비우면 무제한">
+            </span>
+          </div>
+          <div class="wk-xout-frow"><label>벌점</label><input type="number" id="apt-score" min="1" max="100" placeholder="예: 1"></div>
+          <div class="wk-xout-frow"><label>사유</label><input type="text" id="apt-label" placeholder="예: 10분이하 지각" maxlength="20"></div>
+          <div class="wk-xout-preview" id="apt-msg"></div>
+          <div class="wk-xout-btns">
+            <button type="button" class="wk-xout-add" id="apt-save" onclick="scAptAdd()">자동 항목 추가</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 상벌점 편집 (점수·사유 수정) -->
+  <div class="wk-xout-overlay" id="sc-ptedit-overlay" onclick="if(event.target===this)scPtEditClose()">
+    <div class="wk-xout-card" style="width:400px">
+      <h3>✏️ 상벌점 편집</h3>
+      <div class="wk-xout-sub" id="pte-head">항목</div>
+      <div class="wk-xout-frow"><label>점수</label><input type="number" id="pte-score" min="-100" max="100" placeholder="예: -2"></div>
+      <div class="pte-hint">상점은 양수(+), 벌점은 음수(−)로 입력합니다</div>
+      <div class="wk-xout-frow"><label>사유</label><input type="text" id="pte-reason" maxlength="40" placeholder="사유"></div>
+      <div class="wk-xout-frow"><label>비고</label><input type="text" id="pte-note" maxlength="100" placeholder="조정 사유 (예: 학부모 확인 - 병원)"></div>
+      <div class="wk-xout-preview" id="pte-msg"></div>
+      <div class="wk-xout-btns">
+        <button type="button" class="wk-xout-cancel" onclick="scPtEditClose()">취소</button>
+        <button type="button" class="wk-xout-add" id="pte-save" onclick="scPtEditSave()">저장</button>
       </div>
     </div>
   </div>
