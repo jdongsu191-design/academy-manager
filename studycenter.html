@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.86-manualmemo]</title>
+<title>BMAPS · 독서실 출결 [v0.87-remainmsg]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -783,7 +783,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.86-manualmemo</span>
+    <span class="tb-ver" id="sc-ver">v0.87-remainmsg</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1140,7 +1140,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.86-manualmemo';
+  window.STUDYCENTER_VERSION = 'v0.87-remainmsg';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -3227,7 +3227,7 @@
           + '<div class="wk-sub">'+scWkEsc(((st.school||'')+' '+(st.grade||'')).trim())
           + (st.reading_room_code ? ' · <span class="wk-code">'+scWkEsc(st.reading_room_code)+'</span>' : '')
           + '</div></div>'
-          + '<div class="wk-msg-wrap"><button class="wk-pt-btn" onclick="scPtOpen(\''+sid+'\')">⭐ 상벌점</button><button class="wk-rpt-btn" onclick="scRptLastWeek(\''+sid+'\',this)">리포트</button><button class="wk-exp-btn" onclick="scWkExpOpen(\''+sid+'\')">🕐 예상</button></div>'
+          + '<div class="wk-msg-wrap"><button class="wk-pt-btn" onclick="scPtOpen(\''+sid+'\')">⭐ 상벌점</button><button class="wk-rpt-btn" onclick="scRptLastWeek(\''+sid+'\',this)">리포트</button><button class="wk-exp-btn" onclick="scWkExpOpen(\''+sid+'\')">🕐 예상</button><button class="wk-msg-btn" onclick="scMsgThisWeek(\''+sid+'\',this)" title="남은 의무 학습시간 카톡 멘트 복사">'+scMsgRangeLabel()+'</button></div>'
           + '</div></td>'
         + '<td class="wk-req-cell">'
           + '<span class="wk-req-group">'
@@ -3490,30 +3490,46 @@
     t += "※ 반복적인 " + (hasReq ? "의무 학습시간 미이행 및 " : "") + "스터디센터 규칙 미이행 시 퇴실 조치됩니다";
     return t;
   }
-  // 토요일 멘트: 금주 월~금(5일) 요약
-  function scMsgBuildSat(student, rowsByDate, reqMin, weekDates){
-    var hasReq = (reqMin != null && reqMin > 0);
+  /* 남은 의무시간 멘트 — 금요일=월~금(5일) / 토요일=월~토(6일)
+     days = 집계 일수, lateInfo = 멘토링 지각 가산(scLateWeekOf 결과, 없으면 가산 0) */
+  function scMsgBuildSat(student, rowsByDate, reqMin, weekDates, days, lateInfo){
+    var nDays = (days === 6) ? 6 : 5;
+    var lateMin = (lateInfo && lateInfo.lateMin) ? lateInfo.lateMin : 0;
+    var extra   = (lateInfo && lateInfo.extraMin) ? lateInfo.extraMin : 0;
+    var baseReq = reqMin;
+    var reqTot  = (baseReq != null) ? (baseReq + extra) : null;
+    var hasReq  = (reqTot != null && reqTot > 0);
     var totalNet = 0;
-    for(var i=0;i<5;i++){   // 월~금만
+    for(var i=0;i<nDays;i++){
       var row = rowsByDate[weekDates[i]] || null;
       var net = row ? scWkCalcDaily(row) : null;
       if(net != null) totalNet += net;
     }
+    var range = scMsgMD(weekDates[0]) + "~" + scMsgMD(weekDates[nDays-1]);
     var t = "안녕하세요 베스티안 스터디센터입니다. " + student.name + " 학생 스터디센터 학습시간 안내드립니다.\n\n";
     if(hasReq){
-      var remain = reqMin - totalNet; if(remain < 0) remain = 0;
-      t += "■ 의무 학습시간: " + scWkFmtDur(reqMin) + "\n";
-      t += "■ " + scMsgMD(weekDates[0]) + "~" + scMsgMD(weekDates[4]) + " 학습 시간: " + scWkFmtDur(totalNet) + "\n";
+      var remain = reqTot - totalNet; if(remain < 0) remain = 0;
+      t += "■ 의무 학습시간: " + scWkFmtDur(reqTot) + "\n";
+      if(extra > 0){
+        t += "   (기본 " + scWkFmtDur(baseReq) + " + 지각 " + scWkFmtDur(extra) + ")\n";
+      }
+      t += "■ " + range + " 학습 시간: " + scWkFmtDur(totalNet) + "\n";
       t += "■ 남은 의무 학습시간: " + scWkFmtDur(remain) + "\n\n";
       t += "언제나 학생을 위해 최선을 다하는 베스티안이 되겠습니다. 감사합니다.\n\n";
-      t += "※의무 학습시간은 " + scWkFmtDur(reqMin) + "이며, 남은 의무시간은 반드시 주말에 학습해야 합니다※\n";
+      t += "※의무 학습시간은 " + scWkFmtDur(reqTot) + "이며, 남은 의무시간은 반드시 주말에 학습해야 합니다※\n";
+      if(extra > 0){
+        t += "※지각 " + scWkFmtDur(lateMin) + "의 3배인 " + scWkFmtDur(extra) + "이 의무 학습시간에 가산되었습니다※\n";
+      }
       t += "※반복적인 의무 학습시간 미이행 및 스터디센터 규칙 미이행 시 퇴실 조치됩니다※";
     } else {
-      t += "■ " + scMsgMD(weekDates[0]) + "~" + scMsgMD(weekDates[4]) + " 학습 시간: " + scWkFmtDur(totalNet) + "\n\n";
+      t += "■ " + range + " 학습 시간: " + scWkFmtDur(totalNet) + "\n\n";
       t += "언제나 학생을 위해 최선을 다하는 베스티안이 되겠습니다. 감사합니다.";
     }
     return t;
   }
+  /* 오늘 요일로 집계 범위 자동 판단 — 토·일은 월~토, 그 외는 월~금 */
+  function scMsgRangeDays(){ var d = new Date().getDay(); return (d === 6 || d === 0) ? 6 : 5; }
+  function scMsgRangeLabel(){ return scMsgRangeDays() === 6 ? '📨 월~토' : '📨 월~금'; }
   // [지난주] 버튼: 보는 주의 직전 주 월~일
   async function scMsgLastWeek(sid, btn){
     if(!_wkWeekDates || !_wkWeekDates.length){ alert("주간 데이터가 로드되지 않았습니다."); return; }
@@ -3535,7 +3551,7 @@
       alert("멘트 생성 실패: " + (e.message || e));
     }
   }
-  // [이번주] 버튼: 보는 주 월~금 (로드된 _wkData 재사용)
+  // [남은시간] 버튼: 보는 주 (로드된 _wkData 재사용). 오늘 요일로 월~금/월~토 자동 판단
   function scMsgThisWeek(sid, btn){
     if(!_wkWeekDates || !_wkWeekDates.length){ alert("주간 데이터가 로드되지 않았습니다."); return; }
     var student = _wkStudents.find(function(s){ return s.id === sid; });
@@ -3543,7 +3559,9 @@
     var rows = {}, sd = _wkData[sid] || {};
     for(var dt in sd){ rows[dt] = sd[dt]; }
     var reqMin = scWkEffectiveReq(sid, _wkWeekDates[0]);
-    var msg = scMsgBuildSat(student, rows, reqMin, _wkWeekDates);
+    // 멘토링 기간이면 지각 x3 가산 포함 (면제 내역은 scWkLoad 에서 이미 로드됨)
+    var lateInfo = scLateWeekOf(sid, _wkWeekDates, rows);
+    var msg = scMsgBuildSat(student, rows, reqMin, _wkWeekDates, scMsgRangeDays(), lateInfo);
     scMsgCopy(msg, btn, btn ? btn.textContent : "");
   }
   // 클립보드 복사 + 버튼 피드백
