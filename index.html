@@ -13966,7 +13966,11 @@ async function admSaveEditClass() {
 async function deleteClass(id, name) {
   if (!confirm('반 "' + name + '"을 삭제하시겠습니까?\n소속 학생의 반은 미배정 상태가 됩니다.')) return;
   try {
-    await db.from('users').update({class_id: null}).eq('class_id', id);
+    // 주반뿐 아니라 부반 슬롯에 들어 있는 경우까지 모두 정리
+    for (var _si = 0; _si < CLASS_SLOTS.length; _si++) {
+      var _f = CLASS_SLOTS[_si], _pt = {}; _pt[_f] = null;
+      await db.from('users').update(_pt).eq(_f, id);
+    }
     var {error} = await db.from('classes').update({active: false}).eq('id', id);
     if (error) throw error;
     await loadAdminData();
@@ -14771,6 +14775,44 @@ function _forceDownloadCanvas(canvas, fileName, mimeType, quality) {
    - mrBuildReportHTML: 선생님/관리자 공용 HTML 빌더
    - html2canvas 기반 이미지 내보내기 (shareOrCopyCanvas 공통 유틸)
 ============================================================ */
+
+/* ── [반 소속] 학생 1명이 여러 반에 속할 수 있다 ─────────────
+   users 의 class_id(주반) + class_id2~6(부반) 슬롯에 저장한다.
+   개수를 늘리려면 DDL 로 컬럼을 추가하고 CLASS_SLOTS 에 이름만 넣으면 된다.
+   소속 판정·배정·해제는 반드시 아래 헬퍼로만 한다
+   (훗날 연결 테이블로 바꾸더라도 교체 지점이 여기 하나가 되도록). */
+var CLASS_SLOTS = ['class_id','class_id2','class_id3','class_id4','class_id5','class_id6'];
+var CLASS_SLOTS_SUB = CLASS_SLOTS.slice(1);      // 부반 슬롯
+var CLASS_SLOTS_SEL = CLASS_SLOTS.join(',');     // select 용 컬럼 문자열
+/* 학생이 배정된 반 id 목록 */
+function stuClassIds(s){
+  if(!s) return [];
+  return CLASS_SLOTS.map(function(f){ return s[f]; }).filter(Boolean);
+}
+/* 이 학생이 해당 반에 속하는가 */
+function stuInClass(s, classId){
+  if(!s || !classId) return false;
+  return CLASS_SLOTS.some(function(f){ return s[f] === classId; });
+}
+/* 비어 있는 첫 슬롯 이름 (없으면 null = 슬롯 꽉 참) */
+function stuFreeClassSlot(s){
+  for(var i=0; i<CLASS_SLOTS.length; i++){ if(!s[CLASS_SLOTS[i]]) return CLASS_SLOTS[i]; }
+  return null;
+}
+/* 이 학생에게서 특정 반만 떼어내는 patch (여러 슬롯에 중복돼 있어도 모두 정리) */
+function stuDetachClassPatch(s, classId){
+  var patch = {};
+  CLASS_SLOTS.forEach(function(f){ if(s && s[f] === classId) patch[f] = null; });
+  return patch;
+}
+/* 부반 전부 비우기 — 전반·분원이동처럼 새 반 하나만 남겨야 할 때 */
+function stuClearSubSlots(){
+  var p = {}; CLASS_SLOTS_SUB.forEach(function(f){ p[f] = null; }); return p;
+}
+/* PostgREST .or() 조건 — 어느 슬롯이든 이 반이면 매칭 */
+function classOrFilter(classId){
+  return CLASS_SLOTS.map(function(f){ return f + '.eq.' + classId; }).join(',');
+}
 
 /* ── [재입학 판별] ───────────────────────────────────────
    재입학 처리(reEnrollStudent)는 enrolled_at을 새로 쓰고 withdrawn_at만 지운다.
@@ -18147,7 +18189,7 @@ async function initNajeAssignTab(){
     for(var i=0; i<_naState.classes.length; i++){
       var cid = _naState.classes[i].id;
       var {data: studs} = await db.from('users')
-        .select('id,name').eq('role','student').eq('status','active').eq('class_id', cid).order('name');
+        .select('id,name').eq('role','student').eq('status','active').or(classOrFilter(cid)).order('name');
       _naState.classStudents[cid] = studs || [];
     }
   } catch(e) {
@@ -18958,7 +19000,7 @@ async function admNaSelectClass(classId){
   _admNaState.classId = classId;
   // 해당 반 학생 로드
   var _na_today = _localYMD(new Date());
-  var {data:students} = await db.from('users').select('id,name').eq('role','student').eq('status','active').eq('class_id',classId).lte('enrolled_at',_na_today).order('name');
+  var {data:students} = await db.from('users').select('id,name').eq('role','student').eq('status','active').or(classOrFilter(classId)).lte('enrolled_at',_na_today).order('name');
   _admNaState.classStudents[classId] = students||[];
   await admNaLoadMatrix();
   document.getElementById('adm-na-matrix-wrap').style.display = 'block';
@@ -20415,14 +20457,14 @@ async function anrLoad(){
 
   // 2) 대상 학생 조회
   var stuQuery = db.from('users')
-    .select('id,name,school,grade,class_id,teacher_id,status,enrolled_at,school_level')
+    .select('id,name,school,grade,teacher_id,status,enrolled_at,school_level,' + CLASS_SLOTS_SEL)
     .eq('role','student').eq('status','active')
     .in('teacher_id', targetTeacherIds).order('name');
   var {data: allStudents} = await stuQuery;
   allStudents = (allStudents||[]);
 
   // 반 필터
-  if(classId) allStudents = allStudents.filter(function(s){ return s.class_id === classId; });
+  if(classId) allStudents = allStudents.filter(function(s){ return stuInClass(s, classId); });
 
   // 중등 전용 학생 제외 (N제 단계 부여는 고등/중고등만)
   allStudents = allStudents.filter(function(s){ return s.school_level !== 'middle' && s.school_level !== 'elem'; });
@@ -22199,6 +22241,10 @@ function toggleAdminNajeMenu() {
 let _allBranches    = [];   // 분원 목록
 let allClasses      = [];   // 전체 반 (관리자용)
 let _withdrawnStudents = []; // 퇴원 학생 (선생님용)
+/* [내 반 소속·타 담당] 내 반에 배정돼 있지만 담당은 다른 선생님인 학생.
+   전역 students 에는 절대 섞지 않는다(학생 수 통계·주말프로그램·N제가 전부 students 기준).
+   학생관리 목록 화면에서만 합쳐 보여주고 배지로 구분한다. */
+let _classOnlyStudents = [];
 
 async function loadAppData() {
   const role = currentUser.role;
@@ -22277,6 +22323,27 @@ async function loadTeacherData() {
       !rawStudents.some(r => r.id === s.id)
     ))
     .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
+
+  // [내 반 소속·타 담당] 내 반에 배정된 학생 중 담당이 내가 아닌 학생 (목록 표시 전용)
+  _classOnlyStudents = [];
+  try {
+    var _myClassIds = (classes || []).map(function(c){ return c.id; }).filter(Boolean);
+    if (_myClassIds.length) {
+      var _orCond = _myClassIds.map(function(cid){ return classOrFilter(cid); }).join(',');
+      var _coRes = await db.from('users').select('*')
+        .eq('role','student').eq('status','active').or(_orCond);
+      _classOnlyStudents = (_coRes.data || []).filter(function(s){
+        return s.teacher_id !== currentUser.id;
+      });
+      // 담당 선생님 이름 부착 (배지에 실제 이름을 보여주기 위함)
+      var _otIds = [...new Set(_classOnlyStudents.map(function(s){ return s.teacher_id; }).filter(Boolean))];
+      if (_otIds.length) {
+        var _otRes = await db.from('users').select('id,name').in('id', _otIds);
+        var _otMap = {}; (_otRes.data || []).forEach(function(t){ _otMap[t.id] = t.name; });
+        _classOnlyStudents.forEach(function(s){ s._teacherName = _otMap[s.teacher_id] || ''; });
+      }
+    }
+  } catch(e) { console.warn('[내 반 소속·타 담당 학생 로드 실패]', e); _classOnlyStudents = []; }
 
   // 후속 단계(업무일지·주말프로그램)에서 참조할 수 있도록 전역 보관
   window._futureInIds       = futureInIds;
@@ -22365,7 +22432,11 @@ function renderClassList(){
 async function tcDeleteClass(id, name){
   if (!confirm('반 "' + name + '"을 삭제하시겠습니까?\n소속 학생의 반은 미배정 상태가 됩니다.')) return;
   try {
-    await db.from('users').update({class_id: null}).eq('class_id', id);
+    // 주반뿐 아니라 부반 슬롯에 들어 있는 경우까지 모두 정리
+    for (var _si = 0; _si < CLASS_SLOTS.length; _si++) {
+      var _f = CLASS_SLOTS[_si], _pt = {}; _pt[_f] = null;
+      await db.from('users').update(_pt).eq(_f, id);
+    }
     var {error} = await db.from('classes').update({active: false}).eq('id', id);
     if (error) throw error;
     await loadTeacherData();   // 끝에서 renderStudents + renderClassList 재호출
@@ -22599,6 +22670,7 @@ async function saveEditClass(){
    XLSX 일괄등록 탭은 A-3b에서 student_code 규약 적응 후 추가 예정. */
 var _csmClassId = null, _csmClassName = '', _csmClassLevel = 'high', _csmAllCandidates = [];
 var _csmCandTeacherMap = {}, _csmCandBranchMap = {};
+var _csmCurrent = {};   // 현재 반 소속 학생 캐시 (반 제거 시 슬롯 판정용)
 
 async function openClassStudentModal(classId, className){
   _csmClassId = classId;
@@ -22632,9 +22704,28 @@ async function csmLoadCurrentStudents(){
   var listEl = document.getElementById('csm-current-list');
   var label  = document.getElementById('csm-count-label');
   listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#9ca3af">불러오는 중...</div>';
-  var inClass = students.filter(function(s){
-    return s.class_id === _csmClassId || s.class_id2 === _csmClassId;
-  });
+  // [반 소속 전원] 담당 선생님과 무관하게 이 반에 배정된 학생을 모두 보여준다
+  var inClass = [];
+  try {
+    var _icRes = await db.from('users')
+      .select('id,name,school,grade,teacher_id,' + CLASS_SLOTS_SEL)
+      .eq('role','student').eq('status','active').or(classOrFilter(_csmClassId)).order('name');
+    inClass = _icRes.data || [];
+  } catch(e) {
+    console.error('[csmLoadCurrentStudents]', e);
+    inClass = students.filter(function(s){ return stuInClass(s, _csmClassId); });   // 폴백: 내 담당만
+  }
+  // 담당 선생님 이름 부착 (배지 표기용)
+  try {
+    var _icIds = [...new Set(inClass.map(function(s){ return s.teacher_id; }).filter(Boolean))];
+    if (_icIds.length) {
+      var _icT = await db.from('users').select('id,name').in('id', _icIds);
+      var _icMap = {}; (_icT.data || []).forEach(function(t){ _icMap[t.id] = t.name; });
+      inClass.forEach(function(s){ s._teacherName = _icMap[s.teacher_id] || ''; });
+    }
+  } catch(e) { console.warn('[반 학생 담당 선생님 조회 실패]', e); }
+  _csmCurrent = {};
+  inClass.forEach(function(s){ _csmCurrent[s.id] = s; });
   if(label) label.textContent = inClass.length + '명 재학 중';
   if(!inClass.length){
     listEl.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:13px">이 반에 소속된 학생이 없습니다<br>학생 추가 탭에서 추가하세요</div>';
@@ -22642,24 +22733,34 @@ async function csmLoadCurrentStudents(){
   }
   listEl.innerHTML = inClass.map(function(s){
     var sg = [s.school, s.grade].filter(Boolean).join(' ');
-    var isMain = s.class_id === _csmClassId;
+    var isMain = (s.class_id === _csmClassId);
+    var _notMine = (currentUser && s.teacher_id && s.teacher_id !== currentUser.id);
     return '<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:#fff">'
       +'<div style="width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">'+s.name[0]+'</div>'
       +'<div style="flex:1;min-width:0">'
         +'<div style="font-size:13px;font-weight:700;color:#1e293b">'+s.name
-          +(isMain?'':' <span style="font-size:10px;color:#6b7280">(2반)</span>')
+          +(isMain?'':' <span style="font-size:10px;color:#6b7280">(부반)</span>')
+          +(_notMine?' <span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;font-weight:700">'
+             +(s._teacherName ? _esc(s._teacherName)+' 선생님 담당' : '타 선생님 담당')+'</span>':'')
         +'</div>'
         +(sg?'<div style="font-size:11px;color:#9ca3af">'+sg+'</div>':'')
       +'</div>'
-      +'<button onclick="csmRemoveStudent(\'' +s.id+ '\',\'' +s.name.replace(/'/g,'')+ '\',' +isMain+ ')"'
+      +'<button onclick="csmRemoveStudent(\'' +s.id+ '\',\'' +s.name.replace(/'/g,'')+ '\')"'
         +' style="padding:3px 9px;border:1px solid #fca5a5;border-radius:6px;background:#fef2f2;color:#dc2626;font-size:12px;font-weight:600;cursor:pointer">제거</button>'
     +'</div>';
   }).join('');
 }
 
-async function csmRemoveStudent(studentId, studentName, isMain){
+async function csmRemoveStudent(studentId, studentName){
   if(!confirm('['+studentName+'] 학생을 이 반에서 제거할까요?\n학생 데이터는 유지됩니다.')) return;
-  var updateObj = isMain ? {class_id: null} : {class_id2: null};
+  // 이 반이 들어 있는 슬롯만 비운다 (다른 반 배정은 건드리지 않음)
+  var row = _csmCurrent[studentId];
+  if(!row){
+    var _r = await db.from('users').select('id,' + CLASS_SLOTS_SEL).eq('id', studentId).maybeSingle();
+    row = _r.data;
+  }
+  var updateObj = stuDetachClassPatch(row, _csmClassId);
+  if(!Object.keys(updateObj).length){ alert('이 학생은 이 반에 배정되어 있지 않습니다.'); return; }
   var {error} = await db.from('users').update(updateObj).eq('id', studentId);
   if(error){ alert('오류: '+error.message); return; }
   await loadTeacherData();
@@ -22673,7 +22774,7 @@ async function csmLoadAddList(){
   if (listEl) listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#9ca3af;font-size:13px">불러오는 중...</div>';
   try {
     var { data: allStuds } = await db.from('users')
-      .select('id,name,school,grade,class_id,class_id2,teacher_id,branch_id,school_level')
+      .select('id,name,school,grade,teacher_id,branch_id,school_level,' + CLASS_SLOTS_SEL)
       .eq('role','student').eq('status','active').order('name');
     var all = allStuds || [];
     // 담당 선생님·분원 이름 매핑
@@ -22688,16 +22789,14 @@ async function csmLoadAddList(){
     if (bids.length && typeof _allBranches !== 'undefined' && Array.isArray(_allBranches)) {
       (_allBranches || []).forEach(function(b){ _csmCandBranchMap[b.id] = b.name; });
     }
-    var inClassIds = new Set(all.filter(function(s){
-      return s.class_id === _csmClassId || s.class_id2 === _csmClassId;
-    }).map(function(s){ return s.id; }));
+    var inClassIds = new Set(all.filter(function(s){ return stuInClass(s, _csmClassId); })
+                                .map(function(s){ return s.id; }));
     _csmAllCandidates = all.filter(function(s){ return !inClassIds.has(s.id); });
   } catch(e) {
     console.error('[csmLoadAddList]', e);
     // 실패 시 기존 방식(내 담당) 폴백
-    var inClassIds2 = new Set(students.filter(function(s){
-      return s.class_id === _csmClassId || s.class_id2 === _csmClassId;
-    }).map(function(s){ return s.id; }));
+    var inClassIds2 = new Set(students.filter(function(s){ return stuInClass(s, _csmClassId); })
+                                      .map(function(s){ return s.id; }));
     _csmAllCandidates = students.filter(function(s){ return !inClassIds2.has(s.id); });
   }
   var sb = document.getElementById('csm-search');
@@ -22718,9 +22817,10 @@ function csmFilterStudents(){
   }
   listEl.innerHTML = filtered.map(function(s){
     var sg = [s.school, s.grade].filter(Boolean).join(' ');
-    var cls1 = classes.find(function(c){ return c.id===s.class_id; });
-    var cls2 = s.class_id2 ? classes.find(function(c){ return c.id===s.class_id2; }) : null;
-    var clsLabel = [cls1?cls1.name:'', cls2?cls2.name:''].filter(Boolean).join(', ');
+    var clsLabel = stuClassIds(s).map(function(cid){
+      var _c = classes.find(function(c){ return c.id===cid; });
+      return _c ? _c.name : '';
+    }).filter(Boolean).join(', ');
     // [타 선생님 학생 표시] 담당 선생님·분원 배지 (내 담당이 아니면)
     var _tName = (s.teacher_id && _csmCandTeacherMap[s.teacher_id]) ? _csmCandTeacherMap[s.teacher_id] : '';
     var _bName = (s.branch_id && _csmCandBranchMap[s.branch_id]) ? _csmCandBranchMap[s.branch_id] : '';
@@ -22761,9 +22861,10 @@ async function csmAddSelected(){
     var s   = _csmAllCandidates.find(function(x){ return x.id===sid; }) || students.find(function(x){ return x.id===sid; });
     if(!s){ fail.push(sid); continue; }
     var updateObj;
-    if(!s.class_id){ updateObj = {class_id: _csmClassId}; }
-    else if(!s.class_id2){ updateObj = {class_id2: _csmClassId}; }
-    else { updateObj = {class_id2: _csmClassId}; }
+    if(stuInClass(s, _csmClassId)){ continue; }              // 이미 이 반
+    var _slot = stuFreeClassSlot(s);
+    if(!_slot){ fail.push(s.name + '(반 ' + CLASS_SLOTS.length + '개 초과)'); continue; }
+    updateObj = {}; updateObj[_slot] = _csmClassId;
     // [타 선생님 학생] 반 연결만 — teacher_id·school_level·bety_yn 등 원래 담당 설정 보호
     var _isMyStudent = (currentUser && s.teacher_id === currentUser.id);
     if (_isMyStudent) {
@@ -22899,15 +23000,16 @@ async function csmUploadXlsx(){
     var d = _csmXlsxData[i];
     try{
       var {data: existing} = await db.from('users')
-        .select('id,class_id,class_id2')
+        .select('id,' + CLASS_SLOTS_SEL)
         .eq('role','student').eq('name',d.name)
         .eq('teacher_id',currentUser.id).eq('status','active');
       if(existing && existing.length > 0){
         var s = existing[0];
-        if(s.class_id === _csmClassId || s.class_id2 === _csmClassId){ skip++; continue; }
+        if(stuInClass(s, _csmClassId)){ skip++; continue; }
         var updateObj = {};
-        if(!s.class_id) updateObj.class_id = _csmClassId;
-        else updateObj.class_id2 = _csmClassId;
+        var _slot2 = stuFreeClassSlot(s);
+        if(!_slot2){ fail.push(d.name + '(반 ' + CLASS_SLOTS.length + '개 초과)'); continue; }
+        updateObj[_slot2] = _csmClassId;
         if(d.school){ updateObj.school = d.school; updateObj.grade = d.grade ? (d.grade+'학년') : null; }
         if(d.enrolled_at) updateObj.enrolled_at = d.enrolled_at;
         updateObj.school_level = _csmClassLevel;
@@ -23031,7 +23133,7 @@ async function dlpLoadData(){
   // 해당 반 학생 목록
   var _today = new Date().toISOString().split('T')[0];
   var {data:studs} = await db.from('users').select('id,name,school,grade')
-    .eq('class_id', classId).eq('status','active').lte('enrolled_at', _today).order('name');
+    .or(classOrFilter(classId)).eq('status','active').lte('enrolled_at', _today).order('name');
   studs = studs || [];
 
   if(!studs.length){
@@ -23184,7 +23286,7 @@ async function lpExtraLoadCandidates(classId, className){
       return;
     }
     // 이 반 재원생(class_id) 제외 = "목록 외 = 보강 학생"만
-    var { data: classStuds } = await db.from('users').select('id').eq('class_id', classId);
+    var { data: classStuds } = await db.from('users').select('id').or(classOrFilter(classId));
     var classSet = new Set((classStuds||[]).map(function(s){ return s.id; }));
     var extraSids = sids.filter(function(id){ return !classSet.has(id); });
     if(!extraSids.length){
@@ -23229,7 +23331,7 @@ async function openLpClassModal(classId, className){
 
   var _lpToday = _localYMD(new Date());
   var {data:studs} = await db.from('users').select('id,name,school,grade')
-    .eq('class_id', classId).eq('status','active').lte('enrolled_at', _lpToday).order('name');
+    .or(classOrFilter(classId)).eq('status','active').lte('enrolled_at', _lpToday).order('name');
 
   var lpMap = {};
   if(studs && studs.length){
@@ -25085,7 +25187,7 @@ async function cancelTransfer(reqId) {
       if (hist && hist.length) { histId = hist[0].id; if (!origClassId) origClassId = hist[0].from_class_id || null; }
     } catch(e) { console.warn('[cancelTransfer] 이력 조회 경고:', e); }
     const { error: ue } = await db.from('users').update({
-      teacher_id: req.from_teacher_id, class_id: origClassId, class_id2: null
+      teacher_id: req.from_teacher_id, class_id: origClassId, ...stuClearSubSlots()
     }).eq('id', req.student_id);
     if (ue) throw ue;
     const { error: de } = await db.from('transfer_requests').delete().eq('id', reqId);
@@ -25181,7 +25283,7 @@ async function submitTransfer() {
       if (_dupReq && _dupReq.length) { errors.push((stuData.name||t.id) + ': 이미 전반 신청됨(취소 후 재신청)'); continue; }
 
       const { error: ue } = await db.from('users').update({
-        teacher_id: toTeacherId, class_id: toClassId, class_id2: null
+        teacher_id: toTeacherId, class_id: toClassId, ...stuClearSubSlots()
       }).eq('id', t.id);
       if (ue) throw ue;
 
@@ -25279,7 +25381,8 @@ function renderStudents() {
   const cf  = document.getElementById('stClassFilter')?.value || '';
   const isWdMode  = _stuViewMode === 'withdrawn';
   const isNewMode = _stuViewMode === 'new';
-  const list = isWdMode ? _withdrawnStudents : students;
+  // 내 반에 속한 타 담당 학생도 함께 보여준다 (전역 students 는 그대로)
+  const list = isWdMode ? _withdrawnStudents : students.concat(_classOnlyStudents || []);
 
   // 신입/퇴원 연·월 필터 (신입=enrolled_at, 퇴원=withdrawn_at 기준)
   let ymY = '', ymM = '';
@@ -25297,7 +25400,7 @@ function renderStudents() {
   const filtered = list.filter(s => {
     if (q && !s.name.toLowerCase().includes(q)) return false;
     // 반 필터: class_id2(부반) 도 함께 검색 (퇴원 목록은 반 정보가 무의미하므로 제외)
-    if (!isWdMode && cf && s.class_id !== cf && s.class_id2 !== cf) return false;
+    if (!isWdMode && cf && !stuInClass(s, cf)) return false;
     // 신입: 연·월 미지정이면 최근 30일 이내 입학자
     if (isNewMode) {
       if (ymY || ymM) { if (!_ymMatch(s.enrolled_at, ymY, ymM)) return false; }
@@ -25337,9 +25440,12 @@ function renderStudents() {
 
   el.innerHTML = header + filtered.map(s => {
     const cls         = classes.find(c => c.id === s.class_id);
-    const cls2        = s.class_id2 ? classes.find(c => c.id === s.class_id2) : null;
+    const _subCls     = stuClassIds(s).slice(1).map(cid => classes.find(c => c.id === cid)).filter(Boolean);
+    const cls2        = _subCls[0] || null;
     const schoolGrade = [s.school, s.grade].filter(Boolean).join(' ');
     const isSelected  = _selectedStudentIds.has(s.id);
+    // 내 담당이 아닌(내 반 수업만 듣는) 학생 — 조회 전용
+    const _otherTeacher = !!(currentUser && s.teacher_id && s.teacher_id !== currentUser.id);
     const avatar      = s.profile_image_url
       ? `<div style="width:36px;height:36px;border-radius:50%;overflow:hidden;flex-shrink:0"><img src="${s.profile_image_url}" style="width:100%;height:100%;object-fit:cover"></div>`
       : `<div style="width:36px;height:36px;border-radius:50%;background:#eef3f8;color:var(--navy);font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0">${(s.name||'?')[0]}</div>`;
@@ -25368,7 +25474,7 @@ function renderStudents() {
     }
 
     return `<div style="display:flex;align-items:center;gap:8px;padding:10px 4px;border-bottom:1px solid var(--border)">
-      ${!_showWithdrawn ? `<label style="cursor:pointer;flex-shrink:0">
+      ${(!_showWithdrawn && !_otherTeacher) ? `<label style="cursor:pointer;flex-shrink:0">
         <input type="checkbox" ${isSelected?'checked':''} style="width:15px;height:15px;accent-color:var(--navy);cursor:pointer"
           onchange="onStudentCheckChange('${s.id}',this.checked)">
       </label>` : ''}
@@ -25377,6 +25483,7 @@ function renderStudents() {
         <div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
           ${(s.name||'')}
           ${_showWithdrawn ? '<span style="font-size:10px;padding:2px 7px;border-radius:100px;background:#fef2f2;color:#dc2626;font-weight:700">퇴원</span>' : ''}
+          ${_otherTeacher ? `<span style="font-size:10px;padding:2px 7px;border-radius:100px;background:#fef3c7;color:#92400e;font-weight:700">${s._teacherName ? _esc(s._teacherName) + ' 선생님 담당' : '타 선생님 담당'}</span>` : ''}
           ${cls  ? `<span style="font-size:11px;padding:2px 7px;border-radius:100px;background:#eef3f8;color:var(--navy);font-weight:600">${_esc(cls.name)}</span>` : ''}
           ${cls2 ? `<span style="font-size:11px;padding:2px 7px;border-radius:100px;background:#f0fdf4;color:#16a34a;font-weight:600">${_esc(cls2.name)}</span>` : ''}
           ${s.student_code ? `<span style="font-size:10px;padding:2px 6px;border-radius:6px;background:#f0f7ff;color:#1d4ed8;font-family:monospace;font-weight:700">${s.student_code}</span>` : ''}
@@ -25387,7 +25494,7 @@ function renderStudents() {
           ${_showWithdrawn && s.withdrawn_at ? ' · <span style="color:#dc2626">퇴원 ' + s.withdrawn_at + '</span>' : ''}
         </div>
       </div>
-      <div style="display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${actions}</div>
+      <div style="display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${_otherTeacher ? '' : actions}</div>
     </div>`;
   }).join('');
 }
@@ -25617,7 +25724,7 @@ async function admClassChangeSave(studentId) {
     const newTeacher = (allUsers || []).find(u => u.id === teacherId);
     const newBranchId = newTeacher ? (newTeacher.branch_id || null) : null;
     const { error } = await db.from('users')
-      .update({ teacher_id: teacherId, class_id: classId, class_id2: null, branch_id: newBranchId })
+      .update(Object.assign({ teacher_id: teacherId, class_id: classId, branch_id: newBranchId }, stuClearSubSlots()))
       .eq('id', studentId);
     if (error) throw error;
     document.getElementById('admin-class-change-modal')?.remove();
@@ -26051,7 +26158,7 @@ async function loadWorkLog() {
     // 해당 날짜 기준 재원 학생 조회 (class_id 또는 class_id2가 이 반인 학생)
     const { data: activeStuds } = await db.from('users').select('*')
       .eq('role', 'student').eq('status', 'active')
-      .or(`class_id.eq.${classId},class_id2.eq.${classId}`)
+      .or(classOrFilter(classId))
       .lte('enrolled_at', date)
       .order('name');
 
@@ -26065,7 +26172,7 @@ async function loadWorkLog() {
     const futureInSet  = new Set((futureInRes.data  || []).map(r => r.student_id));
     const _poSeen = new Set();
     const pastOutStuds = (futureOutRes.data || [])
-      .filter(r => r.student && r.student.class_id === classId)
+      .filter(r => r.student && stuInClass(r.student, classId))
       .map(r => r.student)
       .filter(s => { if (_poSeen.has(s.id)) return false; _poSeen.add(s.id); return true; });
 
@@ -27221,7 +27328,7 @@ async function wlPrintBlankForms(date, classIds) {
     const cls = (classes || []).find(c => c.id === cid);
     const { data: roster } = await db.from('users').select('id,name,school,grade')
       .eq('role','student').eq('status','active')
-      .or(`class_id.eq.${cid},class_id2.eq.${cid}`)
+      .or(classOrFilter(cid))
       .lte('enrolled_at', date).order('name');
     htmls.push(buildBlankWorkLogCardHTML(cls, roster || [], dateLabel, currentUser.name));
   }
@@ -27713,7 +27820,7 @@ async function loadTsStudents() {
   listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#9ca3af;font-size:13px">불러오는 중...</div>';
   try {
     const { data } = await db.from('users').select('*')
-      .eq('role', 'student').eq('class_id', classId).eq('status', 'active').order('name');
+      .eq('role', 'student').or(classOrFilter(classId)).eq('status', 'active').order('name');
     window._tsAllStudents = data || [];
     filterTsStudents();
   } catch(e) {
