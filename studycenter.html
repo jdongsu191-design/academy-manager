@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.90-aptrange]</title>
+<title>BMAPS · 독서실 출결 [v0.91-dutypoint]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -708,6 +708,15 @@
   .apt-range select{ border:1.5px solid #cbd5e1; border-radius:6px; padding:6px 8px; font-size:13px;
                      font-family:inherit; font-weight:700; color:#334155; background:#fff; flex-shrink:0; cursor:pointer; }
   .apt-prev{ font-size:11.5px; font-weight:700; color:#0369a1; margin:-4px 0 10px 74px; min-height:15px; }
+  /* 의무시간 불이행 — 구간 없이 켜고 끄는 항목 */
+  .apt-duty{ border:1.5px solid #bae6fd; background:#f0f9ff; border-radius:9px; padding:10px 12px; margin-bottom:14px; }
+  .apt-duty-chk{ display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:800; color:#0c4a6e; }
+  .apt-duty-chk input{ width:16px; height:16px; cursor:pointer; accent-color:#0369a1; }
+  .apt-duty-row{ display:flex; align-items:center; gap:8px; margin-top:8px; font-size:12.5px; font-weight:700; color:#334155; }
+  .apt-duty-row input{ width:70px; border:1.5px solid #cbd5e1; border-radius:6px; padding:5px 8px; font-size:13px; font-family:inherit; }
+  .apt-duty-msg{ font-size:11.5px; font-weight:700; color:#15803d; }
+  .apt-duty-note{ font-size:11px; color:#0369a1; line-height:1.6; margin-top:7px; }
+  .apt-sub{ font-size:12.5px; font-weight:800; color:#0f172a; margin:4px 0 8px; }
   .apt-item{ display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid #e2e8f0;
              border-radius:8px; background:#fff; margin-bottom:5px; }
   .apt-item.off{ opacity:.5; }
@@ -824,7 +833,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.90-aptrange</span>
+    <span class="tb-ver" id="sc-ver">v0.91-dutypoint</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1181,7 +1190,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.90-aptrange';
+  window.STUDYCENTER_VERSION = 'v0.91-dutypoint';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2300,6 +2309,13 @@
     document.getElementById("cmp-daybar").style.display = "none";
     scWkCmpRender();
     document.getElementById("sc-compliance-overlay").classList.add("open");
+    // [자동 벌점] 끝난 주면 의무시간 불이행 부여 (규칙이 켜져 있을 때만, 1회)
+    scAptDutyRun().then(function(n){
+      if(n > 0){
+        var cc = document.getElementById("cmp-count");
+        if(cc) cc.textContent = _cmpCountText + " · 의무 불이행 벌점 " + n + "명 부여";
+      }
+    });
   }
   function scWkCmpMode(m){
     _cmpMode = m;
@@ -3044,6 +3060,7 @@
     scAptPreview();
     await scAptLoadRules(true);
     scAptRenderList();
+    scAptDutyRender();
     document.getElementById("sc-ptpreset-overlay").classList.add("open");
   }
   function scPtPresetClose(){
@@ -3144,10 +3161,11 @@
   }
   function scAptRenderList(){
     var box = document.getElementById("apt-list"); if(!box) return;
-    if(!_aptRules || !_aptRules.length){
+    var list = (_aptRules || []).filter(function(x){ return x.kind === "in" || x.kind === "out"; });
+    if(!list.length){
       box.innerHTML = '<div class="apt-empty">등록된 자동 항목이 없습니다 · 아래에서 추가하세요</div>'; return;
     }
-    box.innerHTML = _aptRules.map(function(r){
+    box.innerHTML = list.map(function(r){
       var on = (r.active !== false);
       return '<div class="apt-item' + (on ? '' : ' off') + '">'
         + '<span class="apt-kind ' + (r.kind === 'in' ? 'in' : 'out') + '">' + (r.kind === 'in' ? '등원' : '복귀') + '</span>'
@@ -3197,6 +3215,84 @@
     }catch(e){ msg.style.color = "#dc2626"; msg.textContent = "추가 실패: " + (e.message || e); }
     finally{ btn.disabled = false; }
   }
+  /* ── 의무시간 불이행 규칙 (kind='duty') — 구간 없이 on/off + 점수 ── */
+  function scAptDutyRule(){
+    return (_aptRules || []).find(function(x){ return x.kind === "duty"; }) || null;
+  }
+  function scAptDutyRender(){
+    var chk = document.getElementById("apt-duty-on");
+    var sc  = document.getElementById("apt-duty-score");
+    var msg = document.getElementById("apt-duty-msg");
+    if(!chk || !sc) return;
+    var r = scAptDutyRule();
+    chk.checked = !!(r && r.active !== false);
+    sc.value    = r ? Math.abs(r.points) : "";
+    if(msg) msg.textContent = "";
+  }
+  async function scAptDutySave(){
+    var chk = document.getElementById("apt-duty-on");
+    var sc  = document.getElementById("apt-duty-score");
+    var msg = document.getElementById("apt-duty-msg");
+    var on  = !!chk.checked;
+    var v   = parseInt(sc.value, 10);
+    if(on && (isNaN(v) || v <= 0)){
+      if(msg){ msg.style.color = "#dc2626"; msg.textContent = "벌점을 1 이상 입력하세요"; }
+      chk.checked = false; return;
+    }
+    if(isNaN(v) || v <= 0) v = 15;   // 꺼진 상태에서 점수가 비어 있으면 기본값 보관
+    try{
+      var cur = scAptDutyRule();
+      var payload = { kind:"duty", min_minutes:1, max_minutes:null,
+                      points:-Math.abs(v), label:"의무시간 불이행", active:on, sort_order:0 };
+      var r = cur
+        ? await db.from("reading_room_auto_point_rules").update(payload).eq("id", cur.id)
+        : await db.from("reading_room_auto_point_rules").insert(payload);
+      if(r.error) throw r.error;
+      await scAptLoadRules(true); scAptDutyRender();
+      if(msg){ msg.style.color = "#15803d"; msg.textContent = on ? "✓ 사용중" : "중지됨"; }
+    }catch(e){
+      if(msg){ msg.style.color = "#dc2626"; msg.textContent = "저장 실패: " + (e.message || e); }
+    }
+  }
+  /* 이행현황(주)을 열 때, 이미 끝난 주에 한해 미달 학생에게 1회 부여.
+     auto_key = 학생|주시작일|duty 라 몇 번을 열어도 중복되지 않는다. */
+  async function scAptDutyRun(){
+    try{
+      var rules = await scAptLoadRules();
+      var rule = (rules || []).find(function(x){ return x.kind === "duty" && x.active !== false; });
+      if(!rule) return 0;
+      if(!_wkWeekDates || _wkWeekDates.length < 7) return 0;
+      if(_wkWeekDates[6] >= scRrToday()) return 0;      // 아직 끝나지 않은 주는 건너뜀
+      var targets = [];
+      (_wkStudents || []).forEach(function(st){
+        var lt = scReqWithLate(st.id, _wkWeekDates, _wkData[st.id] || {});
+        if(lt.total == null || lt.total <= 0) return;    // 의무시간 미설정
+        var total = 0;
+        for(var i=0; i<7; i++){
+          var row = (_wkData[st.id] || {})[_wkWeekDates[i]] || null;
+          var n = row ? scWkCalcDaily(row) : null;
+          if(n != null) total += n;
+        }
+        if(total < lt.total) targets.push({ id: st.id, short: lt.total - total });
+      });
+      var ok = 0;
+      for(var i=0; i<targets.length; i++){
+        var t = targets[i];
+        var r = await db.from("reading_room_points").insert({
+          student_id : t.id,
+          points     : rule.points,
+          reason     : (rule.label || "의무시간 불이행") + " (" + scWkFmtDur(t.short) + " 부족)",
+          award_date : _wkWeekDates[6],
+          source     : "auto",
+          auto_key   : t.id + "|" + _wkWeekDates[0] + "|duty"
+        });
+        if(!r.error) ok++;
+        else if(r.error.code !== "23505") console.warn("의무 불이행 자동 벌점 실패:", r.error);
+      }
+      return ok;
+    }catch(e){ console.warn("의무 불이행 자동 벌점 오류:", e); return 0; }
+  }
+
   async function scAptToggle(id, on){
     try{
       var r = await db.from("reading_room_auto_point_rules").update({ active: on }).eq("id", id);
@@ -5647,7 +5743,7 @@
       <h3>⚙ 상벌점 항목 설정</h3>
       <div class="ppt-tabs">
         <button type="button" id="ppt-tab-manual" class="on" onclick="scPtPresetTab('manual')">✍️ 수동 항목</button>
-        <button type="button" id="ppt-tab-auto" onclick="scPtPresetTab('auto')">🤖 키오스크 자동</button>
+        <button type="button" id="ppt-tab-auto" onclick="scPtPresetTab('auto')">🤖 자동벌점 항목</button>
       </div>
 
       <div id="ppt-manual">
@@ -5670,9 +5766,24 @@
 
       <!-- 키오스크 자동 벌점 항목 -->
       <div id="ppt-auto" style="display:none">
-        <div class="apt-desc">학생이 키오스크로 <b>입실·복귀</b>할 때 지각 시간을 구간별로 판정해 자동으로 벌점을 부여합니다.<br>
+        <div class="apt-desc"><b>키오스크 지각</b>은 입실·복귀 때 지각 시간을 구간별로 판정해 자동 부여합니다.<br>
           등원은 <b>오전 9시 이전이면 지각으로 보지 않으며</b>, 같은 건에 중복 부여되지 않습니다.<br>
           구간이 겹치면 <b>더 좁은 구간</b>이 적용됩니다 — 예: <b>10분 이하 −1</b>, <b>30분 이하 −2</b>, <b>30분 초과 −3</b> 으로 단계를 만들 수 있습니다.</div>
+        <!-- 의무시간 불이행 (구간 없이 켜고 끄는 항목) -->
+        <div class="apt-duty">
+          <label class="apt-duty-chk">
+            <input type="checkbox" id="apt-duty-on" onchange="scAptDutySave()">
+            <span>📚 의무시간 불이행 자동 부여</span>
+          </label>
+          <div class="apt-duty-row">
+            <span>벌점</span>
+            <input type="number" id="apt-duty-score" min="1" max="100" placeholder="15" onchange="scAptDutySave()">
+            <span class="apt-duty-msg" id="apt-duty-msg"></span>
+          </div>
+          <div class="apt-duty-note">주가 끝난 뒤 <b>이행 현황</b>을 열면, 그 주 의무시간(지각 가산 포함)을 못 채운 학생에게 <b>1회만</b> 부여됩니다.</div>
+        </div>
+
+        <div class="apt-sub">⏰ 키오스크 지각 구간</div>
         <div id="apt-list" style="margin-bottom:10px"></div>
         <div class="apt-add">
           <div class="apt-kindbtns">
