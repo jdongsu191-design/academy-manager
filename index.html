@@ -3415,8 +3415,9 @@
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div>
-          <label style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">입학일</label>
+          <label id="edit-student-enrolled-label" style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">입학일</label>
           <input type="date" id="edit-student-enrolled" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
+          <div id="edit-student-enrolled-hint" style="display:none;font-size:11px;font-weight:600;color:#0e7490;margin-top:4px"></div>
         </div>
         <div>
           <label style="font-size:12px;font-weight:600;color:var(--text-sub);display:block;margin-bottom:5px">퇴원일</label>
@@ -14771,6 +14772,14 @@ function _forceDownloadCanvas(canvas, fileName, mimeType, quality) {
    - html2canvas 기반 이미지 내보내기 (shareOrCopyCanvas 공통 유틸)
 ============================================================ */
 
+/* ── [재입학 판별] ───────────────────────────────────────
+   재입학 처리(reEnrollStudent)는 enrolled_at을 새로 쓰고 withdrawn_at만 지운다.
+   이전 퇴원의 last_class_date는 그대로 남으므로, 그 날짜가 새 입학일보다
+   앞서면 '한 번 나갔다 다시 들어온 학생' = 재입학으로 본다. */
+function mrIsReturning(s){
+  return !!(s && s.enrolled_at && s.last_class_date && s.last_class_date < s.enrolled_at);
+}
+
 /* ── 공통 헬퍼: 연도 드롭다운 초기화 ─────────────────────── */
 function mrInitYearSelect(selId) {
   var sel = document.getElementById(selId);
@@ -14832,7 +14841,7 @@ async function generateTeacherMonthlyReport() {
         .eq('role','student').eq('teacher_id', currentUser.id)
         .or('status.eq.active,and(status.eq.inactive,last_class_date.gte.'+monthStart+'),and(status.eq.inactive,and(last_class_date.is.null,withdrawn_at.gte.'+monthStart+'))'),
       db.from('users')
-        .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_steps')
+        .select('id,name,school,grade,teacher_id,class_id,enrolled_at,last_class_date,naje_steps')
         .eq('role','student').eq('teacher_id', currentUser.id).neq('status','cancelled')
         .gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd),
       db.from('transfer_requests')
@@ -14965,7 +14974,9 @@ function mrGetTeacherReportFromData(tid, d) {
     return false;
   });
 
-  var myNew = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid && !afterInIds.has(s.id); });
+  var _newAll  = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid && !afterInIds.has(s.id); });
+  var myNew    = _newAll.filter(function(s){ return !mrIsReturning(s); });   // 순수 신입
+  var myReturn = _newAll.filter(function(s){ return  mrIsReturning(s); });   // 재입학
   var myWithdrawn = (d.allStudents || []).filter(function(s) {
     var lc = s.last_class_date || s.withdrawn_at;
     return s.teacher_id === tid && !afterInIds.has(s.id) && s.status === 'inactive' && lc && lc >= d.monthStart && lc <= d.monthEnd;
@@ -14985,10 +14996,10 @@ function mrGetTeacherReportFromData(tid, d) {
     var sc = Object.assign({}, s, { class_id: null, _pastClassName: pastClassOf(s.id) });
     if(activeAtStart(s)) startStudents.push(sc);
     if(activeAtEnd(s)) endStudents.push(sc);
-    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) myNew.push(sc);
+    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) (mrIsReturning(s) ? myReturn : myNew).push(sc);
   });
 
-  return { teacher, sg, najeLabel, getBranch, groupByClass, startStudents, myNew, myWithdrawn, myIn, myOut, endStudents };
+  return { teacher, sg, najeLabel, getBranch, groupByClass, startStudents, myNew, myReturn, myWithdrawn, myIn, myOut, endStudents };
 }
 
 async function saveTeacherMonthlyReportImage(copyMode) {
@@ -15125,7 +15136,7 @@ async function generateMonthlyReport() {
         .eq('role','student')
         .or('status.eq.active,and(status.eq.inactive,last_class_date.gte.'+monthStart+'),and(status.eq.inactive,and(last_class_date.is.null,withdrawn_at.gte.'+monthStart+'))');
     var _qNew = db.from('users')
-        .select('id,name,school,grade,teacher_id,class_id,enrolled_at,naje_steps')
+        .select('id,name,school,grade,teacher_id,class_id,enrolled_at,last_class_date,naje_steps')
         .eq('role','student').neq('status','cancelled').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
     var _qTransfer = db.from('transfer_requests')
         .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
@@ -15271,7 +15282,9 @@ function mrGetTeacherReport(tid) {
   });
   var startStudents = startBase.concat(startFromOut.map(function(t){ return t.student; }));
 
-  var myNew = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid && !afterInIds.has(s.id); });
+  var _newAll  = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid && !afterInIds.has(s.id); });
+  var myNew    = _newAll.filter(function(s){ return !mrIsReturning(s); });   // 순수 신입
+  var myReturn = _newAll.filter(function(s){ return  mrIsReturning(s); });   // 재입학
   var myWithdrawn = myStudents.filter(function(s){
     var lc = s.last_class_date || s.withdrawn_at;
     return !afterInIds.has(s.id) && s.status === 'inactive' && lc && lc >= d.monthStart && lc <= d.monthEnd;
@@ -15299,10 +15312,10 @@ function mrGetTeacherReport(tid) {
     var sc = Object.assign({}, s, { class_id: null, _pastClassName: _pastClassOf(s.id) });
     if(_activeAtStart(s)) startStudents.push(sc);
     if(_activeAtEnd(s)) endStudents.push(sc);
-    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) myNew.push(sc);
+    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) (mrIsReturning(s) ? myReturn : myNew).push(sc);
   });
 
-  return { teacher, getBranch: _getBranch, sg: _sg, najeLabel: _najeLabel, groupByClass: _groupByClass, startStudents, myNew, myWithdrawn, myIn, myOut, endStudents };
+  return { teacher, getBranch: _getBranch, sg: _sg, najeLabel: _najeLabel, groupByClass: _groupByClass, startStudents, myNew, myReturn, myWithdrawn, myIn, myOut, endStudents };
 }
 
 function mrRenderTeacherReport(tid) {
@@ -15323,6 +15336,11 @@ function mrBuildReportHTML(r, d, branchName, forImage) {
   (r.myNew || []).forEach(function(s){
     evMap[s.id]  = '신입 입학 (' + (s.enrolled_at || '-') + ')';
     evType[s.id] = { label: '신입', color: '#16a34a', bg: '#dcfce7' };
+  });
+  (r.myReturn || []).forEach(function(s){
+    evMap[s.id]  = '재입학 (' + (s.enrolled_at || '-') + ')'
+                 + (s.last_class_date ? ' · 이전 마지막수업 ' + s.last_class_date : '');
+    evType[s.id] = { label: '재입학', color: '#0e7490', bg: '#cffafe' };
   });
   r.myWithdrawn.forEach(function(s){
     var displayDate = s.last_class_date || s.withdrawn_at || '-';
@@ -15489,9 +15507,11 @@ function mrBuildReportHTML(r, d, branchName, forImage) {
 
   /* 인원 요약 바 */
   var newCnt    = (r.myNew || []).length;
+  var reCnt     = (r.myReturn || []).length;
   var summaryItems = [
     { label: '1일 시작', val: r.startStudents.length, c: '#334155' },
     { label: '신입',     val: newCnt,                   c: '#15803d' },
+    { label: '재입학',   val: reCnt,                    c: '#0e7490' },
     { label: '전반IN',   val: r.myIn.length,             c: '#1d4ed8' },
     { label: '퇴원',     val: r.myWithdrawn.length,      c: '#dc2626' },
     { label: '전반OUT',  val: r.myOut.length,            c: '#7e22ce' },
@@ -24494,6 +24514,18 @@ function openEditStudentModal(studentId, isAdmin = false) {
   (function(){ var _ge=document.getElementById('edit-student-grade'); var _gv=s.grade||''; if(_gv && !Array.prototype.some.call(_ge.options,function(o){return o.value===_gv;})){ var _o=document.createElement('option'); _o.value=_gv; _o.textContent=_gv; _ge.insertBefore(_o, _ge.options[1]||null); } _ge.value=_gv; })();
   document.getElementById('edit-student-enrolled').value  = s.enrolled_at || '';
   document.getElementById('edit-student-withdrawn').value = s.withdrawn_at || '';
+  /* [재입학] 재입학 학생은 이 칸이 곧 재입학일 → 라벨을 바꾸고 이전 퇴원 정보를 함께 보여준다.
+     모달은 재사용되므로 아닐 때는 반드시 '입학일'로 되돌린다. */
+  (function(){
+    var _reOn = (typeof mrIsReturning === 'function') && mrIsReturning(s);
+    var _lab  = document.getElementById('edit-student-enrolled-label');
+    var _hint = document.getElementById('edit-student-enrolled-hint');
+    if(_lab) _lab.textContent = _reOn ? '재입학일' : '입학일';
+    if(_hint){
+      _hint.textContent   = _reOn ? ('🔄 재입학 · 이전 마지막수업 ' + s.last_class_date) : '';
+      _hint.style.display = _reOn ? '' : 'none';
+    }
+  })();
   document.getElementById('edit-student-wlevel').value = s.weekend_level || '';
   document.getElementById('edit-student-wtime').value  = s.weekend_attend_time || '';
 
@@ -24539,7 +24571,10 @@ function openEditStudentModal(studentId, isAdmin = false) {
     statusRow.innerHTML = `<span style="color:#dc2626;font-weight:600">⚠️ 퇴원 상태</span>${s.withdrawn_at ? ' · 퇴원일: ' + s.withdrawn_at : ''}
       &nbsp;<button class="btn btn-sm btn-primary" onclick="reEnrollStudent('${s.id}','${(s.name||'').replace(/'/g,"\'")}')">재입학 처리</button>`;
   } else {
-    statusRow.innerHTML = `<span style="color:#16a34a;font-weight:600">✅ 재학 중</span>${s.enrolled_at ? ' · 입학일: ' + s.enrolled_at : ''}`;
+    const _reOn2 = (typeof mrIsReturning === 'function') && mrIsReturning(s);
+    statusRow.innerHTML = `<span style="color:#16a34a;font-weight:600">✅ 재학 중</span>`
+      + (s.enrolled_at ? ` · ${_reOn2 ? '재입학일' : '입학일'}: ${s.enrolled_at}` : '')
+      + (_reOn2 ? ` <span style="background:#cffafe;color:#0e7490;padding:1px 7px;border-radius:5px;font-size:11px;font-weight:700">재입학</span>` : '');
   }
   openModal('editStudent');
 }
