@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.93-dutybonus]</title>
+<title>BMAPS · 독서실 출결 [v0.94-bonusfrom]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -720,6 +720,10 @@
   .apt-duty.ok .apt-duty-chk{ color:#166534; }
   .apt-duty.ok .apt-duty-chk input{ accent-color:#16a34a; }
   .apt-duty.ok .apt-duty-note{ color:#15803d; }
+  .apt-ok-date{ width:auto !important; }
+  .apt-ok-clr{ border:1.5px solid #cbd5e1; background:#fff; color:#64748b; border-radius:6px;
+               padding:4px 9px; font-size:11.5px; font-weight:700; font-family:inherit; cursor:pointer; }
+  .apt-ok-clr:hover{ background:#f1f5f9; }
   .apt-sub{ font-size:12.5px; font-weight:800; color:#0f172a; margin:4px 0 8px; }
   .apt-item{ display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid #e2e8f0;
              border-radius:8px; background:#fff; margin-bottom:5px; }
@@ -837,7 +841,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.93-dutybonus</span>
+    <span class="tb-ver" id="sc-ver">v0.94-bonusfrom</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1194,7 +1198,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.93-dutybonus';
+  window.STUDYCENTER_VERSION = 'v0.94-bonusfrom';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -3310,43 +3314,82 @@
   function scAptOkRule(){
     return (_aptRules || []).find(function(x){ return x.kind === "dutyok"; }) || null;
   }
+  /* 시작일 — 저장값(YYYY-MM-DD)만 뽑아낸다. 컬럼이 없으면 undefined 라 제한 없음으로 동작 */
+  function scAptOkFrom(rule){
+    var d = rule && rule.start_date;
+    return d ? String(d).slice(0, 10) : "";
+  }
   function scAptOkRender(){
     var chk = document.getElementById("apt-ok-on");
     var sc  = document.getElementById("apt-ok-score");
+    var fr  = document.getElementById("apt-ok-from");
     var msg = document.getElementById("apt-ok-msg");
     if(!chk || !sc) return;
     var r = scAptOkRule();
     chk.checked = !!(r && r.active !== false);
     sc.value    = r ? Math.abs(r.points) : "";
+    if(fr) fr.value = scAptOkFrom(r);
     if(msg) msg.textContent = "";
+  }
+  function scAptOkFromClear(){
+    var fr = document.getElementById("apt-ok-from");
+    if(!fr || !fr.value) return;
+    fr.value = "";
+    scAptOkSave();
+  }
+  /* 규칙 1행 쓰기 — 과거 중복 행이 있어도 kind 기준으로 전부 같은 값이 되게 갱신 */
+  async function scAptOkWrite(cur, payload){
+    return cur
+      ? await db.from("reading_room_auto_point_rules").update(payload).eq("kind", "dutyok")
+      : await db.from("reading_room_auto_point_rules").insert(payload);
   }
   async function scAptOkSave(){
     var chk = document.getElementById("apt-ok-on");
     var sc  = document.getElementById("apt-ok-score");
+    var fr  = document.getElementById("apt-ok-from");
     var msg = document.getElementById("apt-ok-msg");
     var on  = !!chk.checked;
     var v   = parseInt(sc.value, 10);
+    var from = (fr && fr.value) ? fr.value : null;
     if(on && (isNaN(v) || v <= 0)){
       if(msg){ msg.style.color = "#dc2626"; msg.textContent = "상점을 1 이상 입력하세요"; }
       chk.checked = false; return;
     }
     if(isNaN(v) || v <= 0) v = 10;   // 꺼진 상태에서 점수가 비어 있으면 기본값 보관
     chk.disabled = true; sc.disabled = true;   // 저장 중 재입력 → 중복 행 생성 방지
+    if(fr) fr.disabled = true;
     try{
       await scAptLoadRules(true);              // 최신 상태로 insert/update 판단
       var cur = scAptOkRule();
       var payload = { kind:"dutyok", min_minutes:1, max_minutes:null,
-                      points:Math.abs(v), label:"의무시간 달성", active:on, sort_order:0 };
-      var r = cur
-        ? await db.from("reading_room_auto_point_rules").update(payload).eq("kind", "dutyok")
-        : await db.from("reading_room_auto_point_rules").insert(payload);
+                      points:Math.abs(v), label:"의무시간 달성", active:on, sort_order:0,
+                      start_date:from };
+      var r = await scAptOkWrite(cur, payload);
       if(r.error) throw r.error;
       await scAptLoadRules(true); scAptOkRender();
-      if(msg){ msg.style.color = "#15803d"; msg.textContent = on ? "✓ 사용중" : "중지됨"; }
+      if(msg){
+        msg.style.color = "#15803d";
+        msg.textContent = on ? ("✓ 사용중" + (from ? (" · " + from + " 이후") : "")) : "중지됨";
+      }
     }catch(e){
-      if(msg){ msg.style.color = "#dc2626"; msg.textContent = "저장 실패: " + (e.message || e); }
+      var em = String((e && e.message) || e);
+      /* start_date 컬럼이 아직 없는 환경 — 시작일만 빼고 저장해 on/off·점수는 계속 쓸 수 있게 한다 */
+      if(/start_date/.test(em)){
+        try{
+          delete payload.start_date;
+          var r2 = await scAptOkWrite(cur, payload);
+          if(r2.error) throw r2.error;
+          await scAptLoadRules(true); scAptOkRender();
+          if(msg){
+            msg.style.color = "#b45309";
+            msg.textContent = "저장됨 · 시작일은 start_date 컬럼 추가(SQL) 후 적용됩니다";
+          }
+          return;
+        }catch(e2){ em = String((e2 && e2.message) || e2); }
+      }
+      if(msg){ msg.style.color = "#dc2626"; msg.textContent = "저장 실패: " + em; }
     }
-    finally{ chk.disabled = false; sc.disabled = false; }
+    finally{ chk.disabled = false; sc.disabled = false; if(fr) fr.disabled = false; }
   }
   /* 이행현황(주)을 열 때, 이미 끝난 주에 한해 의무시간을 채운 학생에게 1회 부여.
      auto_key = 학생|주시작일|dutyok 라 몇 번을 열어도 중복되지 않는다. */
@@ -3357,6 +3400,8 @@
       if(!rule) return 0;
       if(!_wkWeekDates || _wkWeekDates.length < 7) return 0;
       if(_wkWeekDates[6] >= scRrToday()) return 0;      // 아직 끝나지 않은 주는 건너뜀
+      var from = scAptOkFrom(rule);
+      if(from && _wkWeekDates[0] < from) return 0;      // 시작일 이전에 시작한 주는 제외
       var targets = [];
       (_wkStudents || []).forEach(function(st){
         var lt = scReqWithLate(st.id, _wkWeekDates, _wkData[st.id] || {});
@@ -5887,7 +5932,13 @@
             <input type="number" id="apt-ok-score" min="1" max="100" placeholder="10" onchange="scAptOkSave()">
             <span class="apt-duty-msg" id="apt-ok-msg"></span>
           </div>
-          <div class="apt-duty-note">주가 끝난 뒤 <b>이행 현황</b>을 열면, 그 주 의무시간(지각 가산 포함)을 <b>채운</b> 학생에게 <b>1회만</b> 부여됩니다.</div>
+          <div class="apt-duty-row">
+            <span>시작일</span>
+            <input type="date" id="apt-ok-from" class="apt-ok-date" onchange="scAptOkSave()">
+            <button type="button" class="apt-ok-clr" onclick="scAptOkFromClear()">비우기</button>
+          </div>
+          <div class="apt-duty-note">주가 끝난 뒤 <b>이행 현황</b>을 열면, 그 주 의무시간(지각 가산 포함)을 <b>채운</b> 학생에게 <b>1회만</b> 부여됩니다.<br>
+            시작일을 정하면 <b>그 날짜 이후에 시작하는 주(월요일 기준)</b>부터만 부여되어, 지난 주차를 열어도 소급 부여되지 않습니다. 비우면 제한 없음.</div>
         </div>
 
         <div class="apt-sub">⏰ 키오스크 지각 구간</div>
