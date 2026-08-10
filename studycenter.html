@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.92-msgfri]</title>
+<title>BMAPS · 독서실 출결 [v0.93-dutybonus]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -716,6 +716,10 @@
   .apt-duty-row input{ width:70px; border:1.5px solid #cbd5e1; border-radius:6px; padding:5px 8px; font-size:13px; font-family:inherit; }
   .apt-duty-msg{ font-size:11.5px; font-weight:700; color:#15803d; }
   .apt-duty-note{ font-size:11px; color:#0369a1; line-height:1.6; margin-top:7px; }
+  .apt-duty.ok{ border-color:#bbf7d0; background:#f0fdf4; }
+  .apt-duty.ok .apt-duty-chk{ color:#166534; }
+  .apt-duty.ok .apt-duty-chk input{ accent-color:#16a34a; }
+  .apt-duty.ok .apt-duty-note{ color:#15803d; }
   .apt-sub{ font-size:12.5px; font-weight:800; color:#0f172a; margin:4px 0 8px; }
   .apt-item{ display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid #e2e8f0;
              border-radius:8px; background:#fff; margin-bottom:5px; }
@@ -833,7 +837,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.92-msgfri</span>
+    <span class="tb-ver" id="sc-ver">v0.93-dutybonus</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1190,7 +1194,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.92-msgfri';
+  window.STUDYCENTER_VERSION = 'v0.93-dutybonus';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2309,11 +2313,14 @@
     document.getElementById("cmp-daybar").style.display = "none";
     scWkCmpRender();
     document.getElementById("sc-compliance-overlay").classList.add("open");
-    // [자동 벌점] 끝난 주면 의무시간 불이행 부여 (규칙이 켜져 있을 때만, 1회)
-    scAptDutyRun().then(function(n){
-      if(n > 0){
+    // [자동 상벌점] 끝난 주면 의무시간 불이행 벌점 / 달성 상점 부여 (규칙이 켜져 있을 때만, 1회)
+    Promise.all([scAptDutyRun(), scAptOkRun()]).then(function(res){
+      var tail = "";
+      if(res[0] > 0) tail += " · 의무 불이행 벌점 " + res[0] + "명 부여";
+      if(res[1] > 0) tail += " · 의무 달성 상점 " + res[1] + "명 부여";
+      if(tail){
         var cc = document.getElementById("cmp-count");
-        if(cc) cc.textContent = _cmpCountText + " · 의무 불이행 벌점 " + n + "명 부여";
+        if(cc) cc.textContent = _cmpCountText + tail;
       }
     });
   }
@@ -3061,6 +3068,7 @@
     await scAptLoadRules(true);
     scAptRenderList();
     scAptDutyRender();
+    scAptOkRender();
     document.getElementById("sc-ptpreset-overlay").classList.add("open");
   }
   function scPtPresetClose(){
@@ -3240,12 +3248,16 @@
       chk.checked = false; return;
     }
     if(isNaN(v) || v <= 0) v = 15;   // 꺼진 상태에서 점수가 비어 있으면 기본값 보관
+    chk.disabled = true; sc.disabled = true;   // 저장 중 재입력 → 중복 행 생성 방지
     try{
+      await scAptLoadRules(true);              // 최신 상태로 insert/update 판단
       var cur = scAptDutyRule();
       var payload = { kind:"duty", min_minutes:1, max_minutes:null,
                       points:-Math.abs(v), label:"의무시간 불이행", active:on, sort_order:0 };
+      /* 과거에 중복 생성된 행이 있어도 전부 같은 값이 되도록 kind 기준으로 갱신한다.
+         (id 기준이면 남은 행이 켜진 채로 계속 부여되는 사고가 난다) */
       var r = cur
-        ? await db.from("reading_room_auto_point_rules").update(payload).eq("id", cur.id)
+        ? await db.from("reading_room_auto_point_rules").update(payload).eq("kind", "duty")
         : await db.from("reading_room_auto_point_rules").insert(payload);
       if(r.error) throw r.error;
       await scAptLoadRules(true); scAptDutyRender();
@@ -3253,6 +3265,7 @@
     }catch(e){
       if(msg){ msg.style.color = "#dc2626"; msg.textContent = "저장 실패: " + (e.message || e); }
     }
+    finally{ chk.disabled = false; sc.disabled = false; }
   }
   /* 이행현황(주)을 열 때, 이미 끝난 주에 한해 미달 학생에게 1회 부여.
      auto_key = 학생|주시작일|duty 라 몇 번을 열어도 중복되지 않는다. */
@@ -3291,6 +3304,87 @@
       }
       return ok;
     }catch(e){ console.warn("의무 불이행 자동 벌점 오류:", e); return 0; }
+  }
+
+  /* ── 의무시간 달성 상점 (kind='dutyok') — 구간 없이 on/off + 점수 ── */
+  function scAptOkRule(){
+    return (_aptRules || []).find(function(x){ return x.kind === "dutyok"; }) || null;
+  }
+  function scAptOkRender(){
+    var chk = document.getElementById("apt-ok-on");
+    var sc  = document.getElementById("apt-ok-score");
+    var msg = document.getElementById("apt-ok-msg");
+    if(!chk || !sc) return;
+    var r = scAptOkRule();
+    chk.checked = !!(r && r.active !== false);
+    sc.value    = r ? Math.abs(r.points) : "";
+    if(msg) msg.textContent = "";
+  }
+  async function scAptOkSave(){
+    var chk = document.getElementById("apt-ok-on");
+    var sc  = document.getElementById("apt-ok-score");
+    var msg = document.getElementById("apt-ok-msg");
+    var on  = !!chk.checked;
+    var v   = parseInt(sc.value, 10);
+    if(on && (isNaN(v) || v <= 0)){
+      if(msg){ msg.style.color = "#dc2626"; msg.textContent = "상점을 1 이상 입력하세요"; }
+      chk.checked = false; return;
+    }
+    if(isNaN(v) || v <= 0) v = 10;   // 꺼진 상태에서 점수가 비어 있으면 기본값 보관
+    chk.disabled = true; sc.disabled = true;   // 저장 중 재입력 → 중복 행 생성 방지
+    try{
+      await scAptLoadRules(true);              // 최신 상태로 insert/update 판단
+      var cur = scAptOkRule();
+      var payload = { kind:"dutyok", min_minutes:1, max_minutes:null,
+                      points:Math.abs(v), label:"의무시간 달성", active:on, sort_order:0 };
+      var r = cur
+        ? await db.from("reading_room_auto_point_rules").update(payload).eq("kind", "dutyok")
+        : await db.from("reading_room_auto_point_rules").insert(payload);
+      if(r.error) throw r.error;
+      await scAptLoadRules(true); scAptOkRender();
+      if(msg){ msg.style.color = "#15803d"; msg.textContent = on ? "✓ 사용중" : "중지됨"; }
+    }catch(e){
+      if(msg){ msg.style.color = "#dc2626"; msg.textContent = "저장 실패: " + (e.message || e); }
+    }
+    finally{ chk.disabled = false; sc.disabled = false; }
+  }
+  /* 이행현황(주)을 열 때, 이미 끝난 주에 한해 의무시간을 채운 학생에게 1회 부여.
+     auto_key = 학생|주시작일|dutyok 라 몇 번을 열어도 중복되지 않는다. */
+  async function scAptOkRun(){
+    try{
+      var rules = await scAptLoadRules();
+      var rule = (rules || []).find(function(x){ return x.kind === "dutyok" && x.active !== false; });
+      if(!rule) return 0;
+      if(!_wkWeekDates || _wkWeekDates.length < 7) return 0;
+      if(_wkWeekDates[6] >= scRrToday()) return 0;      // 아직 끝나지 않은 주는 건너뜀
+      var targets = [];
+      (_wkStudents || []).forEach(function(st){
+        var lt = scReqWithLate(st.id, _wkWeekDates, _wkData[st.id] || {});
+        if(lt.total == null || lt.total <= 0) return;    // 의무시간 미설정
+        var total = 0;
+        for(var i=0; i<7; i++){
+          var row = (_wkData[st.id] || {})[_wkWeekDates[i]] || null;
+          var n = row ? scWkCalcDaily(row) : null;
+          if(n != null) total += n;
+        }
+        if(total >= lt.total) targets.push({ id: st.id, total: total });
+      });
+      var ok = 0;
+      for(var i=0; i<targets.length; i++){
+        var t = targets[i];
+        var r = await db.from("reading_room_points").insert({
+          student_id : t.id,
+          points     : Math.abs(rule.points),
+          reason     : (rule.label || "의무시간 달성") + " (" + scWkFmtDur(t.total) + " 학습)",
+          award_date : _wkWeekDates[6],
+          source     : "auto",
+          auto_key   : t.id + "|" + _wkWeekDates[0] + "|dutyok"
+        });
+        if(!r.error) ok++;
+        else if(r.error.code !== "23505") console.warn("의무 달성 자동 상점 실패:", r.error);
+      }
+      return ok;
+    }catch(e){ console.warn("의무 달성 자동 상점 오류:", e); return 0; }
   }
 
   async function scAptToggle(id, on){
@@ -5743,7 +5837,7 @@
       <h3>⚙ 상벌점 항목 설정</h3>
       <div class="ppt-tabs">
         <button type="button" id="ppt-tab-manual" class="on" onclick="scPtPresetTab('manual')">✍️ 수동 항목</button>
-        <button type="button" id="ppt-tab-auto" onclick="scPtPresetTab('auto')">🤖 자동벌점 항목</button>
+        <button type="button" id="ppt-tab-auto" onclick="scPtPresetTab('auto')">🤖 자동 상벌점 항목</button>
       </div>
 
       <div id="ppt-manual">
@@ -5781,6 +5875,19 @@
             <span class="apt-duty-msg" id="apt-duty-msg"></span>
           </div>
           <div class="apt-duty-note">주가 끝난 뒤 <b>이행 현황</b>을 열면, 그 주 의무시간(지각 가산 포함)을 못 채운 학생에게 <b>1회만</b> 부여됩니다.</div>
+        </div>
+        <!-- 의무시간 달성 상점 (구간 없이 켜고 끄는 항목) -->
+        <div class="apt-duty ok">
+          <label class="apt-duty-chk">
+            <input type="checkbox" id="apt-ok-on" onchange="scAptOkSave()">
+            <span>🏅 의무시간 달성 상점 자동 부여</span>
+          </label>
+          <div class="apt-duty-row">
+            <span>상점</span>
+            <input type="number" id="apt-ok-score" min="1" max="100" placeholder="10" onchange="scAptOkSave()">
+            <span class="apt-duty-msg" id="apt-ok-msg"></span>
+          </div>
+          <div class="apt-duty-note">주가 끝난 뒤 <b>이행 현황</b>을 열면, 그 주 의무시간(지각 가산 포함)을 <b>채운</b> 학생에게 <b>1회만</b> 부여됩니다.</div>
         </div>
 
         <div class="apt-sub">⏰ 키오스크 지각 구간</div>
