@@ -3398,12 +3398,17 @@
       <span style="width:8px"></span>
       <button onclick="byAbsPrint('portrait')"  style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #cbd5e1;border-radius:7px;background:#fff;color:#475569;cursor:pointer">🖨️ 세로</button>
       <button onclick="byAbsPrint('landscape')" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #cbd5e1;border-radius:7px;background:#fff;color:#475569;cursor:pointer">🖨️ 가로</button>
-      <button onclick="byAbsExport(true)"  style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #fde68a;border-radius:7px;background:#fff;color:#92400e;cursor:pointer">📋 복사</button>
-      <button onclick="byAbsExport(false)" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #fde68a;border-radius:7px;background:#fff;color:#92400e;cursor:pointer">💾 저장</button>
+      <span style="font-size:11px;color:#9ca3af;font-weight:600">이미지</span>
+      <span style="font-size:11px;color:#1e40af;font-weight:700">평일</span>
+      <button onclick="byAbsExport(true,'wk')"  title="평일 응시 표만 이미지로 복사" style="font-size:12px;padding:5px 8px;border:1.5px solid #bfdbfe;border-radius:7px;background:#fff;cursor:pointer">📋</button>
+      <button onclick="byAbsExport(false,'wk')" title="평일 응시 표만 이미지로 저장" style="font-size:12px;padding:5px 8px;border:1.5px solid #bfdbfe;border-radius:7px;background:#fff;cursor:pointer">💾</button>
+      <span style="font-size:11px;color:#b91c1c;font-weight:700;margin-left:2px">결석</span>
+      <button onclick="byAbsExport(true,'ab')"  title="결석 표만 이미지로 복사" style="font-size:12px;padding:5px 8px;border:1.5px solid #fecaca;border-radius:7px;background:#fff;cursor:pointer">📋</button>
+      <button onclick="byAbsExport(false,'ab')" title="결석 표만 이미지로 저장" style="font-size:12px;padding:5px 8px;border:1.5px solid #fecaca;border-radius:7px;background:#fff;cursor:pointer">💾</button>
       <button id="by-abs-save" onclick="byAbsSave()" style="font-size:11.5px;font-weight:700;padding:5px 13px;border:none;border-radius:7px;background:#92400e;color:#fff;cursor:pointer">💾 반영</button>
     </div>
     <div id="by-abs-body" style="padding:16px 20px;overflow:auto;background:#f8fafc"></div>
-    <div id="by-abs-image-render" style="position:fixed;left:-9999px;top:0;width:1150px;background:#fff;font-family:'Pretendard','Noto Sans KR',sans-serif;padding:22px"></div>
+    <div id="by-abs-image-render" style="position:fixed;left:-9999px;top:0;width:820px;background:#fff;font-family:'Pretendard','Noto Sans KR',sans-serif;padding:22px"></div>
   </div>
 </div>
 
@@ -11300,14 +11305,101 @@ function byAbsBuildImageHTML(opt){
     });
     return h + '</tbody></table></div>';
   }
-  // 결석 표는 새 장에서 시작 — 단 평일 표가 비어 있으면 첫 장이 통째로 비므로 그때는 붙인다
-  var breakAbsent = !!opt.breakPage && sp.weekday.length > 0;
-  return '<div style="text-align:center;margin-bottom:' + (cm ? '10px' : '14px') + '">'
-    + '<div style="font-size:' + TITLE + ';font-weight:800;color:#92400e">📝 베티모의고사 ' + _esc(d.round) + ' 결석 · 평일 응시</div>'
+  // only: 'wk' | 'ab' — 한 표만 뽑아 장당 행 수를 줄인다 (카톡 가독성)
+  var only = opt.only || '';
+  var sub  = (only === 'wk') ? ' 평일 응시' : (only === 'ab') ? ' 결석' : ' 결석 · 평일 응시';
+  // 결석 표는 새 장에서 시작 — 단 평일 표가 없으면 첫 장이 통째로 비므로 그때는 붙인다
+  var breakAbsent = !!opt.breakPage && !only && sp.weekday.length > 0;
+  var head = '<div style="text-align:center;margin-bottom:' + (cm ? '10px' : '14px') + '">'
+    + '<div style="font-size:' + TITLE + ';font-weight:800;color:#92400e">📝 베티모의고사 ' + _esc(d.round) + _esc(sub) + '</div>'
     + '<div style="font-size:11.5px;color:#6b7280;margin-top:4px">' + _esc(d.date) + ' · '
-    + _esc(typeof weekendOutputTitle === 'function' ? weekendOutputTitle('bety') : '') + '</div></div>'
+    + _esc(typeof weekendOutputTitle === 'function' ? weekendOutputTitle('bety') : '') + '</div></div>';
+  if (only === 'wk') return head + tbl(sp.weekday, 'wk', '📅 평일 응시 학생', '#1e40af', false);
+  if (only === 'ab') return head + tbl(sp.absent,  'ab', '❌ 결석',           '#b91c1c', false);
+  return head
     + tbl(sp.weekday, 'wk', '📅 평일 응시 학생', '#1e40af', false)
     + tbl(sp.absent, 'ab', '❌ 결석', '#b91c1c', breakAbsent);
+}
+
+/* ── [카톡 공유용 레이아웃] ─────────────────────────────────────
+   프린트는 A4 한 장에 표 하나가 맞지만, 카톡은 말풍선 폭에 맞춰 축소하므로
+   세로로 긴 표는 글자가 뭉개진다. 그래서 공유용은 **같은 표를 2단으로 접어서** 만든다.
+   · 열 구성·머리글·테두리는 표 그대로 유지 (무슨 정보인지 바로 보이게)
+   · 모든 행이 같은 값인 열만 제거해 폭을 아낀다
+     - 모의고사(회차) → 제목으로 올림
+     - 결석 표의 요일 → 전부 '일' 이라 무의미. 그 자리에 예정요일이 들어감
+   ────────────────────────────────────────────────────────────── */
+var BY_SHARE_W = 1300;
+var BY_SHARE_COLS_WK = [
+  { t:'요일',      w:'6%',  a:'center' }, { t:'이름',     w:'10%', a:'left'   },
+  { t:'학교/학년', w:'17%', a:'left'   }, { t:'담당T',    w:'8%',  a:'center' },
+  { t:'등원예정',  w:'11%', a:'center' }, { t:'등원시각', w:'11%', a:'center' },
+  { t:'점수',      w:'7%',  a:'center' }, { t:'비고',     w:'30%', a:'left'   }
+];
+var BY_SHARE_COLS_AB = [
+  { t:'이름',      w:'11%', a:'left'   }, { t:'학교/학년', w:'18%', a:'left'   },
+  { t:'담당T',     w:'9%',  a:'center' }, { t:'예정요일',  w:'9%',  a:'center' },
+  { t:'예정시각',  w:'11%', a:'center' }, { t:'점수',      w:'7%',  a:'center' },
+  { t:'비고',      w:'35%', a:'left'   }
+];
+
+function _byShareTable(list, only){
+  var cols = (only === 'ab') ? BY_SHARE_COLS_AB : BY_SHARE_COLS_WK;
+  var bd = '1px solid #d6a441';
+  if (!list.length) return '<div style="flex:1;min-width:0"></div>';
+  var h = '<div style="flex:1;min-width:0">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">'
+    + '<colgroup>' + cols.map(function(c){ return '<col style="width:' + c.w + '">'; }).join('') + '</colgroup>'
+    + '<thead><tr style="background:#92400e">'
+    + cols.map(function(c){ return '<th style="padding:6px 4px;border:' + bd + ';color:#fff;font-size:11.5px;font-weight:800;text-align:center;white-space:nowrap">' + c.t + '</th>'; }).join('')
+    + '</tr></thead><tbody>';
+  list.forEach(function(r, i){
+    var wd = Number(r.weekday);
+    var dc = (wd === 6) ? '#1d4ed8' : (wd === 0) ? '#dc2626' : '#111827';
+    var td = 'padding:5px 4px;border:' + bd + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    var mkWd = (r.makeup_weekday === '' || r.makeup_weekday == null) ? '' : BY_ABS_DAYS[Number(r.makeup_weekday)];
+    var lead = (only === 'ab')
+      ? ''
+      : '<td style="' + td + ';text-align:center;font-weight:800;color:' + dc + '">' + BY_ABS_DAYS[wd] + '</td>';
+    var mid = (only === 'ab')
+      ? ('<td style="' + td + ';text-align:center;font-weight:800;color:' + (mkWd ? '#b45309' : '#cbd5e1') + '">' + _esc(mkWd || '미정') + '</td>'
+       + '<td style="' + td + ';text-align:center;color:#b45309;font-weight:700">' + _esc(r.makeup_time) + '</td>')
+      : ('<td style="' + td + ';text-align:center">' + _esc(r.attend_time) + '</td>'
+       + '<td style="' + td + ';text-align:center;font-weight:700">' + _esc(r.arrived_at) + '</td>');
+    h += '<tr style="background:' + (i % 2 ? '#fffaf0' : '#fff') + '">'
+      + lead
+      + '<td style="' + td + ';font-weight:800">' + _esc(r.name) + '</td>'
+      + '<td style="' + td + ';color:#475569">' + _esc((r.school || '') + ' ' + (r.grade || '')) + '</td>'
+      + '<td style="' + td + ';text-align:center;color:#475569">' + _esc(r.teacher) + '</td>'
+      + mid
+      + '<td style="' + td + ';text-align:center;font-weight:800;color:#92400e">' + _esc(r.score) + '</td>'
+      + '<td style="' + td + ';color:#374151">' + _esc(r.note) + '</td>'
+      + '</tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+
+/* only: 'wk'(평일) | 'ab'(결석) */
+function byAbsBuildShareHTML(only){
+  var d = _byAbsData;
+  if (!d) return '';
+  var sp = byAbsSplit();
+  var list = (only === 'ab') ? sp.absent : sp.weekday;
+  var mid = Math.ceil(list.length / 2);
+  var title = (only === 'ab') ? '결석' : '평일 응시';
+  var tint  = (only === 'ab') ? '#b91c1c' : '#1e40af';
+  var who   = (typeof weekendOutputTitle === 'function') ? weekendOutputTitle('bety') : '';
+  return '<div style="font-family:\'Pretendard\',\'Noto Sans KR\',\'Malgun Gothic\',sans-serif;background:#fff">'
+    + '<div style="display:flex;align-items:flex-end;gap:10px;padding-bottom:9px;border-bottom:3px solid ' + tint + ';margin-bottom:10px">'
+    + '<div style="font-size:21px;font-weight:900;color:' + tint + '">📝 베티모의고사 ' + _esc(d.round) + ' · ' + title + '</div>'
+    + '<div style="font-size:13px;font-weight:800;color:#475569">' + list.length + '명</div>'
+    + '<span style="flex:1"></span>'
+    + '<div style="font-size:12px;color:#94a3b8;text-align:right">' + _esc(d.date) + (who ? (' · ' + _esc(who)) : '') + '</div>'
+    + '</div>'
+    + '<div style="display:flex;gap:16px;align-items:flex-start">'
+    + _byShareTable(list.slice(0, mid), only)
+    + _byShareTable(list.slice(mid), only)
+    + '</div></div>';
 }
 
 /* 프린트 — 가로/세로 선택 */
@@ -11333,19 +11425,30 @@ function byAbsPrint(orient){
   else { alert('팝업이 차단되었습니다. 팝업 허용 후 다시 시도해주세요.'); }
 }
 
-async function byAbsExport(copy){
+/* only: 'wk'(평일) | 'ab'(결석) — 카톡은 말풍선 폭에 맞춰 축소하므로
+   표를 나누고 폭을 좁혀야 글자가 읽을 만한 크기로 남는다 */
+var BY_ABS_IMG_W = 820;
+async function byAbsExport(copy, only){
   if (!_byAbsData) { alert('먼저 조회해주세요.'); return; }
   byAbsSyncFromInputs();
+  var sp = byAbsSplit();
+  if (only === 'wk' && !sp.weekday.length) { alert('평일 응시 학생이 없습니다.'); return; }
+  if (only === 'ab' && !sp.absent.length)  { alert('결석 학생이 없습니다.'); return; }
   var wrap = document.getElementById('by-abs-image-render');
   if (!wrap) return;
-  wrap.innerHTML = byAbsBuildImageHTML();
+  var W = (only === 'wk' || only === 'ab') ? BY_SHARE_W : BY_ABS_IMG_W;
+  wrap.style.width = W + 'px';
+  wrap.innerHTML = (only === 'wk' || only === 'ab')
+    ? byAbsBuildShareHTML(only)                       // 카톡 공유용 2단 카드
+    : byAbsBuildImageHTML({ only: '' });              // 문서용 전체 표
   await new Promise(function(res){ setTimeout(res, 200); });
   try {
     if (typeof html2canvas === 'undefined') throw new Error('html2canvas 미로드');
     var canvas = await html2canvas(wrap, { backgroundColor:'#fff', scale:2, useCORS:true, logging:false,
-                                           width:1150, height:wrap.scrollHeight });
+                                           width:W, height:wrap.scrollHeight });
     wrap.innerHTML = '';
-    var fn = '베티_' + String(_byAbsData.date).replace(/-/g, '') + '_결석평일응시';
+    var tag = (only === 'wk') ? '_평일응시' : (only === 'ab') ? '_결석' : '_결석평일응시';
+    var fn = '베티_' + String(_byAbsData.date).replace(/-/g, '') + tag;
     if (copy) {
       var r = await shareOrCopyCanvas(canvas, fn + '.png');
       if (r.method === 'clipboard') alert('✅ 이미지가 클립보드에 복사됐습니다!');
