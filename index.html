@@ -3948,6 +3948,7 @@ var _ptAnswers     = {};  // { student_id: [true/false/null x8] } — 오답 정
 // ③ 내신대비 (weekend_naesin)
 var _nsStudents    = [];
 var _nsData        = {};
+var _nsCarry       = {};  // { student_id: 직전 회차(forward-fill용) } — 내신은 시간만 지속
 var _nsSnapshot    = {};
 var _nsLoadedAt    = {};
 var _nsAllTeachers = [];
@@ -4251,7 +4252,7 @@ function doLogout() {
   _wnTestNameLoaded = false;  // 재로그인 시 다른 계정의 시험명칭 캐시 재사용 방지
   _ptStudents = []; _ptData = {}; _ptCarry = {}; _ptSnapshot = {}; _ptLoadedAt = {}; _ptAllTeachers = [];
   _ptAnswers = {};
-  _nsStudents = []; _nsData = {}; _nsSnapshot = {}; _nsLoadedAt = {}; _nsAllTeachers = [];
+  _nsStudents = []; _nsData = {}; _nsCarry = {}; _nsSnapshot = {}; _nsLoadedAt = {}; _nsAllTeachers = [];
   _nsExtraMsgCache = null; _nsExtraMsgCacheByTeacher = {}; _nsExtraMsgLoaded = false;
   _nsEmEditingId = null; _nsEmClasses = []; _nsEmStudents = []; _nsEmSelectedClassIds = new Set(); _nsEmStudentNameMap = {};
   _acctCurrentTab = 'teacher'; _admBranchFilter = ''; _admLevelFilter = ''; _admTeacherStatusFilter = '';
@@ -6106,7 +6107,7 @@ async function wnLoadData() {
       }, _wnStudents.map(s => s.id));
       (records || []).forEach(r => {
         if (r.session_date === date) _wnData[r.student_id] = r;  // 그날 입력(출결·점수용)
-        _wnCarry[r.student_id] = r;                              // 최신 회차(레벨·시간·요일 지속용)
+        _wnCarry[r.student_id] = _wkCarryMerge(_wnCarry[r.student_id], r);   // 레벨·시간·요일은 값이 있을 때만 갱신
       });
     }
 
@@ -6132,6 +6133,25 @@ async function wnLoadData() {
 }
 
 /* ── 테이블 렌더링 ───────────────────────────────────────── */
+/* ── [주말프로그램 forward-fill] 레벨·시간·요일 지속 ──────────────
+   회차별 행을 최신 것으로 **통째로** 덮으면, 새 회차 행이 먼저 만들어지고
+   레벨·시간이 비어 있는 경우(출결 일괄처리 등) 지난 회차 값이 화면에서 사라진다.
+   실제로 베티 16→17회에서 26명의 등원시간이 이렇게 비었다.
+   → 지속 대상 필드는 **값이 있을 때만** 갱신한다. (0 은 유효값이므로 falsy 검사 금지) */
+var WK_CARRY_KEEP = ['level', 'attend_time', 'weekday'];
+function _wkCarryMerge(prev, cur){
+  if (!prev) return cur;
+  var out = Object.assign({}, cur);
+  WK_CARRY_KEEP.forEach(function(f){
+    var v = out[f];
+    if (v === null || v === undefined || v === '') {
+      var p = prev[f];
+      if (p !== null && p !== undefined && p !== '') out[f] = p;
+    }
+  });
+  return out;
+}
+
 /* ── 주말 출석부 요일 (드롭다운 기본값/옵션) ── */
 function weekendDayValue(s, type, rec){
   var def = (type === 'bety') ? 0 : 6;
@@ -8693,7 +8713,7 @@ async function ptLoadData() {
       }, _ptStudents.map(s => s.id));
       (records || []).forEach(r => {
         if (r.session_date === date) _ptData[r.student_id] = r;  // 그날 입력(출결·점수용)
-        _ptCarry[r.student_id] = r;                              // 최신 회차(레벨·시간·요일 지속용)
+        _ptCarry[r.student_id] = _wkCarryMerge(_ptCarry[r.student_id], r);   // 레벨·시간·요일은 값이 있을 때만 갱신
         // 정오답 캐시 갱신 (그날 회차 기준)
         if (r.session_date === date && Array.isArray(r.wrong_answers) && r.wrong_answers.length) {
           if (!_ptAnswers) _ptAnswers = {};
@@ -10766,7 +10786,7 @@ async function byLoadData() {
       }, _byStudents.map(s => s.id));
       (records || []).forEach(r => {
         if (r.session_date === date) _byData[r.student_id] = r;  // 그날 입력(출결·점수용)
-        _byCarry[r.student_id] = r;                              // 최신 회차(레벨·시간·요일 지속용)
+        _byCarry[r.student_id] = _wkCarryMerge(_byCarry[r.student_id], r);   // 레벨·시간·요일은 값이 있을 때만 갱신
       });
     }
 
@@ -12414,12 +12434,17 @@ async function nsLoadData() {
     var _nsSeen = new Set(_nsStudents.map(function(x){ return x.id; }));
     (nsDelegRes.data || []).forEach(function(ds){ if (!_nsSeen.has(ds.id)) { _nsStudents.push(ds); _nsSeen.add(ds.id); } });
 
-    _nsData = {};
+    // 직전 회차 forward-fill: 그날 이하 전체를 가져와 exact/carry 분리 (N제·포텐셜·베티와 동일)
+    _nsData = {}; _nsCarry = {};
     if (_nsStudents.length) {
       var records = await fetchRowsByIds(function(chunk) {
-        return db.from('weekend_naesin').select('*').eq('session_date', date).in('student_id', chunk);
+        return db.from('weekend_naesin').select('*').lte('session_date', date).in('student_id', chunk)
+          .order('session_date', { ascending: true }).order('id', { ascending: true });
       }, _nsStudents.map(s => s.id));
-      (records || []).forEach(r => { _nsData[r.student_id] = r; });
+      (records || []).forEach(r => {
+        if (r.session_date === date) _nsData[r.student_id] = r;   // 그날 입력(출결·결과용)
+        _nsCarry[r.student_id] = _wkCarryMerge(_nsCarry[r.student_id], r);   // 시간은 값이 있을 때만 갱신
+      });
     }
 
     // 데스크/관리자: 담당 선생님별 추가메시지 batch 로드
@@ -12494,10 +12519,11 @@ function nsRenderTable() {
     });
   }
 
-  var _nsSorted = nsSortByTime(_nsStudents, _nsData, _nsSortMode);
+  var _nsSorted = nsSortByTime(_nsStudents, _nsCarry, _nsSortMode);   // 화면에 보이는 시간(승계 포함) 기준
   var _nsPg = _wkPageSlice(_nsSorted, _nsPage); _nsPage = _nsPg.page; _nsPageStudents = _nsPg.list;
   _nsPageStudents.forEach(function(s, i) {
-    var r = _nsData[s.id] || {};
+    var r  = _nsData[s.id] || {};
+    var rc = _nsCarry[s.id];        // 직전 회차 — 시간은 이어받는다
     var curAtt    = (r.id && r.attendance) ? r.attendance : '';
     var curResult = r.result || '';
     var nsIsSent  = nsSentSet.has(s.id);
@@ -12514,7 +12540,7 @@ function nsRenderTable() {
       + '<td style="text-align:left;padding-left:8px;color:#6b7280;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.school||'') + '">' + (s.school||'') + '</td>'
       + '<td style="color:#6b7280;white-space:nowrap">' + (s.grade||'') + '</td>'
       + '<td style="text-align:left;padding-left:6px;font-weight:700;color:#1e293b;white-space:nowrap">' + s.name + '</td>'
-      + '<td><input class="ns-inp ns-focusable" data-sid="' + s.id + '" data-field="attend_time" value="' + (r.attend_time != null && r.id ? r.attend_time : '') + '" placeholder="10:00"></td>'
+      + '<td><input class="ns-inp ns-focusable" data-sid="' + s.id + '" data-field="attend_time" value="' + ((rc && rc.attend_time != null) ? rc.attend_time : '') + '" placeholder="10:00"></td>'
       + '<td><select class="ns-sel ns-focusable" data-sid="' + s.id + '" data-field="attendance">' + attSel + '</select></td>'
       + '<td><select class="ns-sel ns-focusable" data-sid="' + s.id + '" data-field="result">' + resultSel + '</select></td>'
       + '<td><input class="ns-inp ns-focusable" data-sid="' + s.id + '" data-field="note" value="' + (r.note||'') + '" placeholder="비고"></td>'
