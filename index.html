@@ -3420,7 +3420,6 @@
       <button id="by-abs-save" onclick="byAbsSave()" style="font-size:11.5px;font-weight:700;padding:5px 13px;border:none;border-radius:7px;background:#92400e;color:#fff;cursor:pointer">💾 반영</button>
     </div>
     <div id="by-abs-body" style="padding:16px 20px;overflow:auto;background:#f8fafc"></div>
-    <div id="ea-image-render" style="position:fixed;left:-9999px;top:0;width:900px;background:#fff;font-family:'Pretendard','Noto Sans KR',sans-serif;padding:24px"></div>
     <div id="by-abs-image-render" style="position:fixed;left:-9999px;top:0;width:820px;background:#fff;font-family:'Pretendard','Noto Sans KR',sans-serif;padding:22px"></div>
   </div>
 </div>
@@ -25597,7 +25596,8 @@ function eaOutputHTML(r, forPrint) {
     + '</tr></thead><tbody>';
 
   items.forEach(function(x) {
-    var td = 'padding:6px;border:' + line + ';font-size:12px;text-align:center';
+    var td = 'padding:' + (forPrint ? '4px 5px' : '6px') + ';border:' + line
+           + ';font-size:' + (forPrint ? '11px' : '12px') + ';text-align:center';
     html += '<tr' + (forPrint ? ' style="page-break-inside:avoid"' : '') + '>'
       + '<td style="' + td + ';font-weight:600;word-break:keep-all">' + _esc(x.number_label) + '</td>'
       + '<td style="' + td + '">' + _esc(x.score) + '</td>'
@@ -25634,6 +25634,8 @@ async function eaExport(copy) {
   wrap.innerHTML = eaOutputHTML(r, false);
   await new Promise(function(res) { setTimeout(res, 200); });
   try {
+    /* 숨겨진 컨테이너 안에 있으면 높이가 0이 되어 빈 이미지가 만들어진다 */
+    if (!wrap.scrollHeight) throw new Error('\uB80C\uB354 \uC601\uC5ED \uB192\uC774\uAC00 0 \uC785\uB2C8\uB2E4');
     if (typeof html2canvas === 'undefined') throw new Error('html2canvas \uBBF8\uB85C\uB4DC');
     var canvas = await html2canvas(wrap, { backgroundColor: '#fff', scale: 2, useCORS: true, logging: false,
                                            width: 900, height: wrap.scrollHeight });
@@ -25655,19 +25657,30 @@ async function eaExport(copy) {
 function eaPrint() {
   var r = _eaRows[_eaViewIdx];
   if (!r) return;
+  /* A4 \uC138\uB85C, \uC5EC\uBC31 10mm \uAE30\uC900 \uB0B4\uBD80 \uD06C\uAE30 (96dpi) */
+  var PAGE_W = 718, PAGE_H = 1047;
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + _esc(r.title || '\uB0B4\uC2E0 \uBD84\uC11D\uD45C') + '</title>'
     + '<style>*{margin:0;padding:0;box-sizing:border-box}'
-    + 'body{background:#fff;padding:14px;font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","Segoe UI",sans-serif;color:#0f172a;'
+    + 'body{background:#fff;padding:12px;font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","Segoe UI",sans-serif;color:#0f172a;'
     + '-webkit-print-color-adjust:exact;print-color-adjust:exact}'
-    + 'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'
-    + '@page{size:A4 portrait;margin:11mm}'
+    + '#sheet{width:' + PAGE_W + 'px;transform-origin:top left}'
+    + '#page{overflow:hidden}'
+    + 'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'  /* 한 장에 안 들어갈 때를 위한 안전망 */
+    + '@page{size:A4 portrait;margin:10mm}'
     + '@media print{body{padding:0}.no-print{display:none!important}}</style></head><body>'
     + '<div class="no-print" style="margin:0 0 10px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#78350f">'
-    + '\uD83D\uDCA1 \uC778\uC1C4 \uB300\uD654\uC0C1\uC790\uC5D0\uC11C <b>\uC635\uC158 \u2192 \uBA38\uB9AC\uAE00 \uBC0F \uBC14\uB2E5\uAE00</b> \uCCB4\uD06C\uB97C \uB044\uBA74 \uB354 \uAE54\uB054\uD569\uB2C8\uB2E4.</div>'
-    + eaOutputHTML(r, true)
-    + '<scr' + 'ipt>window.onload=function(){window.print();}<\/scr' + 'ipt>'
+    + '\uD83D\uDCA1 \uD55C \uD398\uC774\uC9C0\uC5D0 \uB4E4\uC5B4\uAC00\uB3C4\uB85D \uC790\uB3D9\uC73C\uB85C \uCD95\uC18C\uD569\uB2C8\uB2E4. '
+    + '\uC778\uC1C4 \uB300\uD654\uC0C1\uC790\uC5D0\uC11C <b>\uBC30\uC728 100%</b>, <b>\uBA38\uB9AC\uAE00 \uBC0F \uBC14\uB2E5\uAE00 \uD574\uC81C</b> \uB85C \uB450\uC138\uC694.</div>'
+    + '<div id="page"><div id="sheet">' + eaOutputHTML(r, true) + '</div></div>'
+    + '<scr' + 'ipt>window.onload=function(){'
+    +   'var sh=document.getElementById("sheet"),pg=document.getElementById("page");'
+    +   'var h=sh.scrollHeight,k=Math.min(1,' + PAGE_H + '/h);'
+    +   'if(k<1){sh.style.transform="scale("+k+")";}'
+    +   'pg.style.height=Math.ceil(h*k)+"px";'
+    +   'setTimeout(function(){window.print();},120);'
+    + '}<\/scr' + 'ipt>'
     + '</body></html>';
-  var win = window.open('', '_blank', 'width=1000,height=800');
+  var win = window.open('', '_blank', 'width=1000,height=900');
   if (win) { win.document.write(html); win.document.close(); }
   else { alert('\uD31D\uC5C5\uC774 \uCC28\uB2E8\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uD31D\uC5C5 \uD5C8\uC6A9 \uD6C4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.');
   }
@@ -30804,6 +30817,8 @@ tryAutoLogin();
     </div>
   </div>
 </div>
+  <!-- 분석표 이미지 렌더 자리. 모달 안에 두면 display:none 이 되어 높이가 0이 된다 -->
+<div id="ea-image-render" style="position:fixed;left:-9999px;top:0;width:900px;background:#fff;font-family:'Pretendard','Noto Sans KR',sans-serif;padding:24px"></div>
 <div class="img-viewer" id="imgViewer" onclick="closeImgViewer()">
   <button class="img-viewer-close" onclick="closeImgViewer()">✕</button>
   <img id="viewerImg" src="" alt="">
