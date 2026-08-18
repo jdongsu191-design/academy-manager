@@ -3384,6 +3384,11 @@
       <button onclick="closeModal('eaView')" style="font-size:18px;line-height:1;padding:2px 8px;border:none;background:none;color:#9ca3af;cursor:pointer">&times;</button>
     </div>
     <div id="eav-body" style="overflow-y:auto;flex:1"></div>
+    <div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap">
+      <button onclick="eaExport(true)" style="border:1.5px solid #ddd6fe;color:#6d28d9;font-size:12px;font-weight:700;padding:8px 13px;border-radius:8px;background:#fff;cursor:pointer">🖼 이미지 복사</button>
+      <button onclick="eaExport(false)" style="border:1.5px solid #ddd6fe;color:#6d28d9;font-size:12px;font-weight:700;padding:8px 13px;border-radius:8px;background:#fff;cursor:pointer">💾 이미지 저장</button>
+      <button onclick="eaPrint()" style="border:1.5px solid #e5e7eb;color:#6b7280;font-size:12px;font-weight:700;padding:8px 13px;border-radius:8px;background:#fff;cursor:pointer">🖨 프린트</button>
+    </div>
   </div>
 </div>
 <div id="modal-byAbs" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;align-items:center;justify-content:center;padding:16px">
@@ -3415,6 +3420,7 @@
       <button id="by-abs-save" onclick="byAbsSave()" style="font-size:11.5px;font-weight:700;padding:5px 13px;border:none;border-radius:7px;background:#92400e;color:#fff;cursor:pointer">💾 반영</button>
     </div>
     <div id="by-abs-body" style="padding:16px 20px;overflow:auto;background:#f8fafc"></div>
+    <div id="ea-image-render" style="position:fixed;left:-9999px;top:0;width:900px;background:#fff;font-family:'Pretendard','Noto Sans KR',sans-serif;padding:24px"></div>
     <div id="by-abs-image-render" style="position:fixed;left:-9999px;top:0;width:820px;background:#fff;font-family:'Pretendard','Noto Sans KR',sans-serif;padding:22px"></div>
   </div>
 </div>
@@ -25353,6 +25359,7 @@ function buildAdmTeacherDropdown(branchId) {
    - review 키: difficulty(총평), discrimination(변별력), strategy(학습전략)
 ══════════════════════════════════════════════════════════ */
 var _eaRows = [];    /* 목록 캐시 */
+var _eaViewIdx = -1; /* 상세 모달에 띄운 행 (출력이 이걸 쓴다) */
 
 /* 제작·검수 권한 — 교재에 들어가는 자료라 마스터 관리자와 부원장으로 한정 */
 function eaCanMake() {
@@ -25497,6 +25504,7 @@ function eaCountBy(items, key) {
 function eaView(idx) {
   var r = _eaRows[idx];
   if (!r) return;
+  _eaViewIdx = idx;
   var items = (r.items || []).slice().sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
   var sum   = eaSum(items);
   var units = eaCountBy(items, 'unit');
@@ -25509,7 +25517,6 @@ function eaView(idx) {
   var html = ''
     + '<div style="margin-bottom:10px;font-size:12px;color:#6b7280">'
     +   _esc(r.school) + ' \u00B7 ' + _esc(r.grade) + ' \u00B7 ' + _esc(r.subject)
-    +   (r.teacher_name ? ' \u00B7 분석 ' + _esc(r.teacher_name) + ' 선생님' : '')
     + '</div>'
     + '<div style="margin-bottom:10px">'
     +   '<span style="' + chip + ';background:#f5f3ff;color:#6d28d9">문항 ' + items.length + '</span>'
@@ -25558,6 +25565,114 @@ function eaView(idx) {
   document.getElementById('eav-body').innerHTML = html;
   openModal('eaView');
 }
+/* ── 교재 수록용 출력 ────────────────────────────────────
+   원본 한글 분석표의 열 순서를 따른다: 문항번호 · 배점 · 단원 · 유형분석 · 난이도
+   출처와 분석자 이름은 넣지 않는다 (2026-08 요청). */
+function eaOutputHTML(r, forPrint) {
+  var items = (r.items || []).slice().sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
+  var sum   = eaSum(items);
+  var units = eaCountBy(items, 'unit');
+  var diffs = eaCountBy(items, 'difficulty');
+  var line  = '1px solid #cbd5e1';
+
+  var html = '<div style="color:#0f172a">'
+    + '<div style="font-size:20px;font-weight:800;margin-bottom:4px">'
+    +   _esc(r.title || (r.year + '\uB144 ' + r.semester + '\uD559\uAE30 ' + r.school + ' ' + r.round)) + '</div>'
+    + '<div style="font-size:12.5px;color:#475569;margin-bottom:3px">'
+    +   [r.school, r.grade, r.subject, r.year + '\uB144 ' + r.semester + '\uD559\uAE30 ' + r.round].filter(Boolean).map(_esc).join(' \u00B7 ')
+    +   ' \u00B7 \uCD1D ' + items.length + '\uBB38\uD56D \u00B7 ' + sum + '\uC810</div>'
+    + '<div style="font-size:12px;color:#475569;margin-bottom:2px"><b>\uB2E8\uC6D0\uBCC4</b> '
+    +   Object.keys(units).sort(function(a, b) { return units[b] - units[a]; })
+          .map(function(k) { return _esc(k) + ' ' + units[k]; }).join(' \u00B7 ') + '</div>'
+    + '<div style="font-size:12px;color:#475569;margin-bottom:10px"><b>\uB09C\uC774\uB3C4</b> '
+    +   [1, 2, 3].map(function(k) { return EA_STARS[k] + ' ' + (diffs[k] || 0); }).join(' \u00B7 ') + '</div>';
+
+  var th = 'padding:7px 6px;border:' + line + ';background:#f1f5f9;font-weight:700;font-size:12.5px';
+  html += '<table style="width:100%;border-collapse:collapse;table-layout:fixed'
+       +  (forPrint ? ';page-break-inside:auto' : '') + '">'
+    + '<colgroup><col style="width:76px"><col style="width:52px"><col style="width:22%"><col><col style="width:64px"></colgroup>'
+    + '<thead><tr>'
+    + ['\uBB38\uD56D', '\uBC30\uC810', '\uB2E8\uC6D0', '\uC720\uD615\uBD84\uC11D', '\uB09C\uC774\uB3C4']
+        .map(function(h, i) { return '<th style="' + th + (i === 3 ? ';text-align:left' : '') + '">' + h + '</th>'; }).join('')
+    + '</tr></thead><tbody>';
+
+  items.forEach(function(x) {
+    var td = 'padding:6px;border:' + line + ';font-size:12px;text-align:center';
+    html += '<tr' + (forPrint ? ' style="page-break-inside:avoid"' : '') + '>'
+      + '<td style="' + td + ';font-weight:600;word-break:keep-all">' + _esc(x.number_label) + '</td>'
+      + '<td style="' + td + '">' + _esc(x.score) + '</td>'
+      + '<td style="' + td + ';word-break:keep-all">' + _esc(x.unit) + '</td>'
+      + '<td style="' + td + ';text-align:left;word-break:keep-all">' + _esc(x.type_description) + '</td>'
+      + '<td style="' + td + ';color:#b45309;white-space:nowrap">' + (EA_STARS[x.difficulty] || '') + '</td>'
+      + '</tr>';
+  });
+  html += '</tbody></table>';
+
+  if (eaHasReview(r.review)) {
+    [['difficulty', '\uC2DC\uD5D8 \uCD1D\uD3C9'], ['discrimination', '\uBCC0\uBCC4\uB825 \uBD84\uC11D'], ['strategy', '\uD559\uC2B5 \uC804\uB7B5']]
+      .forEach(function(p) {
+        if (!r.review[p[0]]) return;
+        html += '<div style="margin-top:10px;padding:10px 12px;border:' + line + ';background:#f8fafc'
+             +  (forPrint ? ';page-break-inside:avoid' : '') + '">'
+             +  '<div style="font-size:12.5px;font-weight:800;margin-bottom:4px">' + p[1] + '</div>'
+             +  '<div style="font-size:12px;line-height:1.8;color:#1e293b">' + _esc(r.review[p[0]]) + '</div></div>';
+      });
+  }
+  return html + '</div>';
+}
+
+function eaOutFileName(r) {
+  return ['\uBD84\uC11D\uD45C', r.school, r.grade, r.year + '\uB144' + r.semester + '\uD559\uAE30' + r.round]
+    .filter(Boolean).join('_').replace(/[\\/:*?"<>|\s]/g, '');
+}
+
+async function eaExport(copy) {
+  var r = _eaRows[_eaViewIdx];
+  if (!r) return;
+  var wrap = document.getElementById('ea-image-render');
+  if (!wrap) return;
+  wrap.innerHTML = eaOutputHTML(r, false);
+  await new Promise(function(res) { setTimeout(res, 200); });
+  try {
+    if (typeof html2canvas === 'undefined') throw new Error('html2canvas \uBBF8\uB85C\uB4DC');
+    var canvas = await html2canvas(wrap, { backgroundColor: '#fff', scale: 2, useCORS: true, logging: false,
+                                           width: 900, height: wrap.scrollHeight });
+    wrap.innerHTML = '';
+    var fn = eaOutFileName(r);
+    if (copy) {
+      var res2 = await shareOrCopyCanvas(canvas, fn + '.png');
+      if (res2.method === 'clipboard')     alert('\u2705 \uC774\uBBF8\uC9C0\uAC00 \uD074\uB9BD\uBCF4\uB4DC\uC5D0 \uBCF5\uC0AC\uB410\uC2B5\uB2C8\uB2E4!');
+      else if (res2.method === 'download') alert('\uD83D\uDCBE \uC774\uBBF8\uC9C0\uB97C \uC800\uC7A5\uD588\uC2B5\uB2C8\uB2E4.');
+    } else {
+      await _forceDownloadCanvas(canvas, fn + '.jpg', 'image/jpeg', 0.92);
+    }
+  } catch (e) {
+    wrap.innerHTML = '';
+    alert('\uB0B4\uBCF4\uB0B4\uAE30 \uC2E4\uD328: ' + (e.message || e));
+  }
+}
+
+function eaPrint() {
+  var r = _eaRows[_eaViewIdx];
+  if (!r) return;
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + _esc(r.title || '\uB0B4\uC2E0 \uBD84\uC11D\uD45C') + '</title>'
+    + '<style>*{margin:0;padding:0;box-sizing:border-box}'
+    + 'body{background:#fff;padding:14px;font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","Segoe UI",sans-serif;color:#0f172a;'
+    + '-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    + 'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'
+    + '@page{size:A4 portrait;margin:11mm}'
+    + '@media print{body{padding:0}.no-print{display:none!important}}</style></head><body>'
+    + '<div class="no-print" style="margin:0 0 10px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#78350f">'
+    + '\uD83D\uDCA1 \uC778\uC1C4 \uB300\uD654\uC0C1\uC790\uC5D0\uC11C <b>\uC635\uC158 \u2192 \uBA38\uB9AC\uAE00 \uBC0F \uBC14\uB2E5\uAE00</b> \uCCB4\uD06C\uB97C \uB044\uBA74 \uB354 \uAE54\uB054\uD569\uB2C8\uB2E4.</div>'
+    + eaOutputHTML(r, true)
+    + '<scr' + 'ipt>window.onload=function(){window.print();}<\/scr' + 'ipt>'
+    + '</body></html>';
+  var win = window.open('', '_blank', 'width=1000,height=800');
+  if (win) { win.document.write(html); win.document.close(); }
+  else { alert('\uD31D\uC5C5\uC774 \uCC28\uB2E8\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uD31D\uC5C5 \uD5C8\uC6A9 \uD6C4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.');
+  }
+}
+
 
 /* ══════════════════════════════════════════════════════════
    [EXAM ANALYSIS \u2014 \uC81C\uC791] PDF \u2192 Gemini \u2192 \uAC80\uC218 \u2192 \uC800\uC7A5
