@@ -2122,13 +2122,7 @@
         <div id="tes-table-wrap"></div>
       </div>
 
-      <div class="panel" id="panel-teacher-exam-list">
-        <div class="panel-placeholder">
-          <div class="panel-placeholder-icon">📋</div>
-          <div class="panel-placeholder-text">내신 분석표</div>
-          <div class="panel-placeholder-sub">구현 예정</div>
-        </div>
-      </div>
+      <div class="panel" id="panel-teacher-exam-list"></div>
 
       <!-- ── 관리자/데스크 패널 ── -->
       <div class="panel" id="panel-admin-accounts">
@@ -3011,13 +3005,7 @@
         <div id="es-table-wrap"></div>
       </div>
 
-      <div class="panel" id="panel-admin-exam-list">
-        <div class="panel-placeholder">
-          <div class="panel-placeholder-icon">📋</div>
-          <div class="panel-placeholder-text">내신 분석표</div>
-          <div class="panel-placeholder-sub">구현 예정</div>
-        </div>
-      </div>
+      <div class="panel" id="panel-admin-exam-list"></div>
 
       <div class="panel" id="panel-admin-exam-analysis">
         <div class="panel-placeholder">
@@ -3380,6 +3368,15 @@
 </div>
 
 <!-- 베티 결석 · 평일 응시 취합 -->
+<div id="modal-eaView" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;align-items:center;justify-content:center;padding:16px">
+  <div class="modal" style="max-width:980px;width:96vw;max-height:92vh;display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+      <div id="eav-title" style="font-size:16px;font-weight:800;color:#1f2937"></div>
+      <button onclick="closeModal('eaView')" style="font-size:18px;line-height:1;padding:2px 8px;border:none;background:none;color:#9ca3af;cursor:pointer">&times;</button>
+    </div>
+    <div id="eav-body" style="overflow-y:auto;flex:1"></div>
+  </div>
+</div>
 <div id="modal-byAbs" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;align-items:center;justify-content:center;padding:16px">
   <div style="background:#fff;border-radius:16px;max-width:1180px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden;max-height:92vh;display:flex;flex-direction:column">
     <div style="background:#92400e;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
@@ -4634,6 +4631,8 @@ function switchPanel(panelId, btn) {
   if (panelId === 'admin-monthly-report'    && typeof initAdminMonthlyReport    === 'function') initAdminMonthlyReport();
   if (panelId === 'teacher-exam-score'      && typeof initTeacherExamScore      === 'function') initTeacherExamScore();
   if (panelId === 'admin-exam-score'        && typeof initAdminExamScore        === 'function') initAdminExamScore();
+  if (panelId === 'teacher-exam-list'       && typeof initTeacherExamList       === 'function') initTeacherExamList();
+  if (panelId === 'admin-exam-list'         && typeof initAdminExamList         === 'function') initAdminExamList();
   if (panelId === 'admin-middle-naje'       && typeof initMiddleNajeCheck       === 'function') initMiddleNajeCheck();
   if (panelId === 'middle-naje-result'      && typeof initTeacherMiddleNajeResult === 'function') initTeacherMiddleNajeResult();
   if (panelId === 'naje'                    && typeof initNaje                    === 'function') initNaje();
@@ -25335,6 +25334,217 @@ function buildAdmTeacherDropdown(branchId) {
   tf.innerHTML = '<option value="">전체 선생님</option>'
     + teachers.map(t => `<option value="${t.id}">${_esc(t.name)}T</option>`).join('');
 }
+
+/* ══════════════════════════════════════════════════════════
+   [SECTION: EXAM ANALYSIS] 내신 분석표
+   - 시험대비교재에 수록할 기출 분석표. 저장은 exam_analyses
+   - 목록/상세는 선생님·관리자 공용. 같은 마크업을 접두어(tel/ael)만 바꿔 쓴다
+   - 제작·검수는 마스터 관리자와 부원장만 (eaCanMake)
+   - items 키: order, number_label, score, is_essay, unit, difficulty, type_description
+   - review 키: difficulty(총평), discrimination(변별력), strategy(학습전략)
+══════════════════════════════════════════════════════════ */
+var _eaRows = [];    /* 목록 캐시 */
+
+/* 제작·검수 권한 — 교재에 들어가는 자료라 마스터 관리자와 부원장으로 한정 */
+function eaCanMake() {
+  return !!(currentUser && (currentUser.is_master === true || currentUser.role === 'vice_director'));
+}
+
+var EA_SEL_CSS = 'width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none';
+
+/* 목록 화면 뼈대 */
+function eaListShell(px) {
+  var years = '<option value="">전체</option>';
+  var cur = new Date().getFullYear();
+  for (var y = cur + 1; y >= cur - 4; y--) years += '<option value="' + y + '">' + y + '년</option>';
+  return ''
+  + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px">'
+  +   '<div style="font-size:18px;font-weight:700;color:#7c3aed">\uD83D\uDCCB 내신 분석표</div>'
+  +   (eaCanMake()
+      ? '<button onclick="eaMakeOpen()" style="font-size:12px;font-weight:700;padding:7px 12px;border:none;border-radius:8px;background:#7c3aed;color:#fff;cursor:pointer;white-space:nowrap">+ 새 분석표</button>'
+      : '')
+  + '</div>'
+  + '<div style="font-size:12px;color:#8b5cf6;margin-bottom:16px">시험대비교재에 수록할 기출 분석표입니다</div>'
+  + '<div class="card" style="margin-bottom:12px">'
+  +   '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">'
+  +     '<div><div style="font-size:11px;color:#9ca3af;margin-bottom:3px">연도</div>'
+  +       '<select id="' + px + '-year" style="' + EA_SEL_CSS + '">' + years + '</select></div>'
+  +     '<div><div style="font-size:11px;color:#9ca3af;margin-bottom:3px">학기</div>'
+  +       '<select id="' + px + '-sem" style="' + EA_SEL_CSS + '"><option value="">전체</option><option value="1">1학기</option><option value="2">2학기</option></select></div>'
+  +     '<div><div style="font-size:11px;color:#9ca3af;margin-bottom:3px">시험</div>'
+  +       '<select id="' + px + '-round" style="' + EA_SEL_CSS + '"><option value="">전체</option><option value="중간">중간</option><option value="기말">기말</option></select></div>'
+  +   '</div>'
+  +   '<div style="display:flex;gap:8px">'
+  +     '<input id="' + px + '-q" placeholder="학교 · 과목 검색" onkeydown="if(event.key===\'Enter\')eaLoadList(\'' + px + '\')" style="flex:1;' + EA_SEL_CSS + '">'
+  +     '<button onclick="eaLoadList(\'' + px + '\')" style="padding:7px 16px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap">\uD83D\uDD0D 조회</button>'
+  +   '</div>'
+  + '</div>'
+  + '<div id="' + px + '-wrap"></div>';
+}
+
+async function initTeacherExamList() { return eaInitList('tel', 'panel-teacher-exam-list'); }
+async function initAdminExamList()   { return eaInitList('ael', 'panel-admin-exam-list'); }
+
+function eaInitList(px, panelId) {
+  var panel = document.getElementById(panelId);
+  if (!panel) return;
+  /* 권한에 따라 버튼이 달라지므로 매번 다시 그린다 */
+  panel.innerHTML = eaListShell(px);
+  return eaLoadList(px);
+}
+
+/* 총점·문항수는 items 에서 직접 센다 (AI 가 신고한 값은 믿지 않는다) */
+function eaSum(items) {
+  var n = (items || []).reduce(function(a, x) { return a + (Number(x.score) || 0); }, 0);
+  return Math.round(n * 10) / 10;   /* 0.1점 단위 배점까지만. 부동소수점 꼬리 제거 */
+}
+function eaHasReview(rv) {
+  return !!(rv && (rv.difficulty || rv.discrimination || rv.strategy));
+}
+
+async function eaLoadList(px) {
+  var wrap = document.getElementById(px + '-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">불러오는 중...</div>';
+
+  var year  = (document.getElementById(px + '-year')  || {}).value || '';
+  var sem   = (document.getElementById(px + '-sem')   || {}).value || '';
+  var round = (document.getElementById(px + '-round') || {}).value || '';
+  var q     = ((document.getElementById(px + '-q')    || {}).value || '').trim();
+
+  try {
+    var query = db.from('exam_analyses')
+      .select('id,title,school,grade,year,semester,round,subject,teacher_name,items,review,created_at')
+      .order('year', { ascending: false }).order('created_at', { ascending: false });
+    if (year)  query = query.eq('year', year);
+    if (sem)   query = query.eq('semester', sem);
+    if (round) query = query.eq('round', round);
+
+    var res = await query;
+    if (res.error) throw res.error;
+    var rows = res.data || [];
+
+    if (q) {
+      var lq = q.toLowerCase();
+      rows = rows.filter(function(r) {
+        return [r.school, r.subject, r.title, r.grade].some(function(v) {
+          return String(v || '').toLowerCase().indexOf(lq) >= 0;
+        });
+      });
+    }
+    _eaRows = rows;
+
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">\uD83D\uDCCB</div><p>분석표가 없습니다</p></div>';
+      return;
+    }
+
+    var html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap">'
+      + '<thead><tr style="background:#f5f3ff">'
+      + ['시험', '학교', '학년', '과목', '문항', '총점', '총평', '분석'].map(function(h) {
+          return '<th style="padding:8px 10px;border:1px solid #ddd6fe;color:#5b21b6;font-weight:700">' + h + '</th>';
+        }).join('')
+      + '<th style="padding:8px 10px;border:1px solid #ddd6fe"></th></tr></thead><tbody>';
+
+    rows.forEach(function(r, i) {
+      var items = r.items || [];
+      var sum   = eaSum(items);
+      var td    = 'padding:7px 10px;border:1px solid #ede9fe;text-align:center';
+      html += '<tr>'
+        + '<td style="' + td + ';color:#6b7280">' + _esc(r.year) + ' ' + _esc(r.semester) + '학기 ' + _esc(r.round) + '</td>'
+        + '<td style="' + td + ';text-align:left;font-weight:600;color:#1f2937">' + _esc(r.school) + '</td>'
+        + '<td style="' + td + '">' + _esc(r.grade) + '</td>'
+        + '<td style="' + td + '">' + _esc(r.subject) + '</td>'
+        + '<td style="' + td + '">' + items.length + '</td>'
+        + '<td style="' + td + ';font-weight:700;color:' + (sum === 100 ? '#059669' : '#dc2626') + '">' + sum + '</td>'
+        + '<td style="' + td + '">' + (eaHasReview(r.review) ? '\u2713' : '<span style="color:#d1d5db">\u2014</span>') + '</td>'
+        + '<td style="' + td + ';color:#6b7280">' + (_esc(r.teacher_name) || '<span style="color:#d1d5db">\u2014</span>') + '</td>'
+        + '<td style="' + td + '"><button onclick="eaView(' + i + ')" style="font-size:11px;font-weight:700;padding:4px 10px;border:1.5px solid #ddd6fe;border-radius:6px;background:#fff;color:#6d28d9;cursor:pointer">보기</button></td>'
+        + '</tr>';
+    });
+    wrap.innerHTML = html + '</tbody></table></div>'
+      + '<div style="margin-top:8px;font-size:11px;color:#9ca3af">총 ' + rows.length + '건</div>';
+  } catch (e) {
+    wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#dc2626;font-size:13px">불러오기 실패: ' + _esc(e.message || e) + '</div>';
+  }
+}
+
+/* ── 상세 보기 (읽기 전용) ───────────────────────────────── */
+var EA_STARS = { 1: '\u2605', 2: '\u2605\u2605', 3: '\u2605\u2605\u2605' };
+
+function eaCountBy(items, key) {
+  var m = {};
+  (items || []).forEach(function(x) { var k = x[key]; m[k] = (m[k] || 0) + 1; });
+  return m;
+}
+
+function eaView(idx) {
+  var r = _eaRows[idx];
+  if (!r) return;
+  var items = (r.items || []).slice().sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
+  var sum   = eaSum(items);
+  var units = eaCountBy(items, 'unit');
+  var diffs = eaCountBy(items, 'difficulty');
+
+  document.getElementById('eav-title').textContent =
+    r.title || (r.year + '년 ' + r.semester + '학기 ' + r.school + ' ' + r.grade + ' ' + r.round);
+
+  var chip = 'display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;margin:0 4px 4px 0';
+  var html = ''
+    + '<div style="margin-bottom:10px;font-size:12px;color:#6b7280">'
+    +   _esc(r.school) + ' \u00B7 ' + _esc(r.grade) + ' \u00B7 ' + _esc(r.subject)
+    +   (r.teacher_name ? ' \u00B7 분석 ' + _esc(r.teacher_name) + ' 선생님' : '')
+    + '</div>'
+    + '<div style="margin-bottom:10px">'
+    +   '<span style="' + chip + ';background:#f5f3ff;color:#6d28d9">문항 ' + items.length + '</span>'
+    +   '<span style="' + chip + ';background:' + (sum === 100 ? '#ecfdf5;color:#047857' : '#fef2f2;color:#b91c1c') + '">총점 ' + sum + '</span>'
+    +   '<span style="' + chip + ';background:#f1f5f9;color:#475569">서술형 ' + items.filter(function(x) { return x.is_essay; }).length + '</span>'
+    +   Object.keys(diffs).sort().map(function(k) {
+          return '<span style="' + chip + ';background:#fffbeb;color:#92400e">' + (EA_STARS[k] || k) + ' ' + diffs[k] + '</span>';
+        }).join('')
+    + '</div>'
+    + '<div style="margin-bottom:12px">'
+    +   Object.keys(units).sort(function(a, b) { return units[b] - units[a]; }).map(function(k) {
+          return '<span style="' + chip + ';background:#eff6ff;color:#1d4ed8">' + _esc(k) + ' ' + units[k] + '</span>';
+        }).join('')
+    + '</div>';
+
+  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+    + '<thead><tr style="background:#f5f3ff">'
+    + ['번호', '배점', '단원', '난이도', '유형분석'].map(function(h, i) {
+        return '<th style="padding:7px 8px;border:1px solid #ddd6fe;color:#5b21b6;font-weight:700' + (i === 4 ? ';text-align:left' : '') + '">' + h + '</th>';
+      }).join('')
+    + '</tr></thead><tbody>';
+  items.forEach(function(x) {
+    var td = 'padding:6px 8px;border:1px solid #ede9fe;text-align:center';
+    html += '<tr>'
+      + '<td style="' + td + ';white-space:nowrap;font-weight:600">' + _esc(x.number_label) + '</td>'
+      + '<td style="' + td + '">' + _esc(x.score) + '</td>'
+      + '<td style="' + td + ';white-space:nowrap">' + _esc(x.unit) + '</td>'
+      + '<td style="' + td + ';color:#d97706;white-space:nowrap">' + (EA_STARS[x.difficulty] || _esc(x.difficulty)) + '</td>'
+      + '<td style="' + td + ';text-align:left;color:#374151">' + _esc(x.type_description) + '</td>'
+      + '</tr>';
+  });
+  html += '</tbody></table></div>';
+
+  if (eaHasReview(r.review)) {
+    var box = 'margin-top:12px;padding:11px 13px;border:1.5px solid #e5e7eb;border-radius:9px;background:#fafafa';
+    var ttl = 'font-size:12px;font-weight:800;color:#4b5563;margin-bottom:5px';
+    var bdy = 'font-size:12.5px;line-height:1.75;color:#374151;white-space:pre-wrap';
+    [['difficulty', '\uD83D\uDCCA 시험 총평'], ['discrimination', '\uD83C\uDFAF 변별력 분석'], ['strategy', '\uD83D\uDCDA 학습 전략']]
+      .forEach(function(p) {
+        if (!r.review[p[0]]) return;
+        html += '<div style="' + box + '"><div style="' + ttl + '">' + p[1] + '</div>'
+             +  '<div style="' + bdy + '">' + _esc(r.review[p[0]]) + '</div></div>';
+      });
+  }
+
+  document.getElementById('eav-body').innerHTML = html;
+  openModal('eaView');
+}
+
+/* 제작 모달은 2단계에서 붙인다 */
+function eaMakeOpen() { alert('제작 기능은 준비 중입니다.'); }
 
 /* ============================================================
    [SECTION: MODAL UTIL] 모달 열기/닫기
