@@ -3368,6 +3368,15 @@
 </div>
 
 <!-- 베티 결석 · 평일 응시 취합 -->
+<div id="modal-eaMake" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;align-items:center;justify-content:center;padding:16px">
+  <div class="modal" style="max-width:1060px;width:97vw;max-height:94vh;display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+      <div id="eam-title" style="font-size:16px;font-weight:800;color:#1f2937">새 내신 분석표</div>
+      <button onclick="eaMakeClose()" style="font-size:18px;line-height:1;padding:2px 8px;border:none;background:none;color:#9ca3af;cursor:pointer">&times;</button>
+    </div>
+    <div id="eam-body" style="overflow-y:auto;flex:1"></div>
+  </div>
+</div>
 <div id="modal-eaView" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;align-items:center;justify-content:center;padding:16px">
   <div class="modal" style="max-width:980px;width:96vw;max-height:92vh;display:flex;flex-direction:column">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
@@ -25543,8 +25552,467 @@ function eaView(idx) {
   openModal('eaView');
 }
 
-/* 제작 모달은 2단계에서 붙인다 */
-function eaMakeOpen() { alert('제작 기능은 준비 중입니다.'); }
+/* ══════════════════════════════════════════════════════════
+   [EXAM ANALYSIS \u2014 \uC81C\uC791] PDF \u2192 Gemini \u2192 \uAC80\uC218 \u2192 \uC800\uC7A5
+
+   \uC124\uC815\uC740 4\uCC28\uB840 \uC2E4\uCE21\uC73C\uB85C \uD655\uC815\uD588\uB2E4.
+     gemini-2.5-flash + responseSchema \uAC15\uC81C + maxOutputTokens 32768 + \uC0DD\uAC01 \uC790\uB3D9(\uC57D 25\uCD08)
+     - pro \uB294 \uD504\uB85D\uC2DC maxDuration 60\uCD08\uB97C \uB118\uACA8 \uC8FD\uB294\uB2E4
+     - 8192 \uB294 \uC0DD\uAC01 \uD1A0\uD070\uC774 \uCD9C\uB825 \uC608\uC0B0\uC744 \uC7A0\uC2DD\uD574 \uBE48 \uC751\uB2F5\uC774 \uB09C\uB2E4
+     - \uD6C4\uBCF4 \uB2E8\uC6D0\uC744 \uC2DC\uD5D8 \uBC94\uC704\uB85C \uC880\uD790\uC218\uB85D \uC624\uBC30\uC815\uC774 \uC904\uC5B4\uB4E0\uB2E4 (\uC774\uAC8C \uAC00\uC7A5 \uD070 \uBCC0\uC218)
+   \uCD1D\uC810\u00B7\uBC88\uD638 \uAC80\uC0B0\uC740 AI \uAC00 \uC2E0\uACE0\uD55C \uAC12\uC744 \uC4F0\uC9C0 \uC54A\uACE0 \uCF54\uB4DC\uAC00 \uB2E4\uC2DC \uC13C\uB2E4.
+══════════════════════════════════════════════════════════ */
+var EA_HI_SUBJECTS = ['\uacf5\ud1b5\uc218\ud5591', '\uacf5\ud1b5\uc218\ud5592', '\ub300\uc218', '\ubbf8\uc801\ubd84\u2160', '\ud655\ub960\uacfc \ud1b5\uacc4', '\ubbf8\uc801\ubd84\u2161', '\uae30\ud558'];
+var EA_MAX_PDF_MB = 3;
+var _eaMake = null;
+
+function eaF(id) { var e = document.getElementById(id); return e ? e.value : ''; }
+function eaAttr(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+function eaMakeOpen() {
+  if (!eaCanMake()) { alert('\uc81c\uc791 \uad8c\ud55c\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.'); return; }
+  _eaMake = {
+    view: 'form', busy: false, status: '',
+    pdfName: '', pdfB64: '', items: null, fullScore: 100
+  };
+  document.getElementById('eam-title').textContent = '\uc0c8 \ub0b4\uc2e0 \ubd84\uc11d\ud45c';
+  eaMakeRenderForm();
+  openModal('eaMake');
+  eaLoadUnits();
+}
+
+function eaMakeClose() {
+  if (_eaMake && _eaMake.busy) { alert('\ubd84\uc11d\uc774 \uc9c4\ud589 \uc911\uc785\ub2c8\ub2e4. \uc7a0\uc2dc\ub9cc \uae30\ub2e4\ub824 \uc8fc\uc138\uc694.'); return; }
+  if (_eaMake && _eaMake.view === 'review' && _eaMake.items && !confirm('\uac80\uc218 \uc911\uc778 \ub0b4\uc6a9\uc774 \uc0ac\ub77c\uc9d1\ub2c8\ub2e4. \ub2eb\uc744\uae4c\uc694?')) return;
+  closeModal('eaMake');
+}
+
+/* ── \uc785\ub825 \ud654\uba74 ──────────────────────────────────────── */
+function eaMakeRenderForm() {
+  var now = new Date(), cur = now.getFullYear();
+  var years = '';
+  for (var y = cur + 1; y >= cur - 4; y--) years += '<option value="' + y + '"' + (y === cur ? ' selected' : '') + '>' + y + '\ub144</option>';
+  var lbl = 'font-size:11px;color:#9ca3af;margin-bottom:3px';
+
+  document.getElementById('eam-body').innerHTML = ''
+  + '<div class="card" style="margin-bottom:10px">'
+  +   '<div style="font-size:12px;font-weight:800;color:#6d28d9;margin-bottom:8px">1. \uc2dc\ud5d8 \uc815\ubcf4</div>'
+  +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">'
+  +     '<div><div style="' + lbl + '">\ud559\uad50\uae09</div><select id="eam-level" onchange="eaLevelChange()" style="' + EA_SEL_CSS + '"><option value="\uc911">\uc911\ud559\uad50</option><option value="\uace0">\uace0\ub4f1\ud559\uad50</option></select></div>'
+  +     '<div><div style="' + lbl + '">\ud559\ub144</div><select id="eam-grade" onchange="eaLoadUnits()" style="' + EA_SEL_CSS + '"></select></div>'
+  +     '<div><div style="' + lbl + '">\uacfc\ubaa9</div><select id="eam-subject" onchange="eaLoadUnits()" style="' + EA_SEL_CSS + '"></select></div>'
+  +     '<div><div style="' + lbl + '">\ub9cc\uc810</div><input id="eam-full" type="number" value="100" style="' + EA_SEL_CSS + '"></div>'
+  +   '</div>'
+  +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'
+  +     '<div><div style="' + lbl + '">\uc5f0\ub3c4</div><select id="eam-year" style="' + EA_SEL_CSS + '">' + years + '</select></div>'
+  +     '<div><div style="' + lbl + '">\ud559\uae30</div><select id="eam-sem" onchange="eaLoadUnits()" style="' + EA_SEL_CSS + '"><option value="1">1\ud559\uae30</option><option value="2">2\ud559\uae30</option></select></div>'
+  +     '<div><div style="' + lbl + '">\uc2dc\ud5d8</div><select id="eam-round" style="' + EA_SEL_CSS + '"><option value="\uc911\uac04">\uc911\uac04</option><option value="\uae30\ub9d0">\uae30\ub9d0</option></select></div>'
+  +     '<div><div style="' + lbl + '">\ubd84\uc11d \uc120\uc0dd\ub2d8</div><input id="eam-teacher" value="' + eaAttr((currentUser && currentUser.name) || '') + '" style="' + EA_SEL_CSS + '"></div>'
+  +   '</div>'
+  +   '<div style="margin-top:8px"><div style="' + lbl + '">\ud559\uad50\uba85</div>'
+  +     '<input id="eam-school" placeholder="\uc608: \uc18c\ud558\uc911" style="' + EA_SEL_CSS + '"></div>'
+  + '</div>'
+
+  + '<div class="card" style="margin-bottom:10px">'
+  +   '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">'
+  +     '<div style="font-size:12px;font-weight:800;color:#6d28d9">2. \uc2dc\ud5d8 \ubc94\uc704</div>'
+  +     '<div><button onclick="eaUnitsAll(true)" style="font-size:11px;font-weight:700;padding:4px 9px;border:1.5px solid #ddd6fe;border-radius:6px;background:#fff;color:#6d28d9;cursor:pointer">\uc804\uccb4\uc120\ud0dd</button>'
+  +     '<button onclick="eaUnitsAll(false)" style="margin-left:4px;font-size:11px;font-weight:700;padding:4px 9px;border:1.5px solid #e5e7eb;border-radius:6px;background:#fff;color:#6b7280;cursor:pointer">\ud574\uc81c</button></div>'
+  +   '</div>'
+  +   '<div style="font-size:11px;color:#9ca3af;margin-bottom:8px">\ubc94\uc704 \ubc16 \ub2e8\uc6d0\uc744 \ub04c \uc218\ub85d \uc815\ud655\ub3c4\uac00 \uc62c\ub77c\uac11\ub2c8\ub2e4. \uc774\ubc88 \uc2dc\ud5d8\uc5d0 \ub098\uc628 \ub2e8\uc6d0\ub9cc \ub0a8\uaca8 \uc8fc\uc138\uc694.</div>'
+  +   '<div id="eam-units"></div>'
+  + '</div>'
+
+  + '<div class="card" style="margin-bottom:10px">'
+  +   '<div style="font-size:12px;font-weight:800;color:#6d28d9;margin-bottom:8px">3. \uc2dc\ud5d8\uc9c0 PDF</div>'
+  +   '<input type="file" id="eam-pdf" accept=".pdf,application/pdf" style="display:none" onchange="eaPickPdf(event)">'
+  +   '<div style="display:flex;align-items:center;gap:8px">'
+  +     '<button onclick="document.getElementById(\'eam-pdf\').click()" style="font-size:12px;font-weight:700;padding:8px 14px;border:1.5px solid #ddd6fe;border-radius:8px;background:#fff;color:#6d28d9;cursor:pointer;white-space:nowrap">\ud30c\uc77c \uc120\ud0dd</button>'
+  +     '<div id="eam-pdfname" style="font-size:12px;color:#9ca3af;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\uc120\ud0dd\ub41c \ud30c\uc77c \uc5c6\uc74c</div>'
+  +   '</div>'
+  + '</div>'
+
+  + '<div id="eam-status" style="font-size:12px;margin-bottom:8px;min-height:17px"></div>'
+  + '<button id="eam-go" onclick="eaAnalyze()" style="width:100%;padding:11px;background:#7c3aed;color:#fff;border:none;border-radius:9px;font-size:13.5px;font-weight:800;cursor:pointer">\ud83d\udd0d \ubd84\uc11d \uc2dc\uc791</button>';
+
+  eaLevelChange(true);
+}
+
+/* \ud559\uad50\uae09\uc774 \ubc14\ub01c\uba74 \ud559\ub144\u00b7\uacfc\ubaa9 \uc120\ud0dd\uc9c0\ub97c \ub2e4\uc2dc \uc9dc\ub2e4 */
+function eaLevelChange(skipLoad) {
+  var lv = eaF('eam-level');
+  var g  = document.getElementById('eam-grade');
+  var sj = document.getElementById('eam-subject');
+  if (!g || !sj) return;
+  g.innerHTML = [1, 2, 3].map(function(n) {
+    return '<option value="' + n + '"' + (n === 2 ? ' selected' : '') + '>' + n + '\ud559\ub144</option>';
+  }).join('');
+  sj.innerHTML = (lv === '\uc911')
+    ? '<option value="\uc218\ud559">\uc218\ud559</option>'
+    : EA_HI_SUBJECTS.map(function(x) { return '<option value="' + eaAttr(x) + '">' + _esc(x) + '</option>'; }).join('');
+  if (!skipLoad) eaLoadUnits();
+}
+
+/* exam_units \uc5d0\uc11c \ud6c4\ubcf4 \ub2e8\uc6d0\uc744 \ubd88\ub7ec\uc628\ub2e4.
+   \uae30\ubcf8 \uccb4\ud06c \u2014 \uc911\ud559\uad50\ub294 \ud574\ub2f9 \ud559\uae30\ub9cc, \uace0\ub4f1\uc740 \uacfc\ubaa9 \uc804\uccb4 (\ud559\uae30 \ud3b8\uc131\uc774 \ud559\uad50\ub9c8\ub2e4 \ub2e4\ub984) */
+async function eaLoadUnits() {
+  var box = document.getElementById('eam-units');
+  if (!box) return;
+  var lv = eaF('eam-level'), sj = eaF('eam-subject'), gr = eaF('eam-grade'), sem = eaF('eam-sem');
+  box.innerHTML = '<div style="padding:12px;color:#9ca3af;font-size:12px">\ub2e8\uc6d0 \ubd88\ub7ec\uc624\ub294 \uc911...</div>';
+  try {
+    var q = db.from('exam_units').select('name,semester,sort_order')
+      .eq('school_level', lv).eq('subject', sj).eq('active', true)
+      .order('semester').order('sort_order');
+    if (lv === '\uc911') q = q.eq('grade', Number(gr));
+    var res = await q;
+    if (res.error) throw res.error;
+    var rows = res.data || [];
+    if (!rows.length) {
+      box.innerHTML = '<div style="padding:12px;color:#dc2626;font-size:12px">\ub4f1\ub85d\ub41c \ub2e8\uc6d0\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.</div>';
+      return;
+    }
+    box.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:5px">'
+      + rows.map(function(r) {
+          var on = (lv === '\uace0') || (String(r.semester) === String(sem));
+          return '<label style="display:flex;align-items:center;gap:6px;padding:6px 9px;border:1.5px solid ' + (on ? '#ddd6fe' : '#e5e7eb') + ';border-radius:7px;background:' + (on ? '#faf5ff' : '#fff') + ';font-size:12px;cursor:pointer">'
+            + '<input type="checkbox" class="ea-unit" value="' + eaAttr(r.name) + '"' + (on ? ' checked' : '') + ' onchange="eaUnitCount()" style="accent-color:#7c3aed;width:14px;height:14px;flex:none">'
+            + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _esc(r.name) + '</span></label>';
+        }).join('')
+      + '</div><div id="eam-ucount" style="margin-top:7px;font-size:11px;color:#9ca3af"></div>';
+    eaUnitCount();
+  } catch (e) {
+    box.innerHTML = '<div style="padding:12px;color:#dc2626;font-size:12px">\ub2e8\uc6d0 \ubd88\ub7ec\uc624\uae30 \uc2e4\ud328: ' + _esc(e.message || e) + '</div>';
+  }
+}
+
+function eaUnitsAll(on) {
+  Array.prototype.forEach.call(document.querySelectorAll('.ea-unit'), function(c) { c.checked = !!on; });
+  eaUnitCount();
+}
+function eaCheckedUnits() {
+  return Array.prototype.map.call(document.querySelectorAll('.ea-unit:checked'), function(c) { return c.value; });
+}
+function eaUnitCount() {
+  var el = document.getElementById('eam-ucount');
+  if (el) el.textContent = eaCheckedUnits().length + '\uac1c \uc120\ud0dd\ub428';
+}
+
+function eaPickPdf(ev) {
+  var f = ev.target.files && ev.target.files[0];
+  var nm = document.getElementById('eam-pdfname');
+  if (!f) return;
+  if (f.size > EA_MAX_PDF_MB * 1024 * 1024) {
+    alert('PDF \uac00 \ub108\ubb34 \ud07d\ub2c8\ub2e4 (' + (f.size / 1048576).toFixed(1) + 'MB). ' + EA_MAX_PDF_MB + 'MB \uc774\ud558\ub85c \uc904\uc5ec \uc8fc\uc138\uc694.');
+    ev.target.value = ''; return;
+  }
+  var rd = new FileReader();
+  rd.onload = function() {
+    _eaMake.pdfB64  = String(rd.result).split(',')[1] || '';
+    _eaMake.pdfName = f.name;
+    if (nm) { nm.textContent = f.name + '  (' + (f.size / 1024).toFixed(0) + 'KB)'; nm.style.color = '#374151'; }
+  };
+  rd.readAsDataURL(f);
+}
+
+function eaStatus(msg, color) {
+  var el = document.getElementById('eam-status');
+  if (el) { el.innerHTML = msg ? _esc(msg) : ''; el.style.color = color || '#6b7280'; }
+}
+
+/* ── \ud504\ub86c\ud504\ud2b8\u00b7\uc2a4\ud0a4\ub9c8 (\uc2e4\uce21\uc73c\ub85c \uac80\uc99d\ub41c \ubb38\uad6c\ub97c \uadf8\ub300\ub85c \uc4f4\ub2e4) ── */
+function eaBuildPrompt(units) {
+  return [
+    '\ub108\ub294 \uc218\ud559 \uc2dc\ud5d8\uc9c0\ub97c \ubd84\uc11d\ud558\ub294 \ub3c4\uad6c\ub2e4. \uccb4\ubd80\ud55c \uc2dc\ud5d8\uc9c0 PDF \uc804\uccb4\ub97c \uc77d\uace0 \ubaa8\ub4e0 \ubb38\ud56d\uc744 \ube60\uc9d0\uc5c6\uc774 \ucd94\ucd9c\ud558\ub77c.',
+    '',
+    '\u3010\ubb38\ud56d \ucd94\ucd9c\u3011',
+    '\u2460 \ubb38\ud56d\uc744 \ud558\ub098\ub3c4 \ube60\ub728\ub9ac\uc9c0 \ub9c8\ub77c. \ubc30\uc810 \ud45c\uae30([4\uc810] \ub4f1)\ub97c \uc6d0\ubcf8 \uadf8\ub300\ub85c \uc77d\uc5b4\ub77c.',
+    '\u2461 number_label \uc740 "\uac1d\uad00\uc4291", "\uc11c\uc220\ud6551", "\ub2e8\ub2f5\ud6551" \ud615\uc2dd.',
+    '\u2462 \uc18c\ubb38\ud56d(3-1, 3-2 ...)\uc740 \ucabc\uac1c\uc9c0 \ub9d0\uace0 \ubd80\ubaa8 \ubb38\ud56d \ud558\ub098\ub85c \ud569\uccd0\ub77c. \ubc30\uc810\uc740 \uc18c\ubb38\ud56d \ubc30\uc810\uc758 \ud569.',
+    '\u2463 is_essay \ub294 \uc11c\uc220\ud615/\ub17c\uc220\ud615\uc774\uba74 true.',
+    '\u2464 type_description \uc740 \uadf8 \ubb38\ud56d\uc774 \ubb3b\ub294 \uac83\uc744 \ud55c\uad6d\uc5b4 \ud55c \uc904\ub85c. \uc608: "\uc0bc\uac01\ud615\uc758 \ub0b4\uc2ec\uacfc \ub0b4\uc811\uc6d0\uc758 \ubc18\uc9c0\ub984"',
+    '',
+    '\u3010\ub2e8\uc6d0\u3011',
+    '\u2465 unit \uc740 \ubc18\ub4dc\uc2dc \ub2e4\uc74c \uc911 \ud558\ub098\ub9cc \uace0\ub978\ub2e4:',
+    units.map(function(u) { return '   - ' + u; }).join('\n'),
+    '\u2466 \ubaa9\ub85d\uc5d0 \ub9de\ub294 \ub2e8\uc6d0\uc774 \uc815\ub9d0 \uc5c6\uc744 \ub54c\ub9cc "\uae30\ud0c0" \ub97c \uace0\ub978\ub2e4. \ube44\uc2b7\ud558\ub2e4\uace0 \uc5b5\uc9c0\ub85c \ub07c\uc6cc\ub9de\ucd94\uc9c0 \ub9c8\ub77c.',
+    '\u2467 \ud55c \ubb38\ud56d\uc774 \uc5ec\ub7ec \ub2e8\uc6d0\uc5d0 \uac78\uce58\uba74, \uadf8 \ubb38\ud56d\uc744 \ud478\ub294 \ub370 \ud575\uc2ec\uc774 \ub418\ub294 \ub2e8\uc6d0 \ud558\ub098\ub9cc \uace0\ub978\ub2e4.',
+    '',
+    '\u3010\ub09c\uc774\ub3c4\u3011 difficulty \ub294 1\u00b72\u00b73 \uc911 \ud558\ub098.',
+    '  1(\uc26c\uc6c0)   : \uc815\uc758\ub098 \uacf5\uc2dd\uc744 \uadf8\ub300\ub85c \ud55c \ubc88 \uc801\uc6a9\ud558\uba74 \ud480\ub9b0\ub2e4. \uacc4\uc0b0 1~2\ub2e8\uacc4.',
+    '  2(\ubcf4\ud1b5)   : \uac1c\ub150 \ub450 \uac00\uc9c0\ub97c \uc5f0\uacb0\ud558\uac70\ub098, \uc2dd \uc138\uc6b0\uae30 \u2192 \uacc4\uc0b0 \u2192 \ud574\uc11d\uc758 \ub2e4\ub2e8\uacc4 \ud480\uc774\uac00 \ud544\uc694\ud558\ub2e4.',
+    '  3(\uc5b4\ub824\uc6c0) : \ubcf4\uc870\uc120\u00b7\uacbd\uc6b0 \ub098\ub204\uae30\u00b7\uc870\uac74 \uc7ac\ud574\uc11d \uac19\uc740 \ubc1c\uc0c1\uc774 \ud544\uc694\ud558\uac70\ub098 \uac1c\ub150 \uc138 \uac00\uc9c0 \uc774\uc0c1\uc774 \uc5bd\ud78c\ub2e4.',
+    '',
+    '\u2468 \uc808\ub300 \uae30\uc900\uc774 \uc544\ub2c8\ub77c \uc774 \uc2dc\ud5d8\uc9c0 \uc548\uc5d0\uc11c\uc758 \uc0c1\ub300 \ub09c\uc774\ub3c4\ub85c \ub9e4\uaca8\ub77c.',
+    '\u2469 \uc804\uccb4 \ubb38\ud56d \ub300\ube44 \ub300\ub7b5 1\uc774 30%, 2\uac00 50%, 3\uc774 20% \uac00 \ub418\ub3c4\ub85d \ubd84\ud3ec\uc2dc\ucf1c\ub77c.',
+    '   \ud55c\ucabd\uc5d0 \ubab0\ub9ac\uba74 \uc548 \ub41c\ub2e4. \ub09c\uc774\ub3c4 3\uc740 \ucd5c\uc18c 2\ubb38\ud56d \uc774\uc0c1, \uc804\uccb4\uc758 30%\ub97c \ub118\uc9c0 \uc54a\uac8c \ud558\ub77c.',
+    '\u246a \ubc30\uc810\uc774 \uac00\uc7a5 \ub192\uc740 \ubb38\ud56d\uacfc \uc11c\uc220\ud615/\ub17c\uc220\ud615\uc758 \ub9c8\uc9c0\ub9c9 \ubb38\ud56d\ub4e4\uc740 \ub09c\uc774\ub3c4 3 \ud6c4\ubcf4\ub85c \uba3c\uc800 \uac80\ud1a0\ud558\ub77c.',
+    '',
+    '\u3010\ubc18\ud658\u3011 \uc21c\uc218 JSON\ub9cc. \ub9c8\ud06c\ub2e4\uc6b4 \uae08\uc9c0.'
+  ].join('\n');
+}
+
+function eaBuildSchema(units) {
+  return { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: {
+    order:            { type: 'integer' },
+    number_label:     { type: 'string' },
+    score:            { type: 'number' },
+    is_essay:         { type: 'boolean' },
+    unit:             { type: 'string', enum: units },
+    difficulty:       { type: 'integer' },
+    type_description: { type: 'string' }
+  }, required: ['order', 'number_label', 'score', 'is_essay', 'unit', 'difficulty', 'type_description'] } } },
+  required: ['items'] };
+}
+
+/* \ud504\ub85d\uc2dc\ub294 60\ucd08\uc5d0 \uc8fd\ub294\ub2e4. \uadf8\ubcf4\ub2e4 \uc870\uae08 \ub2a6\uac8c \ub04a\uc5b4 \uc6d0\uc778\uc744 \uad6c\ubd84\ud560 \uc218 \uc788\uac8c \ud55c\ub2e4 */
+async function eaCallGemini(body, ms) {
+  var ctl = new AbortController();
+  var tid = setTimeout(function() { ctl.abort(); }, ms || 90000);
+  try {
+    var res  = await fetch('/api/gemini-proxy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: ctl.signal
+    });
+    var data = await res.json();
+    if (data.error) throw new Error(data.error.message || 'API \uc624\ub958');
+    var cand = (data.candidates || [])[0];
+    var text = cand && cand.content && cand.content.parts && cand.content.parts[0] && cand.content.parts[0].text;
+    if (!text) throw new Error('\ube48 \uc751\ub2f5 (finish=' + (cand && cand.finishReason) + ')');
+    return JSON.parse(text);
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('\uc751\ub2f5\uc774 \ub108\ubb34 \uc624\ub798 \uac78\ub824 \uc911\ub2e8\ud588\uc2b5\ub2c8\ub2e4');
+    throw e;
+  } finally { clearTimeout(tid); }
+}
+
+/* \uac80\uc0b0 \u2014 hard \ub294 \uace0\uccd0\uc57c \ud560 \uac83, soft \ub294 \ubcf4\uace0 \ud310\ub2e8\ud560 \uac83 */
+function eaValidate(items, full) {
+  var hard = [], soft = [];
+  items = items || [];
+  var n = items.length;
+  if (!n) { hard.push('\ubb38\ud56d\uc774 \ud558\ub098\ub3c4 \ucd94\ucd9c\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4'); return { hard: hard, soft: soft, sum: 0, count: 0 }; }
+
+  var sum = eaSum(items);
+  if (Math.abs(sum - Number(full)) > 0.01) hard.push('\ubc30\uc810 \ud569\uacc4 ' + sum + '\uc810 (\ub9cc\uc810 ' + full + '\uc810\uacfc \ub2e4\ub984)');
+
+  var orders = items.map(function(x) { return Number(x.order); }).filter(function(v) { return !isNaN(v); }).sort(function(a, b) { return a - b; });
+  var gaps = [];
+  for (var i = 1; i <= (orders[orders.length - 1] || 0); i++) if (orders.indexOf(i) < 0) gaps.push(i);
+  if (gaps.length) hard.push('\ube60\uc9c4 \uc21c\ubc88: ' + gaps.join(', '));
+
+  var blank = items.filter(function(x) { return !x.unit || !String(x.type_description || '').trim(); }).length;
+  if (blank) hard.push('\ub2e8\uc6d0\uc774\ub098 \uc720\ud615\ubd84\uc11d\uc774 \ube44\uc5b4\uc788\ub294 \ubb38\ud56d ' + blank + '\uac1c');
+
+  var etc = items.filter(function(x) { return x.unit === '\uae30\ud0c0'; }).length;
+  if (etc) soft.push('\ubc94\uc704 \ubc16\uc73c\ub85c \ubd84\ub958\ub41c \ubb38\ud56d ' + etc + '\uac1c \u2014 \ub2e8\uc6d0\uc744 \ud655\uc778\ud574 \uc8fc\uc138\uc694');
+
+  var d3 = items.filter(function(x) { return Number(x.difficulty) === 3; }).length;
+  var p3 = Math.round(d3 / n * 100);
+  if (p3 > 30)     soft.push('\ub09c\uc774\ub3c4 3\uc774 ' + p3 + '% (\uad8c\uc7a5 20% \uc548\ud31b)');
+  else if (d3 < 2) soft.push('\ub09c\uc774\ub3c4 3\uc774 ' + d3 + '\uac1c (\ucd5c\uc18c 2\uac1c \uad8c\uc7a5)');
+
+  return { hard: hard, soft: soft, sum: sum, count: n };
+}
+
+/* ── \ubd84\uc11d \uc2e4\ud589 ─────────────────────────────────────── */
+async function eaAnalyze() {
+  if (!_eaMake || _eaMake.busy) return;
+  var units = eaCheckedUnits();
+  var school = (eaF('eam-school') || '').trim();
+  var full   = Number(eaF('eam-full')) || 100;
+
+  if (!school)          { alert('\ud559\uad50\uba85\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694.'); return; }
+  if (units.length < 1) { alert('\uc2dc\ud5d8 \ubc94\uc704\ub97c 1\uac1c \uc774\uc0c1 \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.'); return; }
+  if (!_eaMake.pdfB64)  { alert('\uc2dc\ud5d8\uc9c0 PDF \ub97c \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.'); return; }
+
+  /* \uc785\ub825\uac12\uc744 \uba3c\uc800 \uc7a1\uc544\ub454\ub2e4 \u2014 \uac80\uc218 \ud654\uba74\uc73c\ub85c \ub118\uc5b4\uac00\uba74 \ud3fc\uc774 \uc0ac\ub77c\uc9c4\ub2e4 */
+  _eaMake.meta = {
+    level: eaF('eam-level'), gradeNum: eaF('eam-grade'), subject: eaF('eam-subject'),
+    year: eaF('eam-year'), semester: eaF('eam-sem'), round: eaF('eam-round'),
+    teacher: (eaF('eam-teacher') || '').trim(), school: school, units: units
+  };
+  _eaMake.fullScore = full;
+
+  var cands = units.indexOf('\uae30\ud0c0') >= 0 ? units.slice() : units.concat(['\uae30\ud0c0']);
+  var body  = {
+    model: 'gemini-2.5-flash',
+    contents: [{ parts: [
+      { inlineData: { mimeType: 'application/pdf', data: _eaMake.pdfB64 } },
+      { text: eaBuildPrompt(cands) }
+    ] }],
+    generationConfig: {
+      temperature: 0, maxOutputTokens: 32768,
+      responseMimeType: 'application/json', responseSchema: eaBuildSchema(cands)
+    }
+  };
+
+  _eaMake.busy = true;
+  var goBtn = document.getElementById('eam-go');
+  if (goBtn) { goBtn.disabled = true; goBtn.style.opacity = '0.55'; goBtn.style.cursor = 'wait'; }
+
+  try {
+    for (var attempt = 1; attempt <= 2; attempt++) {
+      eaStatus(attempt === 1 ? '\ubd84\uc11d \uc911\uc785\ub2c8\ub2e4. 25\ucd08\ucbe4 \uac78\ub9bd\ub2c8\ub2e4...' : '\uac80\uc0b0\uc5d0 \uac78\ub824 \ud55c \ubc88 \ub354 \ubd84\uc11d\ud569\ub2c8\ub2e4...', '#6d28d9');
+      try {
+        var out   = await eaCallGemini(body);
+        var items = (out && out.items) || [];
+        items.sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
+        var v = eaValidate(items, full);
+        if (!v.hard.length || attempt === 2) {
+          _eaMake.items = items;
+          _eaMake.view  = 'review';
+          eaRenderReview();
+          return;
+        }
+      } catch (err) {
+        if (attempt === 2) { eaStatus('\ubd84\uc11d \uc2e4\ud328: ' + (err.message || err), '#dc2626'); return; }
+      }
+    }
+  } finally {
+    _eaMake.busy = false;
+    if (goBtn) { goBtn.disabled = false; goBtn.style.opacity = ''; goBtn.style.cursor = 'pointer'; }
+  }
+}
+
+/* ── \uac80\uc218 \ud654\uba74 ──────────────────────────────────────── */
+function eaGradeText() {
+  var m = _eaMake.meta;
+  return m.level + m.gradeNum;
+}
+function eaAutoTitle() {
+  var m = _eaMake.meta;
+  return m.year + '\ub144 ' + m.semester + '\ud559\uae30 ' + m.school + ' ' + m.gradeNum + '\ud559\ub144 '
+       + (m.subject !== '\uc218\ud559' ? m.subject + ' ' : '') + m.round + '\uace0\uc0ac';
+}
+
+function eaRenderReview() {
+  var m = _eaMake.meta;
+  document.getElementById('eam-title').textContent = '\uac80\uc218 \u2014 ' + m.school + ' ' + eaGradeText() + ' ' + m.round;
+  var opts = m.units.concat(['\uae30\ud0c0']);
+  var td   = 'padding:4px 5px;border:1px solid #ede9fe';
+  var inp  = 'width:100%;padding:5px 7px;border:1.5px solid #e5e7eb;border-radius:6px;font-size:12px;outline:none';
+
+  var html = '<div id="eam-warn" style="margin-bottom:10px"></div>'
+    + '<div style="margin-bottom:10px"><div style="font-size:11px;color:#9ca3af;margin-bottom:3px">\uc81c\ubaa9</div>'
+    +   '<input id="eam-ttl" value="' + eaAttr(eaAutoTitle()) + '" style="' + EA_SEL_CSS + '"></div>'
+    + '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+    + '<thead><tr style="background:#f5f3ff">'
+    + [['\ubc88\ud638', '92px'], ['\ubc30\uc810', '58px'], ['\uc11c\uc220', '42px'], ['\ub2e8\uc6d0', '180px'], ['\ub09c\uc774\ub3c4', '72px'], ['\uc720\ud615\ubd84\uc11d', ''], ['', '34px']]
+        .map(function(h) { return '<th style="padding:6px 5px;border:1px solid #ddd6fe;color:#5b21b6;font-weight:700' + (h[1] ? ';width:' + h[1] : '') + '">' + h[0] + '</th>'; }).join('')
+    + '</tr></thead><tbody id="eam-rows">';
+
+  _eaMake.items.forEach(function(x, i) {
+    html += '<tr>'
+      + '<td style="' + td + '"><input value="' + eaAttr(x.number_label) + '" oninput="eaRowSet(' + i + ',\'number_label\',this.value)" style="' + inp + ';text-align:center"></td>'
+      + '<td style="' + td + '"><input type="number" step="0.5" value="' + eaAttr(x.score) + '" oninput="eaRowSet(' + i + ',\'score\',this.value)" style="' + inp + ';text-align:center"></td>'
+      + '<td style="' + td + ';text-align:center"><input type="checkbox"' + (x.is_essay ? ' checked' : '') + ' onchange="eaRowSet(' + i + ',\'is_essay\',this.checked)" style="accent-color:#7c3aed;width:15px;height:15px"></td>'
+      + '<td style="' + td + '"><select onchange="eaRowSet(' + i + ',\'unit\',this.value)" style="' + inp + '">'
+      +   opts.map(function(u) { return '<option value="' + eaAttr(u) + '"' + (u === x.unit ? ' selected' : '') + '>' + _esc(u) + '</option>'; }).join('')
+      +   (opts.indexOf(x.unit) < 0 ? '<option value="' + eaAttr(x.unit) + '" selected>' + _esc(x.unit) + '</option>' : '')
+      + '</select></td>'
+      + '<td style="' + td + '"><select onchange="eaRowSet(' + i + ',\'difficulty\',this.value)" style="' + inp + ';text-align:center">'
+      +   [1, 2, 3].map(function(d) { return '<option value="' + d + '"' + (Number(x.difficulty) === d ? ' selected' : '') + '>' + EA_STARS[d] + '</option>'; }).join('')
+      + '</select></td>'
+      + '<td style="' + td + '"><input value="' + eaAttr(x.type_description) + '" oninput="eaRowSet(' + i + ',\'type_description\',this.value)" style="' + inp + '"></td>'
+      + '<td style="' + td + ';text-align:center"><button onclick="eaRowDel(' + i + ')" style="font-size:14px;line-height:1;padding:2px 5px;border:none;background:none;color:#ef4444;cursor:pointer">&times;</button></td>'
+      + '</tr>';
+  });
+
+  html += '</tbody></table></div>'
+    + '<div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap">'
+    +   '<button onclick="eaRowAdd()" style="font-size:12px;font-weight:700;padding:8px 13px;border:1.5px solid #ddd6fe;border-radius:8px;background:#fff;color:#6d28d9;cursor:pointer">+ \ud589 \ucd94\uac00</button>'
+    +   '<button onclick="eaBackToForm()" style="font-size:12px;font-weight:700;padding:8px 13px;border:1.5px solid #e5e7eb;border-radius:8px;background:#fff;color:#6b7280;cursor:pointer">\u2190 \ub2e4\uc2dc \ubd84\uc11d</button>'
+    +   '<button id="eam-save" onclick="eaSave()" style="flex:1;min-width:150px;padding:9px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer">\uc800\uc7a5</button>'
+    + '</div>';
+
+  document.getElementById('eam-body').innerHTML = html;
+  eaWarnRefresh();
+}
+
+function eaRowSet(i, field, val) {
+  var it = _eaMake.items[i];
+  if (!it) return;
+  if (field === 'score')           it.score = Number(val) || 0;
+  else if (field === 'difficulty') it.difficulty = Number(val) || 1;
+  else                             it[field] = val;
+  eaWarnRefresh();
+}
+function eaRowDel(i) {
+  _eaMake.items.splice(i, 1);
+  _eaMake.items.forEach(function(x, k) { x.order = k + 1; });
+  eaRenderReview();
+}
+function eaRowAdd() {
+  var n = _eaMake.items.length;
+  _eaMake.items.push({ order: n + 1, number_label: '', score: 0, is_essay: false,
+    unit: _eaMake.meta.units[0] || '\uae30\ud0c0', difficulty: 2, type_description: '' });
+  eaRenderReview();
+}
+function eaBackToForm() {
+  if (!confirm('\uac80\uc218 \uc911\uc778 \ub0b4\uc6a9\uc774 \uc0ac\ub77c\uc9d1\ub2c8\ub2e4. \uc785\ub825 \ud654\uba74\uc73c\ub85c \ub3cc\uc544\uac08\uae4c\uc694?')) return;
+  _eaMake.items = null; _eaMake.view = 'form';
+  document.getElementById('eam-title').textContent = '\uc0c8 \ub0b4\uc2e0 \ubd84\uc11d\ud45c';
+  eaMakeRenderForm();
+  eaLoadUnits();
+}
+
+function eaWarnRefresh() {
+  var box = document.getElementById('eam-warn');
+  if (!box) return;
+  var v = eaValidate(_eaMake.items, _eaMake.fullScore);
+  var n = v.count || 1;
+  var d = eaCountBy(_eaMake.items, 'difficulty');
+  var pill = 'display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;margin:0 4px 4px 0';
+  var html = '<div>'
+    + '<span style="' + pill + ';background:#f5f3ff;color:#6d28d9">\ubb38\ud56d ' + v.count + '</span>'
+    + '<span style="' + pill + ';background:' + (v.sum === Number(_eaMake.fullScore) ? '#ecfdf5;color:#047857' : '#fef2f2;color:#b91c1c') + '">\ucd1d\uc810 ' + v.sum + ' / ' + _eaMake.fullScore + '</span>'
+    + [1, 2, 3].map(function(k) {
+        return '<span style="' + pill + ';background:#fffbeb;color:#92400e">' + EA_STARS[k] + ' ' + (d[k] || 0) + ' (' + Math.round((d[k] || 0) / n * 100) + '%)</span>';
+      }).join('')
+    + '</div>';
+  if (v.hard.length) html += '<div style="margin-top:5px;padding:8px 11px;border:1.5px solid #fecaca;border-radius:8px;background:#fef2f2;font-size:12px;color:#b91c1c;line-height:1.7">\u26a0\ufe0f ' + v.hard.map(_esc).join('<br>\u26a0\ufe0f ') + '</div>';
+  if (v.soft.length) html += '<div style="margin-top:5px;padding:8px 11px;border:1.5px solid #fde68a;border-radius:8px;background:#fffbeb;font-size:12px;color:#92400e;line-height:1.7">\uff65 ' + v.soft.map(_esc).join('<br>\uff65 ') + '</div>';
+  box.innerHTML = html;
+}
+
+/* ── \uc800\uc7a5 ─────────────────────────────────────────────── */
+async function eaSave() {
+  if (!_eaMake || !_eaMake.items || !_eaMake.items.length) return;
+  var m = _eaMake.meta;
+  var v = eaValidate(_eaMake.items, _eaMake.fullScore);
+  if (v.hard.length && !confirm('\uac80\uc0b0 \uacbd\uace0\uac00 \uc788\uc2b5\ub2c8\ub2e4.\n\n\u2022 ' + v.hard.join('\n\u2022 ') + '\n\n\uadf8\ub300\ub85c \uc800\uc7a5\ud560\uae4c\uc694?')) return;
+
+  var btn = document.getElementById('eam-save');
+  if (btn) { btn.disabled = true; btn.textContent = '\uc800\uc7a5 \uc911...'; btn.style.opacity = '0.6'; }
+  try {
+    _eaMake.items.forEach(function(x, k) { x.order = k + 1; });
+    var payload = {
+      title:        (eaF('eam-ttl') || '').trim() || eaAutoTitle(),
+      school:       m.school,
+      grade:        eaGradeText(),
+      year:         m.year,
+      semester:     m.semester,
+      round:        m.round,
+      subject:      m.subject,
+      teacher_name: m.teacher || '',
+      branch_id:    (currentUser && currentUser.branch_id) || null,
+      items:        _eaMake.items,
+      created_by:   (currentUser && currentUser.id) || null
+    };
+    var res = await db.from('exam_analyses').insert(payload).select('id');
+    if (res.error) throw res.error;
+    alert('\uc800\uc7a5\ub418\uc5c8\uc2b5\ub2c8\ub2e4.');
+    _eaMake.items = null;
+    closeModal('eaMake');
+    var px = document.getElementById('ael-wrap') ? 'ael' : 'tel';
+    eaLoadList(px);
+  } catch (e) {
+    alert('\uc800\uc7a5 \uc2e4\ud328: ' + (e.message || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '\uc800\uc7a5'; btn.style.opacity = ''; }
+  }
+}
 
 /* ============================================================
    [SECTION: MODAL UTIL] 모달 열기/닫기
