@@ -8656,12 +8656,18 @@ async function ptLoadData() {
     var _ptForce = new Set();
     try {
       var _ptRecRes = await db.from('weekend_potential').select('student_id').eq('session_date', date);
-      var _ptRecIds = [...new Set((_ptRecRes.data || []).map(function(x){ return x.student_id; }))]
-                        .filter(function(id){ return !_ptSeen.has(id); });
-      if (_ptRecIds.length) {
+      var _ptRecIds = [...new Set((_ptRecRes.data || []).map(function(x){ return x.student_id; }))];
+
+      /* (가) 이미 후보에 있는 학생 — 담당 범위는 통과했지만 이력의 potential_yn=false 에 걸려
+         사라지던 경우. 그 회차에 기록이 있다는 건 명단에 넣으려 한 것이므로 우회시킨다. */
+      _ptRecIds.forEach(function(id){ if (_ptSeen.has(id)) _ptForce.add(id); });
+
+      /* (나) 후보에 아예 없는 학생 — 회차 이후 입학 등으로 users 조회에서 빠진 경우 */
+      var _ptMissIds = _ptRecIds.filter(function(id){ return !_ptSeen.has(id); });
+      if (_ptMissIds.length) {
         var _ptExtra = await fetchRowsByIds(function(chunk) {
           return db.from('users').select(_ptSel).eq('role','student').eq('status','active').in('id', chunk);
-        }, _ptRecIds);
+        }, _ptMissIds);
         (_ptExtra || []).forEach(function(s){
           var mine = (selectedIds.indexOf(s.teacher_id) !== -1) || (_ptDeleg.studentIds.indexOf(s.id) !== -1);
           if (mine && !_ptSeen.has(s.id)) { allStudents.push(s); _ptSeen.add(s.id); _ptForce.add(s.id); }
@@ -10743,10 +10749,31 @@ async function byLoadData() {
     var _bySeen = new Set(allStudents.map(function(x){ return x.id; }));
     (byDelegRes.data || []).forEach(function(ds){ if (!_bySeen.has(ds.id)) { allStudents.push(ds); _bySeen.add(ds.id); } });
 
+    /* [회차 기록 예외] 그 회차에 이미 기록이 있으면 명단에 유지한다.
+       포텐셜과 같은 이유 — 회차 이후 입학이거나 이력의 bety_yn=false 에 걸려
+       추가해 놓고도 화면에서 사라지던 문제. 담당 선생님(공동관리 포함) 범위는 지킨다. */
+    var _byForce = new Set();
+    try {
+      var _byRecRes = await db.from('weekend_bety').select('student_id').eq('session_date', date);
+      var _byRecIds = [...new Set((_byRecRes.data || []).map(function(x){ return x.student_id; }))];
+      _byRecIds.forEach(function(id){ if (_bySeen.has(id)) _byForce.add(id); });
+      var _byMissIds = _byRecIds.filter(function(id){ return !_bySeen.has(id); });
+      if (_byMissIds.length) {
+        var _byExtra = await fetchRowsByIds(function(chunk) {
+          return db.from('users').select(_bySel).eq('role','student').eq('status','active').in('id', chunk);
+        }, _byMissIds);
+        (_byExtra || []).forEach(function(s){
+          var mine = (selectedIds.indexOf(s.teacher_id) !== -1) || (_byDeleg.studentIds.indexOf(s.id) !== -1);
+          if (mine && !_bySeen.has(s.id)) { allStudents.push(s); _bySeen.add(s.id); _byForce.add(s.id); }
+        });
+      }
+    } catch(e) { console.warn('[byLoadData] 회차 기록 예외 조회 실패', e); }
+
     // 이력 기반 필터 + 값 덮어쓰기
     // 인수인계서 원칙: _byStudents에만 할당, 전역 students 불변
+    // _byForce = 그 회차에 실제 기록이 있는 학생 → bety_yn 필터를 우회한다
     _byStudents = (allStudents || [])
-      .filter(s => histMap[s.id] ? histMap[s.id].bety_yn === true : s.bety_yn === true)
+      .filter(s => _byForce.has(s.id) || (histMap[s.id] ? histMap[s.id].bety_yn === true : s.bety_yn === true))
       .map(s => {
         var h = histMap[s.id];
         if (!h) return s;
