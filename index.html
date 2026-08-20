@@ -25389,8 +25389,13 @@ var _eaRows = [];    /* 목록 캐시 */
 var _eaViewIdx = -1; /* 상세 모달에 띄운 행 (출력이 이걸 쓴다) */
 
 /* 제작·검수 권한 — 교재에 들어가는 자료라 마스터 관리자와 부원장으로 한정 */
+/* 제작(AI 분석)과 삭제는 마스터·부원장만. 되돌릴 수 없거나 사용량을 쓰는 일이다. */
 function eaCanMake() {
   return !!(currentUser && (currentUser.is_master === true || currentUser.role === 'vice_director'));
+}
+/* 편집은 선생님까지 연다 (2026-08 요청). 데스크 계정(exam_view)은 조회만. */
+function eaCanEdit() {
+  return eaCanMake() || !!(currentUser && currentUser.role === 'teacher');
 }
 
 var EA_SEL_CSS = 'width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none';
@@ -25444,6 +25449,16 @@ function eaSum(items) {
 function eaHasReview(rv) {
   return !!(rv && (rv.difficulty || rv.discrimination || rv.strategy));
 }
+/* 총평의 문항 표기를 우리말로 통일한다 (2026-08 요청).
+   프롬프트로도 막지만 이미 저장된 글과 AI 의 실수까지 화면에서 바로잡는다.
+   DB 값은 건드리지 않고 보여줄 때만 바꾼다. */
+function eaRvText(t) {
+  return String(t == null ? '' : t)
+    .replace(/\bQ\s*(\d+)/g, '$1\uBC88')
+    .replace(/\bNo\.?\s*(\d+)/gi, '$1\uBC88')
+    .replace(/#\s*(\d+)/g, '$1\uBC88')
+    .replace(/(\d+)\uBC88\uBC88/g, '$1\uBC88');
+}
 
 async function eaLoadList(px) {
   var wrap = document.getElementById(px + '-wrap');
@@ -25489,7 +25504,7 @@ async function eaLoadList(px) {
         }).join('')
       + '<th style="padding:8px 10px;border:1px solid #ddd6fe"></th></tr></thead><tbody>';
 
-    var canEdit = eaCanMake();
+    var canEdit = eaCanEdit(), canDel = eaCanMake();
     rows.forEach(function(r, i) {
       var items = r.items || [];
       var sum   = eaSum(items);
@@ -25506,7 +25521,9 @@ async function eaLoadList(px) {
         +   '<button onclick="eaView(' + i + ')" style="border:1.5px solid #ddd6fe;color:#6d28d9;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">보기</button>'
         +   (canEdit
             ? '<button onclick="eaEdit(' + i + ')" style="margin-left:3px;border:1.5px solid #bfdbfe;color:#1d4ed8;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">편집</button>'
-              + '<button onclick="eaDelete(' + i + ')" style="margin-left:3px;border:1.5px solid #fecaca;color:#dc2626;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">삭제</button>'
+            : '')
+        +   (canDel
+            ? '<button onclick="eaDelete(' + i + ')" style="margin-left:3px;border:1.5px solid #fecaca;color:#dc2626;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">삭제</button>'
             : '')
         + '</td>'
         + '</tr>';
@@ -25584,7 +25601,7 @@ function eaView(idx) {
       .forEach(function(p) {
         if (!r.review[p[0]]) return;
         html += '<div style="' + box + '"><div style="' + ttl + '">' + p[1] + '</div>'
-             +  '<div style="' + bdy + '">' + _esc(r.review[p[0]]) + '</div></div>';
+             +  '<div style="' + bdy + '">' + _esc(eaRvText(r.review[p[0]])) + '</div></div>';
       });
   }
 
@@ -25648,7 +25665,7 @@ function eaOutputHTML(r, forPrint, part) {
         html += '<div style="margin-top:' + F.rvGap + 'px;padding:' + F.rvPad + ';border:' + line + ';background:#f8fafc'
              +  (forPrint ? ';page-break-inside:avoid' : '') + '">'
              +  '<div style="font-size:' + F.rvT + 'px;font-weight:800;margin-bottom:5px">' + p[1] + '</div>'
-             +  '<div style="font-size:' + F.rvB + 'px;line-height:' + F.lh + ';color:#1e293b">' + _esc(r.review[p[0]]) + '</div></div>';
+             +  '<div style="font-size:' + F.rvB + 'px;line-height:' + F.lh + ';color:#1e293b">' + _esc(eaRvText(r.review[p[0]])) + '</div></div>';
       });
   }
   return html + '</div>';
@@ -25734,11 +25751,14 @@ function eaPrint() {
     + 'body{background:#fff;padding:12px;font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","Segoe UI",sans-serif;color:#0f172a;'
     + '-webkit-print-color-adjust:exact;print-color-adjust:exact}'
     + '.sh{width:' + SH_W + 'px;transform-origin:top left}'
-    + '.pg{overflow:hidden;page-break-after:always}.pg:last-child{page-break-after:auto}'
+    /* 시트를 인쇄영역 한가운데 둔다. 미리보기 창이 넓거나 인쇄 여백을
+       '없음' 으로 잡아도 한쪽으로 쏠리지 않는다. */
+    + '.pg{width:' + PAGE_W + 'px;margin:0 auto;overflow:hidden;page-break-after:always}'
+    + '.pg:last-child{page-break-after:auto}'
     + 'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'
     + '@page{size:A4 portrait;margin:10mm}'
     + '@media print{body{padding:0}.no-print{display:none!important}}</style></head><body>'
-    + '<div class="no-print" style="margin:0 0 10px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#78350f">'
+    + '<div class="no-print" style="width:' + PAGE_W + 'px;margin:0 auto 10px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#78350f">'
     + '\uD83D\uDCA1 A4 \uC138\uB85C ' + parts.length + '\uC7A5\uC73C\uB85C \uC778\uC1C4\uB429\uB2C8\uB2E4'
     + (parts.length > 1 ? ' (\uBB38\uD56D\uD45C \u00B7 \uCD1D\uD3C9)' : '')
     + '. \uC778\uC1C4 \uB300\uD654\uC0C1\uC790\uC5D0\uC11C <b>\uBC30\uC728 100%</b>, <b>\uBA38\uB9AC\uAE00 \uBC0F \uBC14\uB2E5\uAE00 \uD574\uC81C</b> \uB85C \uB450\uC138\uC694.</div>'
@@ -25889,7 +25909,7 @@ function eaAttr(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').re
 async function eaEdit(idx) {
   var r = _eaRows[idx];
   if (!r) return;
-  if (!eaCanMake()) { alert('\ud3b8\uc9d1 \uad8c\ud55c\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.'); return; }
+  if (!eaCanEdit()) { alert('\ud3b8\uc9d1 \uad8c\ud55c\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.'); return; }
 
   var items = (r.items || []).slice().sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
   items.forEach(function(x, k) { x.order = k + 1; });
@@ -26246,7 +26266,7 @@ function eaSumPrompt(meta, items, full) {
     '',
     '\u3010\uaddc\uce59\u3011',
     '\u2460 \ubb38\ud56d \ubd84\uc11d\ud45c\uc5d0 \uc5c6\ub294 \ub0b4\uc6a9\uc744 \uc9c0\uc5b4\ub0b4\uc9c0 \ub9c8\ub77c. \uadfc\uac70\ub294 \ud45c\uc5d0 \uc788\ub294 \ub2e8\uc6d0\u00b7\ubc30\uc810\u00b7\ub09c\uc774\ub3c4\u00b7\uc720\ud615\ubfd0\uc774\ub2e4.',
-    '\u2461 \ubb38\ud56d \ubc88\ud638\ub97c \uad6c\uccb4\uc801\uc73c\ub85c \uc778\uc6a9\ud558\ub77c.',
+    '\u2461 \ubb38\ud56d \ubc88\ud638\ub97c \uad6c\uccb4\uc801\uc73c\ub85c \uc778\uc6a9\ud558\ub418, \uBC18\uB4DC\uC2DC "6\uBC88", "18\uBC88" \uCC98\uB7FC \uC4F4\uB2E4. Q6 \u00b7 No.6 \u00b7 #6 \uAC19\uC740 \uD45C\uAE30\uB294 \uAE08\uC9C0\uB2E4.',
     '\u2462 \uad50\uc7ac\uc5d0 \uc2e4\ub824 \ud559\uc0dd\uacfc \ud559\ubd80\ubaa8\uac00 \uc77d\ub294 \uae00\uc774\ub2e4. \uc815\uc911\ud55c \ubb38\uc5b4\uccb4\ub85c \uc4f0\ub418 \uad70\ub354\ub354\uae30 \uc5c6\uc774.',
     '\u2463 \uac01 \ub2e8\ub77d\uc740 \uc904\ubc14\uafc8 \uc5c6\uc774 \ud55c \ubb38\ub2e8\uc73c\ub85c \uc774\uc5b4 \uc368\ub77c.',
     '\u2464 \uc138 \ub2e8\ub77d \ubaa8\ub450 200~250\uc790, \ucd5c\ub300 280\uc790\ub97c \ub118\uc9c0 \uc54a\uac8c \uc4f4\ub2e4.',
@@ -26281,7 +26301,7 @@ async function eaGenSummary() {
       }
     }, 60000);
     _eaMake.review = {
-      difficulty:     String(out.difficulty || ''),
+      difficulty:     eaRvText(out.difficulty || ''),
       discrimination: String(out.discrimination || ''),
       strategy:       String(out.strategy || '')
     };
@@ -26314,7 +26334,7 @@ function eaSumRender() {
       + '<div style="font-size:11.5px;font-weight:800;color:#4b5563;margin-bottom:3px">' + f[1] + '</div>'
       + '<textarea oninput="eaSumSet(\'' + f[0] + '\',this.value)" rows="4" placeholder="\ube44\uc5b4 \uc788\uc2b5\ub2c8\ub2e4. [\ucd1d\ud3c9 \uc0dd\uc131] \uc744 \ub204\ub974\uac70\ub098 \uc9c1\uc811 \uc4f0\uc138\uc694."'
       + ' style="width:100%;padding:8px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:12.5px;line-height:1.75;outline:none;resize:vertical;font-family:inherit">'
-      + _esc(r[f[0]] || '') + '</textarea></div>';
+      + _esc(eaRvText(r[f[0]] || '')) + '</textarea></div>';
   }).join('');
 }
 
