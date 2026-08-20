@@ -26173,7 +26173,11 @@ async function eaDetectRange(cands, round) {
       { text: prompt }
     ] }],
     generationConfig: {
-      temperature: 0, maxOutputTokens: 32768, responseMimeType: 'application/json',
+      /* 생각을 풀어 두면 60초(프록시 제한)를 넘겨 죽는다. 27문항 시험지에서 61.4초 504 를 실측했다.
+         중2 시험지 7종으로 재보니 2048 이면 8.7~12.1초로 들어오고 결과는 무제한일 때와 같았다.
+         출력은 실제로 200토큰 남짓만 쓰므로 4096 이면 넉넉하다. */
+      temperature: 0, maxOutputTokens: 4096, responseMimeType: 'application/json',
+      thinkingConfig: { thinkingBudget: 2048 },
       responseSchema: { type: 'object', properties: { units: { type: 'array', items: { type: 'object', properties: {
         name:     { type: 'string', enum: cands },
         evidence: { type: 'string' }
@@ -26265,14 +26269,26 @@ async function eaCallGemini(body, ms) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: ctl.signal
     });
-    var data = await res.json();
+    /* 프록시가 60초 제한에 걸리면 JSON 이 아니라 오류 페이지를 돌려준다.
+       그대로 res.json() 하면 알아볼 수 없는 구문 오류가 되므로 먼저 글로 받는다. */
+    var body0 = await res.text();
+    var data;
+    try { data = JSON.parse(body0); }
+    catch (e0) {
+      throw new Error(res.status === 504
+        ? '\uc11c\ubc84\uac00 60\ucd08 \uc548\uc5d0 \uc751\ub2f5\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4 (504). \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694'
+        : '\uc11c\ubc84 \uc751\ub2f5\uc744 \uc77d\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4 (HTTP ' + res.status + ')');
+    }
     if (data.error) throw new Error(data.error.message || 'API \uc624\ub958');
     var cand = (data.candidates || [])[0];
     var text = cand && cand.content && cand.content.parts && cand.content.parts[0] && cand.content.parts[0].text;
-    if (!text) throw new Error('\ube48 \uc751\ub2f5 (finish=' + (cand && cand.finishReason) + ')');
+    if (!text) throw new Error((cand && cand.finishReason) === 'MAX_TOKENS'
+      ? '\ucd9c\ub825\uc774 \ud55c\ub3c4\uc5d0 \uac78\ub824 \uc798\ub838\uc2b5\ub2c8\ub2e4 (MAX_TOKENS)'
+      : '\ube48 \uc751\ub2f5 (finish=' + (cand && cand.finishReason) + ')');
     return JSON.parse(text);
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('\uc751\ub2f5\uc774 \ub108\ubb34 \uc624\ub798 \uac78\ub824 \uc911\ub2e8\ud588\uc2b5\ub2c8\ub2e4');
+    if (e.name === 'AbortError') throw new Error('\uc11c\ubc84\uac00 ' + Math.round((ms || 90000) / 1000)
+      + '\ucd08 \uc548\uc5d0 \uc751\ub2f5\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4. \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694');
     throw e;
   } finally { clearTimeout(tid); }
 }
@@ -26450,7 +26466,13 @@ async function eaAnalyze() {
   if (!units.length) {
     eaStatus('\uc2dc\ud5d8 \ubc94\uc704\ub97c \uc778\uc2dd\ud558\ub294 \uc911\uc785\ub2c8\ub2e4...', '#6d28d9');
     try {
-      var det = await eaDetectRange(all, _eaMake.meta.round);
+      /* 한 번 늦었다고 흐름을 끊지 않는다. 응답 시간은 같은 요청도 출렁인다. */
+      var det = null;
+      for (var dt = 1; dt <= 2 && !det; dt++) {
+        if (dt === 2) eaStatus('\ubc94\uc704 \uc778\uc2dd\uc774 \ub2a6\uc5b4 \ud55c \ubc88 \ub354 \uc2dc\ub3c4\ud569\ub2c8\ub2e4...', '#6d28d9');
+        try { det = await eaDetectRange(all, _eaMake.meta.round); }
+        catch (e1) { if (dt === 2) throw e1; }
+      }
       units = det.picked;
       _eaMake.autoRange = true;
       _eaMake.detected  = det.raw;
