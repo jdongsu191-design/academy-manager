@@ -25389,32 +25389,185 @@ var EA_SEL_CSS = 'width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-
 
 /* 목록 화면 뼈대 */
 function eaListShell(px) {
-  var years = '<option value="">전체</option>';
-  var cur = new Date().getFullYear();
-  for (var y = cur + 1; y >= cur - 4; y--) years += '<option value="' + y + '">' + y + '년</option>';
   return ''
   + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px">'
   +   '<div style="font-size:18px;font-weight:700;color:#7c3aed">\uD83D\uDCCB 내신 분석표</div>'
   +   (eaCanMake()
-      ? '<button onclick="eaMakeOpen()" style="font-size:12px;font-weight:700;padding:7px 12px;border:none;border-radius:8px;background:#7c3aed;color:#fff;cursor:pointer;white-space:nowrap">+ 새 분석표</button>'
+      ? '<button onclick="eaMakeOpen(eaPreset())" style="font-size:12px;font-weight:700;padding:7px 12px;border:none;border-radius:8px;background:#7c3aed;color:#fff;cursor:pointer;white-space:nowrap">+ 새 분석표</button>'
       : '')
   + '</div>'
   + '<div style="font-size:12px;color:#8b5cf6;margin-bottom:16px">시험대비교재에 수록할 기출 분석표입니다</div>'
   + '<div class="card" style="margin-bottom:12px">'
-  +   '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">'
-  +     '<div><div style="font-size:11px;color:#9ca3af;margin-bottom:3px">연도</div>'
-  +       '<select id="' + px + '-year" style="' + EA_SEL_CSS + '">' + years + '</select></div>'
-  +     '<div><div style="font-size:11px;color:#9ca3af;margin-bottom:3px">학기</div>'
-  +       '<select id="' + px + '-sem" style="' + EA_SEL_CSS + '"><option value="">전체</option><option value="1">1학기</option><option value="2">2학기</option></select></div>'
-  +     '<div><div style="font-size:11px;color:#9ca3af;margin-bottom:3px">시험</div>'
-  +       '<select id="' + px + '-round" style="' + EA_SEL_CSS + '"><option value="">전체</option><option value="중간">중간</option><option value="기말">기말</option></select></div>'
-  +   '</div>'
+  +   '<div id="' + px + '-nav" style="font-size:13px;margin-bottom:10px"></div>'
   +   '<div style="display:flex;gap:8px">'
-  +     '<input id="' + px + '-q" placeholder="학교 · 과목 검색" onkeydown="if(event.key===\'Enter\')eaLoadList(\'' + px + '\')" style="flex:1;' + EA_SEL_CSS + '">'
+  +     '<input id="' + px + '-q" placeholder="학교 · 과목 검색 (폴더 상관없이 전체에서 찾습니다)" onkeydown="if(event.key===\'Enter\')eaRenderList(\'' + px + '\')" style="flex:1;' + EA_SEL_CSS + '">'
   +     '<button onclick="eaLoadList(\'' + px + '\')" style="padding:7px 16px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap">\uD83D\uDD0D 조회</button>'
   +   '</div>'
   + '</div>'
   + '<div id="' + px + '-wrap"></div>';
+}
+
+/* ── 폴더 탐색 ───────────────────────────────
+   연도 → 학기 → 시험 → 학년 4단계. 폴더는 exam_analyses 의 컬럼에서 그대로
+   나오므로 따로 저장하지 않는다. 각 단계의 선택지가 고정 목록이라 분석표가
+   아직 없는 폴더도 항상 보이고, 들어가서 바로 만들 수 있다. */
+var EA_LEVELS = [
+  { key: 'year',     opts: function() { return eaYearList(); },
+    text: function(v) { return v + '년'; } },
+  { key: 'semester', opts: function() { return ['1', '2']; },
+    text: function(v) { return v + '학기'; } },
+  { key: 'round',    opts: function() { return ['중간', '기말']; },
+    text: function(v) { return v; } },
+  { key: 'grade',    opts: function() { return ['중1', '중2', '중3', '고1', '고2', '고3']; },
+    text: function(v) { return v; } }
+];
+var _eaAll  = null;   /* 전체 목록 캐시 — 폴더 이동은 서버를 다시 부르지 않는다 */
+var _eaPath = {};     /* 지금 들어와 있는 폴더 */
+
+function eaPathDepth() {
+  for (var i = 0; i < EA_LEVELS.length; i++) if (!_eaPath[EA_LEVELS[i].key]) return i;
+  return EA_LEVELS.length;
+}
+/* 저장된 값이 숫자일 수도 글자일 수도 있어 문자열로 맞춰 비교한다 */
+function eaSame(a, b) { return String(a == null ? '' : a) === String(b == null ? '' : b); }
+function eaMatch(r, depth) {
+  for (var i = 0; i < depth; i++) {
+    var k = EA_LEVELS[i].key;
+    if (!eaSame(r[k], _eaPath[k])) return false;
+  }
+  return true;
+}
+/* i 단계에 v 를 넣고 그 아래는 비운다. v 가 없으면 i 단계부터 전부 비운다. */
+function eaNav(px, i, v) {
+  for (var k = i; k < EA_LEVELS.length; k++) delete _eaPath[EA_LEVELS[k].key];
+  if (v) _eaPath[EA_LEVELS[i].key] = v;
+  var qel = document.getElementById(px + '-q');
+  if (qel) qel.value = '';   /* 폴더로 옮기면 검색은 푼다 */
+  eaRenderList(px);
+}
+/* 한 단계 위 폴더로 */
+function eaBack(px) {
+  var d = eaPathDepth();
+  if (d > 0) eaNav(px, d - 1);   /* 마지막 단계를 비우면 그 위로 올라간다 */
+}
+/* 새 분석표에 미리 채울 값 — 지금 폴더까지 정해진 것만 준다 */
+function eaPreset() {
+  var p = {};
+  if (_eaPath.year)     p.year     = _eaPath.year;
+  if (_eaPath.semester) p.semester = _eaPath.semester;
+  if (_eaPath.round)    p.round    = _eaPath.round;
+  if (_eaPath.grade) {
+    p.level    = _eaPath.grade.charAt(0);
+    p.gradeNum = _eaPath.grade.slice(1);
+  }
+  return p;
+}
+
+function eaCrumb(px) {
+  var link = 'color:#7c3aed;font-weight:700;cursor:pointer';
+  var d    = eaPathDepth();
+  var out  = '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px">';
+  if (d > 0)
+    out += '<button onclick="eaBack(\'' + px + '\')" style="margin-right:8px;font-size:12px;'
+         + 'font-weight:700;padding:4px 10px;border:1.5px solid #ddd6fe;border-radius:7px;background:#fff;'
+         + 'color:#6d28d9;cursor:pointer;white-space:nowrap">\u2190 뒤로</button>';
+  out += '<span onclick="eaNav(\'' + px + '\',0)" style="' + link + '">전체</span>';
+  for (var i = 0; i < d; i++) {
+    var L = EA_LEVELS[i], v = _eaPath[L.key];
+    out += '<span style="color:#cbd5e1;margin:0 6px">\u203A</span>'
+         + '<span onclick="eaNav(\'' + px + '\',' + i + ',&quot;' + eaAttr(v) + '&quot;)" style="' + link + '">'
+         + _esc(L.text(v)) + '</span>';
+  }
+  return out + '</div>';
+}
+
+function eaFolders(px, depth) {
+  var L    = EA_LEVELS[depth];
+  var here = (_eaAll || []).filter(function(r) { return eaMatch(r, depth); });
+  return '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">'
+    + L.opts().map(function(v) {
+        var n = here.filter(function(r) { return eaSame(r[L.key], v); }).length;
+        return '<div onclick="eaNav(\'' + px + '\',' + depth + ',&quot;' + eaAttr(v) + '&quot;)"'
+          + ' style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;'
+          + 'border:1.5px solid ' + (n ? '#ddd6fe' : '#e5e7eb') + ';border-radius:10px;cursor:pointer;'
+          + 'background:' + (n ? '#faf5ff' : '#fff') + '">'
+          + '<span style="font-size:13px;font-weight:700;color:' + (n ? '#5b21b6' : '#9ca3af') + '">'
+          +   '\uD83D\uDCC1 ' + _esc(L.text(v)) + '</span>'
+          + '<span style="font-size:11px;font-weight:800;color:' + (n ? '#7c3aed' : '#d1d5db') + '">' + n + '</span>'
+          + '</div>';
+      }).join('')
+    + '</div>';
+}
+
+/* 표 그리기 — 폴더 안이든 검색 결과든 같은 표를 쓴다 */
+function eaTable(rows) {
+  if (!rows.length)
+    return '<div class="empty-state" style="padding:40px"><div class="ei">\uD83D\uDCCB</div><p>분석표가 없습니다</p></div>';
+  var html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap">'
+    + '<thead><tr style="background:#f5f3ff">'
+    + ['시험', '학교', '학년', '과목', '문항', '총점', '총평'].map(function(h) {
+        return '<th style="padding:8px 10px;border:1px solid #ddd6fe;color:#5b21b6;font-weight:700">' + h + '</th>';
+      }).join('')
+    + '<th style="padding:8px 10px;border:1px solid #ddd6fe"></th></tr></thead><tbody>';
+
+  var canEdit = eaCanEdit(), canDel = eaCanMake();
+  rows.forEach(function(r, i) {
+    var items = r.items || [];
+    var sum   = eaSum(items);
+    var td    = 'padding:7px 10px;border:1px solid #ede9fe;text-align:center';
+    html += '<tr>'
+      + '<td style="' + td + ';color:#6b7280">' + _esc(r.year) + ' ' + _esc(r.semester) + '학기 ' + _esc(r.round) + '</td>'
+      + '<td style="' + td + ';text-align:left;font-weight:600;color:#1f2937">' + _esc(r.school) + '</td>'
+      + '<td style="' + td + '">' + _esc(r.grade) + '</td>'
+      + '<td style="' + td + '">' + _esc(r.subject) + '</td>'
+      + '<td style="' + td + '">' + items.length + '</td>'
+      + '<td style="' + td + ';font-weight:700;color:' + (sum === 100 ? '#059669' : '#dc2626') + '">' + sum + '</td>'
+      + '<td style="' + td + '">' + (eaHasReview(r.review) ? '\u2713' : '<span style="color:#d1d5db">\u2014</span>') + '</td>'
+      + '<td style="' + td + ';white-space:nowrap">'
+      +   '<button onclick="eaView(' + i + ')" style="border:1.5px solid #ddd6fe;color:#6d28d9;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">보기</button>'
+      +   (canEdit
+          ? '<button onclick="eaEdit(' + i + ')" style="margin-left:3px;border:1.5px solid #bfdbfe;color:#1d4ed8;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">편집</button>'
+          : '')
+      +   (canDel
+          ? '<button onclick="eaDelete(' + i + ')" style="margin-left:3px;border:1.5px solid #fecaca;color:#dc2626;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">삭제</button>'
+          : '')
+      + '</td>'
+      + '</tr>';
+  });
+  return html + '</tbody></table></div>'
+    + '<div style="margin-top:8px;font-size:11px;color:#9ca3af">총 ' + rows.length + '건</div>';
+}
+
+/* 캐시만 보고 다시 그린다 (서버 호출 없음) */
+function eaRenderList(px) {
+  var nav = document.getElementById(px + '-nav');
+  var wrap = document.getElementById(px + '-wrap');
+  if (!nav || !wrap) return;
+  var q = ((document.getElementById(px + '-q') || {}).value || '').trim();
+
+  if (q) {
+    /* 검색은 폴더를 무시하고 전체에서 찾는다 */
+    var lq = q.toLowerCase();
+    _eaRows = (_eaAll || []).filter(function(r) {
+      return [r.school, r.subject, r.title, r.grade].some(function(v) {
+        return String(v || '').toLowerCase().indexOf(lq) >= 0;
+      });
+    });
+    nav.innerHTML = '<span style="color:#6b7280">\uD83D\uDD0D 전체에서 &quot;' + _esc(q) + '&quot; 검색</span>'
+      + '<span onclick="eaNav(\'' + px + '\',0)" style="margin-left:8px;color:#7c3aed;font-weight:700;cursor:pointer">해제</span>';
+    wrap.innerHTML = eaTable(_eaRows);
+    return;
+  }
+
+  var d = eaPathDepth();
+  nav.innerHTML = eaCrumb(px);
+  if (d < EA_LEVELS.length) {
+    _eaRows = [];   /* 폴더 화면에서는 보기/편집 대상이 없다 */
+    wrap.innerHTML = eaFolders(px, d);
+  } else {
+    _eaRows = (_eaAll || []).filter(function(r) { return eaMatch(r, EA_LEVELS.length); });
+    wrap.innerHTML = eaTable(_eaRows);
+  }
 }
 
 async function initTeacherExamList() { return eaInitList('tel', 'panel-teacher-exam-list'); }
@@ -25451,72 +25604,14 @@ async function eaLoadList(px) {
   var wrap = document.getElementById(px + '-wrap');
   if (!wrap) return;
   wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">불러오는 중...</div>';
-
-  var year  = (document.getElementById(px + '-year')  || {}).value || '';
-  var sem   = (document.getElementById(px + '-sem')   || {}).value || '';
-  var round = (document.getElementById(px + '-round') || {}).value || '';
-  var q     = ((document.getElementById(px + '-q')    || {}).value || '').trim();
-
   try {
-    var query = db.from('exam_analyses')
+    /* 폴더 개수를 세려면 어차피 전부 필요하다. 한 번 읽어 두고 이동은 화면에서만 한다. */
+    var res = await db.from('exam_analyses')
       .select('id,title,school,grade,year,semester,round,subject,teacher_name,items,review,created_at')
       .order('year', { ascending: false }).order('created_at', { ascending: false });
-    if (year)  query = query.eq('year', year);
-    if (sem)   query = query.eq('semester', sem);
-    if (round) query = query.eq('round', round);
-
-    var res = await query;
     if (res.error) throw res.error;
-    var rows = res.data || [];
-
-    if (q) {
-      var lq = q.toLowerCase();
-      rows = rows.filter(function(r) {
-        return [r.school, r.subject, r.title, r.grade].some(function(v) {
-          return String(v || '').toLowerCase().indexOf(lq) >= 0;
-        });
-      });
-    }
-    _eaRows = rows;
-
-    if (!rows.length) {
-      wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">\uD83D\uDCCB</div><p>분석표가 없습니다</p></div>';
-      return;
-    }
-
-    var html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap">'
-      + '<thead><tr style="background:#f5f3ff">'
-      + ['시험', '학교', '학년', '과목', '문항', '총점', '총평'].map(function(h) {
-          return '<th style="padding:8px 10px;border:1px solid #ddd6fe;color:#5b21b6;font-weight:700">' + h + '</th>';
-        }).join('')
-      + '<th style="padding:8px 10px;border:1px solid #ddd6fe"></th></tr></thead><tbody>';
-
-    var canEdit = eaCanEdit(), canDel = eaCanMake();
-    rows.forEach(function(r, i) {
-      var items = r.items || [];
-      var sum   = eaSum(items);
-      var td    = 'padding:7px 10px;border:1px solid #ede9fe;text-align:center';
-      html += '<tr>'
-        + '<td style="' + td + ';color:#6b7280">' + _esc(r.year) + ' ' + _esc(r.semester) + '학기 ' + _esc(r.round) + '</td>'
-        + '<td style="' + td + ';text-align:left;font-weight:600;color:#1f2937">' + _esc(r.school) + '</td>'
-        + '<td style="' + td + '">' + _esc(r.grade) + '</td>'
-        + '<td style="' + td + '">' + _esc(r.subject) + '</td>'
-        + '<td style="' + td + '">' + items.length + '</td>'
-        + '<td style="' + td + ';font-weight:700;color:' + (sum === 100 ? '#059669' : '#dc2626') + '">' + sum + '</td>'
-        + '<td style="' + td + '">' + (eaHasReview(r.review) ? '\u2713' : '<span style="color:#d1d5db">\u2014</span>') + '</td>'
-        + '<td style="' + td + ';white-space:nowrap">'
-        +   '<button onclick="eaView(' + i + ')" style="border:1.5px solid #ddd6fe;color:#6d28d9;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">보기</button>'
-        +   (canEdit
-            ? '<button onclick="eaEdit(' + i + ')" style="margin-left:3px;border:1.5px solid #bfdbfe;color:#1d4ed8;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">편집</button>'
-            : '')
-        +   (canDel
-            ? '<button onclick="eaDelete(' + i + ')" style="margin-left:3px;border:1.5px solid #fecaca;color:#dc2626;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px;background:#fff;cursor:pointer">삭제</button>'
-            : '')
-        + '</td>'
-        + '</tr>';
-    });
-    wrap.innerHTML = html + '</tbody></table></div>'
-      + '<div style="margin-top:8px;font-size:11px;color:#9ca3af">총 ' + rows.length + '건</div>';
+    _eaAll = res.data || [];
+    eaRenderList(px);
   } catch (e) {
     wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#dc2626;font-size:13px">불러오기 실패: ' + _esc(e.message || e) + '</div>';
   }
@@ -26023,7 +26118,7 @@ async function eaDelete(idx) {
   }
 }
 
-function eaMakeOpen() {
+function eaMakeOpen(preset) {
   if (!eaCanMake()) { alert('\uc81c\uc791 \uad8c\ud55c\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.'); return; }
   _eaMake = {
     view: 'form', busy: false, status: '',
@@ -26033,7 +26128,23 @@ function eaMakeOpen() {
   document.getElementById('eam-title').textContent = '\uc0c8 \ub0b4\uc2e0 \ubd84\uc11d\ud45c';
   eaMakeRenderForm();
   openModal('eaMake');
+  eaApplyPreset(preset);
   eaLoadUnits();
+}
+
+/* 폴더에서 넘어온 값을 폼에 넣는다.
+   학교급을 먼저 넣고 eaLevelChange 로 학년 선택지를 다시 짠 뒤 학년을 넣어야 한다
+   (순서를 바꾸면 학년이 기본값 2로 덮인다). */
+function eaApplyPreset(p) {
+  if (!p) return;
+  var set = function(id, v) { var e = document.getElementById(id); if (e && v) e.value = v; };
+  set('eam-level', p.level);
+  eaLevelChange(true);
+  set('eam-grade', p.gradeNum);
+  set('eam-year',  p.year);
+  set('eam-sem',   p.semester);
+  set('eam-round', p.round);
+  eaSubjectsRefresh(true);   /* 연도·학년이 정해졌으니 과목 목록을 맞춘다 */
 }
 
 function eaMakeClose() {
