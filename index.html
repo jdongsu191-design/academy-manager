@@ -25687,18 +25687,65 @@ function eaPages(r) {
 }
 
 /* \uD55C \uC7A5\uC744 A4 \uC0C1\uC790\uC5D0 \uB123\uACE0 \uB108\uBB34 \uAE38\uBA74 \uC90C\uC5EC \uCE94\uBC84\uC2A4\uB85C \uB9CC\uB4E0\uB2E4 */
+/* ── 상자 맞춤 ─────────────────────────────────────
+   transform:scale 은 가로세로를 같이 줄인다. 그래서 세로만 보고 줄이면
+   가로가 함께 줄어 오른쪽이 빈다 (이미지·PDF·프린트에서 모두 나던 증상).
+
+   그래서 반대로 간다 — 상자보다 넓게 그린 뒤 상자 폭에 맞춰 줄인다.
+   줄인 배율이 얼마든 최종 가로는 항상 상자 폭과 정확히 같다.
+   폭을 넓히면 글이 덜 접혀 높이도 같이 줄므로 몇 번만에 수렴한다.
+   글자는 균일 축소라 가로세로 비율이 그대로다 (늘어나지 않는다). */
+function eaFitBox(el, boxW, boxH) {
+  /* 폭 W 로 그렸을 때의 높이. scrollHeight 를 읽으면 배치가 강제로 다시 계산된다. */
+  function mh(W) { el.style.width = W + 'px'; el.style.transform = 'none'; return el.scrollHeight; }
+  function fits(W, h) { return h * (boxW / W) <= boxH; }
+
+  var h = mh(boxW);
+  if (!h) { el.style.transform = 'scale(1)'; el.style.marginLeft = '0px';
+            return { w: boxW, h: 0, k: 1, fillW: 0, fillH: 0 }; }
+
+  var lo = boxW, hi = 0, W = boxW;   /* lo = 안 들어가는 폭, hi = 들어가는 폭 */
+  if (fits(W, h)) hi = W;
+  else {
+    for (var t = 0; t < 10 && !hi; t++) {
+      lo = W;
+      W  = W * Math.max(1.04, Math.pow(h * (boxW / W) / boxH, 0.75));
+      h  = mh(W);
+      if (fits(W, h)) hi = W;
+    }
+  }
+
+  var k;
+  if (!hi) {
+    /* 열 번을 넓혀도 안 들어가면 그냥 줄인다 (거의 없는 경우) */
+    k = boxH / h;
+  } else {
+    /* lo(안 됨) ~ hi(됨) 사이에서 가장 좁은 폭을 찾는다.
+       폭이 좁을수록 배율 k 가 커지므로 글자가 커진다.
+       hi 는 항상 들어가는 값만 담으므로 결과는 반드시 안전하다. */
+    while (hi - lo > 2) {
+      var mid = (lo + hi) / 2;
+      if (fits(mid, mh(mid))) hi = mid; else lo = mid;
+    }
+    W = hi; h = mh(W); k = boxW / W;
+  }
+
+  el.style.transform  = 'scale(' + k + ')';
+  el.style.marginLeft = Math.max(0, (boxW - W * k) / 2) + 'px';
+  return { w: W, h: h, k: k, fillW: W * k, fillH: h * k };
+}
+
 async function eaRenderPage(r, part) {
   var wrap = document.getElementById('ea-image-render');
   var innerW = EA_IMG_W - EA_IMG_PAD * 2;
   var availH = EA_IMG_H - EA_IMG_PAD * 2;
-  wrap.innerHTML = '<div id="ea-img-inner" style="transform-origin:top left;width:' + innerW + 'px">'
+  wrap.innerHTML = '<div id="ea-img-inner" style="transform-origin:top left">'
                  + eaOutputHTML(r, false, part) + '</div>';
   await new Promise(function(res) { setTimeout(res, 180); });
   var inner = document.getElementById('ea-img-inner');
-  var h = inner ? inner.scrollHeight : 0;
-  if (!h) throw new Error('\uB80C\uB354 \uC601\uC5ED \uB192\uC774\uAC00 0 \uC785\uB2C8\uB2E4');
-  var k = Math.min(1, availH / h);
-  if (k < 1) inner.style.transform = 'scale(' + k + ')';
+  if (!inner) throw new Error('\uB80C\uB354 \uC601\uC5ED\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4');
+  var fit = eaFitBox(inner, innerW, availH);
+  if (!fit.h) throw new Error('\uB80C\uB354 \uC601\uC5ED \uB192\uC774\uAC00 0 \uC785\uB2C8\uB2E4');
   await new Promise(function(res) { setTimeout(res, 60); });
   if (typeof html2canvas === 'undefined') throw new Error('html2canvas \uBBF8\uB85C\uB4DC');
   return await html2canvas(wrap, { backgroundColor: '#fff', scale: 2, useCORS: true, logging: false,
@@ -25740,8 +25787,10 @@ async function eaExport(copy) {
 function eaPrint() {
   var r = _eaRows[_eaViewIdx];
   if (!r) return;
-  var PAGE_W = 718, PAGE_H = 1047;   /* A4 세로 인쇄 영역, 여백 10mm (96dpi) */
-  var SH_W = EA_IMG_W - EA_IMG_PAD * 2;   /* 이미지와 똑같은 폭(852)으로 그린다 */
+  /* A4 세로에서 여백 10mm 를 뺀 인쇄 영역. px 로 적으면 96dpi 를 가정하게 되고
+     프린터 여백이 조금만 달라도 오른쪽이 잘리거나 남는다. mm 로 두면 브라우저가
+     알아서 맞추고, 인쇄 여백을 '없음' 으로 바꿔도 가운데에 온다. */
+  var PAGE_MM = '190mm', PAGE_MM_H = '277mm';
   var parts = eaPages(r);
   var body = parts.map(function(p) {
     return '<div class="pg"><div class="sh">' + eaOutputHTML(r, true, p) + '</div></div>';
@@ -25750,28 +25799,33 @@ function eaPrint() {
     + '<style>*{margin:0;padding:0;box-sizing:border-box}'
     + 'body{background:#fff;padding:12px;font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","Segoe UI",sans-serif;color:#0f172a;'
     + '-webkit-print-color-adjust:exact;print-color-adjust:exact}'
-    + '.sh{width:' + SH_W + 'px;transform-origin:top left}'
+    + '.sh{transform-origin:top left}'   /* 폭은 아래 맞춤 스크립트가 정한다 */
     /* 시트를 인쇄영역 한가운데 둔다. 미리보기 창이 넓거나 인쇄 여백을
        '없음' 으로 잡아도 한쪽으로 쏠리지 않는다. */
-    + '.pg{width:' + PAGE_W + 'px;margin:0 auto;overflow:hidden;page-break-after:always}'
+    + '.pg{width:' + PAGE_MM + ';margin:0 auto;overflow:hidden;page-break-after:always}'
     + '.pg:last-child{page-break-after:auto}'
     + 'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'
     + '@page{size:A4 portrait;margin:10mm}'
     + '@media print{body{padding:0}.no-print{display:none!important}}</style></head><body>'
-    + '<div class="no-print" style="width:' + PAGE_W + 'px;margin:0 auto 10px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#78350f">'
+    + '<div class="no-print" style="width:' + PAGE_MM + ';margin:0 auto 10px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#78350f">'
     + '\uD83D\uDCA1 A4 \uC138\uB85C ' + parts.length + '\uC7A5\uC73C\uB85C \uC778\uC1C4\uB429\uB2C8\uB2E4'
     + (parts.length > 1 ? ' (\uBB38\uD56D\uD45C \u00B7 \uCD1D\uD3C9)' : '')
     + '. \uC778\uC1C4 \uB300\uD654\uC0C1\uC790\uC5D0\uC11C <b>\uBC30\uC728 100%</b>, <b>\uBA38\uB9AC\uAE00 \uBC0F \uBC14\uB2E5\uAE00 \uD574\uC81C</b> \uB85C \uB450\uC138\uC694.</div>'
     + body
-    + '<scr' + 'ipt>window.onload=function(){'
-    +   'var L=document.querySelectorAll(".sh"),KW=' + (PAGE_W / SH_W) + ';'
-    +   'for(var i=0;i<L.length;i++){var sh=L[i],pg=sh.parentNode,h=sh.scrollHeight;'
-    /* KW = 폭을 A4 에 꽉 채우는 배율. 높이가 넘칠 때만 그보다 더 줄인다. */
-    +   'var k=Math.min(KW,' + PAGE_H + '/h);'
-    +   'sh.style.transform="scale("+k+")";'
-    /* 더 줄어든 경우 한쪽으로 쏠리지 않게 가운데로 민다 */
-    +   'sh.style.marginLeft=Math.max(0,(' + PAGE_W + '-' + SH_W + '*k)/2)+"px";'
-    +   'pg.style.width="' + PAGE_W + 'px";pg.style.height=Math.ceil(h*k)+"px";}'
+    /* 이미지와 똑같이 맞추려고 eaFitBox 함수 자체를 새 창에 실어 보낸다.
+       식을 두 벌 적어 두면 한쪽만 고쳐져 어긋나기 때문이다. */
+    + '<scr' + 'ipt>' + String(eaFitBox) + ';'
+    +   'window.onload=function(){'
+    /* mm 로 잡은 인쇄영역이 실제 몇 px 인지 재본다 */
+    +   'var q=document.createElement("div");'
+    +   'q.style.cssText="position:absolute;visibility:hidden;width:' + PAGE_MM + ';height:' + PAGE_MM_H + '";'
+    +   'document.body.appendChild(q);var BW=q.clientWidth,BH=q.clientHeight;'
+    +   'q.parentNode.removeChild(q);'
+    +   'var L=document.querySelectorAll(".sh");'
+    +   'for(var i=0;i<L.length;i++){'
+    +   'var f=eaFitBox(L[i],BW,BH);'
+    /* 페이지 높이를 내용에 맞춰 줄여 빈 둘째 장이 생기지 않게 한다 */
+    +   'L[i].parentNode.style.height=Math.ceil(f.fillH)+"px";}'
     +   'setTimeout(function(){window.print();},140);'
     + '}<\/scr' + 'ipt>'
     + '</body></html>';
