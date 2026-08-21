@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>변형문제 — BMAPS v0.05</title>
+<title>변형문제 — BMAPS v0.06</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
@@ -92,7 +92,7 @@
 
 <header class="top">
   <h1>변형문제</h1>
-  <span class="badge" id="ver">v0.05</span>
+  <span class="badge" id="ver">v0.06</span>
   <span class="sp" id="who">…</span>
 </header>
 
@@ -182,7 +182,7 @@
    · 이 단계에서 하는 일: 원본 올리기 · 쪽 이미지 만들기 · 목록/휴지통
    · 읽기(비전)·변형 생성·검수·내보내기는 다음 단계에서 붙인다.
 ══════════════════════════════════════════════════════════════ */
-window.VARIANT_VERSION = 'v0.05';
+window.VARIANT_VERSION = 'v0.06';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -456,34 +456,41 @@ function vCore(t){
     .replace(/[\s{}]/g, '');
 }
 
-async function vWrapBatch(items){
+/* ⚠ 생각 예산을 0 으로 두면 안 된다.
+   실측에서 모델이 폭주해 영어로 엉뚱한 내용을 1.4만 토큰 쏟아냈다.
+   (안전장치가 걸러 내긴 했지만 시간과 돈만 버린다) */
+async function vWrapBatch(items, budget){
   var res = await fetch(PROXY, { method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ model:'gemini-2.5-flash',
       contents:[{ parts:[{ text: WRAP_PROMPT + '\n\n' + JSON.stringify({ items: items }) }] }],
       generationConfig:{ temperature:0, maxOutputTokens:16384,
         responseMimeType:'application/json',
-        thinkingConfig:{ thinkingBudget:1024 }, responseSchema: WRAP_SCHEMA } }) });
+        thinkingConfig:{ thinkingBudget: budget || 1024 }, responseSchema: WRAP_SCHEMA } }) });
   var raw = await res.text(), d;
-  try { d = JSON.parse(raw); } catch(e) { throw new Error('HTTP ' + res.status); }
+  try { d = JSON.parse(raw); } catch(e) { throw new Error('응답이 JSON 이 아님 (HTTP ' + res.status + ')'); }
   if (d.error) throw new Error(d.error.message || '오류');
   var c = (d.candidates || [])[0] || {};
   var t = c.content && c.content.parts && c.content.parts[0] && c.content.parts[0].text;
-  if (!t) throw new Error('빈 응답');
-  return JSON.parse(t).items || [];
+  if (!t) throw new Error('빈 응답 (' + (c.finishReason || '') + ')');
+  try { return JSON.parse(t).items || []; }
+  catch(e) { throw new Error('응답이 잘림 (' + (c.finishReason || '') + ')'); }
 }
 
-/* rows 중 '안 감싸짐' 경고가 붙은 것만 다듬는다. 돌려받은 값은 검사 후 채택. */
+/* rows 중 '안 감싸짐' 경고가 붙은 것만 다듬는다. 돌려받은 값은 검사 후 채택.
+   묶음이 크면 응답이 잘리는 일이 있어 3개씩 보내고, 실패하면 두 번까지 다시 시도한다. */
 async function vWrapRows(rows, onStep){
   var need = rows.filter(function(r){
     return (r.ocr.format_flags || []).some(function(f){ return f.indexOf('안 감싸짐') >= 0; }); });
-  var ok = 0, rej = 0;
-  for (var i = 0; i < need.length; i += 5) {
-    var chunk = need.slice(i, i + 5);
-    var got;
-    try {
-      got = await vWrapBatch(chunk.map(function(r){
-        return { statement: r.statement, choices: r.choices }; }));
-    } catch(e) { rej += chunk.length; if (onStep) onStep(i + chunk.length, need.length); continue; }
+  var ok = 0, rej = 0, err = 0, lastErr = '';
+  for (var i = 0; i < need.length; i += 3) {
+    var chunk = need.slice(i, i + 3);
+    var payload = chunk.map(function(r){ return { statement: r.statement, choices: r.choices }; });
+    var got = null;
+    for (var a = 0; a < 2 && !got; a++) {
+      try { got = await vWrapBatch(payload, a ? 2048 : 1024); }
+      catch(e) { lastErr = String(e.message || e); }
+    }
+    if (!got) { err += chunk.length; if (onStep) onStep(i + chunk.length, need.length); continue; }
     chunk.forEach(function(r, k) {
       var g = got[k];
       if (!g || (g.choices || []).length !== r.choices.length) { rej++; return; }
@@ -497,7 +504,7 @@ async function vWrapRows(rows, onStep){
     });
     if (onStep) onStep(i + chunk.length, need.length);
   }
-  return { need: need.length, ok: ok, rejected: rej };
+  return { need: need.length, ok: ok, rejected: rej, err: err, lastErr: lastErr };
 }
 
 /* ⚠ 응답이 JSON 이 아닐 수 있다.
@@ -654,7 +661,9 @@ async function vRead(only){
       + '\n형식 경고 ' + flagged + '개'
       + (withAns ? '\n정답이 붙은 문항 ' + withAns + '개' : '')
       + (merged ? '\n정답 쪽에서 가져와 붙인 것 ' + merged + '건' : '')
-      + (wrap.need ? '\n형식 다듬기: 감쌈 ' + wrap.ok + '개 · 그대로 둠 ' + wrap.rejected + '개' : '')
+      + (wrap.need ? '\n형식 다듬기: 감쌈 ' + wrap.ok + '개'
+          + (wrap.rejected ? ' · 내용이 바뀌어 버림 ' + wrap.rejected + '개' : '')
+          + (wrap.err ? ' · 요청 실패 ' + wrap.err + '개 (' + wrap.lastErr + ')' : '') : '')
       + (repaired ? '\n깨진 역슬래시 ' + repaired + '곳 복구' : '')
       + (errs.length
           ? '\n\n실패한 쪽 (세 번 시도했습니다):\n'
