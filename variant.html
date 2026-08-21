@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>변형문제 — BMAPS v0.02</title>
+<title>변형문제 — BMAPS v0.03</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
@@ -92,7 +92,7 @@
 
 <header class="top">
   <h1>변형문제</h1>
-  <span class="badge" id="ver">v0.02</span>
+  <span class="badge" id="ver">v0.03</span>
   <span class="sp" id="who">…</span>
 </header>
 
@@ -182,7 +182,7 @@
    · 이 단계에서 하는 일: 원본 올리기 · 쪽 이미지 만들기 · 목록/휴지통
    · 읽기(비전)·변형 생성·검수·내보내기는 다음 단계에서 붙인다.
 ══════════════════════════════════════════════════════════════ */
-window.VARIANT_VERSION = 'v0.02';
+window.VARIANT_VERSION = 'v0.03';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -395,13 +395,22 @@ function vFlags(statement, choices){
   return f;
 }
 
-async function vAskPage(url){
+/* ⚠ 응답이 JSON 이 아닐 수 있다.
+   Vercel 함수가 60초를 넘겨 죽으면 "An error occurred…" 같은 **글자**가 온다.
+   그걸 그대로 JSON.parse 하면 엉뚱한 오류가 뜨므로 먼저 글자로 받는다. */
+async function vAskPage(url, budget){
   var res = await fetch(PROXY, { method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ model:'gemini-2.5-flash', imageUrls:[url], prompt: OCR_PROMPT,
       generationConfig:{ temperature:0.1, maxOutputTokens:16384,
         responseMimeType:'application/json',
-        thinkingConfig:{ thinkingBudget:8192 }, responseSchema: OCR_SCHEMA } }) });
-  var d = await res.json();
+        thinkingConfig:{ thinkingBudget: budget || 6144 }, responseSchema: OCR_SCHEMA } }) });
+  var raw = await res.text(), d;
+  try { d = JSON.parse(raw); }
+  catch(e) {
+    var head = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90);
+    throw new Error(res.status === 504 || /error occurred|timeout/i.test(raw)
+      ? '시간 초과 (서버가 60초 안에 못 끝냄)' : 'HTTP ' + res.status + ' · ' + head);
+  }
   if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
   var c = (d.candidates || [])[0] || {};
   var t = c.content && c.content.parts && c.content.parts[0] && c.content.parts[0].text;
@@ -409,16 +418,34 @@ async function vAskPage(url){
   return JSON.parse(t).problems || [];
 }
 
-async function vRead(){
+/* 시간 초과는 대체로 일시적이다. 두 번까지 다시 시도하되 생각 예산을 줄여 빨리 끝내게 한다. */
+async function vAskRetry(url){
+  var budgets = [6144, 4096, 2048], last;
+  for (var i = 0; i < budgets.length; i++) {
+    try { return await vAskPage(url, budgets[i]); }
+    catch(e) {
+      last = e;
+      if (i < budgets.length - 1) await new Promise(function(r){ setTimeout(r, 1200); });
+    }
+  }
+  throw last;
+}
+
+/* only 에 쪽 번호 배열을 주면 그 쪽만 다시 읽는다.
+   실패한 쪽 하나 때문에 문서 전체를 다시 읽고 검수를 날리면 안 된다. */
+async function vRead(only){
   var d = vDoc();
   if (!d) return;
-  var pages = d.page_images || [];
-  if (!pages.length) { alert('쪽 이미지가 없습니다.'); return; }
+  var all = d.page_images || [];
+  var pages = only ? all.filter(function(p){ return only.indexOf(p.no) >= 0; }) : all;
+  if (!pages.length) { alert('읽을 쪽이 없습니다.'); return; }
 
-  var had = await db.from('variant_problems').select('id').eq('doc_id', d.id).limit(1);
-  if ((had.data || []).length &&
-      !confirm('이미 읽어 둔 문항이 있습니다.\n다시 읽으면 검수한 내용까지 모두 지워집니다.\n\n계속할까요?'))
-    return;
+  if (!only) {
+    var had = await db.from('variant_problems').select('id').eq('doc_id', d.id).limit(1);
+    if ((had.data || []).length &&
+        !confirm('이미 읽어 둔 문항이 있습니다.\n다시 읽으면 검수한 내용까지 모두 지워집니다.\n\n계속할까요?'))
+      return;
+  }
 
   var btn = $('readbtn');
   if (btn) { btn.disabled = true; btn.textContent = '읽는 중…'; }
@@ -437,7 +464,7 @@ async function vRead(){
       while (queue.length) {
         var p = queue.shift();
         try {
-          var got = await vAskPage(urls[p.path]);
+          var got = await vAskRetry(urls[p.path]);
           got.forEach(function(g){
             var st = vRepair(g.statement), ch = (g.choices || []).map(function(x){ return vRepair(x); });
             repaired += st.n + ch.reduce(function(a, b){ return a + b.n; }, 0);
@@ -449,33 +476,44 @@ async function vRead(){
                      format_flags: vFlags(st.t, choices),
                      figure_desc: g.figure_desc || '' } });
           });
-        } catch(e) { errs.push(p.no + '쪽: ' + (e.message || e)); }
+        } catch(e) { errs.push({ no:p.no, msg:String(e.message || e) }); }
         done++; tick('읽는 중 ' + done + ' / ' + pages.length + '쪽');
       }
     }
     await Promise.all(Array.from({ length: Math.min(READ_AT_ONCE, pages.length) }, worker));
 
-    /* 쪽 순서 → 문항 번호 순서로 정리 */
-    rows.sort(function(a, b){
-      return (a.page_no - b.page_no) || (parseInt(a.number,10) || 0) - (parseInt(b.number,10) || 0); });
-    rows.forEach(function(r, i){ r.order_no = i + 1; });
+    /* 쪽·문항번호로 자리를 정한다. 나중에 일부만 다시 읽어도 순서가 유지되도록
+       전체를 다시 매기지 않고 (쪽×1000 + 번호) 로 계산한다. */
+    rows.forEach(function(r, i){
+      r.order_no = r.page_no * 1000 + (parseInt(r.number, 10) || (i + 1)); });
 
     tick('저장 중…');
-    await db.from('variant_problems').delete().eq('doc_id', d.id);
+    var del = db.from('variant_problems').delete().eq('doc_id', d.id);
+    if (only) del = del.in('page_no', only);          /* 다시 읽은 쪽만 갈아 끼운다 */
+    await del;
     if (rows.length) {
       var ins = await db.from('variant_problems').insert(rows);
       if (ins.error) throw ins.error;
     }
+    var failed = errs.map(function(e){ return e.no; });
     await db.from('variant_docs').update({
-      status: errs.length ? (rows.length ? '읽음' : '실패') : '읽음',
-      error: errs.length ? errs.join(' / ') : null,
+      status: (rows.length || !errs.length) ? '읽음' : '실패',
+      error: errs.length
+        ? JSON.stringify({ failed: failed,
+            msg: errs.map(function(e){ return e.no + '쪽: ' + e.msg; }) })
+        : null,
       updated_at: new Date().toISOString() }).eq('id', d.id);
 
     var flagged = rows.filter(function(r){ return r.ocr.format_flags.length; }).length;
-    alert('읽기가 끝났습니다.\n\n문항 ' + rows.length + '개'
+    alert((only ? '다시 읽기가 끝났습니다.' : '읽기가 끝났습니다.')
+      + '\n\n문항 ' + rows.length + '개'
       + '\n형식 경고 ' + flagged + '개'
       + (repaired ? '\n깨진 역슬래시 ' + repaired + '곳 복구' : '')
-      + (errs.length ? '\n\n실패한 쪽:\n' + errs.join('\n') : ''));
+      + (errs.length
+          ? '\n\n실패한 쪽 (세 번 시도했습니다):\n'
+            + errs.map(function(e){ return e.no + '쪽: ' + e.msg; }).join('\n')
+            + '\n\n[실패한 쪽만 다시 읽기] 를 누르면 그 쪽만 다시 시도합니다.'
+          : ''));
     await vLoadDocs(); vRenderBody();
   } catch(e) {
     alert('읽기 실패\n\n' + (e.message || e));
@@ -493,11 +531,23 @@ async function vRenderRead(d){
          + ' onclick="window.open(this.src)" alt="' + p.no + '쪽">';
   }).join('') || '<div class="empty">쪽 이미지가 없습니다.</div>';
 
+  /* 실패한 쪽이 있으면 그 쪽만 다시 읽을 수 있게 띄운다 */
+  var bad = null;
+  try { bad = d.error ? JSON.parse(d.error) : null; } catch(e) { bad = { msg:[d.error] }; }
+  var badBox = (bad && bad.msg && bad.msg.length)
+    ? '<div class="pill bad" style="display:block;margin-bottom:8px;padding:8px 11px;line-height:1.7">'
+      + '⚠️ 못 읽은 쪽이 있습니다<br>' + esc(bad.msg.join(' / '))
+      + ((bad.failed && bad.failed.length)
+          ? '<br><button style="margin-top:6px" onclick="vRead(' + JSON.stringify(bad.failed) + ')">'
+            + '실패한 쪽만 다시 읽기</button>' : '')
+      + '</div>' : '';
+
   $('body').innerHTML =
     '<div class="readgrid">'
     + '<div><div style="font-size:12px;font-weight:800;margin-bottom:6px">원본 ' + pages.length + '쪽</div>'
     +   '<div class="pages">' + imgs + '</div></div>'
-    + '<div><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+    + '<div>' + badBox
+    +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
     +   '<div style="font-size:12px;font-weight:800">읽은 문항</div>'
     +   '<span class="mut" style="font-size:12px" id="pstat"></span>'
     +   '<button class="pri" id="readbtn" style="margin-left:auto;padding:5px 10px"'
