@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>변형문제 — BMAPS v0.03</title>
+<title>변형문제 — BMAPS v0.04</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
@@ -92,7 +92,7 @@
 
 <header class="top">
   <h1>변형문제</h1>
-  <span class="badge" id="ver">v0.03</span>
+  <span class="badge" id="ver">v0.04</span>
   <span class="sp" id="who">…</span>
 </header>
 
@@ -182,7 +182,7 @@
    · 이 단계에서 하는 일: 원본 올리기 · 쪽 이미지 만들기 · 목록/휴지통
    · 읽기(비전)·변형 생성·검수·내보내기는 다음 단계에서 붙인다.
 ══════════════════════════════════════════════════════════════ */
-window.VARIANT_VERSION = 'v0.03';
+window.VARIANT_VERSION = 'v0.04';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -336,6 +336,12 @@ var OCR_PROMPT = [
  '- **선택지가 없는 주관식이면 choices 를 빈 배열로 둬라.** 없는 선택지를 지어내지 마라.',
  '- 배점 `[3.1점]` 이 있으면 points 에 "3.1" 처럼 숫자만. 없으면 빈 문자열.',
  '',
+ '정답·해설 쪽',
+ '- **문항 없이 정답이나 해설만 적힌 쪽**이면 새 문항을 만들지 마라.',
+ '  그 번호마다 is_answer 를 true 로 하고, 정답을 answer 에, 풀이가 있으면 solution 에 적어라.',
+ '  이때 statement 와 choices 는 비워 둬라.',
+ '- 문항 쪽에 정답이 같이 적혀 있으면 answer 에 적어라. 없으면 빈 문자열.',
+ '',
  '그림',
  '- 그림이 있으면 has_figure=true, figure_desc 에 무엇이 그려져 있는지 적어라(곡선·점 이름·표시).',
  '- 글자가 흐려 확실하지 않으면 그 부분을 ?? 로 표시해라. **추측해서 지어내지 마라.**'
@@ -344,8 +350,10 @@ var OCR_PROMPT = [
 var OCR_SCHEMA = { type:'object', properties:{ problems:{ type:'array', items:{ type:'object',
   properties:{ number:{type:'string'}, statement:{type:'string'},
     choices:{type:'array', items:{type:'string'}}, points:{type:'string'},
-    has_figure:{type:'boolean'}, figure_desc:{type:'string'} },
-  required:['number','statement','choices','points','has_figure','figure_desc'] } } },
+    has_figure:{type:'boolean'}, figure_desc:{type:'string'},
+    is_answer:{type:'boolean'}, answer:{type:'string'}, solution:{type:'string'} },
+  required:['number','statement','choices','points','has_figure','figure_desc',
+            'is_answer','answer','solution'] } } },
   required:['problems'] };
 
 /* ⚠ JSON 이스케이프가 역슬래시를 삼킨다.
@@ -358,19 +366,39 @@ var VCMD = {
 };
 var VBACK = { '\x08':'\\b', '\x09':'\\t', '\x0a':'\\n', '\x0b':'\\v', '\x0c':'\\f', '\x0d':'\\r' };
 
+/* 줄바꿈(\n)만 진짜로 쓰일 수 있으므로 목록으로 가리고,
+   나머지 제어문자(\b \t \v \f \r)는 LaTeX·한글 어디에도 안 쓰이니
+   **뒤에 영문자가 오면 무조건** 삼켜진 역슬래시로 본다.
+   (목록 방식이면 \root 같은 걸 놓친다 — 실제로 놓쳤다) */
 function vRepair(t){
   if (!t) return { t:t || '', n:0 };
   var out = '', n = 0, i = 0;
   while (i < t.length) {
-    var c = t.charAt(i), list = VCMD[c];
-    if (list) {
-      var tail = t.substr(i + 1, 10), hit = false;
-      for (var k = 0; k < list.length; k++) if (tail.indexOf(list[k]) === 0) { hit = true; break; }
-      if (hit) { out += VBACK[c]; n++; i++; continue; }
+    var c = t.charAt(i);
+    if (VBACK[c]) {
+      var next = t.charAt(i + 1), ok;
+      if (c === '\n') {
+        var list = VCMD[c], tail = t.substr(i + 1, 10);
+        ok = false;
+        for (var k = 0; k < list.length; k++) if (tail.indexOf(list[k]) === 0) { ok = true; break; }
+      } else {
+        ok = /[A-Za-z]/.test(next);
+      }
+      if (ok) { out += VBACK[c]; n++; i++; continue; }
     }
     out += c; i++;
   }
   return { t:out, n:n };
+}
+
+/* 표기를 하나로 맞춘다.
+   같은 문서인데 쪽마다 \( \) 를 쓰기도 하고 $ 를 쓰기도 한다(실측: 5쪽만 $ 116개).
+   $ 는 기계적으로 바꿀 수 있으니 코드가 통일한다. */
+function vNorm(t){
+  if (!t) return '';
+  t = t.replace(/\$\$([\s\S]*?)\$\$/g, function(m, s){ return '\\(' + s + '\\)'; });
+  t = t.replace(/\$([^$\n]+)\$/g,      function(m, s){ return '\\(' + s + '\\)'; });
+  return t;
 }
 
 /* 형식 검사 — 내용이 맞는지는 사람이 봐야 하지만, 형식은 코드가 다 잡는다 */
@@ -450,7 +478,7 @@ async function vRead(only){
   var btn = $('readbtn');
   if (btn) { btn.disabled = true; btn.textContent = '읽는 중…'; }
   var box = $('plist');
-  var done = 0, rows = [], errs = [], repaired = 0;
+  var done = 0, rows = [], errs = [], answers = [], repaired = 0;
   function tick(msg){
     if (box) box.innerHTML = '<div class="empty">' + esc(msg) + '<div class="bar" style="margin-top:10px">'
       + '<i style="width:' + Math.round(done / pages.length * 100) + '%"></i></div></div>';
@@ -466,11 +494,19 @@ async function vRead(only){
         try {
           var got = await vAskRetry(urls[p.path]);
           got.forEach(function(g){
-            var st = vRepair(g.statement), ch = (g.choices || []).map(function(x){ return vRepair(x); });
-            repaired += st.n + ch.reduce(function(a, b){ return a + b.n; }, 0);
+            function fix(x){ var r = vRepair(x); repaired += r.n; return { t: vNorm(r.t), n: r.n }; }
+            var st = fix(g.statement), ch = (g.choices || []).map(fix);
             var choices = ch.map(function(x){ return x.t; });
+            var ans = fix(g.answer || '').t, sol = fix(g.solution || '').t;
+
+            /* 정답·해설 쪽은 새 문항이 아니다. 따로 모아 두었다가 같은 번호에 붙인다. */
+            if (g.is_answer && !st.t.replace(/\s/g, '')) {
+              answers.push({ number: String(g.number || ''), answer: ans, solution: sol });
+              return;
+            }
             rows.push({ doc_id: d.id, number: String(g.number || ''), page_no: p.no,
               statement: st.t, choices: choices, points: g.points || null,
+              answer: ans || null, solution: sol || null,
               has_figure: !!g.has_figure, status: '초안',
               ocr: { model:'gemini-2.5-flash', page:p.no, repaired: st.n,
                      format_flags: vFlags(st.t, choices),
@@ -481,6 +517,19 @@ async function vRead(only){
       }
     }
     await Promise.all(Array.from({ length: Math.min(READ_AT_ONCE, pages.length) }, worker));
+
+    /* 뒤쪽 정답지에서 모은 답을 같은 번호의 문항에 붙인다 */
+    var merged = 0, orphan = [];
+    answers.forEach(function(a){
+      var hit = rows.filter(function(r){ return r.number === a.number; });
+      if (hit.length) {
+        hit.forEach(function(r){
+          if (a.answer)   r.answer = a.answer;
+          if (a.solution) r.solution = a.solution;
+        });
+        merged++;
+      } else { orphan.push(a); }
+    });
 
     /* 쪽·문항번호로 자리를 정한다. 나중에 일부만 다시 읽어도 순서가 유지되도록
        전체를 다시 매기지 않고 (쪽×1000 + 번호) 로 계산한다. */
@@ -495,6 +544,16 @@ async function vRead(only){
       var ins = await db.from('variant_problems').insert(rows);
       if (ins.error) throw ins.error;
     }
+    /* 이 회차에 없던 번호(=이미 저장돼 있던 문항)에도 답을 붙인다 — 정답 쪽만 다시 읽은 경우 */
+    for (var oi = 0; oi < orphan.length; oi++) {
+      var a = orphan[oi], patch = {};
+      if (a.answer)   patch.answer = a.answer;
+      if (a.solution) patch.solution = a.solution;
+      if (!Object.keys(patch).length) continue;
+      var r2 = await db.from('variant_problems').update(patch)
+                 .eq('doc_id', d.id).eq('number', a.number).is('deleted_at', null).select('id');
+      if (!r2.error && (r2.data || []).length) merged++;
+    }
     var failed = errs.map(function(e){ return e.no; });
     await db.from('variant_docs').update({
       status: (rows.length || !errs.length) ? '읽음' : '실패',
@@ -505,9 +564,12 @@ async function vRead(only){
       updated_at: new Date().toISOString() }).eq('id', d.id);
 
     var flagged = rows.filter(function(r){ return r.ocr.format_flags.length; }).length;
+    var withAns = rows.filter(function(r){ return r.answer; }).length;
     alert((only ? '다시 읽기가 끝났습니다.' : '읽기가 끝났습니다.')
       + '\n\n문항 ' + rows.length + '개'
       + '\n형식 경고 ' + flagged + '개'
+      + (withAns ? '\n정답이 붙은 문항 ' + withAns + '개' : '')
+      + (merged ? '\n정답 쪽에서 가져와 붙인 것 ' + merged + '건' : '')
       + (repaired ? '\n깨진 역슬래시 ' + repaired + '곳 복구' : '')
       + (errs.length
           ? '\n\n실패한 쪽 (세 번 시도했습니다):\n'
@@ -583,6 +645,7 @@ async function vRenderProblems(d){
       +   (flags.length ? '<span class="pill warn" title="' + esc(flags.join(' / ')) + '">형식 경고 '
                           + flags.length + '</span>' : '')
       +   (p.has_figure ? '<span class="pill mut">그림</span>' : '')
+      +   (p.answer ? '<span class="pill ok">답 ' + esc(String(p.answer).slice(0, 14)) + '</span>' : '')
       +   '<span class="mut" style="margin-left:auto;font-size:11px">' + p.page_no + '쪽</span>'
       + '</div>'
       + '<div class="body">' + esc(p.statement || '')
@@ -609,6 +672,8 @@ function vToggle(i){
     + '<label class="f" style="margin-top:6px">선택지 (한 줄에 하나, 없으면 비움)</label>'
     + '<textarea id="ed-c-' + i + '" rows="' + Math.max(2, (p.choices||[]).length) + '">'
       + esc((p.choices || []).join('\n')) + '</textarea>'
+    + '<label class="f" style="margin-top:6px">정답 (뒤쪽 정답지에서 가져옵니다)</label>'
+    + '<input id="ed-a-' + i + '" value="' + esc(p.answer || '') + '">'
     + ((p.ocr||{}).figure_desc
         ? '<div class="mut" style="font-size:11px;margin-top:6px">AI 가 본 그림: '
           + esc(p.ocr.figure_desc) + ' <b>(믿지 말 것 — 배치를 자주 틀립니다)</b></div>' : '')
@@ -627,8 +692,10 @@ async function vSaveProb(i, done){
             .filter(function(x){ return x; });
   var ocr = Object.assign({}, p.ocr || {}, { format_flags: vFlags(s, c), edited: true });
   var status = done ? (p.status === '검수완료' ? '초안' : '검수완료') : p.status;
+  var ansEl = $('ed-a-' + i);
   var up = await db.from('variant_problems').update({
       statement: s, choices: c, ocr: ocr, status: status,
+      answer: ansEl ? (ansEl.value.trim() || null) : p.answer,
       reviewed_by: (status === '검수완료' ? vUser.id : null),
       reviewed_at: (status === '검수완료' ? new Date().toISOString() : null),
       updated_at: new Date().toISOString() }).eq('id', p.id);
