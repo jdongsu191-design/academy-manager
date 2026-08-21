@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>변형문제 — BMAPS v0.06</title>
+<title>변형문제 — BMAPS v0.07</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
@@ -92,7 +92,7 @@
 
 <header class="top">
   <h1>변형문제</h1>
-  <span class="badge" id="ver">v0.06</span>
+  <span class="badge" id="ver">v0.07</span>
   <span class="sp" id="who">…</span>
 </header>
 
@@ -182,7 +182,7 @@
    · 이 단계에서 하는 일: 원본 올리기 · 쪽 이미지 만들기 · 목록/휴지통
    · 읽기(비전)·변형 생성·검수·내보내기는 다음 단계에서 붙인다.
 ══════════════════════════════════════════════════════════════ */
-window.VARIANT_VERSION = 'v0.06';
+window.VARIANT_VERSION = 'v0.07';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -425,86 +425,76 @@ function vFlags(statement, choices){
 
 /* ══════════════════════════════════════════════════════════
    형식 다듬기 — 맨몸으로 나온 수식을 \( \) 로 감싼다
-   쪽마다 표기가 흔들려서(4쪽이 통째로 맨몸으로 나온 적 있다) 필요하다.
-   ⭐ 다시 '읽히지' 않는다. 이미 읽은 글에 **구분자만** 넣게 하고,
-      구분자를 도로 떼어 원문과 같은지 대조해 다르면 버린다.
-      그래서 이 단계가 내용을 망칠 수 없다.
+
+   ⚠ AI 에게 시키지 마라. 두 번 해봤고 두 번 다 **원문을 그대로 돌려줬다.**
+      (그런데 "안 바뀌었으니 통과"로 세어 '감쌌다'고 잘못 보고했었다)
+   그래서 코드가 직접 한다. 한글 사이에 낀 비한글 덩어리 중
+   '수식으로 볼 근거'가 있는 것만 감싼다. 실제 문항 110개로 검증했고
+   내용이 달라진 것은 0개였다.
 ════════════════════════════════════════════════════════════ */
-var WRAP_PROMPT = [
- '아래는 이미 읽어 낸 수학 문항이다. **내용을 절대 바꾸지 마라.**',
- '할 일은 딱 하나 — 수식인 부분을 \\( \\) 로 감싸는 것이다.',
- '',
- '- 글자를 하나도 더하거나 빼거나 고치지 마라. 순서도 바꾸지 마라.',
- '- 오직 \\( 와 \\) 만 넣어라. 이미 감싸진 곳은 그대로 둬라.',
- '- 한국어 문장, 배점 표기 [5.0점], 문항 번호는 감싸지 마라.',
- '- 좌표 (0,3) · 식 x^2+y^2=4 · 분수 -4/3 · sqrt(5) · 선분 AB 같은 것이 수식이다.',
- '- sqrt(5) 처럼 평문으로 쓰인 것은 \\(\\sqrt{5}\\) 로 고쳐도 된다. 그 외 내용 변경은 안 된다.',
- '',
- '들어온 순서 그대로, 같은 개수로 돌려줘라.'
-].join('\n');
+var W_HAN  = /[가-힣]/;
+var W_MATH = /\\[A-Za-z]+|[\^_=<>]|[A-Za-z]\s*\(|\d\s*[+\-*/]\s*\d|\(\s*-?[\dA-Za-z][^()]*,/;
+var W_SKIP = /^\[?\s*총?\s*\d+(\.\d+)?\s*점?\s*\]?$|^\(\d+\)$|^[①-⑤]$/;
+var W_TRAIL = ' \t,.?!:;\u00b7';
+var W_SQRT = /(?<![A-Za-z\\])sqrt\s*\(([^()]*)\)/g;
 
-var WRAP_SCHEMA = { type:'object', properties:{ items:{ type:'array', items:{ type:'object',
-  properties:{ statement:{type:'string'}, choices:{type:'array', items:{type:'string'}} },
-  required:['statement','choices'] } } }, required:['items'] };
+function vWrap(text){
+  var t = String(text == null ? '' : text);
+  if (!t) return t;
+  /* 이미 감싸진 구간은 통째로 지켜 둔다 */
+  var keep = [];
+  t = t.replace(/\\\([\s\S]*?\\\)/g, function(m){ keep.push(m); return '\u0000' + (keep.length - 1) + '\u0000'; });
 
-/* 구분자·공백·평문 root 표기를 지운 '알맹이'. 이게 같아야 받아들인다. */
+  var parts = t.split(/([가-힣]+|\u0000\d+\u0000)/);
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i];
+    if (!part || W_HAN.test(part.charAt(0)) || part.charAt(0) === '\u0000') continue;
+    var a = 0, b = part.length;
+    while (a < b && W_TRAIL.indexOf(part.charAt(a)) >= 0) a++;
+    while (b > a && W_TRAIL.indexOf(part.charAt(b - 1)) >= 0) b--;
+    var head = part.slice(0, a), core = part.slice(a, b), tail = part.slice(b);
+    if (!core || W_SKIP.test(core) || !W_MATH.test(core)) continue;
+    function cnt(s, ch){ return s.split(ch).length - 1; }
+    while (core && core.slice(-1) === ')' && cnt(core, '(') < cnt(core, ')')) {
+      tail = ')' + tail; core = core.slice(0, -1);
+    }
+    while (core && core.charAt(0) === '(' && cnt(core, '(') > cnt(core, ')')) {
+      head = head + '('; core = core.slice(1);
+    }
+    if (!core || !W_MATH.test(core)) continue;
+    core = core.trim().replace(W_SQRT, function(m, x){ return '\\sqrt{' + x + '}'; });
+    parts[i] = head + '\\(' + core + '\\)' + tail;
+  }
+  t = parts.join('');
+  return t.replace(/\u0000(\d+)\u0000/g, function(m, k){ return keep[+k]; });
+}
+
+/* 감싸도 내용이 그대로인지 마지막으로 한 번 더 확인한다 */
 function vCore(t){
-  return String(t || '')
+  return String(t == null ? '' : t)
     .replace(/\\\(|\\\)/g, '')
     .replace(/\\sqrt\s*\{([^{}]*)\}/g, 'sqrt($1)')
     .replace(/\\left|\\right|\\,|\\;/g, '')
     .replace(/[\s{}]/g, '');
 }
 
-/* ⚠ 생각 예산을 0 으로 두면 안 된다.
-   실측에서 모델이 폭주해 영어로 엉뚱한 내용을 1.4만 토큰 쏟아냈다.
-   (안전장치가 걸러 내긴 했지만 시간과 돈만 버린다) */
-async function vWrapBatch(items, budget){
-  var res = await fetch(PROXY, { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ model:'gemini-2.5-flash',
-      contents:[{ parts:[{ text: WRAP_PROMPT + '\n\n' + JSON.stringify({ items: items }) }] }],
-      generationConfig:{ temperature:0, maxOutputTokens:16384,
-        responseMimeType:'application/json',
-        thinkingConfig:{ thinkingBudget: budget || 1024 }, responseSchema: WRAP_SCHEMA } }) });
-  var raw = await res.text(), d;
-  try { d = JSON.parse(raw); } catch(e) { throw new Error('응답이 JSON 이 아님 (HTTP ' + res.status + ')'); }
-  if (d.error) throw new Error(d.error.message || '오류');
-  var c = (d.candidates || [])[0] || {};
-  var t = c.content && c.content.parts && c.content.parts[0] && c.content.parts[0].text;
-  if (!t) throw new Error('빈 응답 (' + (c.finishReason || '') + ')');
-  try { return JSON.parse(t).items || []; }
-  catch(e) { throw new Error('응답이 잘림 (' + (c.finishReason || '') + ')'); }
-}
-
-/* rows 중 '안 감싸짐' 경고가 붙은 것만 다듬는다. 돌려받은 값은 검사 후 채택.
-   묶음이 크면 응답이 잘리는 일이 있어 3개씩 보내고, 실패하면 두 번까지 다시 시도한다. */
-async function vWrapRows(rows, onStep){
+/* '안 감싸짐' 경고가 붙은 문항만 다듬는다. 통신이 없으므로 즉시 끝난다. */
+function vWrapRows(rows){
   var need = rows.filter(function(r){
     return (r.ocr.format_flags || []).some(function(f){ return f.indexOf('안 감싸짐') >= 0; }); });
-  var ok = 0, rej = 0, err = 0, lastErr = '';
-  for (var i = 0; i < need.length; i += 3) {
-    var chunk = need.slice(i, i + 3);
-    var payload = chunk.map(function(r){ return { statement: r.statement, choices: r.choices }; });
-    var got = null;
-    for (var a = 0; a < 2 && !got; a++) {
-      try { got = await vWrapBatch(payload, a ? 2048 : 1024); }
-      catch(e) { lastErr = String(e.message || e); }
-    }
-    if (!got) { err += chunk.length; if (onStep) onStep(i + chunk.length, need.length); continue; }
-    chunk.forEach(function(r, k) {
-      var g = got[k];
-      if (!g || (g.choices || []).length !== r.choices.length) { rej++; return; }
-      var same = vCore(g.statement) === vCore(r.statement)
-        && g.choices.every(function(c, ci){ return vCore(c) === vCore(r.choices[ci]); });
-      if (!same) { rej++; return; }             /* 내용이 바뀌었으면 버린다 */
-      r.statement = g.statement; r.choices = g.choices;
-      r.ocr.format_flags = vFlags(r.statement, r.choices);
-      r.ocr.wrapped = true;
-      ok++;
-    });
-    if (onStep) onStep(i + chunk.length, need.length);
-  }
-  return { need: need.length, ok: ok, rejected: rej, err: err, lastErr: lastErr };
+  var ok = 0, rej = 0;
+  need.forEach(function(r){
+    var ns = vWrap(r.statement), nc = r.choices.map(vWrap);
+    var same = vCore(ns) === vCore(r.statement)
+      && nc.every(function(c, i){ return vCore(c) === vCore(r.choices[i]); });
+    if (!same) { rej++; return; }                 /* 있을 수 없지만 그래도 지킨다 */
+    var before = (r.ocr.format_flags || []).length;
+    r.statement = ns; r.choices = nc;
+    r.ocr.format_flags = vFlags(ns, nc);
+    r.ocr.wrapped = true;
+    if (r.ocr.format_flags.length < before) ok++;
+  });
+  return { need: need.length, ok: ok, rejected: rej, err: 0, lastErr: '' };
 }
 
 /* ⚠ 응답이 JSON 이 아닐 수 있다.
@@ -606,7 +596,7 @@ async function vRead(only){
     var wrap = { need:0, ok:0, rejected:0 };
     if (rows.length) {
       tick('형식 다듬는 중…');
-      wrap = await vWrapRows(rows, function(a, b){ tick('형식 다듬는 중 ' + a + ' / ' + b); });
+      wrap = vWrapRows(rows);
     }
 
     /* 뒤쪽 정답지에서 모은 답을 같은 번호의 문항에 붙인다 */
