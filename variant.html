@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>변형문제 — BMAPS v0.10</title>
+<title>변형문제 — BMAPS v0.11</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
@@ -92,7 +92,7 @@
 
 <header class="top">
   <h1>변형문제</h1>
-  <span class="badge" id="ver">v0.10</span>
+  <span class="badge" id="ver">v0.11</span>
   <span class="sp" id="who">…</span>
 </header>
 
@@ -182,7 +182,7 @@
    · 이 단계에서 하는 일: 원본 올리기 · 쪽 이미지 만들기 · 목록/휴지통
    · 읽기(비전)·변형 생성·검수·내보내기는 다음 단계에서 붙인다.
 ══════════════════════════════════════════════════════════════ */
-window.VARIANT_VERSION = 'v0.10';
+window.VARIANT_VERSION = 'v0.11';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -625,12 +625,50 @@ async function vAskRetry(url){
 
 /* only 에 쪽 번호 배열을 주면 그 쪽만 다시 읽는다.
    실패한 쪽 하나 때문에 문서 전체를 다시 읽고 검수를 날리면 안 된다. */
+/* 빠른정답 쪽 — 번호와 정답이 표로 붙어 있어 번호가 밀리지 않는다.
+   프롬프트는 nje.html 의 정답 인식 규칙을 그대로 가져왔다. */
+var ANS_PROMPT = [
+ '이 이미지는 한국 수학 문제집의 **빠른정답 쪽**이다. 적힌 문항 번호와 정답을 모두 읽어라.',
+ '',
+ '- 번호는 자연수다. **하나도 빠뜨리지 마라.**',
+ '- 동그라미 숫자 ①②③④⑤ 는 **원본 기호 그대로** 둬라. 1,2,3,4,5 로 바꾸지 마라.',
+ '- 분수는 "분자/분모" (예: 16/3) · 제곱근은 √ · 지수는 ^ 로 적어라.',
+ '- 좌표·집합·순서쌍은 원본 그대로 (예: (2,3), {1,2,3}).',
+ '- 해설이 붙어 있어도 **최종 답만** 뽑아라.',
+ '- 여러 단으로 나뉘어 있으면 왼쪽 위 → 오른쪽 아래 순서로 모두 읽어라.',
+ '- 확실하지 않으면 그 번호는 빼라. **지어내지 마라.**'
+].join('\n');
+
+var ANS_SCHEMA = { type:'object', properties:{ answers:{ type:'array', items:{ type:'object',
+  properties:{ number:{type:'string'}, answer:{type:'string'} },
+  required:['number','answer'] } } }, required:['answers'] };
+
+async function vAskAnswerPage(url){
+  var res = await fetch(PROXY, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ model:'gemini-2.5-flash', imageUrls:[url], prompt: ANS_PROMPT,
+      generationConfig:{ temperature:0, maxOutputTokens:16384,
+        responseMimeType:'application/json',
+        thinkingConfig:{ thinkingBudget:2048 }, responseSchema: ANS_SCHEMA } }) });
+  var raw = await res.text(), d;
+  try { d = JSON.parse(raw); } catch(e) { throw new Error('응답이 JSON 이 아님'); }
+  if (d.error) throw new Error(d.error.message || '오류');
+  var c = (d.candidates || [])[0] || {};
+  var t = c.content && c.content.parts && c.content.parts[0] && c.content.parts[0].text;
+  if (!t) throw new Error(c.finishReason === 'RECITATION'
+    ? '저작권 필터에 걸림(RECITATION)' : '빈 응답');
+  return JSON.parse(t).answers || [];
+}
+
 async function vRead(only){
   var d = vDoc();
   if (!d) return;
   var all = d.page_images || [];
   var pages = only ? all.filter(function(p){ return only.indexOf(p.no) >= 0; }) : all;
-  if (!pages.length) { alert('읽을 쪽이 없습니다.'); return; }
+  /* 해설·표지 쪽은 비전에 보내지 않는다 — 가짜 문항이 생기고 비용만 든다 */
+  var quickPages = pages.filter(function(p){ return p.kind === '빠른정답'; });
+  var skipped = pages.filter(function(p){ return p.kind === '해설' || p.kind === '표지'; });
+  pages = pages.filter(function(p){ return !p.kind || p.kind === '문제'; });
+  if (!pages.length && !quickPages.length) { alert('읽을 쪽이 없습니다.'); return; }
 
   if (!only) {
     var had = await db.from('variant_problems').select('id').eq('doc_id', d.id).limit(1);
@@ -647,10 +685,11 @@ async function vRead(only){
     if (box) box.innerHTML = '<div class="empty">' + esc(msg) + '<div class="bar" style="margin-top:10px">'
       + '<i style="width:' + Math.round(done / pages.length * 100) + '%"></i></div></div>';
   }
-  tick('읽는 중 0 / ' + pages.length + '쪽');
+  tick('읽는 중 0 / ' + pages.length + '쪽'
+       + (skipped.length ? '  (해설·표지 ' + skipped.length + '쪽은 건너뜁니다)' : ''));
 
   try {
-    var urls = await vSignedUrls(pages.map(function(p){ return p.path; }));
+    var urls = await vSignedUrls(pages.concat(quickPages).map(function(p){ return p.path; }));
     var queue = pages.slice();
     async function worker(){
       while (queue.length) {
@@ -684,6 +723,20 @@ async function vRead(only){
       }
     }
     await Promise.all(Array.from({ length: Math.min(READ_AT_ONCE, pages.length) }, worker));
+
+    /* 빠른정답 쪽에서 번호↔정답 표를 통째로 얻는다 */
+    var qa = 0;
+    for (var qi = 0; qi < quickPages.length; qi++) {
+      tick('빠른정답 쪽 읽는 중…');
+      try {
+        var got2 = await vAskAnswerPage(urls[quickPages[qi].path]);
+        got2.forEach(function(a){
+          answers.push({ number: String(a.number || ''), answer: vNorm(vRepair(a.answer).t),
+                         solution: '', fromQuick: true });
+          qa++;
+        });
+      } catch(e) { errs.push({ no: quickPages[qi].no, msg: '빠른정답 — ' + (e.message || e) }); }
+    }
 
     /* 서술형 소문항을 하나로 합친다 — 개수를 회차와 무관하게 만든다 */
     var mg = vMergeSubParts(rows);
@@ -755,6 +808,8 @@ async function vRead(only){
       + (withAns ? '\n정답이 붙은 문항 ' + withAns + '개' : '')
       + (merged ? '\n정답 쪽에서 가져와 붙인 것 ' + merged + '건' : '')
       + (mg.merged ? '\n서술형 소문항 합침 ' + mg.merged + '건' : '')
+      + (skipped.length ? '\n건너뛴 쪽 ' + skipped.length + '개 (해설·표지)' : '')
+      + (qa ? '\n빠른정답 쪽에서 읽은 정답 ' + qa + '개' : '')
       + (sp.demoted ? '\n뒤쪽 해설 쪽에서 온 것 ' + sp.demoted + '건은 문항이 아니라 해설로 넣었습니다' : '')
       + (skipped ? '\n⚠ 정답을 붙이지 않은 번호 ' + skipped + '개'
           + ' — 해설 쪽 번호가 밀렸을 수 있어 직접 확인이 필요합니다' : '')
@@ -937,9 +992,51 @@ function vProg(msg, pct){
 }
 
 /* PDF 를 쪽 이미지로 — 브라우저에서 한다. 서버가 필요 없다. */
+/* ══════════════════════════════════════════════════════════
+   쪽 종류 가리기 — nje.html(N제 PDF 등록)에서 가져온 방식
+
+   학원이 한/글로 만든 PDF 는 **텍스트가 살아 있다**(실측 쪽당 809자).
+   그래서 비전에 보내기 전에 글로 먼저 쪽을 나눌 수 있다:
+     문제 42쪽 · 빠른정답 1쪽 · 해설 12쪽
+   해설 쪽을 건너뛰면 '해설이 가짜 문항이 되는' 사고가 원천 차단되고
+   비전 호출도 12쪽분 줄어든다. 정답은 빠른정답 쪽에서 표째로 얻으므로
+   번호가 밀리지 않는다.
+
+   ⚠ 시중 문제은행 PDF 는 난독화 폰트라 글자가 쓰레기다.
+      한글 비율로 '쓸 만한 텍스트인지' 먼저 판정한다.
+════════════════════════════════════════════════════════════ */
+var NJ_MARKER = /[0-9]+[｜|]/g;
+
+function vPageKind(t){
+  var marker = (t.match(NJ_MARKER) || []).length;
+  var quick = (/빠른정답/.test(t) && /[0-9]+[｜|]/.test(t))
+           || (/정답\s*및\s*해설/.test(t) && /빠른정답/.test(t));
+  if (quick) return { kind: '빠른정답', marker: marker };
+  var comm = /정답\s*및\s*해설/.test(t)
+          || (/풀이/.test(t) && marker > 6 && !/빠른정답/.test(t))
+          || (/해설/.test(t) && t.length > 500 && marker === 0);
+  if (comm) return { kind: '해설', marker: marker };
+  if (marker === 0 && t.replace(/\s/g, '').length < 200) return { kind: '표지', marker: marker };
+  return { kind: '문제', marker: marker };
+}
+
 async function vPdfToPages(file, onStep){
   var buf = await file.arrayBuffer();
   var pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
+  /* ① 글자를 먼저 훑어 쪽 종류를 가린다 */
+  var texts = [];
+  for (var t = 1; t <= pdf.numPages; t++) {
+    try {
+      var tc = await (await pdf.getPage(t)).getTextContent();
+      texts.push(tc.items.map(function(x){ return x.str; }).join(''));
+    } catch(e) { texts.push(''); }
+  }
+  var all = texts.join('');
+  var han = (all.match(/[가-힣]/g) || []).length;
+  var usable = all.length > 200 && han / all.length > 0.12;   /* 난독화 폰트 걸러내기 */
+
+  /* ② 쪽 그림 만들기 */
   var out = [];
   for (var i = 1; i <= pdf.numPages; i++) {
     var page = await pdf.getPage(i);
@@ -948,9 +1045,11 @@ async function vPdfToPages(file, onStep){
     cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
     await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
     var blob = await new Promise(function(res){ cv.toBlob(res, PAGE_TYPE, PAGE_Q); });
-    out.push({ no: i, blob: blob, w: cv.width, h: cv.height });
+    var k = usable ? vPageKind(texts[i - 1]).kind : '문제';
+    out.push({ no: i, blob: blob, w: cv.width, h: cv.height, kind: k });
     onStep(i, pdf.numPages);
   }
+  out.usable = usable;
   return out;
 }
 
@@ -1003,7 +1102,7 @@ async function vUpload(){
         var p = made[k], path = 'pages/' + docId + '/' + p.no + '.' + PAGE_EXT;
         var r2 = await db.storage.from(BUCKET).upload(path, p.blob, { upsert: true, contentType: PAGE_TYPE });
         if (r2.error) throw r2.error;
-        pages.push({ no: p.no, path: path, w: p.w, h: p.h });
+        pages.push({ no: p.no, path: path, w: p.w, h: p.h, kind: p.kind || '문제' });
         vProg('쪽 올리는 중 ' + (k + 1) + ' / ' + made.length, 55 + (k + 1) / made.length * 40);
       }
     } else {
