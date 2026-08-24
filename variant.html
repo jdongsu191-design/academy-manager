@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>변형문제 — BMAPS v0.07</title>
+<title>변형문제 — BMAPS v0.08</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
@@ -92,7 +92,7 @@
 
 <header class="top">
   <h1>변형문제</h1>
-  <span class="badge" id="ver">v0.07</span>
+  <span class="badge" id="ver">v0.08</span>
   <span class="sp" id="who">…</span>
 </header>
 
@@ -182,7 +182,7 @@
    · 이 단계에서 하는 일: 원본 올리기 · 쪽 이미지 만들기 · 목록/휴지통
    · 읽기(비전)·변형 생성·검수·내보내기는 다음 단계에서 붙인다.
 ══════════════════════════════════════════════════════════════ */
-window.VARIANT_VERSION = 'v0.07';
+window.VARIANT_VERSION = 'v0.08';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -497,6 +497,49 @@ function vWrapRows(rows){
   return { need: need.length, ok: ok, rejected: rej, err: 0, lastErr: '' };
 }
 
+/* ══════════════════════════════════════════════════════════
+   서술형 소문항 합치기 — 개수를 회차와 무관하게 고정한다
+
+   같은 문항을 회차마다 다르게 쪼갠다(실측):
+     A 회차 → 19, 20            (묶어서)
+     B 회차 → 19-(1), 19-(2), 20-(1), 20-(2)   (쪼개서)
+   둘 다 틀린 읽기가 아니지만 개수가 흔들린다.
+   **같은 쪽에서 같은 숫자 번호가 여러 번 나오면 소문항으로 보고 하나로 합친다.**
+════════════════════════════════════════════════════════════ */
+/* ⚠ 숫자를 다 이어 붙이면 안 된다. '19-(1)' 의 숫자를 모으면 '191' 이 되어
+   정답 '19' 와 짝이 안 맞는다. **맨 앞 숫자 덩어리만** 쓴다. */
+function vNumKey(n){ var m = String(n == null ? '' : n).match(/\d+/); return m ? m[0] : ''; }
+
+function vMergeSubParts(rows){
+  var byKey = {}, order = [], merged = 0;
+  rows.forEach(function(r){
+    var k = r.page_no + '#' + vNumKey(r.number);
+    if (!byKey[k]) { byKey[k] = [r]; order.push(k); }
+    else byKey[k].push(r);
+  });
+  var out = [];
+  order.forEach(function(k){
+    var g = byKey[k];
+    if (g.length === 1) { out.push(g[0]); return; }
+    /* 원문에 적힌 번호 순서대로 이어 붙인다 */
+    g.sort(function(a, b){ return String(a.number).localeCompare(String(b.number)); });
+    var base = g[0];
+    base.statement = g.map(function(x){ return x.statement; })
+                      .filter(Boolean).join('\n');
+    base.choices = g.reduce(function(best, x){
+      return (x.choices || []).length > best.length ? x.choices : best; }, []);
+    base.answer = g.map(function(x){ return x.answer; }).filter(Boolean).join(' ') || null;
+    base.solution = g.map(function(x){ return x.solution; }).filter(Boolean).join('\n') || null;
+    base.has_figure = g.some(function(x){ return x.has_figure; });
+    base.number = vNumKey(base.number) || base.number;
+    base.ocr.merged_parts = g.length;
+    base.ocr.format_flags = vFlags(base.statement, base.choices);
+    merged += g.length - 1;
+    out.push(base);
+  });
+  return { rows: out, merged: merged };
+}
+
 /* ⚠ 응답이 JSON 이 아닐 수 있다.
    Vercel 함수가 60초를 넘겨 죽으면 "An error occurred…" 같은 **글자**가 온다.
    그걸 그대로 JSON.parse 하면 엉뚱한 오류가 뜨므로 먼저 글자로 받는다. */
@@ -573,9 +616,12 @@ async function vRead(only){
             var choices = ch.map(function(x){ return x.t; });
             var ans = fix(g.answer || '').t, sol = fix(g.solution || '').t;
 
-            /* 정답·해설 쪽은 새 문항이 아니다. 따로 모아 두었다가 같은 번호에 붙인다. */
-            if (g.is_answer && !st.t.replace(/\s/g, '')) {
-              answers.push({ number: String(g.number || ''), answer: ans, solution: sol });
+            /* 정답·해설 쪽은 새 문항이 아니다. 따로 모아 두었다가 같은 번호에 붙인다.
+               ⚠ is_answer 면 본문이 남아 있어도 정답으로 본다. 예전엔 본문이 비어야만
+                  정답으로 처리해서, 서술형 정답이 새 문항으로 잡혀 번호가 겹쳤다. */
+            if (g.is_answer) {
+              answers.push({ number: String(g.number || ''), answer: ans,
+                             solution: sol || st.t });
               return;
             }
             rows.push({ doc_id: d.id, number: String(g.number || ''), page_no: p.no,
@@ -592,6 +638,10 @@ async function vRead(only){
     }
     await Promise.all(Array.from({ length: Math.min(READ_AT_ONCE, pages.length) }, worker));
 
+    /* 서술형 소문항을 하나로 합친다 — 개수를 회차와 무관하게 만든다 */
+    var mg = vMergeSubParts(rows);
+    rows = mg.rows;
+
     /* 맨몸으로 나온 수식을 감싼다 (내용이 바뀌면 버리므로 안전하다) */
     var wrap = { need:0, ok:0, rejected:0 };
     if (rows.length) {
@@ -599,13 +649,14 @@ async function vRead(only){
       wrap = vWrapRows(rows);
     }
 
-    /* 뒤쪽 정답지에서 모은 답을 같은 번호의 문항에 붙인다 */
+    /* 뒤쪽 정답지에서 모은 답을 같은 번호의 문항에 붙인다.
+       번호는 숫자만 비교한다 — '19-(1)' 도 정답 '19' 와 짝이 맞아야 한다. */
     var merged = 0, orphan = [];
     answers.forEach(function(a){
-      var hit = rows.filter(function(r){ return r.number === a.number; });
+      var hit = rows.filter(function(r){ return vNumKey(r.number) === vNumKey(a.number); });
       if (hit.length) {
         hit.forEach(function(r){
-          if (a.answer)   r.answer = a.answer;
+          if (a.answer)   r.answer = (r.answer ? r.answer + ' ' : '') + a.answer;
           if (a.solution) r.solution = a.solution;
         });
         merged++;
@@ -632,7 +683,8 @@ async function vRead(only){
       if (a.solution) patch.solution = a.solution;
       if (!Object.keys(patch).length) continue;
       var r2 = await db.from('variant_problems').update(patch)
-                 .eq('doc_id', d.id).eq('number', a.number).is('deleted_at', null).select('id');
+                 .eq('doc_id', d.id).eq('number', vNumKey(a.number))
+                 .is('deleted_at', null).select('id');
       if (!r2.error && (r2.data || []).length) merged++;
     }
     var failed = errs.map(function(e){ return e.no; });
@@ -651,6 +703,7 @@ async function vRead(only){
       + '\n형식 경고 ' + flagged + '개'
       + (withAns ? '\n정답이 붙은 문항 ' + withAns + '개' : '')
       + (merged ? '\n정답 쪽에서 가져와 붙인 것 ' + merged + '건' : '')
+      + (mg.merged ? '\n서술형 소문항 합침 ' + mg.merged + '건' : '')
       + (wrap.need ? '\n형식 다듬기: 감쌈 ' + wrap.ok + '개'
           + (wrap.rejected ? ' · 내용이 바뀌어 버림 ' + wrap.rejected + '개' : '')
           + (wrap.err ? ' · 요청 실패 ' + wrap.err + '개 (' + wrap.lastErr + ')' : '') : '')
