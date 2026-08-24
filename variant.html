@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>변형문제 — BMAPS v0.11</title>
+<title>변형문제 — BMAPS v0.12</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
@@ -92,7 +92,7 @@
 
 <header class="top">
   <h1>변형문제</h1>
-  <span class="badge" id="ver">v0.11</span>
+  <span class="badge" id="ver">v0.12</span>
   <span class="sp" id="who">…</span>
 </header>
 
@@ -182,7 +182,7 @@
    · 이 단계에서 하는 일: 원본 올리기 · 쪽 이미지 만들기 · 목록/휴지통
    · 읽기(비전)·변형 생성·검수·내보내기는 다음 단계에서 붙인다.
 ══════════════════════════════════════════════════════════════ */
-window.VARIANT_VERSION = 'v0.11';
+window.VARIANT_VERSION = 'v0.12';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -666,7 +666,7 @@ async function vRead(only){
   var pages = only ? all.filter(function(p){ return only.indexOf(p.no) >= 0; }) : all;
   /* 해설·표지 쪽은 비전에 보내지 않는다 — 가짜 문항이 생기고 비용만 든다 */
   var quickPages = pages.filter(function(p){ return p.kind === '빠른정답'; });
-  var skipped = pages.filter(function(p){ return p.kind === '해설' || p.kind === '표지'; });
+  var skipPages = pages.filter(function(p){ return p.kind === '해설' || p.kind === '표지'; });
   pages = pages.filter(function(p){ return !p.kind || p.kind === '문제'; });
   if (!pages.length && !quickPages.length) { alert('읽을 쪽이 없습니다.'); return; }
 
@@ -686,7 +686,7 @@ async function vRead(only){
       + '<i style="width:' + Math.round(done / pages.length * 100) + '%"></i></div></div>';
   }
   tick('읽는 중 0 / ' + pages.length + '쪽'
-       + (skipped.length ? '  (해설·표지 ' + skipped.length + '쪽은 건너뜁니다)' : ''));
+       + (skipPages.length ? '  (해설·표지 ' + skipPages.length + '쪽은 건너뜁니다)' : ''));
 
   try {
     var urls = await vSignedUrls(pages.concat(quickPages).map(function(p){ return p.path; }));
@@ -752,6 +752,18 @@ async function vRead(only){
       wrap = vWrapRows(rows);
     }
 
+    /* 한 쪽만 다시 읽을 때는 빠른정답 쪽을 안 읽으므로,
+       지우기 전에 그 쪽에 붙어 있던 정답을 챙겨 두었다가 다시 붙인다. */
+    if (only) {
+      var keep = await db.from('variant_problems')
+        .select('number,answer,solution').eq('doc_id', d.id).in('page_no', only);
+      (keep.data || []).forEach(function(k){
+        if (k.answer || k.solution)
+          answers.push({ number: k.number, answer: k.answer || '',
+                         solution: k.solution || '', kept: true });
+      });
+    }
+
     /* 뒤쪽 정답지에서 모은 답을 같은 번호의 문항에 붙인다.
        번호는 숫자만 비교한다 — '19-(1)' 도 정답 '19' 와 짝이 맞아야 한다. */
     var merged = 0, skipped = 0, orphan = [];
@@ -808,7 +820,7 @@ async function vRead(only){
       + (withAns ? '\n정답이 붙은 문항 ' + withAns + '개' : '')
       + (merged ? '\n정답 쪽에서 가져와 붙인 것 ' + merged + '건' : '')
       + (mg.merged ? '\n서술형 소문항 합침 ' + mg.merged + '건' : '')
-      + (skipped.length ? '\n건너뛴 쪽 ' + skipped.length + '개 (해설·표지)' : '')
+      + (skipPages.length ? '\n건너뛴 쪽 ' + skipPages.length + '개 (해설·표지 — 비전에 보내지 않음)' : '')
       + (qa ? '\n빠른정답 쪽에서 읽은 정답 ' + qa + '개' : '')
       + (sp.demoted ? '\n뒤쪽 해설 쪽에서 온 것 ' + sp.demoted + '건은 문항이 아니라 해설로 넣었습니다' : '')
       + (skipped ? '\n⚠ 정답을 붙이지 않은 번호 ' + skipped + '개'
@@ -927,6 +939,10 @@ function vToggle(i){
     +   '<button onclick="vSaveProb(' + i + ')">저장</button>'
     +   '<button class="pri" onclick="vSaveProb(' + i + ',true)">'
         + (p.status === '검수완료' ? '검수 해제' : '저장하고 검수완료') + '</button>'
+    /* 모델이 그 쪽에서 헛것을 쓴 경우가 있다(영어 혼잣말이 본문에 섞이거나 옆 문항이 통째로 누락).
+       그럴 땐 문서 전체가 아니라 그 쪽만 다시 읽는 게 맞다. */
+    +   '<button onclick="vRead([' + p.page_no + '])" title="이 쪽의 문항을 다시 읽습니다">'
+        + p.page_no + '쪽 다시 읽기</button>'
     +   '<button style="margin-left:auto" onclick="vDropProb(' + i + ')">폐기</button>'
     + '</div>';
 }
