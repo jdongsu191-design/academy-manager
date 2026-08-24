@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>변형문제 — BMAPS v0.09</title>
+<title>변형문제 — BMAPS v0.10</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
@@ -92,7 +92,7 @@
 
 <header class="top">
   <h1>변형문제</h1>
-  <span class="badge" id="ver">v0.09</span>
+  <span class="badge" id="ver">v0.10</span>
   <span class="sp" id="who">…</span>
 </header>
 
@@ -182,7 +182,7 @@
    · 이 단계에서 하는 일: 원본 올리기 · 쪽 이미지 만들기 · 목록/휴지통
    · 읽기(비전)·변형 생성·검수·내보내기는 다음 단계에서 붙인다.
 ══════════════════════════════════════════════════════════════ */
-window.VARIANT_VERSION = 'v0.09';
+window.VARIANT_VERSION = 'v0.10';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -388,6 +388,9 @@ function vRepair(t){
     }
     out += c; i++;
   }
+  /* 되살리지 못한 제어문자는 쓰레기다 — LaTeX·한글 어디에도 안 쓰인다.
+     (실측에서 \x08 이 스무 개 넘게 줄줄이 붙어 나온 쪽이 있었다) */
+  out = out.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
   return { t:out, n:n };
 }
 
@@ -408,16 +411,22 @@ function vNorm(t){
 var BARE = /\\[A-Za-z]+|[\^_=<>]|[A-Za-z]\s*\(|\d\s*[+\-*/]\s*\d|\(\s*-?[\dA-Za-z][^()]*,/;
 function vFlags(statement, choices){
   var f = [];
+  function cnt(s, ch){ return s.split(ch).length - 1; }
   function one(t, where){
     if (!t) return;
     var o = (t.match(/\\\(/g) || []).length, c = (t.match(/\\\)/g) || []).length;
     if (o !== c) f.push(where + ': 수식 구분자 짝 안 맞음');
-    var m, rx = /\\\(([\s\S]*?)\\\)/g;
-    while ((m = rx.exec(t))) {
-      var s = m[1];
-      if ((s.match(/\(/g)||[]).length !== (s.match(/\)/g)||[]).length) f.push(where + ': 괄호 안 맞음');
-      if ((s.match(/\{/g)||[]).length !== (s.match(/\}/g)||[]).length) f.push(where + ': 중괄호 안 맞음');
-    }
+    /* ⚠ 괄호는 **구분자만 떼고 글 전체에서** 세야 한다.
+       집합 표기에 한글이 끼면 수식이 끊기는 게 정상이고, 여는 { 와 닫는 } 가
+       서로 다른 구간에 (또는 한쪽이 수식 밖에) 놓인다:
+         A = {x | x는 10 이하의 자연수}
+         → \(A = {x | x\)는 \(10\)이하의 자연수\(}\)
+       구간별로 세면 안 맞다고 나오고(거짓 경고 24개), 여기에 } 를 붙이면
+       오히려 내용을 망친다. 전체로 세면 진짜 결함만 남는다:
+         \((2, 1))\)  →  (2, 1))  →  ( 1개 ) 2개  → 진짜 결함 */
+    var flat = t.replace(/\\\(|\\\)/g, '');
+    if (cnt(flat, '(') !== cnt(flat, ')')) f.push(where + ': 괄호 안 맞음');
+    if (cnt(flat, '{') !== cnt(flat, '}')) f.push(where + ': 중괄호 안 맞음');
     var outside = t.replace(/\\\([\s\S]*?\\\)/g, ' ');
     if (BARE.test(outside)) f.push(where + ': 수식이 안 감싸짐');
   }
@@ -513,6 +522,39 @@ function vWrapRows(rows){
    정답 '19' 와 짝이 안 맞는다. **맨 앞 숫자 덩어리만** 쓴다. */
 function vNumKey(n){ var m = String(n == null ? '' : n).match(/\d+/); return m ? m[0] : ''; }
 
+/* ⚠⚠ 뒤쪽 해설 쪽이 가짜 문항이 되고, 그 번호가 밀려 정답이 엉뚱한 문항에 붙는다.
+   실측(일일N제 55쪽): 43쪽까지 문항, 45쪽부터 해설. 모델이 해설을 문항으로 읽고
+   번호를 순서대로 매기면서 **한 칸씩 밀렸다.**
+     45쪽 '16번' 내용 = 실제로는 22번 해설
+     45쪽 '20번' 답 ⑤ = 실제 20번(주관식) 답은 5
+   그래서 **같은 번호가 다른 쪽에서 또 나오면**
+     · 앞쪽을 문항으로 삼고 뒤쪽 본문은 solution 에 보관한다
+     · 그 번호에는 **정답을 자동으로 붙이지 않는다** (번호를 믿을 수 없다)
+   틀린 정답이 붙는 것보다 정답이 없는 게 낫다 — 검산과 변형이 통째로 오염된다. */
+function vSplitLaterPages(rows){
+  var byNum = {}, order = [];
+  rows.forEach(function(r){
+    var k = vNumKey(r.number);
+    if (!byNum[k]) { byNum[k] = [r]; order.push(k); }
+    else byNum[k].push(r);
+  });
+  var out = [], demoted = 0, risky = 0;
+  order.forEach(function(k){
+    var g = byNum[k];
+    var pages = {};
+    g.forEach(function(r){ pages[r.page_no] = 1; });
+    if (Object.keys(pages).length < 2) { g.forEach(function(r){ out.push(r); }); return; }
+    g.sort(function(a, b){ return a.page_no - b.page_no; });
+    var head = g[0], rest = g.slice(1);
+    head.solution = [head.solution].concat(rest.map(function(r){ return r.statement; }))
+                      .filter(Boolean).join('\n') || null;
+    head.ocr.dup_pages = g.map(function(r){ return r.page_no; });
+    demoted += rest.length; risky++;
+    out.push(head);
+  });
+  return { rows: out, demoted: demoted, risky: risky };
+}
+
 function vMergeSubParts(rows){
   var byKey = {}, order = [], merged = 0;
   rows.forEach(function(r){
@@ -562,7 +604,9 @@ async function vAskPage(url, budget){
   if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
   var c = (d.candidates || [])[0] || {};
   var t = c.content && c.content.parts && c.content.parts[0] && c.content.parts[0].text;
-  if (!t) throw new Error('빈 응답 (' + (c.finishReason || '이유 없음') + ')');
+  if (!t) throw new Error(c.finishReason === 'RECITATION'
+    ? '저작권 필터에 걸렸습니다(RECITATION) — 이 쪽은 자동으로 못 읽습니다'
+    : '빈 응답 (' + (c.finishReason || '이유 없음') + ')');
   return JSON.parse(t).problems || [];
 }
 
@@ -644,6 +688,9 @@ async function vRead(only){
     /* 서술형 소문항을 하나로 합친다 — 개수를 회차와 무관하게 만든다 */
     var mg = vMergeSubParts(rows);
     rows = mg.rows;
+    /* 뒤쪽 해설 쪽에서 온 가짜 문항을 걷어낸다 */
+    var sp = vSplitLaterPages(rows);
+    rows = sp.rows;
 
     /* 맨몸으로 나온 수식을 감싼다 (내용이 바뀌면 버리므로 안전하다) */
     var wrap = { need:0, ok:0, rejected:0 };
@@ -654,16 +701,17 @@ async function vRead(only){
 
     /* 뒤쪽 정답지에서 모은 답을 같은 번호의 문항에 붙인다.
        번호는 숫자만 비교한다 — '19-(1)' 도 정답 '19' 와 짝이 맞아야 한다. */
-    var merged = 0, orphan = [];
+    var merged = 0, skipped = 0, orphan = [];
     answers.forEach(function(a){
       var hit = rows.filter(function(r){ return vNumKey(r.number) === vNumKey(a.number); });
-      if (hit.length) {
-        hit.forEach(function(r){
-          if (a.answer)   r.answer = (r.answer ? r.answer + ' ' : '') + a.answer;
-          if (a.solution) r.solution = a.solution;
-        });
+      /* 번호가 여러 쪽에 걸쳐 있던 것은 해설 쪽 번호가 밀렸을 수 있다 → 붙이지 않는다 */
+      if (hit.length === 1 && !(hit[0].ocr || {}).dup_pages) {
+        var r = hit[0];
+        if (a.answer && !r.answer) r.answer = a.answer;      /* 덮어쓰지도, 이어 붙이지도 않는다 */
+        if (a.solution && !r.solution) r.solution = a.solution;
         merged++;
-      } else { orphan.push(a); }
+      } else if (hit.length) { skipped++; }
+      else { orphan.push(a); }
     });
 
     /* 쪽·문항번호로 자리를 정한다. 나중에 일부만 다시 읽어도 순서가 유지되도록
@@ -707,6 +755,9 @@ async function vRead(only){
       + (withAns ? '\n정답이 붙은 문항 ' + withAns + '개' : '')
       + (merged ? '\n정답 쪽에서 가져와 붙인 것 ' + merged + '건' : '')
       + (mg.merged ? '\n서술형 소문항 합침 ' + mg.merged + '건' : '')
+      + (sp.demoted ? '\n뒤쪽 해설 쪽에서 온 것 ' + sp.demoted + '건은 문항이 아니라 해설로 넣었습니다' : '')
+      + (skipped ? '\n⚠ 정답을 붙이지 않은 번호 ' + skipped + '개'
+          + ' — 해설 쪽 번호가 밀렸을 수 있어 직접 확인이 필요합니다' : '')
       + (wrap.need ? '\n형식 다듬기: 감쌈 ' + wrap.ok + '개'
           + (wrap.rejected ? ' · 내용이 바뀌어 버림 ' + wrap.rejected + '개' : '')
           + (wrap.err ? ' · 요청 실패 ' + wrap.err + '개 (' + wrap.lastErr + ')' : '') : '')
