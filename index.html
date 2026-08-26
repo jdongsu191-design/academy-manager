@@ -894,6 +894,14 @@
               style="flex:1;min-width:100px;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none">
               <option value="">전체 반</option>
             </select>
+            <select id="stSchoolFilter" onchange="renderStudents()"
+              style="flex:1;min-width:100px;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none">
+              <option value="">전체 학교</option>
+            </select>
+            <select id="stGradeFilter" onchange="renderStudents()"
+              style="flex:1;min-width:88px;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none">
+              <option value="">전체 학년</option>
+            </select>
           </div>
 
           <!-- 신입/퇴원 연·월 필터 -->
@@ -997,6 +1005,7 @@
             <div class="card-title">학생 출결 · 과제
               <button class="btn btn-sm btn-outline" onclick="openAddTempStudentModal()"
                 style="font-size:12px;border-style:dashed;margin-left:8px">+ 학생 추가</button>
+              <span style="font-size:11px;color:var(--text-sub);font-weight:400;margin-left:8px">✦ 헤더 클릭 → 일괄 처리</span>
             </div>
             <div style="overflow-x:auto">
               <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -1005,9 +1014,9 @@
                     <th style="padding:8px 4px;border-bottom:1px solid var(--border);width:28px"></th>
                     <th style="padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap">학교/학년</th>
                     <th style="padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)">이름</th>
-                    <th style="padding:8px 10px;text-align:center;border-bottom:1px solid var(--border)">출석</th>
-                    <th style="padding:8px 10px;text-align:center;border-bottom:1px solid var(--border)">N제</th>
-                    <th style="padding:8px 10px;text-align:center;border-bottom:1px solid var(--border)">숙제</th>
+                    <th style="padding:8px 10px;text-align:center;border-bottom:1px solid var(--border);cursor:pointer;user-select:none" onclick="wlBulkModal('attendance')" title="클릭: 일괄 처리"><span style="text-decoration:underline dotted 2px #94a3b8">출석</span> ✦</th>
+                    <th style="padding:8px 10px;text-align:center;border-bottom:1px solid var(--border);cursor:pointer;user-select:none" onclick="wlBulkModal('n_count')" title="클릭: 일괄 처리"><span style="text-decoration:underline dotted 2px #94a3b8">N제</span> ✦</th>
+                    <th style="padding:8px 10px;text-align:center;border-bottom:1px solid var(--border);cursor:pointer;user-select:none" onclick="wlBulkModal('homework_done')" title="클릭: 일괄 처리"><span style="text-decoration:underline dotted 2px #94a3b8">숙제</span> ✦</th>
                     <th style="padding:8px 10px;text-align:center;border-bottom:1px solid var(--border)">TEST</th>
                     <th style="padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)">특이사항</th>
                   </tr>
@@ -15322,6 +15331,43 @@ function _fillMonthOptions(selId) {
   for (var m = 1; m <= 12; m++) h += '<option value="' + m + '">' + m + '월</option>';
   sel.innerHTML = h; sel.dataset.filled = '1';
 }
+/* ── 목록에서 값을 모아 드롭다운을 채운다 (학교·학년 필터) ──
+   sig 가 같으면 다시 그리지 않는다 — renderStudents 는 타이핑마다 불린다. */
+function _fillPickOptions(selId, allLabel, vals, fmt) {
+  var sel = document.getElementById(selId); if (!sel) return;
+  var sig = vals.join('\u0001');
+  if (sel.dataset.sig === sig) return;
+  var prev = sel.value;
+  sel.innerHTML = '<option value="">' + allLabel + '</option>'
+    + vals.map(function(v) {
+        return '<option value="' + _esc(v) + '">' + _esc(fmt ? fmt(v) : v) + '</option>';
+      }).join('');
+  sel.dataset.sig = sig;
+  if (prev && vals.indexOf(prev) !== -1) sel.value = prev;
+}
+/* 학년은 숫자가 먼저, 숫자끼리는 크기순 (1,2,3 … 그 뒤에 '초6' 같은 문자값) */
+function _gradeCmp(a, b) {
+  var da = /^\d+$/.test(a), db = /^\d+$/.test(b);
+  if (da && db) return parseInt(a, 10) - parseInt(b, 10);
+  if (da) return -1;
+  if (db) return 1;
+  return String(a).localeCompare(String(b), 'ko');
+}
+function _fillStuAttrFilters(list) {
+  var pick = function(f) {
+    var seen = {};
+    (list || []).forEach(function(s) {
+      var v = String(s[f] == null ? '' : s[f]).trim();
+      if (v) seen[v] = true;
+    });
+    return Object.keys(seen);
+  };
+  _fillPickOptions('stSchoolFilter', '전체 학교',
+    pick('school').sort(function(a, b) { return a.localeCompare(b, 'ko'); }));
+  _fillPickOptions('stGradeFilter', '전체 학년',
+    pick('grade').sort(_gradeCmp),
+    function(v) { return /^\d+$/.test(v) ? v + '학년' : v; });
+}
 function resetAdmYmFilter() {
   var y = document.getElementById('admYearFilter'), m = document.getElementById('admMonthFilter');
   if (y) y.value = ''; if (m) m.value = '';
@@ -24893,6 +24939,7 @@ async function lpLoadWorkLog(studentId, classId){
       stuTestScore   = sl.test_score  != null ? String(sl.test_score) : '';
       if(sl.homework_done === true || sl.homework_done === 'true') stuHomeworkDone = '완료';
       else if(sl.homework_done === 'partial') stuHomeworkDone = '일부완료';
+      else if(sl.homework_done === 'notbrought') stuHomeworkDone = '미지참';
       else if(sl.homework_done === false || sl.homework_done === 'false') stuHomeworkDone = '미완료';
       stuNCount = sl.n_count != null ? String(sl.n_count) : '';
     }
@@ -27900,8 +27947,15 @@ function renderStudents() {
       : ((ymY || ymM) ? '선택 기간 퇴원자' : '전체 기간');
   }
 
+  // 학교·학년 드롭다운은 지금 보고 있는 목록에서 값을 모은다
+  _fillStuAttrFilters(list);
+  const sf = document.getElementById('stSchoolFilter')?.value || '';
+  const gf = document.getElementById('stGradeFilter')?.value  || '';
+
   const filtered = list.filter(s => {
     if (q && !s.name.toLowerCase().includes(q)) return false;
+    if (sf && String(s.school || '').trim() !== sf) return false;
+    if (gf && String(s.grade == null ? '' : s.grade).trim() !== gf) return false;
     // 반 필터: class_id2(부반) 도 함께 검색 (퇴원 목록은 반 정보가 무의미하므로 제외)
     if (!isWdMode && cf && !stuInClass(s, cf)) return false;
     // 신입: 연·월 미지정이면 최근 30일 이내 입학자
@@ -28773,6 +28827,7 @@ function renderWlStudentTable(students, studentLogs) {
           <option value="true"    ${sl.homework_done === 'true'    || sl.homework_done === true    ? 'selected' : ''}>완료</option>
           <option value="false"   ${sl.homework_done === 'false'   || sl.homework_done === false   ? 'selected' : ''}>미완료</option>
           <option value="partial" ${sl.homework_done === 'partial' ? 'selected' : ''}>일부완료</option>
+          <option value="notbrought" ${sl.homework_done === 'notbrought' ? 'selected' : ''}>미지참</option>
         </select>
       </td>
       <td style="padding:8px 4px;text-align:center">
@@ -28794,6 +28849,97 @@ function renderWlStudentTable(students, studentLogs) {
     wlIndivRenderList('progress');
     wlIndivRenderList('homework');
   }
+}
+
+/* ── 일괄 처리 (출석 · N제 · 숙제) ──────────────────────────
+   주말프로그램(wnBulkModal)과 같은 방식.
+   ⚠ data-field 이름은 다른 표에도 쓰이므로 반드시 #wl-student-tbody 안으로 좁힌다.
+   ⚠ 삭제된 학생 행(disabled)은 대상에서 뺀다. */
+function _wlBulkTargets(field) {
+  return Array.from(document.querySelectorAll(
+    '#wl-student-tbody [data-field="' + field + '"]')).filter(function(el) { return !el.disabled; });
+}
+
+function wlBulkModal(field) {
+  var ex = document.getElementById('wl-bulk-modal');
+  if (ex) ex.remove();
+  var count = _wlBulkTargets(field).length;
+  if (!count) { alert('학생이 없습니다'); return; }
+
+  var isAtt = field === 'attendance';
+  var isN   = field === 'n_count';
+  var icon  = isAtt ? '📋' : isN ? '🔢' : '📝';
+  var title = isAtt ? '출석 일괄 처리' : isN ? 'N제 일괄 처리' : '숙제 일괄 처리';
+
+  var body;
+  if (isN) {
+    body = '<div style="display:flex;gap:8px;align-items:center;justify-content:center">'
+      + '<input id="wl-bulk-n" type="text" placeholder="예) 20"'
+      + ' style="width:120px;padding:12px 14px;border:2px solid var(--navy);border-radius:10px;font-size:15px;text-align:center;outline:none">'
+      + '<button onclick="wlBulkApply(\'n_count\', document.getElementById(\'wl-bulk-n\').value)"'
+      + ' style="padding:12px 20px;border:2px solid var(--navy);border-radius:10px;background:var(--navy);color:#fff;font-size:15px;font-weight:700;cursor:pointer">적용</button>'
+      + '</div>'
+      + '<div style="margin-top:10px;text-align:center">'
+      + '<button onclick="wlBulkApply(\'n_count\', \'\')"'
+      + ' style="padding:8px 16px;border:2px solid #d1d5db;border-radius:10px;background:#f5f6fa;color:#6b7280;font-size:13px;font-weight:700;cursor:pointer">비우기</button>'
+      + '</div>';
+  } else {
+    var options = isAtt
+      ? [{v:'present',l:'정시',c:'#16a34a',bg:'#f0fdf4'},
+         {v:'late',   l:'지각',c:'#d97706',bg:'#fffbeb'},
+         {v:'absent', l:'결석',c:'#dc2626',bg:'#fef2f2'}]
+      : [{v:'true',      l:'완료',   c:'#16a34a',bg:'#f0fdf4'},
+         {v:'partial',   l:'일부완료',c:'#b45309',bg:'#fffbeb'},
+         {v:'notbrought',l:'미지참', c:'#7c3aed',bg:'#f5f3ff'},
+         {v:'false',     l:'미완료', c:'#dc2626',bg:'#fef2f2'},
+         {v:'',          l:'비우기', c:'#6b7280',bg:'#f5f6fa'}];
+    body = '<div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:center">'
+      + options.map(function(o) {
+          return '<button onclick="wlBulkApply(\'' + field + '\',\'' + o.v + '\')"'
+            + ' style="padding:14px 20px;border:2px solid ' + o.c + ';border-radius:10px;background:' + o.bg
+            + ';color:' + o.c + ';font-size:15px;font-weight:700;cursor:pointer;min-width:90px"'
+            + ' onmouseover="this.style.opacity=0.8" onmouseout="this.style.opacity=1">' + o.l + '</button>';
+        }).join('')
+      + '</div>';
+  }
+
+  var modal = document.createElement('div');
+  modal.id = 'wl-bulk-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = '<div style="background:#fff;border-radius:16px;padding:28px;max-width:400px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.2)">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+    + '<div style="font-size:17px;font-weight:800;color:var(--navy)">' + icon + ' ' + title + '</div>'
+    + '<button onclick="document.getElementById(\'wl-bulk-modal\').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#9ca3af">&times;</button>'
+    + '</div>'
+    + '<div style="font-size:12px;color:#6b7280;margin-bottom:20px">현재 표의 <strong style="color:var(--navy)">' + count + '명</strong> 전원에게 적용됩니다</div>'
+    + body
+    + '<div style="margin-top:18px;text-align:center">'
+    + '<button onclick="document.getElementById(\'wl-bulk-modal\').remove()" style="padding:8px 24px;background:#f5f6fa;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;color:#6b7280;cursor:pointer;font-weight:600">취소</button>'
+    + '</div></div>';
+  modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+  if (isN) setTimeout(function() { var i = document.getElementById('wl-bulk-n'); if (i) i.focus(); }, 30);
+}
+
+function wlBulkApply(field, value) {
+  var els = _wlBulkTargets(field);
+  els.forEach(function(el) {
+    el.value = value;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  var label = field === 'attendance'
+    ? (value === 'present' ? '정시' : value === 'late' ? '지각' : '결석')
+    : field === 'n_count'
+    ? (String(value).trim() === '' ? '비우기' : 'N제 ' + value)
+    : (value === 'true' ? '완료' : value === 'partial' ? '일부완료'
+       : value === 'notbrought' ? '미지참' : value === 'false' ? '미완료' : '비우기');
+  var m = document.getElementById('wl-bulk-modal');
+  if (m) m.remove();
+  var toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#1F3A51;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;font-weight:700;z-index:4000;box-shadow:0 4px 16px rgba(0,0,0,0.2)';
+  toast.textContent = '✅ ' + els.length + '명 ' + label + ' 처리 완료';
+  document.body.appendChild(toast);
+  setTimeout(function() { toast.remove(); }, 2000);
 }
 
 function removeWlStudentRow(sid) {
@@ -29451,8 +29597,9 @@ function buildWorkLogCardHTML(log, cls, stus, dateLabel, teacherName) {
     const attC  = s.attendance === 'absent'  ? '#ef4444' : s.attendance === 'late' ? '#f97316' : '';
     const hw    = s.homework_done === 'true' || s.homework_done === true ? '완료'
       : s.homework_done === 'partial' ? '일부완료'
+      : s.homework_done === 'notbrought' ? '미지참'
       : s.homework_done === 'false' || s.homework_done === false ? '미완료' : '';
-    const hwC   = hw === '완료' ? '#3B6D11' : hw === '일부완료' ? '#b45309' : hw === '미완료' ? '#ef4444' : '#9ca3af';
+    const hwC   = hw === '완료' ? '#3B6D11' : hw === '일부완료' ? '#b45309' : hw === '미지참' ? '#7c3aed' : hw === '미완료' ? '#ef4444' : '#9ca3af';
     const rowBg = i % 2 === 0 ? '#fff' : '#f8fbff';
     return `<tr style="background:${rowBg}">
       <td style="padding:6px 8px;border:1px solid #e5e7eb;color:#6b7280;font-size:12px">${esc(sg)}</td>
@@ -30428,8 +30575,8 @@ async function copyWorkLogImage(mode) {
       const attColor   = att === 'absent' ? '#ef4444' : att === 'late' ? '#f97316' : '#16a34a';
       const nCount     = cells[4].querySelector('input')?.value  || '';
       const hwVal      = cells[5].querySelector('select')?.value || '';
-      const hwLabel    = hwVal === 'true' ? '완료' : hwVal === 'partial' ? '일부완료' : hwVal === 'false' ? '미완료' : '';
-      const hwColor    = hwVal === 'true' ? '#16a34a' : hwVal === 'partial' ? '#b45309' : hwVal === 'false' ? '#ef4444' : '#9ca3af';
+      const hwLabel    = hwVal === 'true' ? '완료' : hwVal === 'partial' ? '일부완료' : hwVal === 'notbrought' ? '미지참' : hwVal === 'false' ? '미완료' : '';
+      const hwColor    = hwVal === 'true' ? '#16a34a' : hwVal === 'partial' ? '#b45309' : hwVal === 'notbrought' ? '#7c3aed' : hwVal === 'false' ? '#ef4444' : '#9ca3af';
       const score      = cells[6].querySelector('input')?.value  || '';
       const note       = cells[7].querySelector('input')?.value  || '';
       studentData.push({ name, schoolGrade, attLabel, attColor, nCount, hwLabel, hwColor, score, note, typeLabel: _stuTypeLabel });
@@ -30695,9 +30842,11 @@ async function awlShowDetail(logId) {
     const attColor = s.attendance === 'absent' ? 'color:#ef4444;font-weight:600' : s.attendance === 'late' ? 'color:#f97316' : '';
     const hwLabel  = s.homework_done === 'true' || s.homework_done === true ? '완료'
       : s.homework_done === 'partial' ? '일부완료'
+      : s.homework_done === 'notbrought' ? '미지참'
       : s.homework_done === 'false'  || s.homework_done === false ? '미완료' : '';
     const hwColor  = s.homework_done === 'true' || s.homework_done === true ? 'color:#16a34a;font-weight:600'
       : s.homework_done === 'partial' ? 'color:#b45309;font-weight:600'
+      : s.homework_done === 'notbrought' ? 'color:#7c3aed;font-weight:600'
       : s.homework_done === 'false' || s.homework_done === false ? 'color:#ef4444' : 'color:#9ca3af';
     return `<tr style="background:${i % 2 === 0 ? '#fff' : '#f8fbff'}">
       <td style="padding:7px 8px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280">${sg}</td>
