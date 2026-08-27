@@ -216,7 +216,9 @@ def _clean_ans(s):
 
 
 HEAD = re.compile(r'\[Potential\s*([^\]]+?)\]\s*\[\s*(?:A\s*([\d.]+)점\s*/\s*B\s*([\d.]+)점|([\d.]+)점)\s*\]')
-NOTE = re.compile(r'\[정답\]\s*(.*?)\s*\[Potential\s*([^\]]+?)\]\s*\[([^\]]+?)\]')
+# ⚠ 유형 표기는 회차마다 다르다 — '[응용심화]' 도 오고 그냥 '기본개념' 도 온다 (실측 중1 3월3회).
+#   대괄호를 강제하면 그 회차의 정답이 통째로 빈값이 된다.
+NOTE = re.compile(r'\[정답\]\s*(.*?)\s*\[Potential\s*([^\]]+?)\]\s*(.*?)\s*$')
 SRC = re.compile(r'출처\)\s*(.+)')
 DROP = re.compile(r'^\s*(?:[123]단계|출처\)|\[\s*Potent!?al)')
 
@@ -250,7 +252,7 @@ def tidy(p):
     return {
         'number': p['no'],
         'level': (m.group(2).strip() if m else (hm.group(1).strip() if hm else '')),
-        'type': m.group(3).strip() if m else '',
+        'type': (m.group(3) or '').strip('[] ') if m else '',
         'answer_script': _clean_ans(m.group(1) if m else ''),
         'points': ({'A': hm.group(2), 'B': hm.group(3)} if hm and hm.group(2)
                    else (hm.group(4) if hm else None)),
@@ -312,7 +314,10 @@ def _quick_answers(z):
             for i, c in enumerate(cells):
                 if re.fullmatch(r'\d{1,2}', c) and i + 1 < len(cells):
                     nxt = cells[i + 1]
-                    if nxt.startswith('⟪'):
+                    # 답이 수식(⟪⟫)이 아닐 수도 있다 — 보기 선택 답 'ㄷ' (실측 중1 3월3회 8번)
+                    if nxt.startswith('⟪') or (nxt and not re.fullmatch(r'\d{1,2}', nxt)
+                                               and '빠른답지' not in nxt
+                                               and not nxt.startswith('Potential')):
                         quick[int(c)] = _clean_ans(nxt)
     return quick
 
