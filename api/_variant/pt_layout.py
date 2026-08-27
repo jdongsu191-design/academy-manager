@@ -53,8 +53,10 @@ def parapr(i, align='JUSTIFY', line=160, intent=0, left=0, right=0,
             '<hp:switch><hp:case hp:required-namespace='
             '"http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">%s</hp:case>'
             '<hp:default>%s</hp:default></hp:switch>'
+            # ⚠ ignoreMargin=0 이면 테두리가 문단 **여백까지 포함**해 그려져
+            #   밑줄이 다음 문단 첫 줄 위에 얹힌다 (실측) — 글상자에만 붙인다
             '<hh:border borderFillIDRef="%d" offsetLeft="%d" offsetRight="%d"'
-            ' offsetTop="%d" offsetBottom="%d" connect="%d" ignoreMargin="0"/>'
+            ' offsetTop="%d" offsetBottom="%d" connect="%d" ignoreMargin="1"/>'
             '</hh:paraPr>' % (i, tab, align, keep, hold, marg, marg, border,
                               pad, pad, pad, pad, connect))
 
@@ -86,6 +88,11 @@ def _bump(h, tag, add, xml):
 
 class Styled(Doc):
     """원본 서식을 물려받되, 쓰임새별 모양을 새로 얹은 문서."""
+
+    # 수식을 본문(10.5pt)에 맞춘다 — eq_metrics 는 13pt 기준이라 그대로 쓰면
+    # 수식이 글자보다 커서 줄 높이가 널뛰고 번호 밑줄에 닿는다 (실측).
+    EQ_SCALE = 1050.0 / 1300.0
+    EQ_BASE = 1050
 
     def __init__(self, template):
         super().__init__(template)
@@ -133,15 +140,17 @@ class Styled(Doc):
         P = {}
         specs = [
             # 번호 줄 — 위로 넉넉히 띄우고 아래에 굵은 밑줄, 본문과 떼지 않는다
-            ('head', dict(prev=mm(4.2), next=mm(1.4), border=BF_RULE,
-                          pad=mm(0.8), keep=1, line=140)),
+            #  ⚠ next 를 좁게 잡으면 밑줄이 본문 첫 줄(특히 분수 수식)에 닿는다 (실측)
+            ('head', dict(prev=mm(4.2), next=mm(2.6), border=BF_RULE,
+                          pad=mm(0.9), keep=1, line=140)),
             # 본문 — 줄을 넉넉히, 왼쪽을 조금 들여 번호와 층을 만든다
             #  ⚠ 양쪽 정렬(JUSTIFY)은 쓰지 않는다. 수식이 글자처럼 끼어 있어
             #     줄이 일찍 끊기고, 한/글이 남은 자리를 낱말 사이 공백으로 벌린다
             #     ('직각삼각형    ABC에서    피타고라스    정리에' 처럼 됐다).
-            ('body',    dict(align='LEFT', line=178, left=mm(1.2), next=mm(1.0),
+            #  178% 는 13pt 수식 시절의 값 — 수식을 본문 크기로 줄인 뒤엔 원본(160)에 맞춘다
+            ('body',    dict(align='LEFT', line=165, left=mm(1.2), next=mm(1.0),
                              keep=1, hold=1)),
-            ('bodyend', dict(align='LEFT', line=178, left=mm(1.2), next=mm(1.0), hold=1)),
+            ('bodyend', dict(align='LEFT', line=165, left=mm(1.2), next=mm(1.0), hold=1)),
             # 도형 자리 — 점선 상자 (connect=1 이라야 위아래 문단이 한 상자로 이어진다)
             ('memo',     dict(align='CENTER', line=150, prev=mm(2.0), keep=1, **BOX)),
             ('memol',    dict(align='LEFT', line=150, next=mm(2.0), keep=1, **BOX)),
@@ -235,7 +244,7 @@ class Styled(Doc):
 
     def _cut(self, script, depth=0):
         """단 폭에 맞을 때까지 쪼갠다. 더 못 쪼개면 그대로 돌려준다."""
-        if eq_measure(script)[0] <= self.colw or depth > 2:
+        if eq_measure(script)[0] * self.EQ_SCALE <= self.colw or depth > 2:
             return [script]
         for chars in (self.OPS, '+-'):
             at = [i for i in self._top(script, chars) if i > 0]

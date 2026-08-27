@@ -79,19 +79,30 @@ class Doc:
         self.hdr_xml = None
 
     # ── 조각 ──
+    #  수식 크기·기준선. 원본 포텐셜 실측: baseUnit=본문 pt, baseLine 은 내용에 따라
+    #  일반 85 · 첨자 71 · 분수 65 · 복합분수 61. 고정 68 로 두면 분수가 아래로 처져
+    #  윗줄(번호 밑줄)에 닿는다.
+    EQ_SCALE = 1.0          # eq_measure(13pt 기준)를 본문 크기로 줄이는 비율
+    EQ_BASE = 1000
+
     def eq(self, script):
         self._id += 1
         w, h = eq_measure(script)
+        r = h / 1300.0                       # eq_metrics.BASE 대비 높이 비율
+        bl = 85 if r <= 1.3 else (71 if r <= 1.75 else (65 if r <= 2.9 else 61))
+        w = int(w * self.EQ_SCALE)
+        h = int(h * self.EQ_SCALE)
         return ('<hp:equation id="%d" zOrder="0" numberingType="EQUATION" textWrap="TOP_AND_BOTTOM"'
                 ' textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" version="Equation Version 60"'
-                ' baseLine="68" textColor="#000000" baseUnit="1000" lineMode="CHAR" font="HYhwpEQ">'
+                ' baseLine="%d" textColor="#000000" baseUnit="%d" lineMode="CHAR" font="HYhwpEQ">'
                 '<hp:sz width="%d" widthRelTo="ABSOLUTE" height="%d" heightRelTo="ABSOLUTE" protect="0"/>'
                 '<hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0"'
                 ' holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP"'
                 ' horzAlign="LEFT" vertOffset="0" horzOffset="0"/>'
                 '<hp:outMargin left="56" right="56" top="0" bottom="0"/>'
                 '<hp:shapeComment>수식입니다.</hp:shapeComment>'
-                '<hp:script>%s</hp:script></hp:equation>' % (self._id, w, h, esc(script)))
+                '<hp:script>%s</hp:script></hp:equation>'
+                % (self._id, bl, self.EQ_BASE, w, h, esc(script)))
 
     def img(self, png, wmm, hmm):
         self._id += 2
