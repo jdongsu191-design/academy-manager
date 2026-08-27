@@ -26,7 +26,7 @@ EQ_WORD = [
     ('triangle', r'\triangle '), ('angle', r'\angle '), ('square', r'\square '),
     ('SIGMA', r'\sum '), ('PI', r'\pi '), ('SQRT', r'\sqrt'),
     ('sqrt', r'\sqrt'), ('root', r'\sqrt'),
-    ('bar', r'\overline'), ('vec', r'\vec'), ('hat', r'\hat'),
+    ('overline', r'\overline'), ('bar', r'\overline'), ('vec', r'\vec'), ('hat', r'\hat'),
     ('times', r'\times '), ('cdot', r'\cdot '), ('div', r'\div '),
     ('pm', r'\pm '), ('mp', r'\mp '), ('infty', r'\infty '),
     ('sin', r'\sin '), ('cos', r'\cos '), ('tan', r'\tan '),
