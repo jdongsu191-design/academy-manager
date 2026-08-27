@@ -227,11 +227,13 @@ def make_eval(model):
                 pos = m2.start() + 1
                 continue
             v = prim(m2.group(1), _args(m2.group(2)), x, depth)
-            e2 = e2[:m2.start()] + repr(v) + e2[m2.end():]
+            # ⚠ 괄호 필수 — 음수를 맨몸으로 넣으면 -13.0**2 가 -(13²) 로 계산된다 (실측)
+            e2 = e2[:m2.start()] + '(%r)' % v + e2[m2.end():]
             pos = 0
         for s in model.sidx:
             e2 = re.sub(r'(?<![A-Za-z_0-9])%s(?![A-Za-z_0-9])' % re.escape(s),
-                        repr(model.S(x, s)), e2)
+                        '(%r)' % model.S(x, s), e2)
+        e2 = e2.replace('^', '**')      # 대수 명세의 거듭제곱 (도형 명세엔 ^ 가 없다)
         return float(eval(e2, {'__builtins__': {}}, dict(SAFE)))
     return ev
 
@@ -243,6 +245,13 @@ def residuals_of(model, lines):
     for raw in lines:
         s = str(raw).strip()
         if not s or s.startswith('#'):
+            continue
+        # ≠(같지 않다) — '=' 분해기에 넣으면 SyntaxError (실측: 'a != 0').
+        #   완전히 버리면 b≈0 같은 퇴화 해로 수렴한 배치가 섞인다 (실측: 항등식 값이 흔들림)
+        #   → '너무 가까우면 어긴 만큼' 미는 약한 벌점으로 받는다.
+        if '!=' in s:
+            L, R = s.split('!=', 1)
+            plan.append(('ne', L, R))
             continue
         # ⚠ 부등식(k > 0 처럼 '값의 범위')을 모르는 조건으로 버리면 문항 전체가 검산 못 함이 된다.
         #   등식이 아니라 **한쪽으로만 미는 벌점**으로 받는다 — 만족하면 0, 어기면 어긴 만큼.
@@ -274,6 +283,8 @@ def residuals_of(model, lines):
                 out.append(min(0.0, ev(a, x) - ev(b, x)))
             elif kind == 'le':
                 out.append(max(0.0, ev(a, x) - ev(b, x)))
+            elif kind == 'ne':                       # a != b : 0.5 이내로 가까우면 밀어낸다
+                out.append(max(0.0, 0.5 - abs(ev(a, x) - ev(b, x))))
             elif kind == 'parallel':
                 (ax, ay), (bx, by) = model.P(x, a[0]), model.P(x, a[1])
                 (cx, cy), (dx, dy) = model.P(x, a[2]), model.P(x, a[3])
@@ -386,8 +397,9 @@ def _check(spec, trials=10, seed=12345, rel=2e-3):
     scl = spec.get('scalars') or []
     cons = spec.get('constraints') or []
     ask = (spec.get('ask') or '').strip()
-    if not pts or not ask:
-        return {'verdict': '검산 못 함', 'why': '점 목록이나 구할 것이 없음'}
+    # 순수 대수(점 없음)도 미지수만 있으면 푼다 — 같은 최소제곱 풀이기가 그대로 돈다
+    if not ask or (not pts and not scl):
+        return {'verdict': '검산 못 함', 'why': '점·미지수 목록이나 구할 것이 없음'}
 
     model = Model(pts, scl)
     res, ncons, bad = residuals_of(model, cons)
@@ -417,17 +429,23 @@ def _check(spec, trials=10, seed=12345, rel=2e-3):
             else:
                 x0 += [rng.uniform(-sc, sc), rng.uniform(-sc, sc)]
         for _ in scl:
-            x0.append(rng.uniform(0.05 * sc, 0.6 * sc))
+            # 도형: 길이·반지름이라 양수 근처. 순수 대수: 음수·큰 값도 흔하다 (x=-3 …)
+            x0.append(rng.uniform(0.05 * sc, 0.6 * sc) if pts
+                      else (1.0 if t == 0 else rng.uniform(-30.0, 30.0)))
         x, f = least_squares(res, x0)
         # ⚠ 크기에 견주어 본다. 도형이 쪼그라들면 잔차도 같이 작아져 거짓 통과가 난다
         #   (실측: 정삼각형+50° 라는 모순이 '확인함' 으로 통과했다)
-        span = 0.0
-        for i in range(len(pts)):
-            for j in range(i + 1, len(pts)):
-                span = max(span, math.dist(model.P(x, pts[i]), model.P(x, pts[j])))
-        if span < 1e-2:
-            fails += 1
-            continue
+        if pts:
+            span = 0.0
+            for i in range(len(pts)):
+                for j in range(i + 1, len(pts)):
+                    span = max(span, math.dist(model.P(x, pts[i]), model.P(x, pts[j])))
+            if span < 1e-2:
+                fails += 1
+                continue
+        else:
+            # 순수 대수: 크기를 미지수 값에서 잰다 (도형처럼 쪼그라들 일이 없다)
+            span = max([1.0] + [abs(model.S(x, nm)) for nm in scl])
         # ⚠ 1e-6 은 잉여 조건(좌표 고정 넷)이 있으면 수렴이 문턱 바로 위(1e-10)에서
         #   멈춰 멀쩡한 배치를 다 버렸다. 모순 잔차는 1e-2 이상이라 1e-5 도 여유가 크다.
         if f > (1e-5 * max(1.0, span)) ** 2 * max(1, ncons):
@@ -438,7 +456,7 @@ def _check(spec, trials=10, seed=12345, rel=2e-3):
             for j in range(i + 1, len(pts)):
                 if math.dist(model.P(x, pts[i]), model.P(x, pts[j])) < 1e-3 * span:
                     degen = True
-        if degen:
+        if degen:                        # 점이 없으면 이 검사는 자연히 건너뛴다
             fails += 1
             continue
         try:

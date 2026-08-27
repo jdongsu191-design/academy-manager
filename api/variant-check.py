@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler
 
 # _variant 안 모듈들은 서로 평면 임포트(from vg_spec import …)를 쓴다 — 폴더를 경로에 얹는다
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '_variant'))
-from vg_core import run_once, combine
+from vg_core import run_once, combine, agrees
 
 
 class handler(BaseHTTPRequestHandler):
@@ -43,7 +43,13 @@ class handler(BaseHTTPRequestHandler):
                 self._send(200, out)
                 return
 
-            raise ValueError('mode 는 run 또는 combine')
+            if mode == 'agree':
+                # 정답을 손으로 고친 뒤 — 이미 구한 검산값과 새 답만 다시 견준다 (AI 호출 없음)
+                v = {'value': body.get('value'), 'vars': body.get('vars') or {}}
+                self._send(200, {'agree': agrees(v, body.get('answer_script') or '')})
+                return
+
+            raise ValueError('mode 는 run / combine / agree')
         except Exception as e:
             self._send(500, {'error': '%s: %s' % (type(e).__name__, str(e)[:200])})
 

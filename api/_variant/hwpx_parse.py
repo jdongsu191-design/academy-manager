@@ -206,6 +206,15 @@ def parse(path):
 
 
 # ── 문항 하나를 정리해 담기 ────────────────────────────────────
+def _clean_ans(s):
+    """미주·빠른답지의 정답 토막을 정본으로.
+    ⟪⟫ 를 벗기고, 수식 안 개행을 공백으로, '4 개' 처럼 단위 앞 공백을 붙인다.
+    (실측: 12번 미주가 ⟪4↵⟫개 — 개행이 정규식을 막아 정답이 빈값이 됐다)"""
+    s = re.sub(r'[⟪⟫]', ' ', str(s or ''))
+    s = re.sub(r'\s+', ' ', s).strip()
+    return re.sub(r'\s+(?=[가-힣]+$)', '', s)
+
+
 HEAD = re.compile(r'\[Potential\s*([^\]]+?)\]\s*\[\s*(?:A\s*([\d.]+)점\s*/\s*B\s*([\d.]+)점|([\d.]+)점)\s*\]')
 NOTE = re.compile(r'\[정답\]\s*(.*?)\s*\[Potential\s*([^\]]+?)\]\s*\[([^\]]+?)\]')
 SRC = re.compile(r'출처\)\s*(.+)')
@@ -219,6 +228,7 @@ def tidy(p):
     ntxt = [text_of(i).strip() for i in npar]
     npics = [v for i in npar for k, v in i if k == 'pic']
     head = next((t for t in ntxt if '[정답]' in t), '')
+    head = re.sub(r'\s+', ' ', head)     # 수식 안 개행이 정규식을 막는다 (실측 12번)
     m = NOTE.search(head)
     src = next((SRC.search(t).group(1).strip() for t in ntxt if SRC.search(t)), '')
 
@@ -241,7 +251,7 @@ def tidy(p):
         'number': p['no'],
         'level': (m.group(2).strip() if m else (hm.group(1).strip() if hm else '')),
         'type': m.group(3).strip() if m else '',
-        'answer_script': (m.group(1) if m else '').strip('⟪⟫ '),
+        'answer_script': _clean_ans(m.group(1) if m else ''),
         'points': ({'A': hm.group(2), 'B': hm.group(3)} if hm and hm.group(2)
                    else (hm.group(4) if hm else None)),
         'source': src,
@@ -303,7 +313,7 @@ def _quick_answers(z):
                 if re.fullmatch(r'\d{1,2}', c) and i + 1 < len(cells):
                     nxt = cells[i + 1]
                     if nxt.startswith('⟪'):
-                        quick[int(c)] = nxt.strip('⟪⟫')
+                        quick[int(c)] = _clean_ans(nxt)
     return quick
 
 

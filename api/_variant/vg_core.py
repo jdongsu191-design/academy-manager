@@ -25,7 +25,7 @@ def run_once(statement, png=None, temp=0.15, trials=10):
         spec, sec = ask_spec(statement, png, temp=temp)
     except Exception as e:
         return {'verdict': '명세 실패', 'why': str(e)[:70], 'sec': 0, 'spec': None}
-    if not spec.get('points'):
+    if not spec.get('points') and not spec.get('scalars'):   # 대수는 점 없이 미지수만 온다
         return {'verdict': '검산 못 함', 'why': (spec.get('why') or '')[:70],
                 'sec': sec, 'spec': spec}
     r = check(spec, trials=trials)
