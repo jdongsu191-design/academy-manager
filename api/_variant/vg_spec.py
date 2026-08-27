@@ -142,9 +142,11 @@ def num_of(script, vars=None):
     s = re.sub(r'(?<![A-Za-z])[Dd][Ee][Gg](?![A-Za-z])', ' ', s)
     s = s.replace('°', ' ').replace('^{circ}', ' ').replace('circ', ' ')
     s = re.sub(r'\s*over\s*', ' over ', s)                 # over 앞뒤 공백을 맞춘다
-    s = re.sub(r'\{([^{}]*)\} over \{([^{}]*)\}', r'((\1)/(\2))', s)
+    # ⚠ sqrt 를 분수보다 **먼저** 푼다. '5sqrt{61}over{61}' 처럼 밀착해 오면
+    #   분수 규칙이 sqrt 의 인자 중괄호를 분자로 오인해 sqrt(61/61) 이 된다 (실측 오판)
     s = re.sub(r'(?<![A-Za-z])(root|sqrt)\s*\{([^{}]*)\}', r'sqrt(\2)', s)
     s = re.sub(r'(?<![A-Za-z])(root|sqrt)\s*(\d+(?:\.\d+)?)', r'sqrt(\2)', s)
+    s = re.sub(r'\{([^{}]*)\} over \{([^{}]*)\}', r'((\1)/(\2))', s)
     # 한/글은 여는 중괄호가 없어도 읽는다 (9root5 }over4 = 9√5/4). 남은 중괄호는 턴다.
     s = s.replace('{', ' ').replace('}', ' ')
     if ' over ' in s:                                       # 마지막 over 를 분수로
