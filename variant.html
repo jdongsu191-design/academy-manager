@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>변형문제 — BMAPS v0.20</title>
+<title>변형문제 — BMAPS v0.30</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
@@ -91,7 +91,7 @@
 
 <header class="top">
   <h1>변형문제 · 포텐셜</h1>
-  <span class="badge" id="ver">v0.20</span>
+  <span class="badge" id="ver">v0.30</span>
   <span class="sp" id="who">…</span>
 </header>
 
@@ -174,7 +174,7 @@
    · 파싱·검산 결과는 Storage 의 parsed/<docId>.json 하나에 담는다 (DDL 불필요).
    · index.html 에는 손대지 않는다. BMAPS 메뉴에서 새 창으로 연다.
 ══════════════════════════════════════════════════════════════ */
-window.VARIANT_VERSION = 'v0.20';
+window.VARIANT_VERSION = 'v0.30';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -183,6 +183,8 @@ const BUCKET = 'variants';
 /* ⚠ 반드시 상대 경로 — 절대 주소를 박으면 프리뷰에서 출처가 달라져 CORS 사전요청에 막힌다 */
 const API_PARSE = '/api/variant-parse';
 const API_CHECK = '/api/variant-check';
+const API_GEN   = '/api/variant-gen';
+const API_BUILD = '/api/variant-build';
 
 var vUser = null, vDocs = [], vDocId = null, vTabNow = 'read', vNames = {}, vPick_ = null;
 var vParsed = null;            /* 지금 고른 문서의 parsed/<id>.json 내용 */
@@ -276,9 +278,8 @@ function vRenderBody(){
     : '';
   if (!d) { $('body').innerHTML = '<div class="empty">왼쪽에서 문서를 고르세요.</div>'; return; }
   if (vTabNow === 'read') return vRenderRead(d);
-  $('body').innerHTML = '<div class="empty">' +
-    ({ make:'2 · 변형 만들기', export:'3 · 문제집 내보내기' }[vTabNow]) +
-    ' — 2단계에서 붙입니다.</div>';
+  if (vTabNow === 'make') return vRenderMake(d);
+  if (vTabNow === 'export') return vRenderExport(d);
 }
 
 /* 버킷이 비공개 — 한 시간짜리 서명 URL 을 받아 쓴다 */
@@ -503,6 +504,275 @@ async function vCheckAll(){
     msg2.textContent = '끝 — 통과 ' + ok + ' / ' + n + (bad ? ' · 어긋남 ' + bad + ' ⚠' : '');
   }
   if (all) all.disabled = false;
+}
+
+/* ══════════════════════════════════════════════════════════
+   2 · 변형 만들기 — 등급 하나씩: 생성 → 검산 → (걸리면 한 번 다시)
+                     → 답 확인되면 헤맨 해설·범위 밖 도구 재작성
+════════════════════════════════════════════════════════════ */
+var LEVELS = ['V1', 'V2', 'V3'];
+var LVDESC = { V1:'계산이 무거워짐', V2:'묻는 대상이 달라짐', V3:'조건이 간접적으로 바뀜' };
+var vGenBusy = false;
+
+function vGradeLabel(d){
+  return [(d.grade || ''), (d.round || ''), (d.unit ? '(' + d.unit + ')' : '')]
+    .filter(Boolean).join(' ');
+}
+function vGen(no){
+  vParsed.gen = vParsed.gen || {};
+  return vParsed.gen[no] = vParsed.gen[no] || { variants: [] };
+}
+function vSlot(no, lv){
+  var g = (vParsed.gen || {})[no];
+  if (!g) return null;
+  return (g.variants || []).filter(function(v){ return v.level === lv; })[0] || null;
+}
+
+async function vRenderMake(d){
+  if (!vParsed) { vParsed = await vParsedLoad(d); if (vDocId !== d.id) return; }
+  if (!vParsed) {
+    $('body').innerHTML = '<div class="empty">먼저 [1 · 읽기 · 검산] 에서 문항을 읽어주세요.</div>';
+    return;
+  }
+  var html =
+      '<div class="note">등급마다 <b>생성 → 검산 → (걸리면 한 번 다시) → 해설 다듬기</b> 를 거칩니다.'
+    + ' 등급 하나에 1~3분 — <b>전체 생성은 30분 이상</b> 걸리니 화면을 켜 두세요.'
+    + ' 만든 것은 그때그때 저장됩니다.</div>'
+    + '<div style="display:flex;gap:8px;margin-bottom:10px">'
+    + '<button class="pri" onclick="vGenAll()"' + (vGenBusy ? ' disabled' : '') + '>전체 생성</button>'
+    + '<span class="mut" style="font-size:12px;align-self:center" id="genmsg"></span></div>'
+    + '<div class="plist">';
+  vParsed.probs.forEach(function(p){
+    var no = String(p.number);
+    html += '<div class="prob"><div class="h"><span class="n">' + no + '번</span>'
+      + (p.type ? '<span class="pill mut">' + esc(p.type) + '</span>' : '')
+      + '<span class="mut" style="font-size:12px">정답 ' + esc(p.answer_script) + '</span>'
+      + '</div>';
+    LEVELS.forEach(function(lv){ html += vSlotHtml(no, lv); });
+    html += '</div>';
+  });
+  $('body').innerHTML = html + '</div>';
+  vKatexAll();
+}
+
+function vSlotHtml(no, lv){
+  var v = vSlot(no, lv);
+  var id = 'slot-' + no + '-' + lv;
+  var h = '<div id="' + id + '" style="border-top:1px solid var(--line);padding:8px 0 4px">';
+  if (!v) {
+    return h + '<span class="pill mut">' + lv + '</span> <span class="mut" style="font-size:12px">'
+      + LVDESC[lv] + '</span> <button style="padding:3px 10px;margin-left:8px"'
+      + ' onclick="vGenLevel(\'' + no + '\',\'' + lv + '\')">만들기</button></div>';
+  }
+  if (v.running) {
+    return h + '<span class="pill mut">' + lv + '</span> '
+      + '<span class="pill warn">' + esc(v.running) + '</span></div>';
+  }
+  if (v.impossible) {
+    return h + '<span class="pill mut">' + lv + '</span> '
+      + '<span class="pill mut">만들 수 없음</span> <span class="mut" style="font-size:12px">'
+      + esc(v.impossible) + '</span> <button style="padding:3px 10px"'
+      + ' onclick="vGenLevel(\'' + no + '\',\'' + lv + '\')">다시</button></div>';
+  }
+  h += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">'
+    + '<span class="pill mut">' + lv + '</span>'
+    + vCheckPill(v.check)
+    + (v.sol_flag ? '<span class="pill warn">⚑ ' + esc(v.sol_flag) + '</span>' : '')
+    + ((v.over || []).length ? '<span class="pill warn">범위 밖: ' + esc(v.over.join('·')) + '</span>' : '')
+    + (v.retried ? '<span class="pill mut">↻ 다시 만듦</span>' : '')
+    + '<span style="margin-left:auto"></span>'
+    + '<button style="padding:3px 10px" onclick="vGenLevel(\'' + no + '\',\'' + lv + '\')">다시 만들기</button>'
+    + '</div>'
+    + '<div class="stmt" style="font-size:13px">' + vStmtHtml(v) + '</div>'
+    + '<div class="foot"><b>정답</b> <span>' + esc(v.answer || '') + '</span>'
+    + (v.figure_need && v.figure_need !== 'none'
+        ? '<span class="mut">▣ 그림 ' + (v.figure_need === 'edit' ? '수정' : '새로') + ': '
+          + esc((v.figure_note || '').slice(0, 80)) + '</span>' : '')
+    + '</div>';
+  return h + '</div>';
+}
+
+function vSlotRefresh(no, lv){
+  var el = $('slot-' + no + '-' + lv);
+  if (el) { el.outerHTML = vSlotHtml(no, lv); vKatexAll(); }
+}
+
+async function vApiGen(body){
+  var r = await fetch(API_GEN, { method:'POST',
+    headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+  var j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+/* 변형 본문($ … $)을 검산한다 — 그림은 주지 않는다: 본문만으로 풀려야 한다 */
+async function vCheckVariant(v){
+  var mk = function(t){ return vApiCheck({ mode:'run', statement:v.statement, temp:t }); };
+  var runs = await Promise.all([mk(0.15), mk(0.55)]);
+  var c = await vApiCheck({ mode:'combine', runs:runs, answer_script:v.answer });
+  if (c.need_third) {
+    runs.push(await mk(0.35));
+    c = await vApiCheck({ mode:'combine', runs:runs, answer_script:v.answer });
+  }
+  return { verdict:c.verdict, value:c.value, agree:c.agree,
+           why:(c.why || '').slice(0, 160) };
+}
+
+function vBad(v){
+  var c = v.check || {};
+  return c.agree === '어긋남' || c.verdict === '조건 모순';
+}
+
+async function vGenLevel(no, lv){
+  var d = vDoc();
+  var p = vParsed.probs.filter(function(x){ return String(x.number) === String(no); })[0];
+  if (!p) return;
+  var g = vGen(no);
+  var put = function(v){
+    g.variants = (g.variants || []).filter(function(x){ return x.level !== lv; });
+    g.variants.push(v);
+    g.variants.sort(function(a, b){ return a.level < b.level ? -1 : 1; });
+  };
+  put({ level: lv, running: '생성 중…' });
+  vSlotRefresh(no, lv);
+  try {
+    var png = await vFigB64(p);
+    var prob = { statement: p.statement, answer_script: p.answer_script,
+                 type: p.type, points: p.points };
+    var label = vGradeLabel(d);
+    var v = await vApiGen({ mode:'gen', prob:prob, grade_label:label, level:lv, png_b64:png });
+    if (!v.impossible) {
+      put(Object.assign(v, { running: '검산 중…' })); vSlotRefresh(no, lv);
+      v.check = await vCheckVariant(v);
+
+      /* 걸리면 사유를 알려 주고 한 번만 다시 — 원판(pt_full3)의 재시도 규칙 */
+      if (vBad(v)) {
+        put(Object.assign(v, { running: '걸림 — 다시 만드는 중…' })); vSlotRefresh(no, lv);
+        var note = '  · ' + lv + ' 로 만든 문제 — '
+          + (v.check.agree === '어긋남'
+              ? ('네가 쓴 답은 ' + v.answer + ' 인데 검산은 ' + v.check.value + ' 가 나왔다')
+              : '조건을 만족하는 도형이 아예 없다 (조건 모순)');
+        try {
+          var v2 = await vApiGen({ mode:'gen', prob:prob, grade_label:label, level:lv,
+                                   png_b64:png, retry_note:note, temp:0.5 });
+          if (!v2.impossible) {
+            v2.check = await vCheckVariant(v2);
+            if (!vBad(v2) || v2.check.agree === '일치') { v = v2; v.retried = true; }
+          }
+        } catch(e) { /* 재시도 실패 — 1차 것을 둔다 */ }
+      }
+
+      /* 답이 확인된 것만 해설을 다듬는다 — 아니면 '그럴듯하지만 틀린 해설' 이 된다 */
+      if ((v.check || {}).agree === '일치') {
+        if (v.sol_flag) {
+          put(Object.assign(v, { running: '해설 다듬는 중…' })); vSlotRefresh(no, lv);
+          try {
+            var r1 = await vApiGen({ mode:'resol', statement:v.statement,
+                                     answer:v.answer, grade_label:label });
+            if (!r1.kept) { v.insight = r1.insight; v.solution = r1.solution; v.sol_flag = ''; }
+          } catch(e) {}
+        }
+        if ((v.over || []).length) {
+          put(Object.assign(v, { running: '학년 도구로 다시 쓰는 중…' })); vSlotRefresh(no, lv);
+          try {
+            var r2 = await vApiGen({ mode:'resol2', statement:v.statement, answer:v.answer,
+                                     over:v.over, grade_label:label });
+            if (!r2.kept) { v.insight = r2.insight; v.solution = r2.solution;
+                            v.sol_flag = ''; v.over = []; }
+          } catch(e) {}
+        }
+      }
+    }
+    delete v.running;
+    put(v);
+    if (v.base_think != null) { g.base_think = v.base_think; g.base_calc = v.base_calc; }
+  } catch(e) {
+    put({ level: lv, impossible: '호출 실패: ' + (e.message || e) });
+  }
+  vSlotRefresh(no, lv);
+  try { await vParsedSave(d); } catch(e) { console.warn('저장 실패', e); }
+}
+
+async function vGenAll(){
+  if (vGenBusy) return;
+  vGenBusy = true;
+  var list = vParsed.probs.map(function(p){ return String(p.number); });
+  var total = list.length * LEVELS.length, done = 0;
+  outer:
+  for (var i = 0; i < list.length; i++) {
+    for (var j = 0; j < LEVELS.length; j++) {
+      if (!vDoc() || vTabNow !== 'make') break outer;
+      var no = list[i], lv = LEVELS[j];
+      done++;
+      var v = vSlot(no, lv);
+      if (v && !v.impossible && !v.running) continue;   /* 이미 있으면 건너뜀 */
+      var msg = $('genmsg');
+      if (msg) msg.textContent = no + '번 ' + lv + ' (' + done + '/' + total + ') 작업 중…';
+      await vGenLevel(no, lv);
+    }
+  }
+  vGenBusy = false;
+  var msg2 = $('genmsg');
+  if (msg2) msg2.textContent = '끝났습니다.';
+}
+
+/* ══════════════════════════════════════════════════════════
+   3 · 문제집 내보내기
+════════════════════════════════════════════════════════════ */
+async function vRenderExport(d){
+  if (!vParsed) { vParsed = await vParsedLoad(d); if (vDocId !== d.id) return; }
+  var gen = (vParsed || {}).gen || {};
+  var rows = [], nv = 0, nok = 0, nfig = 0;
+  Object.keys(gen).sort(function(a, b){ return a - b; }).forEach(function(no){
+    var vs = (gen[no].variants || []).filter(function(v){
+      return (v.statement || '').trim() && !v.impossible; });
+    var ok = vs.filter(function(v){ return (v.check || {}).agree === '일치'; }).length;
+    var fig = vs.filter(function(v){ return v.figure_need && v.figure_need !== 'none'; }).length;
+    nv += vs.length; nok += ok; nfig += fig;
+    rows.push('<tr><td style="padding:3px 10px">' + no + '번</td><td>' + vs.length
+      + '개</td><td>' + ok + '</td><td>' + fig + '</td></tr>');
+  });
+  if (!nv) {
+    $('body').innerHTML = '<div class="empty">아직 만든 변형이 없습니다 — [2 · 변형 만들기] 부터.</div>';
+    return;
+  }
+  $('body').innerHTML =
+      '<div class="note">원문과 변형을 2단으로 놓고 해설·검산 결과를 미주로 붙인 hwpx 를 만듭니다.'
+    + ' 원문 그림·해설 그림은 원본에서 그대로 가져옵니다. 내려받아 한/글에서 열면 됩니다.</div>'
+    + '<div style="font-size:13px;margin-bottom:10px">변형 <b>' + nv + '</b>개 · 검산 일치 <b>'
+    + nok + '</b>개 · 그림 손 필요 <b>' + nfig + '</b>곳</div>'
+    + '<table style="font-size:12px;border-collapse:collapse;margin-bottom:14px">'
+    + '<tr style="color:var(--mut)"><td style="padding:3px 10px">문항</td><td>변형</td>'
+    + '<td>일치</td><td>그림</td></tr>' + rows.join('') + '</table>'
+    + '<button class="pri" id="btn-build" onclick="vBuild()">문제집 만들기 (hwpx)</button>'
+    + ' <span class="mut" style="font-size:12px" id="buildmsg"></span>';
+}
+
+async function vBuild(){
+  var d = vDoc();
+  var btn = $('btn-build'), msg = $('buildmsg');
+  btn.disabled = true; msg.textContent = '만드는 중… (10초 안팎)';
+  try {
+    var url = await vSignedUrl(d.file_path);
+    var title = (d.title || '포텐셜') + ' — 변형문제집';
+    var r = await fetch(API_BUILD, { method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ url:url, title:title, gen:vParsed.gen }) });
+    var j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    var bin = atob(j.hwpx_b64), arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    var blob = new Blob([arr], { type:'application/haansofthwpx' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = title.replace(/[\\/:*?"<>|]/g, '') + '.hwpx';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = '내려받았습니다 — ' + Math.round(j.size / 1024) + ' KB · 문항 '
+      + j.stats.items + ' · 미주 ' + j.stats.notes + ' · 그림 ' + j.stats.pics;
+  } catch(e) {
+    msg.textContent = '실패: ' + (e.message || e);
+  } finally { btn.disabled = false; }
 }
 
 /* ── 휴지통 ─────────────────────────────────────────────── */
