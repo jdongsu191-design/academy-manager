@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BMAPS 입학 상담 관리 v1.5</title>
+  <title>BMAPS 입학 상담 관리 v1.6</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -170,6 +170,20 @@
     .fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--navy-light);}
     .fg textarea{min-height:92px;resize:vertical;line-height:1.5;}
     .fg .manual{margin-top:7px;}
+    /* 복수 선택 체크박스 묶음 (입학 경로 · 퇴원 사유) */
+    .chk-group{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;
+      border:1.5px solid var(--border,#d7dbe4);border-radius:8px;padding:10px 12px;background:#fafbfd;}
+    .chk-group label{display:flex;align-items:center;gap:7px;font-size:13px;color:#333;
+      font-weight:500;margin:0;cursor:pointer;}
+    .chk-group input[type=checkbox]{width:15px;height:15px;accent-color:#1e3a6e;cursor:pointer;flex:none;}
+    /* 통계 모달 */
+    .stat-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px;}
+    .stat-label{width:190px;flex:none;color:#333;}
+    .stat-bar{flex:1;height:16px;background:#eef1f6;border-radius:8px;overflow:hidden;}
+    .stat-bar i{display:block;height:100%;background:#1e3a6e;border-radius:8px;}
+    .stat-num{width:90px;flex:none;text-align:right;color:#555;font-variant-numeric:tabular-nums;}
+    .rz-badge{display:inline-block;font-size:11px;font-weight:600;background:#eef1f6;color:#31456e;
+      border-radius:999px;padding:1px 7px;margin:0 3px 2px 0;white-space:nowrap;}
     .fg .branch-fixed{padding:10px 12px;border:1.5px solid var(--border);border-radius:var(--radius);background:#f8fafc;color:var(--navy);font-weight:600;}
     .section-label{grid-column:1 / -1;font-size:11.5px;font-weight:800;color:var(--gold);letter-spacing:0.4px;text-transform:uppercase;margin:6px 0 -4px;}
     .modal-foot{padding:16px 22px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;}
@@ -243,6 +257,7 @@
           <option value="100">100개씩</option>
         </select>
         <button class="sort-btn" id="sort-btn" onclick="toggleSort()">접수일 ↓ 내림차순</button>
+        <button class="sort-btn" id="stats-btn" onclick="openStatsModal()">📊 통계</button>
         <button class="btn-primary" id="add-btn" onclick="onAddClick()">+ 상담 추가</button>
       </div>
 
@@ -331,6 +346,10 @@
           <div class="fg">
             <label for="f-name">학생 이름</label>
             <input id="f-name" type="text" placeholder="미정이면 - 입력" />
+          </div>
+          <div class="fg full">
+            <label>입학 경로 (복수 선택 가능)</label>
+            <div class="chk-group" id="f-paths"></div>
           </div>
           <div class="fg full">
             <label for="f-content">상담내용</label>
@@ -424,8 +443,12 @@
             <input id="wf-teacher-manual" class="manual hidden" type="text" placeholder="담당T 직접 입력" />
           </div>
           <div class="fg full">
-            <label for="wf-reason">퇴원사유</label>
-            <textarea id="wf-reason" placeholder="퇴원 사유를 입력하세요"></textarea>
+            <label>퇴원 사유 (복수 선택 가능)</label>
+            <div class="chk-group" id="wf-reasons"></div>
+          </div>
+          <div class="fg full">
+            <label for="wf-reason">상세 사유 <span style="color:#b91c1c">(기타 선택 시 필수)</span></label>
+            <textarea id="wf-reason" placeholder="상세 사유를 입력하세요"></textarea>
           </div>
           <div class="fg full">
             <label for="wf-note">비고</label>
@@ -437,6 +460,20 @@
         <span id="w-save-error" class="save-err"></span>
         <button class="btn-ghost" onclick="closeWModal()">취소</button>
         <button class="btn-primary" id="w-save-btn" onclick="saveWithdrawal()">저장</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 통계 모달 (입학 경로별 / 퇴원 사유별) ====== -->
+  <div id="statsModal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="stats-title">통계</h3>
+        <button class="x" onclick="closeStatsModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="stats-body"></div>
+      <div class="modal-foot">
+        <button class="btn-ghost" onclick="closeStatsModal()">닫기</button>
       </div>
     </div>
   </div>
@@ -462,7 +499,7 @@
        - 별도 페이지 / index.html 과 동일 anon 클라이언트 + savedUserId 공유
        - 접근: admin 또는 (vice_director && permissions.consult_manage)
        ========================================================= */
-    window.CONSULT_VERSION = 'v1.5';
+    window.CONSULT_VERSION = 'v1.6';
 
     const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -470,6 +507,10 @@
     const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
     const REG_STATUS_OPTIONS = ['등록','상담중','보류','거절','미등록','취소'];
+    // 입학 경로 · 퇴원 사유 (복수 선택). index.html 퇴원처리 모달과 같은 목록을 쓴다 — 바꾸면 같이 바꿀 것
+    const ADMISSION_PATHS = ['친구 소개','지인 추천','광고 및 온라인 검색','간담회','학원프로그램(시험대비, 입시)','기타'];
+    const WITHDRAW_REASONS = ['성적 및 학습효과 불만','강사 수업 불만족','학습관리 불만족','타학원 이동',
+                              '시간표 및 일정문제','학원비문제','거리문제','학습의지 부족','단기퇴원(ex. 윈터)','기타'];
 
     const BR_ALL = '__all__';     // 관리자: 전체 분원
     const BR_MINE = '__mine__';   // 부원장: 내 담당 전체
@@ -610,6 +651,8 @@
       showScreen('appScreen');
       $('user-name').textContent = currentUser.name || '';
       buildStatusOptions();
+      buildCheckGroup('f-paths', ADMISSION_PATHS);
+      buildCheckGroup('wf-reasons', WITHDRAW_REASONS);
       await loadBranches();
       buildBranchUI();
       await loadTeachers();
@@ -974,6 +1017,11 @@
 
       body.innerHTML = pageRows.map(function(r, i){
         var reason = r.withdraw_reason ? esc(r.withdraw_reason) : '';
+        var rzs = reasonBadges(r.withdraw_reasons);
+        var rzTitle = esc(((r.withdraw_reasons||[]).join(' · ') + (r.withdraw_reason ? ' — ' + r.withdraw_reason : '')).replace(/^ — /,''));
+        var reasonCell = (rzs || reason)
+          ? '<span class="ellip" title="'+rzTitle+'">'+rzs+(reason||'')+'</span>'
+          : '<span style="color:#cbd5e1">—</span>';
         var note = r.note ? esc(r.note) : '';
         var sg = [r.school, r.grade].filter(Boolean).join(' ');
         var src = (r.source==='auto') ? ' <span class="src-auto" title="BMAPS 자동 반영">⚙</span>' : '';
@@ -985,7 +1033,7 @@
             '<td style="white-space:nowrap">'+(sg?esc(sg):'<span style="color:#cbd5e1">—</span>')+'</td>'+
             '<td class="name">'+(r.student_name?esc(r.student_name):'—')+src+'</td>'+
             '<td style="white-space:nowrap">'+(r.teacher_name?esc(r.teacher_name):'<span style="color:#cbd5e1">—</span>')+'</td>'+
-            '<td class="content"><span class="ellip" title="'+reason+'">'+(reason||'<span style="color:#cbd5e1">—</span>')+'</span></td>'+
+            '<td class="content">'+reasonCell+'</td>'+
             '<td class="note"><span class="ellip" title="'+note+'">'+(note||'<span style="color:#cbd5e1">—</span>')+'</span></td>'+
             '<td class="actions">'+
               '<button class="btn-view" onclick="openViewW(\''+r.id+'\')">보기</button>'+
@@ -994,6 +1042,28 @@
             '</td>'+
           '</tr>';
       }).join('');
+    }
+
+    /* ---------- 복수 선택 체크박스 ---------- */
+    function buildCheckGroup(elId, items){
+      var el=$(elId); if(!el) return;
+      el.innerHTML = items.map(function(s,i){
+        return '<label><input type="checkbox" value="'+esc(s)+'"> '+esc(s)+'</label>';
+      }).join('');
+    }
+    function getChecked(elId){
+      return Array.prototype.map.call(
+        document.querySelectorAll('#'+elId+' input:checked'),
+        function(c){ return c.value; });
+    }
+    function setChecked(elId, values){
+      var vs = values || [];
+      Array.prototype.forEach.call(
+        document.querySelectorAll('#'+elId+' input'),
+        function(c){ c.checked = vs.indexOf(c.value)!==-1; });
+    }
+    function reasonBadges(arr){
+      return (arr||[]).map(function(s){ return '<span class="rz-badge">'+esc(s)+'</span>'; }).join('');
     }
 
     /* ---------- 폼 옵션 빌드 ---------- */
@@ -1028,6 +1098,7 @@
       ].forEach(function(id){ if($(id)) $(id).value=''; });
       $('f-status').value='';
       $('f-teacher').value='';
+      setChecked('f-paths', []);
       onStatusChange(); onTeacherChange();
       $('save-error').textContent='';
     }
@@ -1088,6 +1159,7 @@
       $('f-demofollow').value= r.demo_followup_date || '';
       $('f-regdate').value   = r.reg_date || '';
       $('f-note').value      = r.note || '';
+      setChecked('f-paths', r.admission_paths);
 
       // 등록여부: 표준값이면 select, 아니면 직접입력
       if(r.reg_status && REG_STATUS_OPTIONS.indexOf(r.reg_status)===-1){
@@ -1141,6 +1213,7 @@
       html+=vrow('등록여부', r.reg_status);
       html+=vrow('학교/학년', r.school_grade);
       html+=vrow('이름', r.student_name);
+      html+=vrow('입학 경로', (r.admission_paths||[]).join(', '));
       html+=vrow('내용', r.content, true);
       html+=vrow('TEST(상담)일', fmtKDateRaw(r.test_date));
       html+=vrow('TEST 점수', r.test_score);
@@ -1189,7 +1262,8 @@
         demo_date:    val('f-demodate') || null,
         demo_followup_date: val('f-demofollow') || null,
         reg_date:     val('f-regdate') || null,
-        note:         val('f-note').trim() || null
+        note:         val('f-note').trim() || null,
+        admission_paths: (function(){ var a=getChecked('f-paths'); return a.length?a:null; })()
       };
 
       // 담당T
@@ -1259,6 +1333,7 @@
       ['wf-lastclass','wf-school','wf-grade','wf-name','wf-reason','wf-note','wf-teacher-manual'
       ].forEach(function(id){ if($(id)) $(id).value=''; });
       $('wf-teacher').value='';
+      setChecked('wf-reasons', []);
       onWTeacherChange();
       $('w-save-error').textContent='';
     }
@@ -1307,6 +1382,7 @@
       $('wf-name').value      = r.student_name || '';
       $('wf-reason').value    = r.withdraw_reason || '';
       $('wf-note').value      = r.note || '';
+      setChecked('wf-reasons', r.withdraw_reasons);
       if(r.teacher_id && _teachers.some(function(t){return t.id===r.teacher_id;})){
         $('wf-teacher').value=r.teacher_id;
       } else if(r.teacher_name){
@@ -1339,7 +1415,8 @@
       html+=vrow('학교/학년', sg);
       html+=vrow('이름', r.student_name);
       html+=vrow('담당T', r.teacher_name);
-      html+=vrow('퇴원사유', r.withdraw_reason, true);
+      html+=vrow('퇴원 사유(항목)', (r.withdraw_reasons||[]).join(', '));
+      html+=vrow('상세 사유', r.withdraw_reason, true);
       html+=vrow('비고', r.note, true);
       html+=vrow('출처', r.source==='auto' ? 'BMAPS 자동 반영' : '직접/이관');
       $('w-view-body').innerHTML=html;
@@ -1361,12 +1438,18 @@
       var branchId = getWModalBranchId();
       if(!branchId){ err.textContent='분원을 선택해 주세요.'; return; }
 
+      var reasons = getChecked('wf-reasons');
+      if(reasons.indexOf('기타')!==-1 && !val('wf-reason').trim()){
+        err.textContent='기타를 선택한 경우 상세 사유를 입력해 주세요.'; return;
+      }
+
       var payload = {
         branch_id: branchId,
         last_class_date: val('wf-lastclass') || null,
         school:       val('wf-school').trim() || null,
         grade:        val('wf-grade').trim() || null,
         student_name: name,
+        withdraw_reasons: reasons.length ? reasons : null,
         withdraw_reason: val('wf-reason').trim() || null,
         note:         val('wf-note').trim() || null
       };
@@ -1417,6 +1500,59 @@
         console.error(e);
       }
     }
+
+    /* ========== 통계 모달 (입학 경로별 / 퇴원 사유별) ========== */
+    function openStatsModal(){
+      var isW = (_viewMode==='withdrawal');
+      // 표와 같은 필터(분원 범위 · 월 · 검색어)를 그대로 따른다
+      var rows, items, field, dateField;
+      if(isW){
+        rows = _withdrawals.slice(); items = WITHDRAW_REASONS;
+        field = 'withdraw_reasons'; dateField = 'last_class_date';
+      } else {
+        rows = _consults.slice(); items = ADMISSION_PATHS;
+        field = 'admission_paths'; dateField = 'inquiry_date';
+      }
+      if(_monthFilter) rows = rows.filter(function(r){ return (r[dateField]||'').slice(0,7)===_monthFilter; });
+      if(_searchQuery) rows = rows.filter(function(r){ return (r.student_name||'').toLowerCase().indexOf(_searchQuery)!==-1; });
+
+      var counts = {}; items.forEach(function(s){ counts[s]=0; });
+      var none = 0, extra = {};
+      rows.forEach(function(r){
+        var a = r[field];
+        if(!a || !a.length){ none++; return; }
+        a.forEach(function(s){
+          if(counts[s]!=null) counts[s]++;
+          else extra[s]=(extra[s]||0)+1;      // 목록이 바뀐 뒤 남은 옛 값도 버리지 않는다
+        });
+      });
+
+      var total = rows.length;
+      var maxN = 1;
+      items.forEach(function(s){ if(counts[s]>maxN) maxN=counts[s]; });
+      Object.keys(extra).forEach(function(s){ if(extra[s]>maxN) maxN=extra[s]; });
+      if(none>maxN) maxN=none;
+
+      function bar(label, n){
+        var pct = total ? Math.round(n*1000/total)/10 : 0;
+        return '<div class="stat-row"><div class="stat-label">'+esc(label)+'</div>'
+          + '<div class="stat-bar"><i style="width:'+(n?Math.max(3, n*100/maxN):0)+'%"></i></div>'
+          + '<div class="stat-num">'+n+'건 ('+pct+'%)</div></div>';
+      }
+
+      var scope = [currentScopeLabel(), _monthFilter || '전체 기간'].filter(Boolean).join(' · ');
+      var html = '<div style="font-size:12px;color:#667;margin-bottom:12px">'
+        + esc(scope) + ' · 기록 <b>' + total + '</b>건'
+        + ' <span style="color:#99a">(복수 선택이라 합계가 기록 수보다 클 수 있습니다. %는 기록 수 기준)</span></div>';
+      items.forEach(function(s){ html += bar(s, counts[s]); });
+      Object.keys(extra).sort().forEach(function(s){ html += bar(s+' (목록 외)', extra[s]); });
+      html += bar('미입력', none);
+
+      $('stats-title').textContent = isW ? '퇴원 사유별 통계' : '입학 경로별 통계';
+      $('stats-body').innerHTML = html;
+      $('statsModal').classList.remove('hidden');
+    }
+    function closeStatsModal(){ $('statsModal').classList.add('hidden'); }
 
     /* ---------- 시작 ---------- */
     // ── 맨 위로 가기 버튼 (스크롤 내리면 표시, 클릭 시 최상단) ──
