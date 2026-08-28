@@ -171,6 +171,9 @@ class Styled(Doc):
             ('sol',  dict(align='LEFT', line=155, left=mm(2.0), next=mm(0.6))),
             ('solh', dict(align='LEFT', line=150, prev=mm(1.4), next=mm(0.4))),
             ('note', dict(align='LEFT', line=150, next=mm(0.4))),
+            # 해설 첫 줄 — 위 가는 구분선 + 띄움. 어느 문항의 풀이인지 한눈에 갈라 준다
+            ('noteh', dict(align='LEFT', line=140, prev=mm(2.6), next=mm(0.8),
+                           border=BF_TAB, pad=mm(0.8))),
             ('ctr',  dict(align='CENTER', line=150)),
             ('rule', dict(line=100, prev=mm(1.2), next=mm(1.2), border=BF_TAB)),
         ]

@@ -11,6 +11,7 @@
 import io, re
 from pt_layout import Styled, mm
 from pt_build import esc, to_png
+from clean_core import wrap_math
 
 LVDOT = {'V1': 1, 'V2': 2, 'V3': 3}
 NEED = {'edit': '도형 필요 — 원문 그림을 고쳐 쓰세요',
@@ -115,6 +116,8 @@ class Book(Styled):
                 inbox = False
                 continue
             box = inbox or (not src and bool(self.COND.match(ln)))
+            if not src:
+                ln = wrap_math(ln)[0]   # 변형 본문의 샌 수식도 감싼다
             self.add([('body', segs(ln))], 'cbox' if box else 'body')
 
     def memo_box(self, need, note):
@@ -180,8 +183,10 @@ def build_book(src, probs, gen, title):
 
         # ── 원문 ── (원문마다 새 단에서 시작)
         seq += 1
+        oseq = seq                                   # 변형 해설이 가리킬 원문 번호
         s.newcol()
-        nb = [('ans', s.segs_src('[정답]  ⟪%s⟫' % p['answer_script']), 'note'),
+        nb = [s.T('【%d번 · 원문 풀이】' % seq, 'otag', 'noteh'),
+              ('ans', s.segs_src('[정답]  ⟪%s⟫' % p['answer_script']), 'note'),
               s.T('난이도   발상 %s / 계산 %s'
                   % (dots(g.get('base_think'), 5), dots(g.get('base_calc'), 6)), 'dim', 'note'),
               s.T('출처)  ' + (p.get('source') or ''), 'dim', 'note')]
@@ -202,7 +207,9 @@ def build_book(src, probs, gen, title):
         for v in vs:
             seq += 1
             ok, cline = check_line(v.get('check'))
-            nb = [('ans', s.segs('[정답]  %s' % v['answer']), 'note'),
+            nb = [s.T('【%d번 · %s 변형 풀이 — 원문은 %d번】'
+                      % (seq, v.get('level') or 'V?', oseq), 'vtag', 'noteh'),
+                  ('ans', s.segs('[정답]  %s' % v['answer']), 'note'),
                   (('ok' if ok else 'warn'), ['<hp:t>%s</hp:t>' % esc(cline)], 'note'),
                   s.T('변형   %s' % dots(LVDOT.get(v.get('level'), 1), 5), 'dim', 'note'),
                   s.T('난이도  발상 %s / 계산 %s'
@@ -213,7 +220,8 @@ def build_book(src, probs, gen, title):
             for tag, body in (('[발상]', v.get('insight')), ('[풀이]', v.get('solution')),
                               ('[변형 아이디어]', v.get('idea'))):
                 nb.append(s.T(tag, 'solh', 'solh'))
-                nb += [s.R(x) for x in sol_lines(body)]
+                # 저장된 옛 생성물에도 $ 밖으로 샌 수식 낱말이 남아 있다 — 조립 때 한 번 더 감싼다
+                nb += [s.R(wrap_math(x)[0]) for x in sol_lines(body)]
             if v.get('sol_flag'):
                 nb.append(s.T('⚑ %s — 답은 검산 결과를 보세요.' % v['sol_flag'],
                               'warn', 'note'))

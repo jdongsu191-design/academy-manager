@@ -188,7 +188,9 @@ def _measure(s, scale):
         sup = k >= 0 and toks[k].endswith(('^', '_'))
         aw, ah, ni = _atom(toks, i, scale * (SUP if sup else 1.0))
         if sup:
-            base_h = max([a[1] for a in atoms], default=BASE * scale)
+            # ⚠ 기준을 '지금까지 최대 높이'로 잡으면 첨자마다 누적돼 4.8배까지 부푼다.
+            #   첨자의 기준은 **바로 앞 덩이**다 (분수^2 처럼 큰 밑은 그 높이를 따른다)
+            base_h = atoms[-1][1] if atoms else BASE * scale
             ah = base_h + ah * 0.55
         atoms.append((aw, ah))
         i = ni
@@ -286,7 +288,9 @@ def _chars(t, scale):
                         if d == 0: break
                     k += 1
                 iw, ih = _measure(t[j + 1:k], scale * SUP)
-                w += iw; h = max(h, h + ih * 0.55, BASE * scale + ih * 0.55)
+                # ⚠ h + ih*0.55 로 누적하면 첨자 8개짜리 식이 4.8배 높이가 된다 —
+                #   첨자는 겹치지 않는 한 키를 더 키우지 않는다 (실측 '공중부양' 신고)
+                w += iw; h = max(h, BASE * scale + ih * 0.55)
                 j = k + 1
             elif j < len(t):
                 iw, ih = _measure(t[j], scale * SUP)

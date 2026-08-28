@@ -31,7 +31,13 @@ ENDED = re.compile(r'따라서|그러므로|답은|이다\.\s*$|구하는 값|�
 # $ 밖으로 새어 나온 한글 수식 낱말 — 그대로 두면 한/글에 글자로 찍힌다
 #  실측: '$BC$= 5 cm ,rm bar{AC} =8cm' 가 "BC= 5 cm ,rm bar{AC} =8cm" 로 인쇄됐다
 MATHTOK = re.compile(r'(?<![A-Za-z])(rm|it|ita|bar|over|sqrt|root|times|cdot|'
-                     r'DEG|ANGLE|TRIANGLE|LEFT|RIGHT|PERP|prime)(?![A-Za-z])|\^\s*\{|_\s*\{')
+                     r'DEG|ANGLE|TRIANGLE|LEFT|RIGHT|PERP|prime|'
+                     # 그리스 낱말과 THEREFORE 류도 글자로 찍힌다 (실측 'alpha는', 'beta이므로')
+                     r'alpha|beta|gamma|theta|lambda|mu|pi|omega|THEREFORE|BECAUSE'
+                     r')(?![A-Za-z])'
+                     # 'rmB'·'RMA' 처럼 지시어가 대문자에 붙은 꼴 (실측 '점 RMB가')
+                     r'|(?<![A-Za-z])(?:rm|RM|it|IT|bf|BF)(?=[A-Z])'
+                     r'|\^\s*\{|_\s*\{')
 TRAIL = ' \t,.·;:'
 
 
