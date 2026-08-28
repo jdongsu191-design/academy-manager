@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BMAPS 입학 상담 관리 v1.7</title>
+  <title>BMAPS 입학 상담 관리 v1.8</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -190,12 +190,12 @@
     .st-tab.active{background:#1e3a6e;color:#fff;}
     .st-top select{padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;background:#fff;font-size:13px;outline:none;}
     .st-scope{margin-left:auto;font-size:12px;color:#667;}
-    .st-cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px;}
-    .st-card{background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:10px 12px;text-align:center;}
+    .st-cards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;}
+    .st-card{background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px 12px;text-align:center;}
     .st-card .k{font-size:11.5px;color:#667;font-weight:700;margin-bottom:4px;}
-    .st-card .v{font-size:20px;font-weight:800;color:var(--navy);font-variant-numeric:tabular-nums;}
+    .st-card .v{font-size:22px;font-weight:800;color:var(--navy);font-variant-numeric:tabular-nums;}
     .st-card .v small{font-size:12px;font-weight:600;color:#889;margin-left:1px;}
-    .st-card.up .v{color:#16a34a;} .st-card.down .v{color:#dc2626;}
+    .st-note{font-size:12px;color:#92600a;background:#fdf6e3;border:1px solid #f0e2b6;border-radius:8px;padding:8px 12px;margin-bottom:14px;}
     .st-sec{font-size:13px;font-weight:800;color:var(--navy);margin:18px 0 8px;padding-top:14px;border-top:1px solid #f1f5f9;}
     .st-legend{display:flex;gap:14px;font-size:12px;color:#556;margin-bottom:6px;}
     .st-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px;}
@@ -520,7 +520,7 @@
        - 별도 페이지 / index.html 과 동일 anon 클라이언트 + savedUserId 공유
        - 접근: admin 또는 (vice_director && permissions.consult_manage)
        ========================================================= */
-    window.CONSULT_VERSION = 'v1.7';
+    window.CONSULT_VERSION = 'v1.8';
 
     const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -1523,11 +1523,12 @@
     }
 
     /* ========== 통계 모달 (입퇴원 종합 · 연/월 탐색 · 그래프) ==========
-       표 필터(월·검색어)와 분리된 자체 기간 컨트롤을 쓴다. 분원 범위만 화면 선택을 따른다.
-       등록 수 = 상담 기록 중 등록 상태가 '등록'인 것 (접수일 귀속) */
+       표 필터(월·검색어)와 분리된 자체 기간·분원 컨트롤을 쓴다. 분원 범위는 화면 선택 안에서 좁힌다.
+       집계는 상담 수·퇴원 수만 (등록·순증감은 데이터 정비 전이라 뺌 — 2026-08 사용자 결정) */
     let _stTab = 'admission';     // 'admission' | 'withdrawal'
     let _stYear = '';             // '' = 전체 기간, 'YYYY'
     let _stMonth = '';            // '' = 연도 전체, 'YYYY-MM'
+    let _stBranch = '';           // '' = 범위 내 전체 분원, 아니면 branch id (모달 전용 필터)
     let _stInited = false;
     let _stConsults = [], _stWithdrawals = [];
 
@@ -1556,6 +1557,8 @@
       // 열 때마다 새로 조회한다 — 저장·삭제 직후에도 항상 최신
       var r = await Promise.all([_stFetch('admission_consultations'), _stFetch('withdrawals')]);
       _stConsults = r[0]; _stWithdrawals = r[1];
+      // 화면 분원 범위가 바뀌어 선택 분원이 범위를 벗어나면 초기화
+      if(_stBranch && !_allowedBranches.some(function(b){ return b.id===_stBranch; })) _stBranch = '';
       if(!_stInited){
         // 첫 열람 기본값: 올해 데이터가 있으면 올해, 없으면 전체 기간
         var y = String(new Date().getFullYear());
@@ -1570,6 +1573,12 @@
     function stSetTab(t){ if(t!==_stTab){ _stTab=t; renderStats(); } }
     function onStYear(){ _stYear = $('st-year').value; _stMonth=''; renderStats(); }
     function onStMonth(){ _stMonth = $('st-month').value; renderStats(); }
+    function onStBranch(){ _stBranch = $('st-branch').value; renderStats(); }
+    // 모달 분원 필터 적용 (기간 필터와 별개)
+    function _stBase(list){
+      if(!_stBranch) return list;
+      return list.filter(function(r){ return r.branch_id===_stBranch; });
+    }
     function stPickYear(y){ _stYear=y; _stMonth=''; renderStats(); }
     function stPickMonth(m){ _stMonth = (_stMonth===m) ? '' : m; renderStats(); }
 
@@ -1594,11 +1603,8 @@
     }
 
     function renderStats(){
-      var cons = _stConsults.filter(function(r){ return _stIn(r.inquiry_date||''); });
-      var wds  = _stWithdrawals.filter(function(r){ return _stIn(r.last_class_date||''); });
-      var reg  = cons.filter(function(r){ return r.reg_status==='등록'; }).length;
-      var rate = cons.length ? Math.round(reg*1000/cons.length)/10 : 0;
-      var net  = reg - wds.length;
+      var cons = _stBase(_stConsults).filter(function(r){ return _stIn(r.inquiry_date||''); });
+      var wds  = _stBase(_stWithdrawals).filter(function(r){ return _stIn(r.last_class_date||''); });
 
       // ── 상단 컨트롤 (탭 · 연도 · 월) ──
       var years = _stYearList();
@@ -1618,22 +1624,30 @@
         }
         html += '</select>';
       }
-      html += '<span class="st-scope">'+esc(currentScopeLabel())+' · '+esc(_stPeriodLabel())+'</span></div>';
+      // 분원 선택 (전체·내담당처럼 여러 분원 범위일 때만 노출)
+      if(multiBranchView() && _allowedBranches.length>1){
+        html += '<select id="st-branch" onchange="onStBranch()"><option value="">분원 전체</option>'
+          + _allowedBranches.map(function(b){
+              return '<option value="'+esc(b.id)+'"'+(b.id===_stBranch?' selected':'')+'>'+esc(b.name)+'</option>';
+            }).join('')
+          + '</select>';
+      }
+      var scopeName = _stBranch ? (_branchMap[_stBranch]||'') : currentScopeLabel();
+      html += '<span class="st-scope">'+esc(scopeName)+' · '+esc(_stPeriodLabel())+'</span></div>';
+
+      // ── 데이터 정확도 안내 ──
+      html += '<div class="st-note">⚠ 2026년 9월 이전의 데이터는 정확하지 않을 수 있습니다.</div>';
 
       // ── 요약 카드 ──
-      function card(k,v,cls){ return '<div class="st-card'+(cls||'')+'"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'; }
+      function card(k,v){ return '<div class="st-card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'; }
       html += '<div class="st-cards">'
         + card('상담 수', cons.length+'<small>건</small>')
-        + card('등록 수', reg+'<small>건</small>')
-        + card('등록 전환율', rate+'<small>%</small>')
         + card('퇴원 수', wds.length+'<small>건</small>')
-        + card('순증감', (net>0?'+':'')+net+'<small>명</small>', net>0?' up':(net<0?' down':''))
         + '</div>';
 
       // ── 추이 그래프 (연도 선택 시 월별 12칸, 전체 기간이면 연도별) ──
       html += '<div class="st-legend">'
         + '<span><i style="background:#1e3a6e"></i>상담</span>'
-        + '<span><i style="background:#16a34a"></i>등록</span>'
         + '<span><i style="background:#dc2626"></i>퇴원</span></div>'
         + '<div class="st-chart">'+_stChartSVG()+'</div>'
         + '<div class="st-hint">'+(_stYear
@@ -1643,9 +1657,16 @@
       // ── 항목별 집계 (탭별) ──
       if(_stTab==='admission'){
         html += _stBars('입학 경로별', ADMISSION_PATHS, cons, function(r){ return r.admission_paths; }, true);
-        html += _stBars('등록 상태별', REG_STATUS_OPTIONS, cons, function(r){ return r.reg_status ? [r.reg_status] : null; }, false);
       } else {
         html += _stBars('퇴원 사유별', WITHDRAW_REASONS, wds, function(r){ return r.withdraw_reasons; }, true);
+      }
+
+      // ── 분원별 집계 (여러 분원 범위 + 분원 전체 선택일 때) ──
+      if(multiBranchView() && !_stBranch && _allowedBranches.length>1){
+        var brNames = _allowedBranches.map(function(b){ return b.name; });
+        var brRows = (_stTab==='withdrawal') ? wds : cons;
+        html += _stBars('분원별 '+(_stTab==='withdrawal'?'퇴원':'상담'), brNames, brRows,
+          function(r){ var n=_branchMap[r.branch_id]; return n ? [n] : null; }, false);
       }
 
       $('stats-body').innerHTML = html;
@@ -1693,24 +1714,24 @@
         if(!cats.length) return '<div style="color:#99a;font-size:13px;padding:14px 0">그래프로 표시할 날짜 데이터가 없습니다.</div>';
       }
       var cut = inYear ? 7 : 4;
-      var C={}, R={}, W={};
-      cats.forEach(function(c){ C[c]=0; R[c]=0; W[c]=0; });
-      _stConsults.forEach(function(r){
+      var C={}, W={};
+      cats.forEach(function(c){ C[c]=0; W[c]=0; });
+      _stBase(_stConsults).forEach(function(r){
         var d=(r.inquiry_date||'').slice(0,cut);
-        if(C[d]!=null){ C[d]++; if(r.reg_status==='등록') R[d]++; }
+        if(C[d]!=null) C[d]++;
       });
-      _stWithdrawals.forEach(function(r){
+      _stBase(_stWithdrawals).forEach(function(r){
         var d=(r.last_class_date||'').slice(0,cut);
         if(W[d]!=null) W[d]++;
       });
-      var maxV=1; cats.forEach(function(c){ maxV=Math.max(maxV,C[c],R[c],W[c]); });
+      var maxV=1; cats.forEach(function(c){ maxV=Math.max(maxV,C[c],W[c]); });
       var step = Math.max(1, Math.ceil(maxV/4));
       var top = step*Math.ceil(maxV/step);
 
       var Wd=800, Hd=225, padL=36, padR=8, padT=10, padB=26;
       var pw=Wd-padL-padR, ph=Hd-padT-padB;
       var gw=pw/cats.length;
-      var bw=Math.min(16, gw*0.22), gap=Math.min(3, gw*0.04);
+      var bw=Math.min(20, gw*0.3), gap=Math.min(3, gw*0.04);
 
       var s='<svg viewBox="0 0 '+Wd+' '+Hd+'" xmlns="http://www.w3.org/2000/svg">';
       for(var v=0; v<=top; v+=step){
@@ -1718,15 +1739,15 @@
         s+='<line x1="'+padL+'" y1="'+gy+'" x2="'+(Wd-padR)+'" y2="'+gy+'" stroke="#eef1f6" stroke-width="1"/>';
         s+='<text x="'+(padL-6)+'" y="'+(gy+3.5)+'" text-anchor="end" font-size="10" fill="#99a">'+v+'</text>';
       }
-      var colors={c:'#1e3a6e', r:'#16a34a', w:'#dc2626'};
+      var colors={c:'#1e3a6e', w:'#dc2626'};
       cats.forEach(function(cat,i){
         var x0=padL+gw*i, cx=x0+gw/2;
         var sel = inYear && _stMonth===cat;
         var grp='<g class="grp" onclick="'+(inYear ? "stPickMonth('"+cat+"')" : "stPickYear('"+cat+"')")+'">';
         if(sel) grp+='<rect x="'+(x0+1)+'" y="'+padT+'" width="'+(gw-2)+'" height="'+ph+'" fill="#f4e9c8" rx="4"/>';
         grp+='<rect x="'+x0+'" y="'+padT+'" width="'+gw+'" height="'+(ph+padB)+'" fill="transparent"/>';
-        var series=[['c',C[cat],'상담'],['r',R[cat],'등록'],['w',W[cat],'퇴원']];
-        var totW=bw*3+gap*2, sx=cx-totW/2;
+        var series=[['c',C[cat],'상담'],['w',W[cat],'퇴원']];
+        var totW=bw*2+gap, sx=cx-totW/2;
         series.forEach(function(sr,j){
           var h=ph*sr[1]/top, bx=sx+j*(bw+gap), by=padT+ph-h;
           grp+='<rect x="'+bx+'" y="'+by+'" width="'+bw+'" height="'+h+'" fill="'+colors[sr[0]]+'" rx="2">'
