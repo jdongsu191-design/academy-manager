@@ -58,7 +58,10 @@ RULES = """너는 학원 수학 교재를 만드는 사람이다. 아래 **원�
                  **한두 줄로** 적어라. 점 이름·길이·각도를 빠짐없이 넣어라.
                  ⚠ **반드시 한국어로** 써라. 선생님이 읽고 그린다.
 9. **수식은 빠짐없이 $ … $ 안에 넣어라.** $ 밖에 rm·bar{ }·over·sqrt·DEG·ANGLE 같은
-   한글 수식 낱말이 하나라도 남으면 한/글에 그 글자가 그대로 찍힌다(실제로 찍혔다)."""
+   한글 수식 낱말이 하나라도 남으면 한/글에 그 글자가 그대로 찍힌다(실제로 찍혔다).
+10. 원문에 [조건] 묶음이나 (가)(나)(다)·ㄱ.ㄴ.ㄷ. 조건 줄이 있으면, 변형에서도
+   **각 조건을 "(가) …" 형식 그대로 한 줄씩 줄바꿈으로** 써라. 문장에 풀어 녹이지 마라.
+   (조판이 그 줄들을 원본처럼 테두리 상자에 넣는다)"""
 
 SCHEMA = {'type': 'object', 'properties': {
     'base_think': {'type': 'integer'}, 'base_calc': {'type': 'integer'},
@@ -111,7 +114,8 @@ def make_one(prob, grade_label, level, png_b64=None, retry_note='', temp=0.35):
                  ('@GRADE@', grade_label), ('@TYPE@', prob.get('type') or ''),
                  ('@POINTS@', ('A %s / B %s' % (pts.get('A'), pts.get('B')))
                   if isinstance(pts, dict) else str(pts or '')),
-                 ('@STMT@', (prob.get('statement') or '').replace('⟪', '$').replace('⟫', '$')),
+                 ('@STMT@', (prob.get('statement') or '').replace('⟪', '$').replace('⟫', '$')
+                  .replace('⟦', '\n[조건]\n').replace('⟧', '\n')),
                  ('@ANSWER@', '$%s$' % (prob.get('answer_script') or '')),
                  ('@CURR@', grade_block(grade_label)),
                  ('@RETRY@', (RETRY_HEAD % retry_note) if retry_note else '')):

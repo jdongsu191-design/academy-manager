@@ -102,12 +102,15 @@ class Styled(Doc):
         np_ = max(int(x) for x in re.findall(r'<hh:paraPr id="(\d+)"', h)) + 1
         nb = max(int(x) for x in re.findall(r'<hh:borderFill id="(\d+)"', h)) + 1
 
-        # 테두리 세 가지
-        BF_RULE, BF_BOX, BF_TAB = nb, nb + 1, nb + 2
+        # 테두리 네 가지
+        BF_RULE, BF_BOX, BF_TAB, BF_CBOX = nb, nb + 1, nb + 2, nb + 3
         bfs = (borderfill(BF_RULE, bottom='SOLID', width='0.4 mm', color='#333333')
                + borderfill(BF_BOX, 'DASH', 'DASH', 'DASH', 'DASH',
                             width='0.12 mm', color='#9AA0A6', face='#F5F5F5')
-               + borderfill(BF_TAB, top='SOLID', width='0.12 mm', color='#BBBBBB'))
+               + borderfill(BF_TAB, top='SOLID', width='0.12 mm', color='#BBBBBB')
+               # 조건 상자 — 원본의 (가)(나)(다) 검은 실선 테두리를 따른다
+               + borderfill(BF_CBOX, 'SOLID', 'SOLID', 'SOLID', 'SOLID',
+                            width='0.15 mm', color='#444444'))
 
         # 글자모양 — 쓰임새마다 하나씩
         cspec = [
@@ -155,6 +158,13 @@ class Styled(Doc):
             ('memo',     dict(align='CENTER', line=150, prev=mm(2.0), keep=1, **BOX)),
             ('memol',    dict(align='LEFT', line=150, next=mm(2.0), keep=1, **BOX)),
             ('memolend', dict(align='LEFT', line=150, next=mm(2.0), **BOX)),
+            # 조건 상자 — connect=1 로 (가)(나)(다) 문단들이 한 상자로 이어진다
+            ('cbox',     dict(align='LEFT', line=160, left=mm(4.0), right=mm(3.0),
+                              border=BF_CBOX, pad=mm(1.8), connect=1,
+                              prev=mm(1.4), next=mm(1.4), keep=1, hold=1)),
+            ('cboxend',  dict(align='LEFT', line=160, left=mm(4.0), right=mm(3.0),
+                              border=BF_CBOX, pad=mm(1.8), connect=1,
+                              prev=mm(1.4), next=mm(1.4), hold=1)),
             ('fig',  dict(align='CENTER', line=130, prev=mm(1.6), next=mm(1.6))),
             ('gap',  dict(line=100)),
             # 해설(미주) — 좁게, 왼쪽을 들여 본문과 구분
@@ -169,7 +179,7 @@ class Styled(Doc):
             np_ += 1
         pps = ''.join(parapr(P[k], **kw) for k, kw in specs)
 
-        h = _bump(h, 'hh:borderFills', 3, bfs)
+        h = _bump(h, 'hh:borderFills', 4, bfs)
         h = _bump(h, 'hh:charProperties', len(C), cps)
         h = _bump(h, 'hh:paraProperties', len(P), pps)
         self.hdr_xml = h
@@ -213,7 +223,7 @@ class Styled(Doc):
         self.paras.append(self.p([('body', [])], 'gap', brk='1'))
 
     # 문항의 마지막 문단은 '다음과 함께' 를 뗀다 — 안 그러면 문서 전체가 한 덩어리로 묶인다
-    END = {'body': 'bodyend', 'memol': 'memolend'}
+    END = {'body': 'bodyend', 'memol': 'memolend', 'cbox': 'cboxend'}
 
     def end_item(self):
         inv = {self.P[k]: self.P[v] for k, v in self.END.items()}

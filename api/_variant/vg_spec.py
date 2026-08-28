@@ -112,7 +112,9 @@ def ask_spec(statement, fig_png=None, budget=8192, tries=3, temp=0.1):
     if fig_png:
         parts.append({'inlineData': {'mimeType': 'image/png',
                                      'data': base64.b64encode(fig_png).decode()}})
-    txt = PROMPT.replace('@STMT@', re.sub(r'[$⟪⟫]', '', statement or ''))
+    # ⟦⟧ 는 조건 상자 표시 — 모델에겐 줄바꿈으로 풀어 보낸다
+    txt = PROMPT.replace('@STMT@',
+                         re.sub(r'[$⟪⟫]', '', re.sub(r'[⟦⟧]', '\n', statement or '')))
     parts.append({'text': txt})
     last = ''
     for b in (budget, 0):        # 60초 제한 안: 두 번만, 호출당 25초
@@ -228,7 +230,7 @@ def figure_only(statement):
     """묻는 대상이 그림 표시에만 있는 기호이면 그 기호를 돌려준다.
     ⚠ 본문에 '그림' 이 없는 문항엔 걸지 않는다 — 대수 문제의 'x 의 값' 을
       '그림에만 표시됨' 이라고 오도했다(실측: 중2 대수 파일 6문항)."""
-    t = re.sub(r'[$⟪⟫`]', ' ', statement or '')
+    t = re.sub(r'[$⟪⟫⟦⟧`]', ' ', statement or '')
     if '그림' not in t:
         return None
     for m in ASKED.finditer(t):

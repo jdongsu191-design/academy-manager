@@ -31,7 +31,7 @@ GREEK = set('alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu 
             'Xi Pi Sigma Upsilon Phi Psi Omega inf infty partial nabla'.split())
 FUNCS = set('log ln lg sin cos tan sec csc cot sinh cosh tanh lim max min exp deg mod'.split())
 BIGOP = set('sum prod int oint lim'.split())
-ACCENT = set('bar vec hat tilde dot ddot box under'.split())
+ACCENT = set('bar vec hat tilde dot ddot box under overline underline'.split())
 ACCENT |= {x.upper() for x in ACCENT}
 RELS = {'LEQ': 1900, 'GEQ': 1900, 'NEQ': 1900, 'TIMES': 1420, 'DIV': 1420,
         'CDOT': 700, 'PLUSMINUS': 1500, 'MINUSPLUS': 1500,
@@ -39,14 +39,18 @@ RELS = {'LEQ': 1900, 'GEQ': 1900, 'NEQ': 1900, 'TIMES': 1420, 'DIV': 1420,
         'therefore': 1400, 'because': 1400, 'IDENTICAL': 1900,
         'IN': 1600, 'NOTIN': 1600, 'SUBSET': 1600, 'CAP': 1400, 'CUP': 1400,
         'APPROX': 1900, 'SIM': 1500, 'PROP': 1600, 'ANGLE': 900, 'PERP': 900,
-        'cdots': 1600, 'dotaxis': 1600, 'ldots': 1600, 'dots': 1600}
+        'cdots': 1600, 'dotaxis': 1600, 'ldots': 1600, 'dots': 1600,
+        # 대문자 기호 낱말 — 표에 없으면 글자 수대로 재서 3배씩 넓어진다 (실측 중2·중3)
+        'THEREFORE': 1400, 'BECAUSE': 1400, 'TRIANGLE': 1500, 'SQUARE': 1500,
+        'DIVIDE': 1420, 'prime': 500, 'PRIME': 500}
 
 # 소문자·중괄호로 쓰인 관계 기호를 한 가지로 모은다
 _ALIAS = {'le': 'LEQ', 'leq': 'LEQ', 'ge': 'GEQ', 'geq': 'GEQ', 'ne': 'NEQ', 'neq': 'NEQ',
           'times': 'TIMES', 'div': 'DIV', 'cdot': 'CDOT', 'in': 'IN', 'cap': 'CAP',
           'cup': 'CUP', 'subset': 'SUBSET', 'approx': 'APPROX', 'sim': 'SIM',
           'rightarrow': 'RIGHTARROW', 'leftarrow': 'LEFTARROW', 'pm': 'PLUSMINUS',
-          'mp': 'MINUSPLUS', 'equiv': 'IDENTICAL', 'perp': 'PERP', 'angle': 'ANGLE'}
+          'mp': 'MINUSPLUS', 'equiv': 'IDENTICAL', 'perp': 'PERP', 'angle': 'ANGLE',
+          'triangle': 'TRIANGLE', 'square': 'SQUARE', 'divide': 'DIVIDE'}
 
 LBRACE, RBRACE, NULLDELIM = '\x01', '\x02', '\x03'
 MULTI = ('cases', 'matrix', 'pmatrix', 'bmatrix', 'dmatrix', 'pile', 'lpile', 'rpile', 'eqalign')
@@ -63,11 +67,14 @@ def normalize(s):
     s = re.sub(r'(?<![A-Za-z])over(?!line|brace|set|arrow)', ' over ', s)
     s = re.sub(r'(?<![A-Za-z])cdot(?!s)', ' cdot ', s)
     for kw in ('sqrt', 'root', 'cases', 'matrix', 'pile', 'eqalign',
-               'LEFT', 'RIGHT', 'left', 'right', 'times',
+               'LEFT', 'RIGHT', 'left', 'right', 'times', 'overline', 'underline',
                'box', 'BOX', 'bar', 'BAR', 'vec', 'VEC', 'hat', 'HAT', 'tilde', 'TILDE'):
         s = re.sub(r'(?<![A-Za-z])' + kw + r'(?![A-Za-z])', ' ' + kw + ' ', s)
-    s = re.sub(r'(?<![A-Za-z])(rm|it|bf)(?=[A-Za-z])', ' ', s)   # rmA 처럼 붙어 나온다
-    s = re.sub(r'(?<![A-Za-z])(rm|it|bf)(?![A-Za-z])', ' ', s)   # 글꼴 지시자는 폭이 없다
+    # ANGLErm BDE 처럼 대문자 낱말 뒤에 붙은 지시어 — 앞이 대문자라 위 규칙이 못 뗀다
+    s = re.sub(r'(?<=[A-Z])(?:rm|it|bf)(?![a-z])', ' ', s)
+    # ⚠ 대문자 지시어(RMA)도 온다 — 안 떼면 글자 수대로 재서 3~4배 넓어진다 (실측 중1 3월3회)
+    s = re.sub(r'(?<![A-Za-z])(ITA|ita|BOLD|bold|RM|rm|IT|it|BF|bf)(?=[A-Za-z])', ' ', s)
+    s = re.sub(r'(?<![A-Za-z])(ITA|ita|BOLD|bold|RM|rm|IT|it|BF|bf)(?![A-Za-z])', ' ', s)
     s = re.sub(r'[ ]{2,}', ' ', s)
     # {leq} 처럼 중괄호로 감싼 관계 기호를 편다
     s = re.sub(r'\{\s*([A-Za-z]+)\s*\}',
@@ -116,7 +123,8 @@ def _unwrap(t):
 def measure(script):
     """(폭, 높이). 모자라면 글자가 겹치므로 넉넉한 쪽으로 잡는다."""
     try:
-        w, h = _measure(normalize(script), 1.0)
+        # 끝에 붙은 가는 공백(` ~)은 한/글이 폭에 세지 않는다 (실측 'a`' 750 = 'a')
+        w, h = _measure(normalize(script).rstrip('`~ '), 1.0)
     except Exception:
         n = len(re.sub(r'\s+', '', str(script)))
         return int(max(1300, n * 900)), int(BASE * 2.6)
@@ -215,7 +223,19 @@ def _atom(toks, i, scale):
         j = i + 1
         while j < len(toks) and toks[j] == ' ': j += 1
         iw, ih = _measure(_unwrap(toks[j]) if j < len(toks) else '', scale)
-        return iw + 800 * scale, ih + 250 * scale, j + 1
+        # 윗줄류(bar·vec·overline)는 폭을 거의 안 늘린다 — +800 은 실측 대비 1.7배였다
+        pad = 800 if t.lower() in ('box',) else 150
+        return iw + pad * scale, ih + 250 * scale, j + 1
+    # 'alpha`' 처럼 가는 공백이 붙은 채 오면 기호 표를 못 찾고 글자 수대로 잰다 — 떼고 본다
+    base = t.rstrip('`~')
+    if base != t and base and (base in RELS or base in GREEK
+                               or base in FUNCS or base in BIGOP):
+        extra = sum((W_TICK if c == '`' else W_TILDE) for c in t[len(base):]) * scale
+        if base in RELS:
+            return RELS[base] * scale + extra, BASE * scale, i + 1
+        if base in GREEK:
+            return 760 * scale + extra, BASE * scale, i + 1
+        return len(base) * W_LETTER * 0.98 * scale + extra, BASE * scale, i + 1
     if t in RELS:
         return RELS[t] * scale, BASE * scale, i + 1
     if t in GREEK:
@@ -227,6 +247,28 @@ def _atom(toks, i, scale):
         return iw, ih, i + 1
     w, h = _chars(t, scale)
     return w, h, i + 1
+
+
+def _word_w(run, scale):
+    """글자 연쇄 하나의 폭 — '+beta' 처럼 기호에 붙어 온 낱말도 표로 잰다."""
+    if run in GREEK:
+        return 760 * scale
+    low = run.lower()
+    if low in _ALIAS and _ALIAS[low] in RELS:
+        return RELS[_ALIAS[low]] * scale
+    if run in RELS:
+        return RELS[run] * scale
+    if run in FUNCS:
+        return len(run) * W_LETTER * 0.98 * scale
+    w = 0.0
+    for c in run:
+        if c in 'mw':
+            w += W_WIDE
+        elif c.isupper():
+            w += W_UPPER
+        else:
+            w += W_LETTER
+    return w * scale
 
 
 def _chars(t, scale):
@@ -264,9 +306,16 @@ def _chars(t, scale):
         elif c.isdigit():       w += W_DIGIT * scale
         elif c in '{}':         pass
         elif c == '!':          w += W_ADD * scale
+        elif 0xE000 <= ord(c) <= 0xF8FF:
+            w += W_BAR * scale                           # 한/글 PUA 기호 (절댓값 막대 등)
         elif ord(c) > 0x2000:   w += W_CJK * scale       # 한글·전각기호
-        elif c in 'mw':         w += W_WIDE * scale
-        elif c.isupper():       w += W_UPPER * scale
+        elif c.isalpha() and c.isascii():
+            k2 = j
+            while k2 < len(t) and t[k2].isalpha() and t[k2].isascii():
+                k2 += 1
+            w += _word_w(t[j:k2], scale)
+            j = k2
+            continue
         else:                   w += W_LETTER * scale
         j += 1
     return w, h

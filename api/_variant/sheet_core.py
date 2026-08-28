@@ -92,6 +92,31 @@ class Book(Styled):
                   ('meta', ['<hp:t>%s</hp:t>' % esc('   ' + meta), '<hp:t>  </hp:t>']),
                   ('dim', [note])], 'head')
 
+    # 변형(모델 출력)의 조건 줄 — "(가) …" "ㄱ. …" 로 시작하는 줄
+    COND = re.compile(r'^(?:\([가나다라마]\)|[ㄱㄴㄷㄹㅁ]\.)')
+
+    def stmt(self, text, src=True):
+        """본문을 문단·조건 상자 단위로 넣는다.
+        원문: 파서가 남긴 ⟦…⟧ 가 상자, \n 이 문단.
+        변형: 모델 출력이라 표시가 없다 — (가)(나)(다)·ㄱ.ㄴ.ㄷ. 줄을 상자로 승격."""
+        segs = self.segs_src if src else self.segs
+        t = (text or '').replace('⟦', '\n⟦\n').replace('⟧', '\n⟧\n')
+        if not src:
+            # 모델이 줄바꿈 없이 이어 쓴 조건도 줄로 편다 — "…구하시오.(가) …(나) …"
+            t = re.sub(r'\s*(?=\([가나다라마]\)\s)', '\n', t)
+            t = re.sub(r'\s*(?=[ㄱㄴㄷㄹㅁ]\.\s)', '\n', t)
+        lines = [ln.strip() for ln in t.split('\n') if ln.strip()]
+        inbox = False
+        for ln in lines:
+            if ln == '⟦':
+                inbox = True
+                continue
+            if ln == '⟧':
+                inbox = False
+                continue
+            box = inbox or (not src and bool(self.COND.match(ln)))
+            self.add([('body', segs(ln))], 'cbox' if box else 'body')
+
     def memo_box(self, need, note):
         if need not in NEED:
             return
@@ -166,7 +191,7 @@ def build_book(src, probs, gen, title):
                 nb.append(('body', [s.img(png, 56.0, 56.0 * h / w)], 'ctr'))
         s.head_line(seq, '원문', 'otag', '%s · %s' % (p.get('type') or '', ptxt),
                     note=s.note(nb))
-        s.add([('body', s.segs_src(p['statement']))], 'body')
+        s.stmt(p['statement'], src=True)
         for f in (p.get('figures') or [])[:1]:
             png, w, h = to_png(src, f[0])
             if png and w:
@@ -195,7 +220,7 @@ def build_book(src, probs, gen, title):
 
             s.head_line(seq, v.get('level') or 'V?', 'vtag',
                         '%s · %s' % (p.get('type') or '', ptxt), note=s.note(nb))
-            s.add([('body', s.segs(v['statement']))], 'body')
+            s.stmt(v['statement'], src=False)
             s.memo_box(v.get('figure_need'), v.get('figure_note'))
             s.end_item()
 

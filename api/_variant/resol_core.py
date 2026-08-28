@@ -93,6 +93,7 @@ def _over(txt, grade):
 
 def rewrite(statement, answer, grade_label, temp=0.2):
     """헤맨 해설 다시 쓰기. 다시 써도 헤매면 kept."""
+    statement = re.sub(r'[⟦⟧]', '\n', statement or '')   # 조건 상자 표시는 줄바꿈으로
     txt = (PROMPT_RESOL.replace('@STMT@', statement).replace('@ANS@', answer)
            .replace('@CURR@', grade_block(grade_label)))
     r = _call(txt, SCHEMA_RESOL, temp)
@@ -107,6 +108,7 @@ def rewrite(statement, answer, grade_label, temp=0.2):
 def rewrite_curr(statement, answer, over, grade_label, temp=0.25):
     """범위 밖 도구를 그 학년 도구로. 못 하면 kept + why."""
     g = grade_of(grade_label) or '중3'
+    statement = re.sub(r'[⟦⟧]', '\n', statement or '')
     txt = PROMPT_CURR
     for k, v in (('@STMT@', statement), ('@ANS@', answer),
                  ('@OVER@', ' · '.join(over)), ('@GRADE@', g),

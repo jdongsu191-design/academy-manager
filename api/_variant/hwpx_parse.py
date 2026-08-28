@@ -101,7 +101,8 @@ def fix_over(s, depth=0):
     return fix_over('%s\\frac{%s}{%s}%s' % (head, num, den, tail), depth + 1)
 EQ_CHAR = {'`': ' ', '~': ' ', '⫽': r'\parallel ', '∥': r'\parallel ',
            '□': r'\square ', '△': r'\triangle ', '∠': r'\angle ',
-           '≡': r'\equiv ', '×': r'\times ', '÷': r'\div ', '°': r'^\circ '}
+           '≡': r'\equiv ', '×': r'\times ', '÷': r'\div ', '°': r'^\circ ',
+           '': '|'}   # 한/글 PUA 절댓값 막대 (실측 중1 3월3회 — 안 바꾸면 화면에 □ 로 뜬다
 
 
 def eq_to_latex(s):
@@ -139,6 +140,22 @@ def items_of(el, skip_endnote=True):
             out.append(('eq', ''.join(x.text or '' for x in e.iter()
                                       if NS(x.tag) == 'script')))
             return
+        if tag in ('rect', 'ellipse', 'polygon', 'curve'):
+            # 조건·보기 상자 (실측: (가)(나)(다) 조건이 검은 테두리 rect 안에 문단별로 있다)
+            # 안의 문단을 줄 단위로 살리고 박스 경계를 표시해 둔다 — 조립기가 상자로 그린다
+            dts = [x for x in e.iter() if NS(x.tag) == 'drawText']
+            if dts:
+                out.append(('boxs', ''))
+                ps = [x for x in dts[0].iter() if NS(x.tag) == 'p']
+                for pi, pp in enumerate(ps):
+                    if pi:
+                        out.append(('br', ''))
+                    for ch in pp:
+                        go(ch)
+                out.append(('boxe', ''))
+                return
+            # drawText 없는 도형은 폭만 차지 — 그냥 지나간다
+            return
         if tag == 'pic':
             img, cmt = '', ''
             for x in e.iter():
@@ -165,6 +182,12 @@ def text_of(items):
             s += v
         elif k == 'eq':
             s += '⟪%s⟫' % v
+        elif k == 'br':
+            s += '\n'
+        elif k == 'boxs':
+            s += '\n⟦\n'
+        elif k == 'boxe':
+            s += '\n⟧\n'
     return s
 
 
@@ -201,7 +224,10 @@ def parse(path):
                 cur = {'no': order, 'note': note, 'items': [], 'sec': si}
                 probs.append(cur)
             if cur is not None:
-                cur['items'] += items_of(p)
+                its = items_of(p)
+                if its:
+                    # 문단 경계를 살린다 — 잃으면 '…구하시오.(가) …' 처럼 한 덩어리가 된다
+                    cur['items'] += ([('br', '')] if cur['items'] else []) + its
     return probs
 
 
@@ -246,7 +272,18 @@ def tidy(p):
     body = re.sub(r'\[\s*Potent!?al[^\]]*\]', '', body)
     body = re.sub(r'(?:\d단계[^\n]*?하세요\.[^\n]*)', '', body)
     body = re.sub(r'출처\)[^⟪]*?번', '', body)
-    body = re.sub(r'\s+', ' ', body).strip()
+    # 줄바꿈은 살리고 줄 안 공백만 접는다 — 조립기가 문단·조건 상자(⟦⟧)를 이 경계로 그린다
+    body = re.sub(r'[ \t]+', ' ', body)
+    lines = [ln.strip() for ln in body.split('\n') if ln.strip()]
+    # ⚠ 마지막 문항엔 뒤쪽 우공이산·빠른답지 페이지가 통째로 딸려 온다
+    #   (마지막 미주 이후의 문단이 전부 붙는 구조 — 실측 중1 3월3회 12번).
+    #   그 경계 문구가 보이면 거기서 자른다. 문항 본문엔 나올 일이 없는 말들이다.
+    stop = re.compile(r'우공이산|愚公移山|烏公移山|빠른답지')
+    for i, ln in enumerate(lines):
+        if stop.search(ln):
+            lines = lines[:i]
+            break
+    body = '\n'.join(lines)
 
     hm = HEAD.search(text_of(p['items']))
     return {
@@ -400,14 +437,22 @@ def parse_potential(data):
         # 화면 표시용 — 본문을 글/수식 조각으로 나눠 수식엔 LaTeX 를 딸려 보낸다.
         # 정본은 어디까지나 statement(한글 수식 스크립트)다.
         parts = []
-        for tok in re.split(r'(⟪[^⟫]*⟫)', p['statement']):
-            if tok.startswith('⟪'):
+        for tok in re.split(r'(⟪[^⟫]*⟫|\n|⟦|⟧)', p['statement']):
+            if not tok:
+                continue
+            if tok == '\n':
+                parts.append({'br': 1})
+            elif tok == '⟦':
+                parts.append({'boxs': 1})
+            elif tok == '⟧':
+                parts.append({'boxe': 1})
+            elif tok.startswith('⟪'):
                 sc = tok.strip('⟪⟫')
                 try:
                     parts.append({'eq': sc, 'latex': eq_to_latex(sc)})
                 except Exception:
                     parts.append({'t': sc})
-            elif tok:
+            else:
                 parts.append({'t': tok})
         out.append({
             'parts': parts,
