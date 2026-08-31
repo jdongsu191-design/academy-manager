@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.95-ptreset]</title>
+<title>BMAPS · 독서실 출결 [v0.96-autopoint]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -841,7 +841,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.95-ptreset</span>
+    <span class="tb-ver" id="sc-ver">v0.96-autopoint</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1198,7 +1198,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.95-ptreset';
+  window.STUDYCENTER_VERSION = 'v0.96-autopoint';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2077,6 +2077,8 @@
       scMentorBadge();
       scWkRenderDayTabs();
       scWkRenderTable();
+      // [지난주 자동 정산] 학생·의무이력·멘토링이 로드된 뒤 1회 (실패해도 화면은 무관)
+      scAptAutoLastWeek();
     } catch(e){
       console.error("주간 출결 로드 실패:", e);
       if(wrap) wrap.innerHTML = '<div class="wk-empty">\ubd88\ub7ec\uc624\uae30 \uc2e4\ud328: ' + (e.message||e) + '</div>';
@@ -3276,21 +3278,23 @@
     finally{ chk.disabled = false; sc.disabled = false; }
   }
   /* 이행현황(주)을 열 때, 이미 끝난 주에 한해 미달 학생에게 1회 부여.
-     auto_key = 학생|주시작일|duty 라 몇 번을 열어도 중복되지 않는다. */
-  async function scAptDutyRun(){
+     auto_key = 학생|주시작일|duty 라 몇 번을 열어도 중복되지 않는다.
+     인자를 주면 그 주(과거 주 자동 실행용)로, 안 주면 지금 로드된 주로 계산한다. */
+  async function scAptDutyRun(dates, students, data, wmap){
+    dates = dates || _wkWeekDates; students = students || _wkStudents; data = data || _wkData;
     try{
       var rules = await scAptLoadRules();
       var rule = (rules || []).find(function(x){ return x.kind === "duty" && x.active !== false; });
       if(!rule) return 0;
-      if(!_wkWeekDates || _wkWeekDates.length < 7) return 0;
-      if(_wkWeekDates[6] >= scRrToday()) return 0;      // 아직 끝나지 않은 주는 건너뜀
+      if(!dates || dates.length < 7) return 0;
+      if(dates[6] >= scRrToday()) return 0;      // 아직 끝나지 않은 주는 건너뜀
       var targets = [];
-      (_wkStudents || []).forEach(function(st){
-        var lt = scReqWithLate(st.id, _wkWeekDates, _wkData[st.id] || {});
+      (students || []).forEach(function(st){
+        var lt = scReqWithLate(st.id, dates, data[st.id] || {}, wmap);
         if(lt.total == null || lt.total <= 0) return;    // 의무시간 미설정
         var total = 0;
         for(var i=0; i<7; i++){
-          var row = (_wkData[st.id] || {})[_wkWeekDates[i]] || null;
+          var row = (data[st.id] || {})[dates[i]] || null;
           var n = row ? scWkCalcDaily(row) : null;
           if(n != null) total += n;
         }
@@ -3303,9 +3307,9 @@
           student_id : t.id,
           points     : rule.points,
           reason     : (rule.label || "의무시간 불이행") + " (" + scWkFmtDur(t.short) + " 부족)",
-          award_date : _wkWeekDates[6],
+          award_date : dates[6],
           source     : "auto",
-          auto_key   : t.id + "|" + _wkWeekDates[0] + "|duty"
+          auto_key   : t.id + "|" + dates[0] + "|duty"
         });
         if(!r.error) ok++;
         else if(r.error.code !== "23505") console.warn("의무 불이행 자동 벌점 실패:", r.error);
@@ -3396,23 +3400,25 @@
     finally{ chk.disabled = false; sc.disabled = false; if(fr) fr.disabled = false; }
   }
   /* 이행현황(주)을 열 때, 이미 끝난 주에 한해 의무시간을 채운 학생에게 1회 부여.
-     auto_key = 학생|주시작일|dutyok 라 몇 번을 열어도 중복되지 않는다. */
-  async function scAptOkRun(){
+     auto_key = 학생|주시작일|dutyok 라 몇 번을 열어도 중복되지 않는다.
+     인자를 주면 그 주(과거 주 자동 실행용)로, 안 주면 지금 로드된 주로 계산한다. */
+  async function scAptOkRun(dates, students, data, wmap){
+    dates = dates || _wkWeekDates; students = students || _wkStudents; data = data || _wkData;
     try{
       var rules = await scAptLoadRules();
       var rule = (rules || []).find(function(x){ return x.kind === "dutyok" && x.active !== false; });
       if(!rule) return 0;
-      if(!_wkWeekDates || _wkWeekDates.length < 7) return 0;
-      if(_wkWeekDates[6] >= scRrToday()) return 0;      // 아직 끝나지 않은 주는 건너뜀
+      if(!dates || dates.length < 7) return 0;
+      if(dates[6] >= scRrToday()) return 0;      // 아직 끝나지 않은 주는 건너뜀
       var from = scAptOkFrom(rule);
-      if(from && _wkWeekDates[0] < from) return 0;      // 시작일 이전에 시작한 주는 제외
+      if(from && dates[0] < from) return 0;      // 시작일 이전에 시작한 주는 제외
       var targets = [];
-      (_wkStudents || []).forEach(function(st){
-        var lt = scReqWithLate(st.id, _wkWeekDates, _wkData[st.id] || {});
+      (students || []).forEach(function(st){
+        var lt = scReqWithLate(st.id, dates, data[st.id] || {}, wmap);
         if(lt.total == null || lt.total <= 0) return;    // 의무시간 미설정
         var total = 0;
         for(var i=0; i<7; i++){
-          var row = (_wkData[st.id] || {})[_wkWeekDates[i]] || null;
+          var row = (data[st.id] || {})[dates[i]] || null;
           var n = row ? scWkCalcDaily(row) : null;
           if(n != null) total += n;
         }
@@ -3425,15 +3431,50 @@
           student_id : t.id,
           points     : Math.abs(rule.points),
           reason     : (rule.label || "의무시간 달성") + " (" + scWkFmtDur(t.total) + " 학습)",
-          award_date : _wkWeekDates[6],
+          award_date : dates[6],
           source     : "auto",
-          auto_key   : t.id + "|" + _wkWeekDates[0] + "|dutyok"
+          auto_key   : t.id + "|" + dates[0] + "|dutyok"
         });
         if(!r.error) ok++;
         else if(r.error.code !== "23505") console.warn("의무 달성 자동 상점 실패:", r.error);
       }
       return ok;
     }catch(e){ console.warn("의무 달성 자동 상점 오류:", e); return 0; }
+  }
+
+  /* [지난주 자동 정산] 주간 데이터를 처음 불러올 때, 직전에 끝난 주의 의무 벌점/상점을
+     아무도 이행현황을 안 열어도 자동으로 부여한다. (실측: 두 주가 통째로 미부여된 적 있음)
+     auto_key 로 중복이 막히므로 몇 번 실행돼도 안전하다. 더 과거 주는 건드리지 않는다
+     — 벌점 리셋(2026-08-24) 이전 주가 되살아나면 안 되기 때문. */
+  var _aptAutoRan = false;
+  async function scAptAutoLastWeek(){
+    if(_aptAutoRan) return;
+    _aptAutoRan = true;
+    try{
+      var today = scRrToday();
+      var thisMon = scWkMonday(today);
+      var d = new Date(thisMon + "T00:00:00");
+      d.setDate(d.getDate() - 7);
+      var dates = scWkBuildWeek(scWkFmtDate(d));
+      if(dates[6] >= today) return;
+      var data = {};
+      if(_wkWeekDates && _wkWeekDates[0] === dates[0]){
+        data = _wkData;                          // 마침 그 주가 로드돼 있으면 그대로
+      } else {
+        var ar = await db.from("reading_room_attendance").select("*")
+          .gte("attend_date", dates[0]).lte("attend_date", dates[6]);
+        if(ar.error) throw ar.error;
+        (ar.data || []).forEach(function(row){
+          if(!data[row.student_id]) data[row.student_id] = {};
+          data[row.student_id][row.attend_date] = row;
+        });
+      }
+      var wmap = await scLateLoadWaivers(dates, {});   // 그 주 면제는 따로 담아 전달
+      var a = await scAptDutyRun(dates, _wkStudents, data, wmap);
+      var b = await scAptOkRun(dates, _wkStudents, data, wmap);
+      if(a > 0 || b > 0)
+        console.log("[자동 상벌점] 지난주(" + dates[0] + "~) 의무 벌점 " + a + "명 · 상점 " + b + "명 부여");
+    }catch(e){ console.warn("지난주 의무 자동 정산 오류:", e); }
   }
 
   async function scAptToggle(id, on){
@@ -4378,6 +4419,16 @@
       if(res.error) throw res.error;
       if(!_wkData[sid]) _wkData[sid] = {};
       _wkData[sid][date] = res.data;
+      // [자동 벌점] 수기 입력·정정 건도 키오스크와 같은 기준으로 부여 (2026-08-31 사용자 결정)
+      //  auto_key 가 같아 키오스크에서 이미 부여된 건은 중복되지 않는다. await 안 함 — 저장 흐름 안 막음
+      try{
+        var _ar = res.data || {};
+        scAptAward(sid, date, "in", scAptLateIn(_ar.expected_check_in, _ar.check_in_time));
+        if(_ar.out_1_end && _ar.out_1_expected_end)
+          scAptAward(sid, date, "out", scAptLateOut(_ar.out_1_expected_end, _ar.out_1_end), "1");
+        if(_ar.out_2_end && _ar.out_2_expected_end)
+          scAptAward(sid, date, "out", scAptLateOut(_ar.out_2_expected_end, _ar.out_2_end), "2");
+      }catch(_ae){ console.warn("수기 저장 자동 벌점 오류:", _ae); }
       // 주간 고정 비고 저장 (그 주 월요일 기준, 학생별 1건)
       var _wrk = document.querySelector('.wk-remark-week[data-sid="'+sid+'"]');
       if(_wrk){
