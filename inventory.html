@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BMAPS 재고관리 v0.5.1</title>
+<title>BMAPS 재고관리 v0.6</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
@@ -108,6 +108,22 @@
   .mini-btn.del{color:var(--danger);}
   .mini-btn.del:hover{border-color:var(--danger);}
   .setup-toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:14px;}
+  /* 카테고리 그룹(초등부/중등부/고등부/기타) 라벨 */
+  .cat-group-label{font-size:12px; font-weight:800; color:var(--sub); letter-spacing:.08em;
+    margin:12px 2px 6px; display:flex; align-items:center; gap:8px;}
+  .cat-group-label::after{content:''; flex:1; height:1px; background:var(--line);}
+  .cat-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px;}
+  /* 추가 모달 */
+  .inv-mask{position:fixed; inset:0; background:rgba(15,23,42,.5); display:flex; align-items:flex-start;
+    justify-content:center; padding:60px 16px; z-index:60;}
+  .inv-modal{background:#fff; border-radius:14px; width:100%; max-width:420px; box-shadow:0 20px 50px rgba(0,0,0,.25); overflow:hidden;}
+  .im-head{padding:14px 18px; font-weight:800; font-size:15px; color:var(--navy); border-bottom:1px solid var(--line);}
+  .im-body{padding:16px 18px;}
+  .im-label{display:block; font-size:12px; font-weight:700; color:var(--sub); margin:10px 0 4px;}
+  .im-body input, .im-body select, .im-body textarea{width:100%; padding:9px 11px; border:1.5px solid var(--line);
+    border-radius:8px; font:inherit; resize:vertical;}
+  .im-body input:focus, .im-body select:focus, .im-body textarea:focus{outline:none; border-color:var(--accent);}
+  .im-foot{padding:12px 18px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end;}
 
   table.invtable{width:100%; border-collapse:collapse; font-size:13px;}
   table.invtable th, table.invtable td{border-bottom:1px solid var(--line); padding:6px; text-align:center;}
@@ -255,7 +271,7 @@
 <div id="appScreen" class="hidden">
   <header class="top">
     <div class="wrap">
-      <h1><small>BESTIAN MATH ACADEMY</small>재고관리<span class="ver">v0.5.1</span></h1>
+      <h1><small>BESTIAN MATH ACADEMY</small>재고관리<span class="ver">v0.6</span></h1>
       <div class="who"><span id="user-name"></span> · <span id="user-role"></span>
         &nbsp;<a href="#" onclick="logout();return false;" style="color:#9FB0D6">로그아웃</a></div>
     </div>
@@ -265,13 +281,13 @@
     <nav class="tabs">
       <button class="on" id="tab-btn-stock" onclick="showTab('stock')">📦 교재 재고</button>
       <button id="tab-btn-bind" onclick="showTab('bind')">📚 제본기 결산</button>
-      <button id="tab-btn-setup" onclick="showTab('setup')">⚙️ 재고 설정</button>
     </nav>
 
     <!-- ════════════ 교재 재고 ════════════
          드롭다운이 화면을 정한다: 관 선택 = 그 관 입력 화면 / 전체선택 = 5관 현황 화면.
          카테고리는 버튼으로 골라 그 표만 보여준다 (긴 스크롤 제거). -->
     <div class="pane on" id="pane-stock">
+     <div id="stockMainView">
       <div class="statusbar">
         <div class="left">
           <select id="myBranchSel" onchange="onMyBranchChange()"></select>
@@ -281,6 +297,7 @@
           <button class="hidden" id="btnCaptureCur" onclick="captureCurrent()">📸 이 카테고리 저장</button>
           <button class="hidden" id="btnCaptureAll" onclick="captureAsImage()">📸 전체 이미지 저장</button>
           <button class="hidden" id="btnCsv" onclick="exportCSV()">⬇️ CSV</button>
+          <button onclick="showStockSetup(true)">⚙️ 재고 설정</button>
           <span class="save-indicator" id="saveIndicator">저장됨 ✓</span>
         </div>
       </div>
@@ -297,10 +314,55 @@
         <div class="transfer-body" id="transferBody"></div>
       </details>
 
-      <div class="cat-grid" id="catGrid"></div>
+      <div id="catGrid"></div>
       <div id="stockTableRoot"><p style="color:var(--sub); padding:20px;">불러오는 중…</p></div>
 
       <p class="hint-box" id="stockHint"></p>
+     </div><!-- /stockMainView -->
+
+     <!-- ── ⚙️ 재고 설정 (교재 재고 안의 설정 화면) ── -->
+     <div id="stockSetupView" class="hidden">
+      <div class="setup-toolbar">
+        <button class="mini-btn" style="font-size:13px; padding:9px 14px;" onclick="showStockSetup(false)">← 재고로 돌아가기</button>
+        <button class="mini-btn" style="font-size:13px; padding:9px 14px;" onclick="openAddModal('cat')">＋ 카테고리 추가</button>
+        <span style="font-size:12px; color:var(--sub);">이름을 고치고 <b>저장</b>을 눌러야 모든 계정에 반영됩니다. 이름만 바꾸면 기존 수량은 유지됩니다.</span>
+        <span style="margin-left:auto; display:flex; gap:8px;">
+          <button class="mini-btn" style="font-size:13px; padding:9px 14px;" onclick="setupReset()">되돌리기</button>
+          <button class="mini-btn" style="font-size:13px; padding:9px 14px; background:var(--accent); border-color:var(--accent); color:#fff;" onclick="setupSave()">💾 저장</button>
+        </span>
+      </div>
+      <p class="hint-box" style="margin:0 0 14px;">
+        ⚠ <b>항목 삭제</b>는 화면에서만 사라지고 저장된 수량 기록은 남습니다. 재고가 남아 있는 항목을 지우려 하면 한 번 더 확인을 받습니다.
+      </p>
+      <div id="setupRoot"></div>
+     </div>
+
+     <!-- ── 추가 모달 (카테고리/구역/교재) ── -->
+     <div class="inv-mask hidden" id="addMask">
+       <div class="inv-modal">
+         <div class="im-head" id="addTitleEl">추가</div>
+         <div class="im-body">
+           <div id="addNameWrap">
+             <label class="im-label" for="addName">이름</label>
+             <input id="addName" type="text" placeholder="이름을 입력하세요">
+           </div>
+           <div id="addGroupWrap" class="hidden">
+             <label class="im-label" for="addGroup">소속 그룹</label>
+             <select id="addGroup"></select>
+             <label class="im-label" for="addTag">꼬리표 (엔제/유형반복 등)</label>
+             <input id="addTag" type="text" value="엔제">
+           </div>
+           <div id="addItemsWrap" class="hidden">
+             <label class="im-label" for="addItems">교재명 (여러 개면 한 줄에 하나씩)</label>
+             <textarea id="addItems" rows="6" placeholder="예)&#10;중2 A1레벨 1주차&#10;중2 A1레벨 2주차"></textarea>
+           </div>
+         </div>
+         <div class="im-foot">
+           <button class="mini-btn" style="font-size:13px; padding:9px 14px;" onclick="closeAddModal()">취소</button>
+           <button class="mini-btn" style="font-size:13px; padding:9px 14px; background:var(--accent); border-color:var(--accent); color:#fff;" onclick="confirmAddModal()">추가</button>
+         </div>
+       </div>
+     </div>
     </div>
 
     <!-- ════════════ 제본기 결산 ════════════ -->
@@ -423,22 +485,6 @@
       </div>
     </div>
 
-    <!-- ════════════ ⚙️ 재고 설정 (카탈로그 편집) ════════════ -->
-    <div class="pane" id="pane-setup">
-      <div class="setup-toolbar">
-        <button class="btnrow-btn mini-btn" style="font-size:13px; padding:9px 14px;" onclick="setupAddCat()">＋ 카테고리 추가</button>
-        <span style="font-size:12px; color:var(--sub);">이름을 고치고, 항목을 빼거나 추가한 뒤 <b>저장</b>을 눌러야 모든 계정에 반영됩니다. 이름만 바꾸면 기존 수량은 그대로 유지됩니다.</span>
-        <span style="margin-left:auto; display:flex; gap:8px;">
-          <button class="mini-btn" style="font-size:13px; padding:9px 14px;" onclick="setupReset()">되돌리기</button>
-          <button class="mini-btn" style="font-size:13px; padding:9px 14px; background:var(--accent); border-color:var(--accent); color:#fff;" onclick="setupSave()">💾 저장</button>
-        </span>
-      </div>
-      <p class="hint-box" style="margin:0 0 14px;">
-        ⚠ <b>항목 삭제</b>는 화면에서만 사라지고 저장된 수량 기록은 남습니다 (같은 항목을 다시 추가해도 수량이 돌아오지는 않습니다).
-        재고가 남아 있는 항목을 지우려 하면 한 번 더 확인을 받습니다.
-      </p>
-      <div id="setupRoot"></div>
-    </div>
   </div>
 </div>
 
@@ -451,7 +497,7 @@
    - 원형: 임시 html 2종(제본기_사용현황_결산 / bestian_inventory)의 로직을
      그대로 옮기고 저장층만 localStorage → Supabase 로 바꿨다
    ========================================================= */
-window.INVENTORY_VERSION = 'v0.5.1';
+window.INVENTORY_VERSION = 'v0.6';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -517,11 +563,16 @@ async function enterApp(){
 
 /* ---------- 탭 ---------- */
 function showTab(name){
-  ['stock','bind','setup'].forEach(t => {
+  ['stock','bind'].forEach(t => {
     $('pane-'+t).classList.toggle('on', t===name);
     $('tab-btn-'+t).classList.toggle('on', t===name);
   });
-  if(name==='setup') setupInit();
+}
+function showStockSetup(on){
+  $('stockMainView').classList.toggle('hidden', on);
+  $('stockSetupView').classList.toggle('hidden', !on);
+  if(on) setupInit();
+  else renderStock();          // 설정에서 돌아오면 최신 카탈로그로 다시
 }
 
 /* ---------- inventory_kv 헬퍼 ---------- */
@@ -555,7 +606,7 @@ function weekItems(prefix, idPrefix, start, end){
 }
 function buildCatalog(){
   const cats=[];
-  cats.push({id:'elem', title:'초등부', tag:'엔제', sections:[
+  cats.push({id:'elem', title:'초등부', tag:'엔제', group:'초등부', sections:[
     {title:'5학년', items:[{id:'e5-a',name:'초5 A레벨'},{id:'e5-b',name:'초5 B레벨'},{id:'e5-c',name:'초5 C레벨'}]},
     {title:'6학년', items:[{id:'e6-a',name:'초6 A레벨'},{id:'e6-b',name:'초6 B레벨'},{id:'e6-c',name:'초6 C레벨'}]},
   ]});
@@ -567,16 +618,16 @@ function buildCatalog(){
       for(let w=1;w<=10;w++) items.push({id:`${g.key}-${lv}-w${w}`, name:`${g.label} ${lv}레벨 ${w}주차`});
       return {title:`${lv}레벨`, items};
     });
-    cats.push({id:g.key, title:`중등부 - ${g.label} (2학기)`, tag:'엔제', sections});
+    cats.push({id:g.key, title:`중등부 - ${g.label} (2학기)`, tag:'엔제', group:'중등부', sections});
   });
-  cats.push({id:'preh-all', title:'예비고 (중등/고1/고2 복습)', tag:'엔제', sections:[
+  cats.push({id:'preh-all', title:'예비고 (중등/고1/고2 복습)', tag:'엔제', group:'고등부', sections:[
     {title:'예비고1 (중등부 복습)', items:weekItems('예비고1(중등복습)','ph1',1,6)},
     {title:'예비고2 (고1 복습)', items:weekItems('예비고2(고1복습)','ph2',1,3)},
     {title:'예비고3 (고2 복습)', items:weekItems('예비고3(고2복습)','ph3',1,3)},
   ]});
   const gs2Weeks=[1,2,3,4,5,6,'7-8',9,10,11,12];
   const gs2Items=gs2Weeks.map(w=>({id:`gs2-w${w}`, name:w==='7-8'?'공통수학2 7·8주차(합본)':`공통수학2 ${w}주차`}));
-  cats.push({id:'h1', title:'고등학교 1학년', tag:'엔제', sections:[
+  cats.push({id:'h1', title:'고등학교 1학년', tag:'엔제', group:'고등부', sections:[
     {title:'공통수학1', items:weekItems('공통수학1','gs1',1,11)},
     {title:'공통수학 다시보기 (공수1)', items:weekItems('공수1 다시보기','gs1re',1,5)},
     {title:'9월 고1 모의고사 대비 (공통수학1)', items:weekItems('공통수학1 모의고사대비','gs1mock',1,2)},
@@ -584,18 +635,18 @@ function buildCatalog(){
     {title:'9월 고1 모의고사 대비 (공통수학2)', items:weekItems('공통수학2 모의고사대비','gs2mock',1,2)},
     {title:'대수&공수1', items:weekItems('대수&공수1','algs1',1,11)},
   ]});
-  cats.push({id:'h2', title:'고등학교 2학년', tag:'엔제', sections:[
+  cats.push({id:'h2', title:'고등학교 2학년', tag:'엔제', group:'고등부', sections:[
     {title:'대수편', items:weekItems('대수편','alg2',1,11)},
     {title:'미적분1편', items:weekItems('미적분1편','calc1',1,12)},
     {title:'고2 모의고사 대비', items:weekItems('고2 모의고사대비','h2mock',1,2)},
   ]});
-  cats.push({id:'h3', title:'고등학교 3학년', tag:'엔제', sections:[
+  cats.push({id:'h3', title:'고등학교 3학년', tag:'엔제', group:'고등부', sections:[
     {title:'미적분2', items:weekItems('미적분2','calc2',1,8)},
     {title:'확통', items:weekItems('확통','prob',1,8)},
     {title:'확통 다시보기', items:weekItems('확통 다시보기','probre',1,3)},
   ]});
   const partItems=(prefix,idPrefix)=>[1,2,3,4].map(p=>({id:`${idPrefix}-p${p}`, name:`${prefix} 파트${p}`}));
-  cats.push({id:'yuhyeong', title:'유형반복 시험대비', tag:'유형반복', sections:[
+  cats.push({id:'yuhyeong', title:'유형반복 시험대비', tag:'유형반복', group:'기타', sections:[
     {title:'공수1', items:partItems('유형반복 공수1','yh-gs1')},
     {title:'공수2', items:partItems('유형반복 공수2','yh-gs2')},
   ]});
@@ -611,12 +662,23 @@ function rebuildAllItems(){
   })));
 }
 rebuildAllItems();
+const CAT_GROUPS = ['초등부','중등부','고등부','기타'];
+function inferGroup(cat){
+  if(CAT_GROUPS.includes(cat.group)) return cat.group;
+  const t=cat.title||'';
+  if(t.includes('초등')) return '초등부';
+  if(t.includes('중등')||/^m\d/.test(cat.id)) return '중등부';
+  if(t.includes('고등')||t.includes('예비고')||/^h\d|^preh/.test(cat.id)) return '고등부';
+  return '기타';
+}
 function applyCatalog(cats){
   if(!Array.isArray(cats) || !cats.length) return;
+  cats.forEach(c=>{ c.group = inferGroup(c); });
   CATALOG = cats;
   rebuildAllItems();
   if(!CATALOG.some(c=>c.id===selCat)) selCat = CATALOG[0].id;
 }
+CATALOG.forEach(c=>{ c.group = inferGroup(c); });
 
 let stockData = {};          // itemId -> {branchId: qty}
 let branchLatest = {};       // branchId -> {at, by} 최근 입력 (updated_at 기준)
@@ -824,14 +886,22 @@ function catStats(cat){
   return {total, zero};
 }
 function renderCatButtons(){
-  $('catGrid').innerHTML = CATALOG.map(c=>{
-    const st=catStats(c);
-    const short=c.title.replace('중등부 - ','').replace('고등학교 ','고').replace('학년','');
-    return `<div class="cat-btn ${c.id===selCat?'on':''}" onclick="selectCat('${c.id}')">
-      <div class="t">${short}</div>
-      <div class="m">${st.total}종 · <b class="${st.zero?'zero':''}">0권 ${st.zero}종</b></div>
-    </div>`;
-  }).join('');
+  let html='';
+  CAT_GROUPS.forEach(g=>{
+    const cats=CATALOG.filter(c=>c.group===g);
+    if(!cats.length) return;
+    html+=`<div class="cat-group-label">${g}</div><div class="cat-grid">`;
+    html+=cats.map(c=>{
+      const st=catStats(c);
+      const short=c.title.replace('중등부 - ','').replace('고등학교 ','고').replace('학년','');
+      return `<div class="cat-btn ${c.id===selCat?'on':''}" onclick="selectCat('${c.id}')">
+        <div class="t">${short}</div>
+        <div class="m">${st.total}종 · <b class="${st.zero?'zero':''}">0권 ${st.zero}종</b></div>
+      </div>`;
+    }).join('');
+    html+='</div>';
+  });
+  $('catGrid').innerHTML=html;
 }
 function selectCat(id){
   selCat=id;
@@ -1135,12 +1205,22 @@ function setupReset(){
 }
 function renderSetup(){
   const root = $('setupRoot');
-  root.innerHTML = setupDraft.map((cat,ci)=>`
-    <div class="setup-cat">
+  let html='';
+  CAT_GROUPS.forEach(g=>{
+    const idxs = setupDraft.map((c,i)=>({c,i})).filter(x=>inferGroup(x.c)===g);
+    if(!idxs.length) return;
+    html += `<div class="cat-group-label">${g}</div>`;
+    idxs.forEach(({c:cat, i:ci})=>{
+      html += `
+    <div class="setup-cat" id="setup-cat-${ci}">
       <div class="sc-head">
         <input value="${esc(cat.title)}" oninput="setupDraft[${ci}].title=this.value">
-        <input value="${esc(cat.tag||'')}" style="flex:0 0 110px; font-weight:600; font-size:12px;" title="꼬리표 (엔제/유형반복 등)" oninput="setupDraft[${ci}].tag=this.value">
-        <button class="mini-btn" onclick="setupAddSec(${ci})">＋ 레벨/구역</button>
+        <select style="flex:0 0 92px; font-size:12px; font-weight:700; border:1px solid var(--line); border-radius:6px; padding:5px;"
+          onchange="setupDraft[${ci}].group=this.value; renderSetup()">
+          ${CAT_GROUPS.map(x=>`<option value="${x}" ${x===inferGroup(cat)?'selected':''}>${x}</option>`).join('')}
+        </select>
+        <input value="${esc(cat.tag||'')}" style="flex:0 0 100px; font-weight:600; font-size:12px;" title="꼬리표" oninput="setupDraft[${ci}].tag=this.value">
+        <button class="mini-btn" onclick="openAddModal('sec',${ci})">＋ 레벨/구역</button>
         <button class="mini-btn del" onclick="setupDelCat(${ci})">카테고리 삭제</button>
       </div>
       <div class="setup-body">
@@ -1148,7 +1228,7 @@ function renderSetup(){
           <div class="setup-sec">
             <div class="ss-head">
               <input value="${esc(sec.title)}" oninput="setupDraft[${ci}].sections[${si}].title=this.value">
-              <button class="mini-btn" onclick="setupAddItem(${ci},${si})">＋ 교재</button>
+              <button class="mini-btn" onclick="openAddModal('item',${ci},${si})">＋ 교재</button>
               <button class="mini-btn del" onclick="setupDelSec(${ci},${si})">구역 삭제</button>
             </div>
             <div class="setup-items">
@@ -1161,23 +1241,61 @@ function renderSetup(){
             </div>
           </div>`).join('')}
       </div>
-    </div>`).join('');
+    </div>`;
+    });
+  });
+  root.innerHTML = html;
+}
+
+/* --- 추가 모달 --- */
+let _addCtx = null;
+function openAddModal(type, ci, si){
+  _addCtx = { type, ci, si };
+  $('addName').value=''; $('addItems').value='';
+  $('addNameWrap').classList.toggle('hidden', type==='item');
+  $('addGroupWrap').classList.toggle('hidden', type!=='cat');
+  $('addItemsWrap').classList.toggle('hidden', type!=='item');
+  if(type==='cat'){
+    $('addTitleEl').textContent='카테고리 추가';
+    $('addGroup').innerHTML = CAT_GROUPS.map(x=>`<option value="${x}">${x}</option>`).join('');
+    $('addTag').value='엔제';
+  } else if(type==='sec'){
+    $('addTitleEl').textContent='['+setupDraft[ci].title+'] 레벨/구역 추가';
+  } else {
+    $('addTitleEl').textContent='['+setupDraft[ci].title+' > '+setupDraft[ci].sections[si].title+'] 교재 추가';
+  }
+  $('addMask').classList.remove('hidden');
+  setTimeout(()=>{ (type==='item'?$('addItems'):$('addName')).focus(); }, 50);
+}
+function closeAddModal(){ $('addMask').classList.add('hidden'); _addCtx=null; }
+function confirmAddModal(){
+  if(!_addCtx) return;
+  const {type, ci, si} = _addCtx;
+  let focusSel=null;
+  if(type==='cat'){
+    const name=$('addName').value.trim();
+    if(!name){ alert('이름을 입력해주세요.'); return; }
+    setupDraft.push({id:newId(), title:name, tag:($('addTag').value.trim()||'엔제'), group:$('addGroup').value, sections:[]});
+    focusSel='#setup-cat-'+(setupDraft.length-1);
+  } else if(type==='sec'){
+    const name=$('addName').value.trim();
+    if(!name){ alert('이름을 입력해주세요.'); return; }
+    setupDraft[ci].sections.push({title:name, items:[]});
+    focusSel='#setup-cat-'+ci;
+  } else {
+    const names=$('addItems').value.split('\n').map(x=>x.trim()).filter(Boolean);
+    if(!names.length){ alert('교재명을 입력해주세요.'); return; }
+    names.forEach(n=>setupDraft[ci].sections[si].items.push({id:newId(), name:n}));
+    focusSel='#setup-cat-'+ci;
+  }
+  closeAddModal();
+  renderSetup();
+  if(focusSel){
+    const el=document.querySelector(focusSel);
+    if(el) el.scrollIntoView({behavior:'smooth', block:'center'});
+  }
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function setupAddCat(){
-  setupDraft.push({id:newId(), title:'새 카테고리', tag:'엔제', sections:[{title:'새 구역', items:[]}]});
-  renderSetup();
-}
-function setupAddSec(ci){
-  setupDraft[ci].sections.push({title:'새 구역', items:[]});
-  renderSetup();
-}
-function setupAddItem(ci,si){
-  const name = prompt('추가할 교재명을 입력하세요.');
-  if(!name || !name.trim()) return;
-  setupDraft[ci].sections[si].items.push({id:newId(), name:name.trim()});
-  renderSetup();
-}
 function setupDelItem(ci,si,ii){
   const it = setupDraft[ci].sections[si].items[ii];
   const q = itemQtySum(it.id);
