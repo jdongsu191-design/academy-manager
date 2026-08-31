@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BMAPS 재고관리 v0.2</title>
+<title>BMAPS 재고관리 v0.3</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
@@ -106,6 +106,27 @@
   .check-chip{display:inline-flex; align-items:center; gap:4px; font-size:11.5px; font-weight:700; border-radius:999px; padding:3px 9px;}
   .check-chip.done{background:var(--ok-bg); color:var(--ok);}
   .check-chip.due{background:var(--danger-bg); color:var(--danger);}
+  /* 카테고리 점프 바 (아코디언 대체 — 전부 펼쳐 두고 점프로 이동) */
+  .jump-bar{position:sticky; top:0; z-index:20; display:flex; flex-wrap:wrap; gap:6px;
+    background:var(--bg); padding:8px 0; margin-bottom:6px; border-bottom:1px solid var(--line);}
+  .jump-bar button{font-size:12px; font-weight:700; color:var(--navy); background:#fff;
+    border:1px solid var(--line-strong); border-radius:999px; padding:5px 12px; cursor:pointer;}
+  .jump-bar button:hover{background:var(--accent); border-color:var(--accent); color:#fff;}
+  /* 플랫 카테고리 블록 */
+  .category-block{background:var(--card); border:1px solid var(--line); border-radius:12px; margin-bottom:12px; overflow:hidden; scroll-margin-top:52px;}
+  .category-block .cat-head{padding:12px 16px; font-weight:800; font-size:15px; display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--line); background:#FAFBFD;}
+  .category-block .cat-head .tag{font-weight:600; color:var(--sub); font-size:12.5px;}
+  .category-block .cat-body2{padding:0 16px 16px;}
+  /* 입력 뷰 표 */
+  table.inptable{width:100%; border-collapse:collapse; font-size:13.5px;}
+  table.inptable th, table.inptable td{border-bottom:1px solid var(--line); padding:6px; text-align:center;}
+  table.inptable th{font-size:11.5px; color:var(--sub); font-weight:700; background:#fafbfc;}
+  table.inptable th.bookcol, table.inptable td.bookcol{text-align:left; min-width:220px; padding-left:4px;}
+  table.inptable td.qtycol{width:110px;}
+  table.inptable td.qtycol input{width:70px; text-align:center; padding:7px 4px; border:1px solid var(--line-strong); border-radius:6px; font-family:var(--mono); font-size:14px; font-weight:700;}
+  table.inptable td.otherscol{text-align:left; padding-left:12px; font-size:12px; color:var(--sub); width:42%;}
+  table.inptable td.otherscol b{color:var(--navy);}
+  table.inptable td.otherscol .none{color:#B6BFCF;}
   /* 이관 추천 */
   .transfer-card{background:var(--card); border:1px solid var(--line); border-radius:12px; margin-bottom:14px; overflow:hidden;}
   .transfer-card > summary{list-style:none; cursor:pointer; padding:13px 16px; font-weight:800; font-size:15px; display:flex; align-items:center; justify-content:space-between;}
@@ -205,7 +226,7 @@
 <div id="appScreen" class="hidden">
   <header class="top">
     <div class="wrap">
-      <h1><small>BESTIAN MATH ACADEMY</small>재고관리<span class="ver">v0.2</span></h1>
+      <h1><small>BESTIAN MATH ACADEMY</small>재고관리<span class="ver">v0.3</span></h1>
       <div class="who"><span id="user-name"></span> · <span id="user-role"></span>
         &nbsp;<a href="#" onclick="logout();return false;" style="color:#9FB0D6">로그아웃</a></div>
     </div>
@@ -219,46 +240,66 @@
 
     <!-- ════════════ 교재 재고 ════════════ -->
     <div class="pane on" id="pane-stock">
-      <div class="statusbar">
-        <div class="left">
-          <select id="myBranchSel" onchange="onMyBranchChange()"></select>
-          <span id="checkChips"></span>
+      <nav class="subtabs">
+        <button class="on" id="stab-input" onclick="showStockView('input')">✏️ 우리 관 입력</button>
+        <button id="stab-all" onclick="showStockView('all')">🏢 전체 현황</button>
+      </nav>
+
+      <!-- ── ✏️ 우리 관 입력 ── -->
+      <div id="stock-input-view">
+        <div class="statusbar">
+          <div class="left">
+            <select id="myBranchSel" onchange="onMyBranchChange()"></select>
+            <span id="checkChips"></span>
+          </div>
+          <div class="btnrow">
+            <button class="primary" onclick="markChecked()">우리 관 이번 달 점검 완료</button>
+            <span class="save-indicator" id="saveIndicator">저장됨 ✓</span>
+          </div>
         </div>
-        <div class="btnrow">
-          <button class="primary" onclick="markChecked()">내 지점 이번 달 점검 완료</button>
-          <button onclick="captureAsImage()">📸 이미지로 저장</button>
-          <button onclick="exportCSV()">⬇️ CSV</button>
-          <span class="save-indicator" id="saveIndicator">저장됨 ✓</span>
+
+        <div class="controls">
+          <input id="searchInput" type="text" placeholder="교재명 검색 (예: 공통수학1, 중2 A1, 3주차 …)" oninput="applyInputFilters()">
+          <label class="chk"><input type="checkbox" id="myZeroChk" onchange="applyInputFilters()"> 우리 관 0권만 보기</label>
         </div>
+
+        <details class="transfer-card" id="transferCard">
+          <summary>🔁 이관 추천 <span class="tr-src" id="transferMeta">관을 선택하면 계산됩니다</span></summary>
+          <div class="transfer-body" id="transferBody"></div>
+        </details>
+
+        <div class="jump-bar" id="jumpBarInput"></div>
+        <div id="inputListRoot"><p style="color:var(--sub); padding:20px;">불러오는 중…</p></div>
+
+        <p class="hint-box">
+          <strong>사용 방법</strong> — 매달 첫째 주에 우리 관 실제 재고를 세며 수량 칸만 채우면 됩니다.
+          입력하면 자동 저장되어 모든 관에 즉시 공유됩니다. 오른쪽 "다른 관 보유"는 참고용입니다.
+        </p>
       </div>
 
-      <div class="summary-grid" id="summaryGrid"></div>
+      <!-- ── 🏢 전체 현황 ── -->
+      <div id="stock-all-view" class="hidden">
+        <div class="statusbar">
+          <div class="left"><span style="font-size:13px; font-weight:700; color:var(--navy);">5개 관 전체 현황</span></div>
+          <div class="btnrow">
+            <button onclick="captureAsImage()">📸 이미지로 저장</button>
+            <button onclick="exportCSV()">⬇️ CSV</button>
+          </div>
+        </div>
 
-      <details class="transfer-card" id="transferCard">
-        <summary>🔁 이관 추천 <span class="tr-src" id="transferMeta">지점을 선택하면 계산됩니다</span></summary>
-        <div class="transfer-body" id="transferBody"></div>
-      </details>
+        <div class="summary-grid" id="summaryGrid"></div>
 
-      <div class="controls">
-        <input id="searchInput" type="text" placeholder="교재명 검색 (예: 공통수학1, 중2 A1, 3주차 …)" oninput="applyFilters()">
-        <label class="chk"><input type="checkbox" id="onlyZeroChk" onchange="applyFilters()"> 재고 0인 지점이 있는 항목만</label>
-        <button onclick="setAllOpen(true)">전체 펼치기</button>
-        <button onclick="setAllOpen(false)">전체 접기</button>
+        <div class="controls">
+          <input id="searchInputAll" type="text" placeholder="교재명 검색" oninput="applyAllFilters()">
+          <label class="chk"><input type="checkbox" id="onlyZeroChk" onchange="applyAllFilters()"> 재고 0인 관이 있는 항목만</label>
+          <span style="font-size:12px; color:var(--sub);">이미지 저장 시, 카테고리 제목 옆 "포함" 체크와 검색·필터가 그대로 반영됩니다.</span>
+          <button onclick="setPrintAll(true)">포함 전체 선택</button>
+          <button onclick="setPrintAll(false)">전체 해제</button>
+        </div>
+
+        <div class="jump-bar" id="jumpBarAll"></div>
+        <div id="catalogRoot"><p style="color:var(--sub); padding:20px;">불러오는 중…</p></div>
       </div>
-
-      <div class="controls" style="background:var(--accent-soft); border:1px solid #c8d8f2; border-radius:10px; padding:10px 14px;">
-        <span style="font-size:12.5px; font-weight:700; color:var(--navy);">이미지에 포함할 항목 —</span>
-        <button onclick="setPrintAll(true)">전체 선택</button>
-        <button onclick="setPrintAll(false)">전체 해제</button>
-        <span style="font-size:12px; color:var(--sub);">카테고리 제목 옆 체크를 해제하면 이미지에서 빠집니다. 검색·필터로 숨긴 행도 제외됩니다.</span>
-      </div>
-
-      <div id="catalogRoot"><p style="color:var(--sub); padding:20px;">불러오는 중…</p></div>
-
-      <p class="hint-box">
-        <strong>사용 방법</strong> — 매달 첫째 주, 각 지점 담당자가 실제 재고 수량을 입력/수정합니다.
-        빨간 칸은 재고 0권, 노란 칸은 여유가 적은 상태입니다. 입력하면 자동 저장되어 <strong>모든 계정에 즉시 공유</strong>됩니다.
-      </p>
     </div>
 
     <!-- ════════════ 제본기 결산 ════════════ -->
@@ -392,7 +433,7 @@
    - 원형: 임시 html 2종(제본기_사용현황_결산 / bestian_inventory)의 로직을
      그대로 옮기고 저장층만 localStorage → Supabase 로 바꿨다
    ========================================================= */
-window.INVENTORY_VERSION = 'v0.2';
+window.INVENTORY_VERSION = 'v0.3';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -480,11 +521,11 @@ async function kvSet(key, value){
    📦 교재 재고 — bestian_inventory 이식
    ═════════════════════════════════════════════════════════ */
 const BRANCHES = [
-  {id:'gaebong',  name:'개봉점'},
-  {id:'haan1',    name:'하안1관'},
-  {id:'haan2',    name:'하안2관'},
-  {id:'cheolsan', name:'철산점'},
-  {id:'cheongna', name:'청라점'},
+  {id:'gaebong',  name:'개봉관',  key:'개봉'},
+  {id:'haan1',    name:'하안1관', key:'하안1'},
+  {id:'haan2',    name:'하안2관', key:'하안2'},
+  {id:'cheolsan', name:'철산관',  key:'철산'},
+  {id:'cheongna', name:'청라관',  key:'청라'},
 ];
 
 function weekItems(prefix, idPrefix, start, end){
@@ -574,19 +615,34 @@ async function stockLoad(){
   }catch(e){ console.error('재고 로드 실패', e); }
 }
 
-/* --- 내 지점 --- */
+/* --- 우리 관 (계정에서 자동 추정 → 필요하면 변경, PC별 기억) --- */
+function guessBranch(){
+  const hay = ((currentUser&&currentUser.name)||'') + '|' + ((currentUser&&currentUser.username)||'');
+  // '하안1' 처럼 긴 키부터 대조 — '하안' 만으로는 1관/2관을 못 가르므로 추정하지 않는다
+  const keys = [...BRANCHES].sort((a,b)=>b.key.length-a.key.length);
+  const hit = keys.find(b=>hay.includes(b.key));
+  return hit ? hit.id : '';
+}
 function buildMyBranchSel(){
   const sel = $('myBranchSel');
-  sel.innerHTML = '<option value="">지점 선택 (내 지점 강조)</option>'
+  sel.innerHTML = '<option value="">우리 관 선택</option>'
     + BRANCHES.map(b=>`<option value="${b.id}">${b.name}</option>`).join('');
   myBranch = localStorage.getItem('inv_my_branch') || '';
   if(myBranch && !BRANCHES.some(b=>b.id===myBranch)) myBranch = '';
+  if(!myBranch){ myBranch = guessBranch(); if(myBranch) localStorage.setItem('inv_my_branch', myBranch); }
   sel.value = myBranch;
 }
 function onMyBranchChange(){
   myBranch = $('myBranchSel').value;
   localStorage.setItem('inv_my_branch', myBranch);
-  renderCatalog(); renderCheckChips(); renderTransfer(); applyFilters();
+  renderInputList(); renderCatalog(); renderCheckChips(); renderTransfer();
+  applyInputFilters(); applyAllFilters();
+}
+function showStockView(name){
+  $('stock-input-view').classList.toggle('hidden', name!=='input');
+  $('stock-all-view').classList.toggle('hidden', name!=='all');
+  $('stab-input').classList.toggle('on', name==='input');
+  $('stab-all').classList.toggle('on', name==='all');
 }
 
 /* --- 실시간 반영 (다른 계정의 수정 즉시 표시) ---
@@ -604,6 +660,7 @@ function subscribeRealtime(){
         const inp=document.querySelector(`tr[data-item-id="${CSS.escape(r.item_id)}"] input[data-branch="${r.branch}"]`);
         if(inp && document.activeElement !== inp) inp.value = r.qty||0;
         updateRowDom(r.item_id);
+        updateInputRow(r.item_id);
         renderSummary(); renderTransfer();
       })
       .on('postgres_changes', { event:'*', schema:'public', table:'inventory_kv' }, payload=>{
@@ -667,51 +724,126 @@ function qtyClass(qty, maxInRow){
 }
 function hasZeroBranch(rowVals){ return BRANCHES.some(b=>(rowVals[b.id]||0)===0); }
 
-function stockRenderAll(){ renderCatalog(); renderSummary(); renderCheckChips(); renderTransfer(); }
+function stockRenderAll(){ renderInputList(); renderCatalog(); renderSummary(); renderCheckChips(); renderTransfer(); }
+
+/* --- 카테고리 점프 바 --- */
+function renderJumpBar(elId, prefix){
+  $(elId).innerHTML = CATALOG.map(c=>
+    `<button onclick="document.getElementById('${prefix}${c.id}').scrollIntoView({behavior:'smooth'})">${c.title.replace('중등부 - ','').replace('고등학교 ','고')}</button>`
+  ).join('');
+}
+
+/* --- ✏️ 우리 관 입력 뷰 (아코디언 없이 전부 펼침) --- */
+function othersHTML(itemId){
+  const rowVals = stockData[itemId]||defaultQtyRow();
+  const parts = BRANCHES.filter(b=>b.id!==myBranch && (rowVals[b.id]||0)>0)
+    .map(b=>`<b>${b.name.replace('관','')}</b> ${rowVals[b.id]}`);
+  return parts.length ? parts.join(' · ') : '<span class="none">다른 관도 없음</span>';
+}
+function inputCellClass(qty){ return qty===0 ? 'zero-cell' : (qty<=2 ? 'low-cell' : 'ok-cell'); }
+function renderInputList(){
+  const root = $('inputListRoot');
+  if(!myBranch){
+    root.innerHTML = '<p class="hint-box">상단에서 <b>우리 관</b>을 먼저 선택해주세요. 선택하면 우리 관 수량만 빠르게 입력하는 화면이 열립니다.</p>';
+    $('jumpBarInput').innerHTML='';
+    return;
+  }
+  renderJumpBar('jumpBarInput','in-');
+  const mineName = BRANCHES.find(b=>b.id===myBranch).name;
+  let html='';
+  CATALOG.forEach(cat=>{
+    html+=`<div class="category-block" id="in-${cat.id}">
+      <div class="cat-head">${cat.title} <span class="tag">· ${cat.tag}</span></div>
+      <div class="cat-body2">`;
+    cat.sections.forEach(sec=>{
+      html+=`<div class="section-title">${sec.title}</div>
+        <table class="inptable"><thead><tr><th class="bookcol">교재명</th><th>${mineName} 수량</th><th style="text-align:left; padding-left:12px;">다른 관 보유 (참고)</th></tr></thead><tbody>`;
+      sec.items.forEach(it=>{
+        const qty=(stockData[it.id]||{})[myBranch]||0;
+        html+=`<tr data-inrow="${it.id}" data-item-name="${it.name}">
+          <td class="bookcol row-name">${it.name}</td>
+          <td class="qtycol ${inputCellClass(qty)}"><input type="number" min="0" step="1" value="${qty}" data-item="${it.id}" data-branch="${myBranch}"></td>
+          <td class="otherscol" data-others="${it.id}">${othersHTML(it.id)}</td></tr>`;
+      });
+      html+='</tbody></table>';
+    });
+    html+='</div></div>';
+  });
+  root.innerHTML = html;
+  if(!root._wired){
+    root._wired = true;
+    root.addEventListener('input', e=>{
+      const t=e.target;
+      if(t.tagName!=='INPUT'||t.type!=='number') return;
+      let val=parseInt(t.value,10);
+      if(isNaN(val)||val<0) val=0;
+      t.value=val;
+      const itemId=t.dataset.item;
+      if(!stockData[itemId]) stockData[itemId]=defaultQtyRow();
+      stockData[itemId][myBranch]=val;
+      t.closest('td').className='qtycol '+inputCellClass(val);
+      updateRowDom(itemId);            // 전체 현황 뷰 동기화
+      renderSummary(); renderTransfer();
+      stockQueueSave(itemId, myBranch, val);
+    });
+    root.addEventListener('focusout', e=>{
+      const t=e.target;
+      if(t.tagName==='INPUT'&&t.type==='number'&&Object.keys(stockDirty).length){ clearTimeout(stockTimer); stockFlush(); }
+    });
+  }
+  applyInputFilters();
+}
+function updateInputRow(itemId){
+  const tr=document.querySelector(`tr[data-inrow="${CSS.escape(itemId)}"]`);
+  if(!tr) return;
+  const qty=(stockData[itemId]||{})[myBranch]||0;
+  const inp=tr.querySelector('input');
+  if(inp && document.activeElement!==inp){ inp.value=qty; inp.closest('td').className='qtycol '+inputCellClass(qty); }
+  const oc=tr.querySelector('[data-others="'+CSS.escape(itemId)+'"]');
+  if(oc) oc.innerHTML=othersHTML(itemId);
+}
+function applyInputFilters(){
+  if(!myBranch) return;
+  const q=($('searchInput').value||'').trim().toLowerCase();
+  const myZero=$('myZeroChk').checked;
+  document.querySelectorAll('#inputListRoot tr[data-inrow]').forEach(tr=>{
+    const name=(tr.dataset.itemName||'').toLowerCase();
+    const qty=(stockData[tr.dataset.inrow]||{})[myBranch]||0;
+    tr.classList.toggle('hidden-row', !((!q||name.includes(q)) && (!myZero||qty===0)));
+  });
+}
 
 function renderCatalog(){
   const root = $('catalogRoot'); root.innerHTML='';
-  CATALOG.forEach((cat, idx)=>{
-    const details = document.createElement('details');
-    details.className='category'; details.dataset.catId=cat.id;
-    if(idx===0) details.open = true;
+  renderJumpBar('jumpBarAll','all-');
+  CATALOG.forEach(cat=>{
+    const block = document.createElement('div');
+    block.className='category-block'; block.id='all-'+cat.id; block.dataset.catId=cat.id;
     const totalItems = cat.sections.reduce((s,sec)=>s+sec.items.length,0);
-    const summary = document.createElement('summary');
-    summary.innerHTML = `<span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <label class="print-chk" onclick="event.stopPropagation()">
-          <input type="checkbox" class="print-select" data-cat="${cat.id}" checked onclick="event.stopPropagation()"> 포함
-        </label>
-        <span>${cat.title} <span style="font-weight:600;color:var(--sub);font-size:12.5px;">· ${cat.tag}</span></span>
-      </span>
-      <span class="catmeta">${totalItems}개 항목 <span class="arrow">▶</span></span>`;
-    details.appendChild(summary);
-    const body = document.createElement('div'); body.className='cat-body';
+    let html = `<div class="cat-head">
+        <label class="print-chk"><input type="checkbox" class="print-select" data-cat="${cat.id}" checked> 포함</label>
+        <span>${cat.title} <span class="tag">· ${cat.tag}</span></span>
+        <span class="tag" style="margin-left:auto;">${totalItems}개 항목</span>
+      </div><div class="cat-body2">`;
     cat.sections.forEach(sec=>{
-      const st=document.createElement('div'); st.className='section-title'; st.textContent=sec.title;
-      body.appendChild(st);
-      const table=document.createElement('table'); table.className='invtable';
-      table.innerHTML = `<thead><tr><th class="bookcol">교재명</th>${BRANCHES.map(b=>`<th class="${b.id===myBranch?'col-mine':''}">${b.name}</th>`).join('')}<th>합계</th></tr></thead>`;
-      const tbody=document.createElement('tbody');
+      html+=`<div class="section-title">${sec.title}</div>
+        <table class="invtable"><thead><tr><th class="bookcol">교재명</th>${BRANCHES.map(b=>`<th class="${b.id===myBranch?'col-mine':''}">${b.name}</th>`).join('')}<th>합계</th></tr></thead><tbody>`;
       sec.items.forEach(it=>{
-        const tr=document.createElement('tr');
-        tr.dataset.itemId=it.id; tr.dataset.itemName=it.name;
         const rowVals=stockData[it.id]||defaultQtyRow();
         const maxInRow=Math.max(...BRANCHES.map(b=>rowVals[b.id]||0));
         const total=BRANCHES.reduce((s,b)=>s+(rowVals[b.id]||0),0);
-        let cells=`<td class="bookcol row-name">${it.name}</td>`;
+        html+=`<tr data-item-id="${it.id}" data-item-name="${it.name}"><td class="bookcol row-name">${it.name}</td>`;
         BRANCHES.forEach(b=>{
           const qty=rowVals[b.id]||0;
-          cells+=`<td class="${qtyClass(qty,maxInRow)}${b.id===myBranch?' col-mine':''}"><input type="number" min="0" step="1" value="${qty}" data-item="${it.id}" data-branch="${b.id}"></td>`;
+          html+=`<td class="${qtyClass(qty,maxInRow)}${b.id===myBranch?' col-mine':''}"><input type="number" min="0" step="1" value="${qty}" data-item="${it.id}" data-branch="${b.id}"></td>`;
         });
-        cells+=`<td class="total-cell" data-cell="total">${total}</td>`;
-        tr.innerHTML=cells;
-        tbody.appendChild(tr);
+        html+=`<td class="total-cell" data-cell="total">${total}</td></tr>`;
       });
-      table.appendChild(tbody);
-      body.appendChild(table);
+      html+='</tbody></table>';
     });
-    details.appendChild(body);
-    root.appendChild(details);
+    html+='</div>';
+    block.innerHTML=html;
+    root.appendChild(block);
   });
 
   if(root._wired) return;          // 재렌더 때 리스너가 겹겹이 붙지 않게 1회만
@@ -726,6 +858,7 @@ function renderCatalog(){
     if(!stockData[itemId]) stockData[itemId]=defaultQtyRow();
     stockData[itemId][branch]=val;
     updateRowDom(itemId);
+    updateInputRow(itemId);          // 입력 뷰 동기화
     renderSummary(); renderTransfer();
     stockQueueSave(itemId, branch, val);
   });
@@ -735,7 +868,7 @@ function renderCatalog(){
   });
   root.addEventListener('change', e=>{
     if(!e.target.classList.contains('print-select')) return;
-    e.target.closest('details.category').classList.toggle('print-hide', !e.target.checked);
+    e.target.closest('.category-block').classList.toggle('print-hide', !e.target.checked);
   });
 }
 function updateRowDom(itemId){
@@ -772,7 +905,7 @@ function renderCheckChips(){
   }).join(' ');
 }
 async function markChecked(){
-  if(!myBranch){ alert('먼저 지점을 선택해주세요.'); return; }
+  if(!myBranch){ alert('먼저 우리 관을 선택해주세요.'); return; }
   const rec = { at:new Date().toISOString(), by:currentUser?currentUser.name:null };
   checkMap[myBranch] = rec;
   renderCheckChips();
@@ -784,8 +917,8 @@ async function markChecked(){
 function renderTransfer(){
   const meta=$('transferMeta'), body=$('transferBody');
   if(!myBranch){
-    meta.textContent='지점을 선택하면 계산됩니다';
-    body.innerHTML='<p class="hint" style="padding:6px 0 10px;">상단에서 지점을 선택하면, 그 지점 재고가 0권인데 다른 지점엔 여유(2권 이상)가 있는 교재를 찾아드립니다.</p>';
+    meta.textContent='관을 선택하면 계산됩니다';
+    body.innerHTML='<p class="hint" style="padding:6px 0 10px;">상단에서 우리 관을 선택하면, 우리 관 재고가 0권인데 다른 관엔 여유(2권 이상)가 있는 교재를 찾아드립니다.</p>';
     return;
   }
   const mineName = BRANCHES.find(b=>b.id===myBranch).name;
@@ -800,7 +933,7 @@ function renderTransfer(){
   });
   meta.innerHTML = `<b>${mineName}</b> 기준 · 가져올 수 있는 교재 <b>${found.length}</b>종`;
   if(!found.length){
-    body.innerHTML=`<p class="hint" style="padding:6px 0 10px;">${mineName}에 0권인데 다른 지점에 여유(2권 이상)가 있는 교재가 없습니다. 👍</p>`;
+    body.innerHTML=`<p class="hint" style="padding:6px 0 10px;">${mineName}에 0권인데 다른 관에 여유(2권 이상)가 있는 교재가 없습니다. 👍</p>`;
     return;
   }
   // 카테고리 순서대로 묶어서 표로
@@ -831,7 +964,7 @@ async function captureTransfer(){
     <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid var(--accent-soft);">
       <div style="font-size:12px;color:var(--accent);font-weight:700;">베스티안 수학학원 · 교재 이관 추천</div>
       <div style="font-size:20px;font-weight:800;margin-top:4px;">${mineName} — 가져올 교재 목록</div>
-      <div style="font-size:12.5px;color:var(--sub);margin-top:4px;">${now.toLocaleDateString('ko-KR')} 기준 · ${mineName} 0권 & 타 지점 2권 이상</div>
+      <div style="font-size:12.5px;color:var(--sub);margin-top:4px;">${now.toLocaleDateString('ko-KR')} 기준 · ${mineName} 0권 & 타 관 2권 이상</div>
     </div>` + $('transferBody').innerHTML.replace(/<div style="margin-top:10px;">[\s\S]*$/,'');
   document.body.appendChild(capture);
   try{
@@ -843,25 +976,19 @@ async function captureTransfer(){
   }catch(err){ console.error(err); alert('이미지 생성 중 문제가 발생했습니다.'); }
   finally{ document.body.removeChild(capture); }
 }
-function setAllOpen(open){ document.querySelectorAll('details.category').forEach(d=>d.open=open); }
 function setPrintAll(on){
   document.querySelectorAll('.print-select').forEach(c=>{
     c.checked=on;
-    c.closest('details.category').classList.toggle('print-hide', !on);
+    c.closest('.category-block').classList.toggle('print-hide', !on);
   });
 }
-function applyFilters(){
-  const q=$('searchInput').value.trim().toLowerCase();
+function applyAllFilters(){
+  const q=($('searchInputAll').value||'').trim().toLowerCase();
   const onlyZero=$('onlyZeroChk').checked;
   document.querySelectorAll('#catalogRoot tr[data-item-id]').forEach(tr=>{
     const name=tr.dataset.itemName.toLowerCase();
     const rowVals=stockData[tr.dataset.itemId]||defaultQtyRow();
-    const show=(!q||name.includes(q)) && (!onlyZero||hasZeroBranch(rowVals));
-    tr.classList.toggle('hidden-row', !show);
-    if(show && (q||onlyZero)){
-      const d=tr.closest('details.category');
-      if(d) d.open=true;
-    }
+    tr.classList.toggle('hidden-row', !((!q||name.includes(q)) && (!onlyZero||hasZeroBranch(rowVals))));
   });
 }
 
@@ -900,7 +1027,7 @@ async function captureAsImage(){
   const selected=[...document.querySelectorAll('.print-select')].filter(c=>c.checked).map(c=>c.dataset.cat);
   if(!selected.length){ alert('이미지에 포함할 항목을 1개 이상 선택해주세요.'); return; }
   if(typeof html2canvas==='undefined'){ alert('이미지 생성 기능을 불러오지 못했습니다. 새로고침 후 다시 시도해주세요.'); return; }
-  const q=$('searchInput').value.trim().toLowerCase();
+  const q=$('searchInputAll').value.trim().toLowerCase();
   const onlyZero=$('onlyZeroChk').checked;
   const now=new Date();
   let bodyHtml='';
