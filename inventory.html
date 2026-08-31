@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BMAPS 재고관리 v0.1</title>
+<title>BMAPS 재고관리 v0.2</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
@@ -98,6 +98,31 @@
   td.total-cell{font-weight:800; font-family:var(--mono); color:var(--navy);}
   tr.hidden-row{display:none;}
   .row-name{font-weight:600;}
+  /* 내 지점 모드 — 선택한 지점 열 강조 */
+  th.col-mine{background:var(--navy) !important; color:#fff !important;}
+  td.col-mine{background:#F4F7FE; box-shadow:inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent);}
+  td.col-mine input{font-weight:800; transform:scale(1.06);}
+  #myBranchSel{padding:8px 10px; border:1px solid var(--line-strong); border-radius:8px; font:inherit; font-weight:700; color:var(--navy);}
+  .check-chip{display:inline-flex; align-items:center; gap:4px; font-size:11.5px; font-weight:700; border-radius:999px; padding:3px 9px;}
+  .check-chip.done{background:var(--ok-bg); color:var(--ok);}
+  .check-chip.due{background:var(--danger-bg); color:var(--danger);}
+  /* 이관 추천 */
+  .transfer-card{background:var(--card); border:1px solid var(--line); border-radius:12px; margin-bottom:14px; overflow:hidden;}
+  .transfer-card > summary{list-style:none; cursor:pointer; padding:13px 16px; font-weight:800; font-size:15px; display:flex; align-items:center; justify-content:space-between;}
+  .transfer-card > summary::-webkit-details-marker{display:none;}
+  .transfer-body{padding:0 16px 16px;}
+  .tr-src{font-size:12px; color:var(--sub);}
+  .tr-src b{color:var(--navy);}
+  /* 비교 요약 카드 */
+  .cmp-cards{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; padding:14px;}
+  @media(max-width:820px){.cmp-cards{grid-template-columns:repeat(2,1fr);}}
+  .cmp-card{border:1px solid var(--line); border-radius:10px; padding:12px 14px;}
+  .cmp-card .k{font-size:11.5px; color:var(--sub); font-weight:700; margin-bottom:4px;}
+  .cmp-card .v{font-size:18px; font-weight:800; color:var(--navy); font-family:var(--mono);}
+  .cmp-card .d{font-size:11.5px; margin-top:4px; line-height:1.5;}
+  details.cmp-detail > summary{list-style:none; cursor:pointer; padding:10px 16px; font-size:13px; font-weight:700; color:var(--accent); border-top:1px solid var(--line);}
+  details.cmp-detail > summary::-webkit-details-marker{display:none;}
+  #bindMeta{font-size:12px; color:var(--sub);}
   .hint-box{font-size:12.5px; color:var(--sub); background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px 16px; margin-top:8px; line-height:1.6;}
 
   /* ══ 제본기 ══ */
@@ -180,7 +205,7 @@
 <div id="appScreen" class="hidden">
   <header class="top">
     <div class="wrap">
-      <h1><small>BESTIAN MATH ACADEMY</small>재고관리<span class="ver">v0.1</span></h1>
+      <h1><small>BESTIAN MATH ACADEMY</small>재고관리<span class="ver">v0.2</span></h1>
       <div class="who"><span id="user-name"></span> · <span id="user-role"></span>
         &nbsp;<a href="#" onclick="logout();return false;" style="color:#9FB0D6">로그아웃</a></div>
     </div>
@@ -196,11 +221,11 @@
     <div class="pane on" id="pane-stock">
       <div class="statusbar">
         <div class="left">
-          <span id="checkBanner">확인 중…</span>
-          <span class="lastcheck-text" id="lastCheckText"></span>
+          <select id="myBranchSel" onchange="onMyBranchChange()"></select>
+          <span id="checkChips"></span>
         </div>
         <div class="btnrow">
-          <button class="primary" onclick="markChecked()">이번 달 점검 완료로 표시</button>
+          <button class="primary" onclick="markChecked()">내 지점 이번 달 점검 완료</button>
           <button onclick="captureAsImage()">📸 이미지로 저장</button>
           <button onclick="exportCSV()">⬇️ CSV</button>
           <span class="save-indicator" id="saveIndicator">저장됨 ✓</span>
@@ -208,6 +233,11 @@
       </div>
 
       <div class="summary-grid" id="summaryGrid"></div>
+
+      <details class="transfer-card" id="transferCard">
+        <summary>🔁 이관 추천 <span class="tr-src" id="transferMeta">지점을 선택하면 계산됩니다</span></summary>
+        <div class="transfer-body" id="transferBody"></div>
+      </details>
 
       <div class="controls">
         <input id="searchInput" type="text" placeholder="교재명 검색 (예: 공통수학1, 중2 A1, 3주차 …)" oninput="applyFilters()">
@@ -362,7 +392,7 @@
    - 원형: 임시 html 2종(제본기_사용현황_결산 / bestian_inventory)의 로직을
      그대로 옮기고 저장층만 localStorage → Supabase 로 바꿨다
    ========================================================= */
-window.INVENTORY_VERSION = 'v0.1';
+window.INVENTORY_VERSION = 'v0.2';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -415,8 +445,10 @@ async function enterApp(){
   $('user-name').textContent = currentUser.name || '';
   $('user-role').textContent = ({admin:(currentUser.is_master?'마스터':'관리자'), desk:'데스크', vice_director:'부원장'})[currentUser.role] || currentUser.role;
   showScreen('appScreen');
+  buildMyBranchSel();
   await Promise.all([stockLoad(), bindLoadAll()]);
   stockRenderAll();
+  subscribeRealtime();
   const now = new Date();
   $('ym').value = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
   buildBindTables();
@@ -515,7 +547,8 @@ CATALOG.forEach(cat=>cat.sections.forEach(sec=>sec.items.forEach(it=>{
 })));
 
 let stockData = {};          // itemId -> {branchId: qty}
-let lastCheck = null;        // {at, by}
+let checkMap = {};           // branchId -> {at, by} (지점별 점검 기록)
+let myBranch = '';           // 내 지점 (PC별 기억)
 function defaultQtyRow(){ const r={}; BRANCHES.forEach(b=>r[b.id]=0); return r; }
 
 async function stockLoad(){
@@ -535,9 +568,63 @@ async function stockLoad(){
       stockData[r.item_id][r.branch]=r.qty||0;
     });
     ALL_ITEMS.forEach(it=>{ if(!stockData[it.id]) stockData[it.id]=defaultQtyRow(); });
-    const kc = await kvGet('stock_last_check');
-    lastCheck = kc && kc.value ? kc.value : null;
+    const kc = await db.from('inventory_kv').select('key,value').like('key','stock_check|%');
+    checkMap = {};
+    ((kc.data)||[]).forEach(r=>{ checkMap[r.key.slice(12)] = r.value; });
   }catch(e){ console.error('재고 로드 실패', e); }
+}
+
+/* --- 내 지점 --- */
+function buildMyBranchSel(){
+  const sel = $('myBranchSel');
+  sel.innerHTML = '<option value="">지점 선택 (내 지점 강조)</option>'
+    + BRANCHES.map(b=>`<option value="${b.id}">${b.name}</option>`).join('');
+  myBranch = localStorage.getItem('inv_my_branch') || '';
+  if(myBranch && !BRANCHES.some(b=>b.id===myBranch)) myBranch = '';
+  sel.value = myBranch;
+}
+function onMyBranchChange(){
+  myBranch = $('myBranchSel').value;
+  localStorage.setItem('inv_my_branch', myBranch);
+  renderCatalog(); renderCheckChips(); renderTransfer(); applyFilters();
+}
+
+/* --- 실시간 반영 (다른 계정의 수정 즉시 표시) ---
+   ⚠ supabase_realtime publication 에 테이블이 있어야 이벤트가 온다.
+     안 켜져 있으면 구독만 되고 조용히 무이벤트 — 기능엔 지장 없음. */
+function subscribeRealtime(){
+  try{
+    db.channel('inv-live')
+      .on('postgres_changes', { event:'*', schema:'public', table:'inventory_stock' }, payload=>{
+        const r = payload.new;
+        if(!r || !r.item_id) return;
+        if(stockDirty[r.item_id+'|'+r.branch] !== undefined) return;   // 내가 입력 중인 칸은 보호
+        if(!stockData[r.item_id]) stockData[r.item_id]=defaultQtyRow();
+        stockData[r.item_id][r.branch]=r.qty||0;
+        const inp=document.querySelector(`tr[data-item-id="${CSS.escape(r.item_id)}"] input[data-branch="${r.branch}"]`);
+        if(inp && document.activeElement !== inp) inp.value = r.qty||0;
+        updateRowDom(r.item_id);
+        renderSummary(); renderTransfer();
+      })
+      .on('postgres_changes', { event:'*', schema:'public', table:'inventory_kv' }, payload=>{
+        const r = payload.new;
+        if(!r || !r.key) return;
+        if(r.key.startsWith('stock_check|')){
+          checkMap[r.key.slice(12)] = r.value;
+          renderCheckChips();
+        } else if(r.key.startsWith('bindery|')){
+          const ym = r.key.slice(8);
+          bMonths[ym] = r.value;
+          bMeta[ym] = { at:r.updated_at, by:r.updated_by };
+          if(ym === curYM() && r.updated_by !== (currentUser&&currentUser.name)){
+            fill(bMonths[ym]);
+            $('bStatus').textContent='다른 계정이 이 달을 수정함 → 최신으로 갱신됨 ('+(r.updated_by||'')+')';
+            $('bStatus').className='b-status';
+          }
+        }
+      })
+      .subscribe();
+  }catch(e){ console.warn('실시간 구독 실패', e); }
 }
 
 /* --- 저장: 바뀐 셀만 모아 upsert --- */
@@ -580,7 +667,7 @@ function qtyClass(qty, maxInRow){
 }
 function hasZeroBranch(rowVals){ return BRANCHES.some(b=>(rowVals[b.id]||0)===0); }
 
-function stockRenderAll(){ renderCatalog(); renderSummary(); renderCheckBanner(); }
+function stockRenderAll(){ renderCatalog(); renderSummary(); renderCheckChips(); renderTransfer(); }
 
 function renderCatalog(){
   const root = $('catalogRoot'); root.innerHTML='';
@@ -603,7 +690,7 @@ function renderCatalog(){
       const st=document.createElement('div'); st.className='section-title'; st.textContent=sec.title;
       body.appendChild(st);
       const table=document.createElement('table'); table.className='invtable';
-      table.innerHTML = `<thead><tr><th class="bookcol">교재명</th>${BRANCHES.map(b=>`<th>${b.name}</th>`).join('')}<th>합계</th></tr></thead>`;
+      table.innerHTML = `<thead><tr><th class="bookcol">교재명</th>${BRANCHES.map(b=>`<th class="${b.id===myBranch?'col-mine':''}">${b.name}</th>`).join('')}<th>합계</th></tr></thead>`;
       const tbody=document.createElement('tbody');
       sec.items.forEach(it=>{
         const tr=document.createElement('tr');
@@ -614,7 +701,7 @@ function renderCatalog(){
         let cells=`<td class="bookcol row-name">${it.name}</td>`;
         BRANCHES.forEach(b=>{
           const qty=rowVals[b.id]||0;
-          cells+=`<td class="${qtyClass(qty,maxInRow)}"><input type="number" min="0" step="1" value="${qty}" data-item="${it.id}" data-branch="${b.id}"></td>`;
+          cells+=`<td class="${qtyClass(qty,maxInRow)}${b.id===myBranch?' col-mine':''}"><input type="number" min="0" step="1" value="${qty}" data-item="${it.id}" data-branch="${b.id}"></td>`;
         });
         cells+=`<td class="total-cell" data-cell="total">${total}</td>`;
         tr.innerHTML=cells;
@@ -627,6 +714,8 @@ function renderCatalog(){
     root.appendChild(details);
   });
 
+  if(root._wired) return;          // 재렌더 때 리스너가 겹겹이 붙지 않게 1회만
+  root._wired = true;
   root.addEventListener('input', e=>{
     const t=e.target;
     if(t.tagName!=='INPUT'||t.type!=='number') return;
@@ -637,7 +726,7 @@ function renderCatalog(){
     if(!stockData[itemId]) stockData[itemId]=defaultQtyRow();
     stockData[itemId][branch]=val;
     updateRowDom(itemId);
-    renderSummary();
+    renderSummary(); renderTransfer();
     stockQueueSave(itemId, branch, val);
   });
   root.addEventListener('focusout', e=>{
@@ -657,7 +746,7 @@ function updateRowDom(itemId){
   const total=BRANCHES.reduce((s,b)=>s+(rowVals[b.id]||0),0);
   BRANCHES.forEach(b=>{
     const input=tr.querySelector(`input[data-branch="${b.id}"]`);
-    if(input) input.closest('td').className=qtyClass(rowVals[b.id]||0, maxInRow);
+    if(input) input.closest('td').className=qtyClass(rowVals[b.id]||0, maxInRow)+(b.id===myBranch?' col-mine':'');
   });
   tr.querySelector('td[data-cell="total"]').textContent=total;
 }
@@ -672,23 +761,87 @@ function renderSummary(){
       <div class="num">${total.toLocaleString()}</div><div class="zero">품절 항목 ${zero}종</div></div>`;
   }).join('');
 }
-function renderCheckBanner(){
-  const banner=$('checkBanner'), text=$('lastCheckText');
-  if(!lastCheck || !lastCheck.at){
-    banner.textContent='이번 달 점검 미완료'; banner.className='due';
-    text.textContent='아직 점검 기록이 없습니다. 매달 첫째 주에 재고를 확인해주세요.';
-    return;
-  }
-  const last=new Date(lastCheck.at), days=Math.floor((new Date()-last)/86400000);
-  text.textContent=`마지막 점검: ${last.toLocaleDateString('ko-KR')} (${days}일 전${lastCheck.by?' · '+lastCheck.by:''})`;
-  if(days>35){ banner.textContent='이번 달 점검이 필요합니다'; banner.className='due'; }
-  else { banner.textContent='점검 완료'; banner.className='ok'; }
+/* 지점별 점검 칩 — 이번 달 점검한 지점은 초록, 아니면 빨강 */
+function renderCheckChips(){
+  const nowYM = new Date().toISOString().slice(0,7);
+  $('checkChips').innerHTML = BRANCHES.map(b=>{
+    const c = checkMap[b.id];
+    const done = c && c.at && String(c.at).slice(0,7) === nowYM;
+    const tip = c && c.at ? new Date(c.at).toLocaleDateString('ko-KR')+(c.by?' · '+c.by:'') : '점검 기록 없음';
+    return `<span class="check-chip ${done?'done':'due'}" title="${tip}">${done?'✓':'○'} ${b.name}</span>`;
+  }).join(' ');
 }
 async function markChecked(){
-  lastCheck={ at:new Date().toISOString(), by:currentUser?currentUser.name:null };
-  renderCheckBanner();
-  try{ await kvSet('stock_last_check', lastCheck); setIndicator('saved','점검 기록 저장됨 ✓'); }
+  if(!myBranch){ alert('먼저 지점을 선택해주세요.'); return; }
+  const rec = { at:new Date().toISOString(), by:currentUser?currentUser.name:null };
+  checkMap[myBranch] = rec;
+  renderCheckChips();
+  try{ await kvSet('stock_check|'+myBranch, rec); setIndicator('saved','점검 기록 저장됨 ✓'); }
   catch(e){ console.error(e); setIndicator('error','점검 기록 저장 실패'); }
+}
+
+/* --- 🔁 이관 추천 — 내 지점 0권 & 타 지점 여유(2권 이상) --- */
+function renderTransfer(){
+  const meta=$('transferMeta'), body=$('transferBody');
+  if(!myBranch){
+    meta.textContent='지점을 선택하면 계산됩니다';
+    body.innerHTML='<p class="hint" style="padding:6px 0 10px;">상단에서 지점을 선택하면, 그 지점 재고가 0권인데 다른 지점엔 여유(2권 이상)가 있는 교재를 찾아드립니다.</p>';
+    return;
+  }
+  const mineName = BRANCHES.find(b=>b.id===myBranch).name;
+  const found=[];
+  ALL_ITEMS.forEach(it=>{
+    const rowVals = stockData[it.id]||defaultQtyRow();
+    if((rowVals[myBranch]||0) !== 0) return;
+    const donors = BRANCHES.filter(b=>b.id!==myBranch && (rowVals[b.id]||0) >= 2)
+      .map(b=>({name:b.name, qty:rowVals[b.id]}))
+      .sort((a,b)=>b.qty-a.qty);
+    if(donors.length) found.push({it, donors});
+  });
+  meta.innerHTML = `<b>${mineName}</b> 기준 · 가져올 수 있는 교재 <b>${found.length}</b>종`;
+  if(!found.length){
+    body.innerHTML=`<p class="hint" style="padding:6px 0 10px;">${mineName}에 0권인데 다른 지점에 여유(2권 이상)가 있는 교재가 없습니다. 👍</p>`;
+    return;
+  }
+  // 카테고리 순서대로 묶어서 표로
+  let html='';
+  CATALOG.forEach(cat=>{
+    const rows=found.filter(f=>f.it.catId===cat.id);
+    if(!rows.length) return;
+    html+=`<div class="section-title">${cat.title}</div>
+      <table class="invtable"><thead><tr><th class="bookcol">교재명</th><th style="text-align:left;">가져올 수 있는 곳 (보유 수량)</th></tr></thead><tbody>`;
+    rows.forEach(f=>{
+      html+=`<tr><td class="bookcol row-name">${f.it.name}</td>
+        <td style="text-align:left; padding-left:8px;">${f.donors.map(d=>`<b>${d.name}</b> ${d.qty}권`).join(' · ')}</td></tr>`;
+    });
+    html+='</tbody></table>';
+  });
+  html+=`<div style="margin-top:10px;"><button onclick="captureTransfer()" style="font-size:13px;font-weight:600;cursor:pointer;border-radius:8px;padding:9px 14px;border:1px solid var(--line-strong);background:#fff;">📸 이 목록 이미지로 저장</button></div>`;
+  body.innerHTML=html;
+}
+async function captureTransfer(){
+  if(!myBranch) return;
+  if(typeof html2canvas==='undefined'){ alert('이미지 생성 기능을 불러오지 못했습니다.'); return; }
+  const mineName = BRANCHES.find(b=>b.id===myBranch).name;
+  const now=new Date();
+  const capture=document.createElement('div');
+  capture.style.cssText='position:fixed;left:-9999px;top:0;width:700px;background:#fff;padding:26px;color:#1b2430;';
+  capture.style.fontFamily=getComputedStyle(document.body).fontFamily;
+  capture.innerHTML=`
+    <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid var(--accent-soft);">
+      <div style="font-size:12px;color:var(--accent);font-weight:700;">베스티안 수학학원 · 교재 이관 추천</div>
+      <div style="font-size:20px;font-weight:800;margin-top:4px;">${mineName} — 가져올 교재 목록</div>
+      <div style="font-size:12.5px;color:var(--sub);margin-top:4px;">${now.toLocaleDateString('ko-KR')} 기준 · ${mineName} 0권 & 타 지점 2권 이상</div>
+    </div>` + $('transferBody').innerHTML.replace(/<div style="margin-top:10px;">[\s\S]*$/,'');
+  document.body.appendChild(capture);
+  try{
+    const canvas=await html2canvas(capture,{backgroundColor:'#ffffff',scale:2,useCORS:true});
+    const a=document.createElement('a');
+    a.href=canvas.toDataURL('image/png');
+    a.download=`이관추천_${mineName}_${now.toISOString().slice(0,10)}.png`;
+    a.click();
+  }catch(err){ console.error(err); alert('이미지 생성 중 문제가 발생했습니다.'); }
+  finally{ document.body.removeChild(capture); }
 }
 function setAllOpen(open){ document.querySelectorAll('details.category').forEach(d=>d.open=open); }
 function setPrintAll(on){
@@ -814,6 +967,7 @@ const SUPPLY_PRESETS=[
 ];
 const CUSTOM_ROWS=3;
 let bMonths={};          // 'YYYY-MM' -> data (서버에서 로드한 전체)
+let bMeta={};            // 'YYYY-MM' -> {at, by} 마지막 저장 정보
 let bSaveTimer=null;
 
 function n(v){ const x=parseFloat(String(v).replace(/[^\d.-]/g,'')); return isNaN(x)?0:x; }
@@ -825,24 +979,40 @@ function ymLabel(ym){ if(!ym) return ''; const[y,m]=ym.split('-'); return y+'년
 
 async function bindLoadAll(){
   try{
-    const r = await db.from('inventory_kv').select('key,value').like('key','bindery|%');
+    const r = await db.from('inventory_kv').select('key,value,updated_at,updated_by').like('key','bindery|%');
     if(r.error) throw r.error;
-    bMonths={};
-    (r.data||[]).forEach(row=>{ bMonths[row.key.slice(8)]=row.value; });
+    bMonths={}; bMeta={};
+    (r.data||[]).forEach(row=>{
+      bMonths[row.key.slice(8)]=row.value;
+      bMeta[row.key.slice(8)]={ at:row.updated_at, by:row.updated_by };
+    });
   }catch(e){ console.error('제본기 로드 실패', e); }
+}
+function bMetaLabel(ym){
+  const m=bMeta[ym];
+  if(!m || !m.at) return '';
+  const d=new Date(m.at);
+  return ' · 마지막 저장 '+(d.getMonth()+1)+'/'+d.getDate()+' '
+    + String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')
+    + (m.by?' — '+m.by:'');
 }
 
 function buildBindTables(){
+  // 매트릭스: 행=종류 5, 열=분원 4 + 행 합계 — 세로 20행 표를 한 화면으로
+  $('bindTable').querySelector('thead').innerHTML =
+    `<tr><th style="width:24%">종류</th>${B_BRANCHES.map(b=>`<th>${b}</th>`).join('')}<th style="width:13%">합계</th></tr>`;
   let html='';
-  B_BRANCHES.forEach(b=>{
-    B_TYPES.forEach((t,i)=>{
-      html+='<tr>';
-      if(i===0) html+=`<td class="branch" rowspan="${B_TYPES.length}">${b}</td>`;
-      html+=`<td class="label">${t}</td><td><input class="num" inputmode="numeric" data-bind="${b}|${t}" oninput="recalc()"></td></tr>`;
+  B_TYPES.forEach(t=>{
+    html+=`<tr><td class="label">${t}</td>`;
+    B_BRANCHES.forEach(b=>{
+      html+=`<td><input class="num" style="text-align:center" inputmode="numeric" data-bind="${b}|${t}" oninput="recalc()"></td>`;
     });
-    html+=`<tr class="sub"><td colspan="2">${b} 소계</td><td data-branchsum="${b}">0</td></tr>`;
+    html+=`<td class="calc" data-typesum="${t}">0</td></tr>`;
   });
+  html+=`<tr class="sub"><td>분원 소계</td>${B_BRANCHES.map(b=>`<td data-branchsum="${b}">0</td>`).join('')}<td class="calc" data-typesum="__all">0</td></tr>`;
   $('bindTable').querySelector('tbody').innerHTML=html;
+  $('bindTable').querySelector('tfoot').innerHTML=
+    `<tr class="sum"><td colspan="${B_BRANCHES.length+1}">총</td><td id="bindTotal">0</td></tr>`;
 
   let s='';
   SUPPLY_PRESETS.forEach(p=>{
@@ -953,6 +1123,13 @@ function recalc(triggerSave=true){
   const d=collect();
   const m=metrics(d);
   B_BRANCHES.forEach(b=>{ document.querySelector(`[data-branchsum="${b}"]`).textContent=fmt(m.branch[b]); });
+  B_TYPES.forEach(t=>{
+    let s=0; B_BRANCHES.forEach(b=>{ s+=(d.binding[b]&&d.binding[b][t])||0; });
+    const el=document.querySelector(`[data-typesum="${t}"]`);
+    if(el) el.textContent=fmt(s);
+  });
+  const allEl=document.querySelector('[data-typesum="__all"]');
+  if(allEl) allEl.textContent=fmt(m.books);
   $('bindTotal').textContent=fmt(m.books);
   $('qNje').textContent=fmt(m.njeQty);   $('aNje').textContent=won(m.njeAmt);
   $('qExam').textContent=fmt(m.examQty); $('aExam').textContent=won(m.examAmt);
@@ -993,6 +1170,7 @@ async function saveMonth(manual){
   bMonths[ym]=data;
   try{
     await kvSet('bindery|'+ym, data);
+    bMeta[ym]={ at:new Date().toISOString(), by:currentUser?currentUser.name:null };
     const t=new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     $('bStatus').textContent='저장됨 · '+ymLabel(ym)+' ('+t+') · 전 계정 공유';
     $('bStatus').className='b-status saved';
@@ -1006,7 +1184,23 @@ async function saveMonth(manual){
 function loadMonth(){
   const ym=curYM();
   fill(bMonths[ym]);
-  $('bStatus').textContent=bMonths[ym]?('불러옴 · '+ymLabel(ym)):(ymLabel(ym)+' — 새로 입력');
+  let msg;
+  if(bMonths[ym]){
+    msg='불러옴 · '+ymLabel(ym)+bMetaLabel(ym);
+  }else{
+    msg=ymLabel(ym)+' — 새로 입력';
+    // [월초 이월] 새 달이면 전월 월말 카운트를 월초로 자동 채움 (수정 가능, 저장 전까지 미확정)
+    const prev=bMonths[prevYM(ym,1)];
+    if(prev && prev.counter){
+      let carried=0;
+      B_COUNTS.forEach(([k])=>{
+        const e=(prev.counter[k]||{}).end;
+        if(e){ document.querySelector(`[data-cstart="${k}"]`).value=e; carried++; }
+      });
+      if(carried){ recalc(false); msg+=' · 월초 카운트는 전월 월말에서 이월됨'; }
+    }
+  }
+  $('bStatus').textContent=msg;
   $('bStatus').className='b-status';
   renderCompare(); syncYearSel(); renderYear();
 }
@@ -1041,6 +1235,26 @@ function renderCompare(){
     ['카운트 총 사용량','useT',false],
   ];
   const get=(m,path)=>{ if(!m) return null; return path.split('.').reduce((o,k)=>o?o[k]:null,m) ?? 0; };
+
+  // ── 핵심 4지표 카드 (권수·수익·지출·차액) ──
+  function deltaLine(tag, c, old, isMoney){
+    if(old===null||old===undefined) return `<div class="d delta-zero">${tag} —</div>`;
+    const f=isMoney?won:fmt, diff=c-old;
+    if(diff>0) return `<div class="d delta-up">${tag} ▲ ${f(diff)}${pct(c,old)}</div>`;
+    if(diff<0) return `<div class="d delta-down">${tag} ▼ ${f(Math.abs(diff))}${pct(c,old)}</div>`;
+    return `<div class="d delta-zero">${tag} −</div>`;
+  }
+  const core=[['총 제본 권수','books',false],['수익 합계','revenue',true],['비품 지출','supply',true],['차액','net',true]];
+  let cards='<div class="cmp-cards">';
+  core.forEach(([label,path,isMoney])=>{
+    const c=get(cur,path)||0;
+    cards+=`<div class="cmp-card"><div class="k">${label}</div><div class="v">${(isMoney?won:fmt)(c)}</div>`
+      + deltaLine('전월', c, get(mPrev,path), isMoney)
+      + deltaLine('전년', c, get(mYear,path), isMoney)
+      + '</div>';
+  });
+  cards+='</div>';
+
   let html=`<table><thead><tr>
     <th style="text-align:left;">항목</th>
     <th>${ymLabel(ym)}<br><small>이번 달</small></th>
@@ -1055,7 +1269,8 @@ function renderCompare(){
     html+='</tr>';
   });
   html+='</tbody></table>';
-  $('cmpBody').innerHTML=html;
+  $('cmpBody').innerHTML = cards
+    + `<details class="cmp-detail"><summary>항목별 상세 비교 펼치기 ▾</summary>${html}</details>`;
 }
 
 function syncYearSel(){
