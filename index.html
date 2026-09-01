@@ -27236,6 +27236,7 @@ function openEditStudentModal(studentId, isAdmin = false) {
   const statusRow = document.getElementById('edit-student-status-row');
   if (s.status === 'inactive') {
     statusRow.innerHTML = `<span style="color:#dc2626;font-weight:600">⚠️ 퇴원 상태</span>${s.withdrawn_at ? ' · 퇴원일: ' + s.withdrawn_at : ''}
+      &nbsp;<button class="btn btn-sm" style="background:#f0fdf4;border:1.5px solid #86efac;color:#16a34a;font-weight:700" onclick="undoWithdraw('${s.id}','${(s.name||'').replace(/'/g,"\'")}')">↩️ 퇴원 취소</button>
       &nbsp;<button class="btn btn-sm btn-primary" onclick="reEnrollStudent('${s.id}','${(s.name||'').replace(/'/g,"\'")}')">재입학 처리</button>`;
   } else {
     const _reOn2 = (typeof mrIsReturning === 'function') && mrIsReturning(s);
@@ -27420,17 +27421,40 @@ async function confirmWithdraw() {
   if (lastClass) updateData.last_class_date = lastClass;
   if (enrolled && !isBulk) updateData.enrolled_at = enrolled;
 
+  // [되돌리기 스냅샷] 퇴원 직전 값을 읽어 users.withdraw_undo 에 담는다 → undoWithdraw 가 그대로 복원
+  let prevMap = {};
+  try {
+    const { data: prevRows } = await db.from('users')
+      .select('id,status,enrolled_at,withdrawn_at,withdraw_reason,last_class_date')
+      .in('id', targets.map(t => t.id));
+    (prevRows || []).forEach(r => { prevMap[r.id] = r; });
+  } catch(e) { console.warn('퇴원 스냅샷 조회 실패:', e); }
+
   let errors = [], success = 0, successIds = [];
+  const _undoSnap = {};
   for (const t of targets) {
     try {
-      const { error } = await db.from('users').update(updateData).eq('id', t.id);
+      const p = prevMap[t.id] || null;
+      const snap = {
+        v: 1, at: new Date().toISOString(), by: (currentUser && currentUser.id) || null,
+        prev: p ? { status: p.status, enrolled_at: p.enrolled_at, withdrawn_at: p.withdrawn_at,
+                    withdraw_reason: p.withdraw_reason, last_class_date: p.last_class_date } : null,
+        report_id: null, wd: []
+      };
+      _undoSnap[t.id] = snap;
+      const { error } = await _updUserWD(t.id, Object.assign({}, updateData, { withdraw_undo: snap }));
       if (error) throw error;
       success++; successIds.push(t.id);
     } catch(e) { errors.push((t.name || t.id) + ': ' + (e.message || e)); }
   }
 
+  let _wdReportId = null;
   if (reportSnapshot && success) {
-    try { await db.from('withdraw_reports').insert(reportSnapshot); }
+    try {
+      const _rr = await db.from('withdraw_reports').insert(reportSnapshot).select('id').single();
+      if (_rr.error) throw _rr.error;
+      _wdReportId = _rr.data ? _rr.data.id : null;
+    }
     catch(e) { console.warn('퇴원보고서 저장 실패:', e); }
   }
 
@@ -27472,7 +27496,7 @@ async function confirmWithdraw() {
         let _wExisting = [];
         try {
           const _exRes = await db.from('withdrawals')
-            .select('id,student_id,student_name,branch_id,note,created_by')
+            .select('*')
             .in('student_name', _wNames).in('branch_id', _wBrs);
           _wExisting = _exRes.data || [];
         } catch(e) { console.warn('withdrawals 기존조회 실패:', e); }
@@ -27490,19 +27514,39 @@ async function confirmWithdraw() {
             try {
               const _upR = await db.from('withdrawals').update(_patch).eq('id', _tgt.id);
               if (_upR.error) console.warn('withdrawals 덮어쓰기 실패:', _upR.error);
+              else if (_undoSnap[w.student_id]) {
+                // 원래 있던 행을 덮어쓴 것 → 되돌릴 땐 삭제하지 말고 이전 값으로 되돌린다
+                const _prior = Object.assign({}, _tgt); delete _prior.id;
+                _undoSnap[w.student_id].wd.push({ id: _tgt.id, prior: _prior });
+              }
             } catch(e) { console.warn('withdrawals 덮어쓰기 오류:', e); }
           } else {
             _wInsert.push(w);
           }
         }
         if (_wInsert.length) {
-          const { error: wErr } = await db.from('withdrawals').insert(_wInsert);
+          const { data: _wNew, error: wErr } = await db.from('withdrawals').insert(_wInsert).select('id,student_id');
           if (wErr) console.warn('withdrawals 자동반영 실패:', wErr);
+          // 이번 퇴원이 새로 만든 행 → 되돌릴 땐 삭제 대상
+          (_wNew || []).forEach(r => {
+            if (_undoSnap[r.student_id]) _undoSnap[r.student_id].wd.push({ id: r.id, prior: null });
+          });
         }
       }
       const skipped = (stuRows || []).length - wRecords.length;
       if (skipped > 0) console.warn('withdrawals 자동반영: 분원 유추 실패로 ' + skipped + '건 제외');
     } catch(e) { console.warn('withdrawals 자동반영 오류:', e); }
+  }
+
+  // 부수 행(보고서·퇴원목록) 정보를 스냅샷에 채워 넣는다 — 되돌리기가 정확히 원복하도록
+  for (const sid of successIds) {
+    const snap = _undoSnap[sid];
+    if (!snap) continue;
+    if (_wdReportId && !isBulk) snap.report_id = _wdReportId;
+    if (snap.report_id || snap.wd.length) {
+      try { await _updUserWD(sid, { withdraw_undo: snap }); }
+      catch(e) { console.warn('스냅샷 갱신 실패:', e); }
+    }
   }
 
   btn.textContent = '📋 퇴원 처리'; btn.disabled = false;
@@ -27553,7 +27597,8 @@ async function reEnrollStudent(studentId, studentName) {
   if (newDate === null) return;
   const dateVal = (newDate.trim()) || today;
   if (!confirm(`${label}${dateVal}로 재입학 처리할까요?
-퇴원일이 초기화되고 재학 상태로 변경됩니다.`)) return;
+입학일이 이 날짜로 바뀌고 퇴원일은 지워집니다.
+※ 실수로 퇴원을 누른 경우라면 [퇴원 취소]를 쓰세요 (입학일이 보존됩니다).`)) return;
   try {
     const { error } = await db.from('users').update({
       status: 'active', enrolled_at: dateVal, withdrawn_at: null
@@ -27563,6 +27608,108 @@ async function reEnrollStudent(studentId, studentName) {
     await loadTeacherData();
     if (currentUser.role === 'admin' || currentUser.role === 'desk') await loadAdminData();
     alert(`✅ 재입학 처리 완료! (입학일: ${dateVal})`);
+  } catch(e) { alert('오류: ' + (e.message || e)); }
+}
+
+/* ── [퇴원 취소] 되돌리기 ────────────────────────────────
+   재입학(reEnrollStudent)과는 다르다.
+     · 재입학   = 한 번 나갔다 다시 들어옴 → enrolled_at 을 새 날짜로 쓴다
+     · 퇴원 취소 = 퇴원 버튼을 잘못 누른 것 → 퇴원 직전 상태로 되돌린다(입학일 보존)
+   퇴원 처리가 users.withdraw_undo 에 남긴 스냅샷으로 원복하고,
+   그때 만들어진 퇴원보고서·퇴원목록 행도 함께 정리한다.
+   ⚠ 스냅샷이 없는 예전 퇴원 건은 status/withdrawn_at/withdraw_reason 만 되돌린다. */
+
+// withdraw_undo 컬럼이 아직 없어도 퇴원/되돌리기가 깨지지 않게 한 번은 컬럼 없이 재시도한다
+var _wdUndoColOk = true;
+async function _updUserWD(id, patch) {
+  if (_wdUndoColOk) {
+    const r = await db.from('users').update(patch).eq('id', id);
+    if (!r.error) return r;
+    const msg = String((r.error && (r.error.message || r.error.details)) || '');
+    if (!/withdraw_undo/i.test(msg) && r.error.code !== '42703') return r;   // 다른 오류는 그대로 알린다
+    _wdUndoColOk = false;
+    console.warn('[withdraw] withdraw_undo 컬럼이 없습니다 — 스냅샷 없이 진행합니다');
+  }
+  const rest = Object.assign({}, patch);
+  delete rest.withdraw_undo;
+  return await db.from('users').update(rest).eq('id', id);
+}
+
+async function undoWithdraw(studentId, studentName) {
+  const label = studentName ? `[${studentName}] ` : '';
+  let snap = null, cur = null;
+  try {
+    const { data } = await db.from('users').select('*').eq('id', studentId).single();
+    cur = data || null;
+    snap = (data && data.withdraw_undo) || null;
+  } catch(e) { console.warn('스냅샷 조회 실패:', e); }
+
+  const prev = snap && snap.prev ? snap.prev : null;
+  const backTo = prev && prev.status === 'inactive' ? '퇴원'
+               : prev && prev.status === 'cancelled' ? '등록취소' : '재원';
+  const lines = [];
+  lines.push(`${label}퇴원을 취소하고 이전 상태(${backTo})로 되돌릴까요?`);
+  if (prev) {
+    lines.push(`· 입학일 ${prev.enrolled_at || '-'} 그대로 유지`);
+  } else {
+    lines.push('· 이 학생은 되돌리기 정보가 없는 예전 퇴원 건입니다.');
+    lines.push('  재원 상태로만 되돌리고 입학일은 그대로 둡니다.');
+  }
+  lines.push('· 퇴원 사유·퇴원일이 지워집니다');
+  lines.push('· 퇴원 보고서와 입퇴원 상담의 퇴원 기록도 함께 삭제됩니다 (되돌릴 수 없음)');
+  if (!confirm(lines.join('\n'))) return;
+
+  try {
+    const upd = prev ? {
+      status:          prev.status || 'active',
+      enrolled_at:     prev.enrolled_at === undefined ? null : prev.enrolled_at,
+      withdrawn_at:    prev.withdrawn_at === undefined ? null : prev.withdrawn_at,
+      withdraw_reason: prev.withdraw_reason === undefined ? null : prev.withdraw_reason,
+      last_class_date: prev.last_class_date === undefined ? null : prev.last_class_date,
+    } : { status: 'active', withdrawn_at: null, withdraw_reason: null };
+    upd.withdraw_undo = null;                       // 스냅샷 소진
+    const { error } = await _updUserWD(studentId, upd);
+    if (error) throw error;
+
+    // 부수 행 정리 — 스냅샷이 있으면 정확히, 없으면 이 학생의 자동 생성분만
+    let delReport = 0, delWd = 0, restWd = 0;
+    if (snap) {
+      if (snap.report_id) {
+        const r = await db.from('withdraw_reports').delete().eq('id', snap.report_id);
+        if (!r.error) delReport++;
+      }
+      for (const w of (snap.wd || [])) {
+        if (!w || !w.id) continue;
+        if (w.prior) {
+          const r = await db.from('withdrawals').update(w.prior).eq('id', w.id);
+          if (!r.error) restWd++;
+        } else {
+          const r = await db.from('withdrawals').delete().eq('id', w.id);
+          if (!r.error) delWd++;
+        }
+      }
+    } else {
+      try {
+        const r1 = await db.from('withdraw_reports').delete().eq('student_id', studentId).select('id');
+        delReport = (r1.data || []).length;
+      } catch(e) { console.warn('퇴원보고서 정리 실패:', e); }
+      try {
+        // 수동으로 등록한 퇴원 기록(source != 'auto')은 건드리지 않는다
+        const r2 = await db.from('withdrawals').delete()
+          .eq('student_id', studentId).eq('source', 'auto').select('id');
+        delWd = (r2.data || []).length;
+      } catch(e) { console.warn('퇴원목록 정리 실패:', e); }
+    }
+
+    closeModal('editStudent');
+    await loadTeacherData();
+    if (currentUser.role === 'admin' || currentUser.role === 'desk') await loadAdminData();
+    const detail = [];
+    if (delReport) detail.push('보고서 ' + delReport + '건 삭제');
+    if (delWd)     detail.push('퇴원목록 ' + delWd + '건 삭제');
+    if (restWd)    detail.push('퇴원목록 ' + restWd + '건 원복');
+    alert('✅ 퇴원 취소 완료!' + (prev ? '' : ' (예전 건이라 입학일은 그대로 둡니다)')
+      + (detail.length ? '\n' + detail.join(' · ') : ''));
   } catch(e) { alert('오류: ' + (e.message || e)); }
 }
 
@@ -28035,8 +28182,10 @@ function renderStudents() {
       actions = `
         <button onclick="openWithdrawReport('${s.id}','${(s.name||'').replace(/'/g,"\\'")}');event.stopPropagation()"
           style="padding:4px 8px;border:1.5px solid #7dd3fc;border-radius:6px;background:#f0f9ff;color:#0369a1;font-size:11px;font-weight:600;cursor:pointer">📋 퇴원 사유</button>
+        <button onclick="undoWithdraw('${s.id}','${(s.name||'').replace(/'/g,"\\'")}');event.stopPropagation()"
+          style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:700;cursor:pointer">↩️ 퇴원 취소</button>
         <button onclick="reEnrollStudent('${s.id}','${(s.name||'').replace(/'/g,"\\'")}');event.stopPropagation()"
-          style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;cursor:pointer">재입학</button>`;
+          style="padding:4px 8px;border:1.5px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font-size:11px;font-weight:600;cursor:pointer">재입학</button>`;
     } else {
       const codeIcon = s.student_code ? '📋' : '—';
       actions = `
@@ -28182,10 +28331,12 @@ function renderAdminStudents() {
          <button onclick="openAdminClassChangeModal('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:700;cursor:pointer">🔄 반 변경</button>`
       : isCancelled
       ? `<button onclick="correctCancelledToWithdrawn('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #fca5a5;border-radius:6px;background:#fef2f2;color:#dc2626;font-size:11px;font-weight:600;cursor:pointer">→ 일반 퇴원으로</button>
-         <button onclick="reEnrollStudent('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;cursor:pointer">재원 복원</button>`
+         <button onclick="undoWithdraw('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:700;cursor:pointer">↩️ 취소 되돌리기</button>
+         <button onclick="reEnrollStudent('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font-size:11px;font-weight:600;cursor:pointer">재입학</button>`
       : `<button onclick="openWithdrawReport('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #7dd3fc;border-radius:6px;background:#f0f9ff;color:#0369a1;font-size:11px;font-weight:600;cursor:pointer">📋 퇴원 사유</button>
          <button onclick="correctWithdrawnToCancelled('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #fed7aa;border-radius:6px;background:#fff7ed;color:#ea580c;font-size:11px;font-weight:600;cursor:pointer">등록취소로</button>
-         <button onclick="reEnrollStudent('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;cursor:pointer">재원</button>`;
+         <button onclick="undoWithdraw('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid #86efac;border-radius:6px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:700;cursor:pointer">↩️ 퇴원 취소</button>
+         <button onclick="reEnrollStudent('${u.id}','${(u.name||'').replace(/'/g,"\\'")}');event.stopPropagation()" style="padding:4px 8px;border:1.5px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font-size:11px;font-weight:600;cursor:pointer">재입학</button>`;
 
     return `<div style="display:flex;align-items:center;gap:8px;padding:10px 4px;border-bottom:1px solid var(--border);opacity:${isActive?1:0.75}">
       ${avatar}
