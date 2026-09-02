@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BMAPS 재고관리 v0.7</title>
+<title>BMAPS 재고관리 v0.8</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
@@ -83,6 +83,7 @@
   .bd.low{background:var(--amber-soft); color:var(--amber);}
   .bd.okk{background:var(--green-soft); color:var(--green);}
   .bd.tot{background:var(--bg); color:var(--sub);}
+  .bd.unset{background:#eef1f6; color:#7a889b; border:1px dashed #c3ccd9;}
   .bcard .go{margin-top:12px; width:100%; background:var(--brand); color:#fff; font-weight:700; border:none; border-radius:8px; padding:8px 0;}
   .bcard .go:hover{background:var(--brand-deep);}
   .tworow{display:grid; grid-template-columns:1.4fr 1fr; gap:12px; align-items:start;}
@@ -113,6 +114,14 @@
   .crow input::-webkit-outer-spin-button, .crow input::-webkit-inner-spin-button{-webkit-appearance:none; margin:0;}
   .crow input:focus{outline:none; border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-soft);}
   .crow.z input{border-color:var(--red); color:var(--red); background:var(--red-soft);}
+  /* 미입력 = 아직 세어 보지 않은 교재 (0권과 구분) */
+  .crow.u{border-style:dashed; background:#fbfcfe;}
+  .crow.u .nm{color:var(--sub);}
+  .crow.u .prev{color:#9aa8bb; font-style:italic;}
+  .crow.u input{border-style:dashed; color:var(--sub); background:#fbfcfe;}
+  .crow.u input::placeholder{color:#b9c3d1;}
+  .cats .pg i.un{font-style:normal; color:#9aa8bb;}
+  .cats button.on .pg i.un{color:#c9d8f4;}
   .vhint{color:var(--sub); font-size:12.5px; margin:14px 2px; line-height:1.6;}
   kbd{background:var(--bg); border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:0 6px; font-size:12px;}
 
@@ -139,6 +148,9 @@
   td.zero-cell{background:var(--red-soft);} td.zero-cell input{background:#fff; border-color:#eab8b8; color:var(--red); font-weight:800;}
   td.low-cell{background:var(--amber-soft);} td.low-cell input{background:#fff; border-color:#eed9a3;}
   td.ok-cell input{background:var(--green-soft); border-color:#b9e3cd;}
+  td.unset-cell{background:#fbfcfe;}
+  td.unset-cell input{background:#fff; border-style:dashed; border-color:#ccd5e2; color:var(--sub);}
+  td.unset-cell input::placeholder{color:#b9c3d1;}
   td.total-cell{font-weight:800; font-family:var(--mono); color:var(--navy);}
   .row-name{font-weight:600;}
 
@@ -274,7 +286,7 @@
 <!-- ══ 본 화면 ══ -->
 <div id="appScreen" class="hidden">
   <div class="topbar">
-    <div class="logo">📦 재고관리 <small>BMAPS</small><span class="ver">v0.7</span></div>
+    <div class="logo">📦 재고관리 <small>BMAPS</small><span class="ver">v0.8</span></div>
     <nav class="mainnav">
       <button id="nav-home" onclick="showView('home')">🏠 홈</button>
       <button id="nav-status" onclick="showView('status')">📚 현황</button>
@@ -324,6 +336,7 @@
       <span style="width:10px"></span>
       <button class="chip-f warn" data-s="zero" onclick="setStatusFilter('zero')">0권만</button>
       <button class="chip-f" data-s="low" onclick="setStatusFilter('low')">부족만</button>
+      <button class="chip-f" data-s="unset" onclick="setStatusFilter('unset')">미입력만</button>
       <button class="chip-f" data-s="transfer" id="chipTransfer" onclick="setStatusFilter('transfer')">이관 추천만</button>
       <span class="spacer"></span>
       <button class="mini-btn" onclick="captureAsImage()">📸 이미지 저장</button>
@@ -518,7 +531,7 @@
    - 데이터·저장 로직은 v0.6 그대로: inventory_stock 셀 upsert + inventory_kv
    - 접근: admin(마스터 포함) · desk · vice_director
    ========================================================= */
-window.INVENTORY_VERSION = 'v0.7';
+window.INVENTORY_VERSION = 'v0.8';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -703,6 +716,7 @@ CATALOG.forEach(c=>{ c.group = inferGroup(c); });
 
 let stockData = {};          // itemId -> {branchId: qty}
 let stockMeta = {};          // 'itemId|branchId' -> at (셀별 마지막 입력 시각)
+let stockHas  = {};          // 'itemId|branchId' -> true (한 번이라도 입력된 칸. 0권 ≠ 미입력)
 let branchLatest = {};       // branchId -> {at} 최근 입력 (updated_at 기준)
 let myBranch = '';           // 내 관 (PC별 기억)
 function defaultQtyRow(){ const r={}; BRANCHES.forEach(b=>r[b.id]=0); return r; }
@@ -741,10 +755,11 @@ async function stockLoad(){
       if((r.data||[]).length < 1000) break;
       off += 1000;
     }
-    stockData = {}; stockMeta = {}; branchLatest = {};
+    stockData = {}; stockMeta = {}; stockHas = {}; branchLatest = {};
     rows.forEach(r=>{
       if(!stockData[r.item_id]) stockData[r.item_id]=defaultQtyRow();
       stockData[r.item_id][r.branch]=r.qty||0;
+      stockHas[r.item_id+'|'+r.branch]=true;          // 행이 있다 = 사람이 한 번은 입력했다
       if(r.updated_at) stockMeta[r.item_id+'|'+r.branch]=r.updated_at;
       noteLatest(r.branch, r.updated_at);
     });
@@ -809,6 +824,7 @@ async function stockFlush(){
   const r = await db.from('inventory_stock').upsert(rows, { onConflict:'item_id,branch' });
   if(r.error){ console.error(r.error); setIndicator('error','저장 실패 — 새로고침 후 다시 시도'); return; }
   rows.forEach(x=>{
+    stockHas[x.item_id+'|'+x.branch]=true;
     stockMeta[x.item_id+'|'+x.branch]=x.updated_at;
     noteLatest(x.branch, x.updated_at);
     updateRowWhen(x.item_id, x.branch);
@@ -839,6 +855,7 @@ function subscribeRealtime(){
         if(stockDirty[r.item_id+'|'+r.branch] !== undefined) return;   // 내가 입력 중인 칸은 보호
         if(!stockData[r.item_id]) stockData[r.item_id]=defaultQtyRow();
         stockData[r.item_id][r.branch]=r.qty||0;
+        stockHas[r.item_id+'|'+r.branch]=true;
         if(r.updated_at) stockMeta[r.item_id+'|'+r.branch]=r.updated_at;
         noteLatest(r.branch, r.updated_at);
         updateItemRow(r.item_id);
@@ -868,33 +885,53 @@ function subscribeRealtime(){
   }catch(e){ console.warn('실시간 구독 실패', e); }
 }
 
-/* --- 공통 유틸 --- */
-function qtyClass(qty, maxInRow){
+/* --- 공통 유틸 ---
+   ⚠ '0권'과 '미입력'은 다르다. 한 번도 세어 본 적 없는 칸(DB 에 행이 없음)을 0으로
+   보여주면 "0권 262종" 같은 거짓 경고가 뜬다. counted() 로 갈라서 다룬다. */
+function counted(itemId, branch){ return !!stockHas[itemId+'|'+branch]; }
+function qtyOf(itemId, branch){ const r=stockData[itemId]; return r ? (r[branch]||0) : 0; }
+function qtyText(itemId, branch){ return counted(itemId, branch) ? String(qtyOf(itemId, branch)) : ''; }
+function cellClass(itemId, branch, maxInRow){
+  if(!counted(itemId, branch)) return 'unset-cell';
+  const qty = qtyOf(itemId, branch);
   if(qty===0) return 'zero-cell';
   if(maxInRow>=3 && qty<=2) return 'low-cell';
   return 'ok-cell';
 }
-function hasZeroBranch(rowVals){ return BRANCHES.some(b=>(rowVals[b.id]||0)===0); }
-function inputCellClass(qty){ return qty===0 ? 'zero-cell' : (qty<=2 ? 'low-cell' : 'ok-cell'); }
+function qtyClass(qty, maxInRow){          // 캡처 등 값만 있는 자리
+  if(qty===0) return 'zero-cell';
+  if(maxInRow>=3 && qty<=2) return 'low-cell';
+  return 'ok-cell';
+}
+function hasZeroBranch(itemId){ return BRANCHES.some(b=>counted(itemId,b.id) && qtyOf(itemId,b.id)===0); }
+function hasUnsetBranch(itemId){ return BRANCHES.some(b=>!counted(itemId,b.id)); }
 function branchStats(bid){
-  let total=0, zero=0, low=0;
+  let total=0, zero=0, low=0, unset=0;
   ALL_ITEMS.forEach(it=>{
-    const q=(stockData[it.id]||{})[bid]||0;
+    if(!counted(it.id, bid)){ unset++; return; }
+    const q=qtyOf(it.id, bid);
     total+=q;
     if(q===0) zero++;
     else if(q<=2) low++;
   });
-  return {total, zero, low};
+  return {total, zero, low, unset, items:ALL_ITEMS.length};
+}
+/* 합계: 세어 본 관만 더한다. 아직 안 센 관이 있으면 '5 (3관)' 처럼 몇 관 기준인지 밝힌다 */
+function rowTotalText(itemId){
+  const done = BRANCHES.filter(b=>counted(itemId,b.id));
+  if(!done.length) return '—';
+  const sum = done.reduce((s,b)=>s+qtyOf(itemId,b.id),0);
+  return done.length===BRANCHES.length ? String(sum) : (sum+' ('+done.length+'관)');
 }
 function transferList(bid){
-  // bid 관이 0권 & 타 관 여유(2권 이상) 목록
+  // bid 관이 '세어 봤는데 0권' & 타 관 여유(2권 이상) 목록
+  // ⚠ 미입력은 제외한다 — 안 세어 본 것을 품절로 보면 전 품목이 이관 추천이 된다
   const found=[];
   if(!bid) return found;
   ALL_ITEMS.forEach(it=>{
-    const rowVals = stockData[it.id]||defaultQtyRow();
-    if((rowVals[bid]||0) !== 0) return;
-    const donors = BRANCHES.filter(b=>b.id!==bid && (rowVals[b.id]||0) >= 2)
-      .map(b=>({name:b.name, qty:rowVals[b.id]}))
+    if(!counted(it.id, bid) || qtyOf(it.id, bid) !== 0) return;
+    const donors = BRANCHES.filter(b=>b.id!==bid && counted(it.id,b.id) && qtyOf(it.id,b.id) >= 2)
+      .map(b=>({name:b.name, qty:qtyOf(it.id,b.id)}))
       .sort((a,b)=>b.qty-a.qty);
     if(donors.length) found.push({it, donors});
   });
@@ -908,12 +945,17 @@ function wireStockRoot(root){
   root.addEventListener('input', e=>{
     const t=e.target;
     if(t.tagName!=='INPUT'||t.type!=='number') return;
-    let val=parseInt(t.value,10);
+    const raw=String(t.value).trim();
+    // 칸을 비우는 중이면 저장하지 않는다 — '미입력' 상태를 그대로 둔다
+    // (예전엔 여기서 0을 강제로 넣어, 세어 본 적 없는 칸이 전부 0권으로 보였다)
+    if(raw===''){ return; }
+    let val=parseInt(raw,10);
     if(isNaN(val)||val<0) val=0;
-    t.value=val;
+    if(String(val)!==raw) t.value=val;
     const itemId=t.dataset.item, branch=t.dataset.branch;
     if(!stockData[itemId]) stockData[itemId]=defaultQtyRow();
     stockData[itemId][branch]=val;
+    stockHas[itemId+'|'+branch]=true;            // 이제 '세어 본 칸'이 된다
     updateItemRow(itemId, t);
     stockQueueSave(itemId, branch, val);
   });
@@ -939,26 +981,26 @@ function wireStockRoot(root){
 
 /* 한 항목의 화면 행 갱신 — 입력형/매트릭스형 어느 쪽이 그려져 있든 처리 */
 function updateItemRow(itemId, skipInput){
-  const rowVals=stockData[itemId]||defaultQtyRow();
   const inRow=document.querySelector(`div[data-inrow="${CSS.escape(itemId)}"]`);
   if(inRow){
     const inp=inRow.querySelector('input');
     if(inp){
-      if(inp!==skipInput && document.activeElement!==inp) inp.value=rowVals[myBranch]||0;
+      if(inp!==skipInput && document.activeElement!==inp) inp.value=qtyText(itemId, myBranch);
     }
-    inRow.classList.toggle('z', (rowVals[myBranch]||0)===0);
+    inRow.classList.toggle('z', counted(itemId,myBranch) && qtyOf(itemId,myBranch)===0);
+    inRow.classList.toggle('u', !counted(itemId,myBranch));
   }
   const mRow=document.querySelector(`tr[data-item-id="${CSS.escape(itemId)}"]`);
   if(mRow){
-    const maxInRow=Math.max(...BRANCHES.map(b=>rowVals[b.id]||0));
+    const maxInRow=Math.max(...BRANCHES.map(b=>counted(itemId,b.id)?qtyOf(itemId,b.id):0));
     BRANCHES.forEach(b=>{
       const inp=mRow.querySelector(`input[data-branch="${b.id}"]`);
       if(!inp) return;
-      if(inp!==skipInput && document.activeElement!==inp) inp.value=rowVals[b.id]||0;
-      inp.closest('td').className=qtyClass(rowVals[b.id]||0, maxInRow)+(b.id===myBranch?' mine-col':'');
+      if(inp!==skipInput && document.activeElement!==inp) inp.value=qtyText(itemId,b.id);
+      inp.closest('td').className=cellClass(itemId,b.id,maxInRow)+(b.id===myBranch?' mine-col':'');
     });
     const tc=mRow.querySelector('td[data-cell="total"]');
-    if(tc) tc.textContent=BRANCHES.reduce((s,b)=>s+(rowVals[b.id]||0),0);
+    if(tc) tc.textContent=rowTotalText(itemId);
   }
 }
 function updateRowWhen(itemId, branch){
@@ -987,9 +1029,12 @@ function renderHome(){
       <h3>${b.name}</h3>
       <div class="when">최근 입력 <b>${latestLabel(rec)}</b><br><span class="${stale?'stale':''}">${ago||'&nbsp;'}</span></div>
       <div class="badges">
-        ${st.zero?`<span class="bd zero">0권 ${st.zero}종</span>`:'<span class="bd okk">0권 없음</span>'}
-        ${st.low?`<span class="bd low">부족 ${st.low}종</span>`:''}
-        <span class="bd tot">총 ${st.total.toLocaleString()}권</span>
+        ${st.unset===st.items
+          ? '<span class="bd unset">아직 입력 없음</span>'
+          : (st.zero?`<span class="bd zero">0권 ${st.zero}종</span>`:'<span class="bd okk">0권 없음</span>')
+            + (st.low?`<span class="bd low">부족 ${st.low}종</span>`:'')
+            + (st.unset?`<span class="bd unset">미입력 ${st.unset}종</span>`:'')
+            + `<span class="bd tot">총 ${st.total.toLocaleString()}권</span>`}
       </div>
       ${mine?`<button class="go" onclick="showView('input')">✏️ 재고 입력</button>`:''}
     </div>`;
@@ -1088,10 +1133,10 @@ function renderStatus(){
   const trSet = statusFilter==='transfer' ? new Set(transferList(myBranch).map(f=>f.it.id)) : null;
   const pass=it=>{
     if(q && !it.name.toLowerCase().includes(q)) return false;
-    const rowVals=stockData[it.id]||defaultQtyRow();
-    if(statusFilter==='zero' && !hasZeroBranch(rowVals)) return false;
+    if(statusFilter==='zero'  && !hasZeroBranch(it.id)) return false;      // 세어 봤는데 0권
+    if(statusFilter==='unset' && !hasUnsetBranch(it.id)) return false;     // 아직 안 센 관이 있음
     if(statusFilter==='low'){
-      const anyLow=BRANCHES.some(b=>{ const v=rowVals[b.id]||0; return v>0 && v<=2; });
+      const anyLow=BRANCHES.some(b=>{ if(!counted(it.id,b.id)) return false; const v=qtyOf(it.id,b.id); return v>0 && v<=2; });
       if(!anyLow) return false;
     }
     if(trSet && !trSet.has(it.id)) return false;
@@ -1108,14 +1153,12 @@ function renderStatus(){
       catHtml+=`<tr class="cat-row"><td class="name">${cat.title} · ${sec.title}</td><td colspan="${BRANCHES.length+1}"></td></tr>`;
       items.forEach(it=>{
         shown++;
-        const rowVals=stockData[it.id]||defaultQtyRow();
-        const maxInRow=Math.max(...BRANCHES.map(b=>rowVals[b.id]||0));
-        const total=BRANCHES.reduce((s,b)=>s+(rowVals[b.id]||0),0);
+        const maxInRow=Math.max(...BRANCHES.map(b=>counted(it.id,b.id)?qtyOf(it.id,b.id):0));
         catHtml+=`<tr data-item-id="${it.id}"><td class="name row-name">${it.name}</td>`;
         BRANCHES.forEach(b=>{
-          catHtml+=`<td class="${qtyClass(rowVals[b.id]||0,maxInRow)}${b.id===myBranch?' mine-col':''}"><input type="number" min="0" step="1" value="${rowVals[b.id]||0}" data-item="${it.id}" data-branch="${b.id}"></td>`;
+          catHtml+=`<td class="${cellClass(it.id,b.id,maxInRow)}${b.id===myBranch?' mine-col':''}"><input type="number" min="0" step="1" placeholder="—" value="${qtyText(it.id,b.id)}" data-item="${it.id}" data-branch="${b.id}"></td>`;
         });
-        catHtml+=`<td class="total-cell" data-cell="total">${total}</td></tr>`;
+        catHtml+=`<td class="total-cell" data-cell="total">${rowTotalText(it.id)}</td></tr>`;
       });
     });
     body+=catHtml;
@@ -1133,14 +1176,18 @@ function renderStatus(){
 let selCat = localStorage.getItem('inv_sel_cat') || CATALOG[0].id;
 if(!CATALOG.some(c=>c.id===selCat)) selCat = CATALOG[0].id;
 function catStats(cat){
-  let total=0, zero=0;
+  let total=0, zero=0, unset=0;
   cat.sections.forEach(sec=>sec.items.forEach(it=>{
     total++;
-    const rowVals=stockData[it.id]||defaultQtyRow();
-    if(myBranch){ if((rowVals[myBranch]||0)===0) zero++; }
-    else if(hasZeroBranch(rowVals)) zero++;
+    if(myBranch){
+      if(!counted(it.id,myBranch)) unset++;
+      else if(qtyOf(it.id,myBranch)===0) zero++;
+    } else {
+      if(hasUnsetBranch(it.id)) unset++;
+      if(hasZeroBranch(it.id)) zero++;
+    }
   }));
-  return {total, zero};
+  return {total, zero, unset};
 }
 function shortCatTitle(c){
   return c.title.replace('중등부 - ','').replace('고등학교 ','고').replace('학년','');
@@ -1157,8 +1204,11 @@ function renderInputCats(){
     html+=`<div class="g">${g}</div>`;
     html+=cats.map(c=>{
       const st=catStats(c);
+      const mark = st.zero ? ` · <b>0권 ${st.zero}</b>`
+                 : st.unset===st.total ? ` · <i class="un">미입력</i>`
+                 : st.unset ? ` · <i class="un">미입력 ${st.unset}</i>` : '';
       return `<button class="${c.id===selCat?'on':''}" onclick="selectCat('${c.id}')">${shortCatTitle(c)}
-        <span class="pg">${st.total}종${st.zero?` · <b>0권 ${st.zero}</b>`:''}</span></button>`;
+        <span class="pg">${st.total}종${mark}</span></button>`;
     }).join('');
   });
   $('inputCats').innerHTML=html;
@@ -1176,16 +1226,18 @@ function renderInputRows(){
   cat.sections.forEach(sec=>{
     html+=`<div class="sec-h">${sec.title}</div>`;
     sec.items.forEach(it=>{
-      const qty=(stockData[it.id]||{})[myBranch]||0;
+      const has=counted(it.id, myBranch);
+      const qty=qtyOf(it.id, myBranch);
       const when=fmtDT(stockMeta[it.id+'|'+myBranch]);
-      html+=`<div class="crow ${qty===0?'z':''}" data-inrow="${it.id}">
+      html+=`<div class="crow ${has&&qty===0?'z':''} ${has?'':'u'}" data-inrow="${it.id}">
         <span class="nm">${it.name}</span>
-        <span class="prev" data-when>${when||''}</span>
-        <input type="number" min="0" step="1" value="${qty}" data-item="${it.id}" data-branch="${myBranch}">
+        <span class="prev" data-when>${has?(when||''):'아직 입력 없음'}</span>
+        <input type="number" min="0" step="1" placeholder="—" value="${qtyText(it.id, myBranch)}" data-item="${it.id}" data-branch="${myBranch}">
       </div>`;
     });
   });
-  html+=`<div class="vhint">각 교재 옆에는 <b>마지막으로 입력된 날짜·시간</b>이 표시됩니다. 값을 고치면 즉시 저장되고 시각이 갱신됩니다.</div>`;
+  html+=`<div class="vhint">빈칸(<b>—</b>)은 <b>아직 세어 보지 않은 교재</b>입니다. 0을 넣으면 "재고 없음"으로 기록됩니다 — 둘은 다릅니다.<br>
+    값을 넣으면 즉시 저장되고, 교재 옆에 마지막 입력 날짜·시간이 표시됩니다.</div>`;
   root.innerHTML=html;
   wireStockRoot(root);
 }
@@ -1207,15 +1259,14 @@ function buildCaptureCategoryHTML(cat, q, onlyZero){
     let rowsHtml='';
     sec.items.forEach(it=>{
       const name=it.name.toLowerCase();
-      const rowVals=stockData[it.id]||defaultQtyRow();
-      if((q&&!name.includes(q)) || (onlyZero&&!hasZeroBranch(rowVals))) return;
+      if((q&&!name.includes(q)) || (onlyZero&&!hasZeroBranch(it.id))) return;
       matchCount++;
-      const maxInRow=Math.max(...BRANCHES.map(b=>rowVals[b.id]||0));
-      const total=BRANCHES.reduce((s,b)=>s+(rowVals[b.id]||0),0);
+      const maxInRow=Math.max(...BRANCHES.map(b=>counted(it.id,b.id)?qtyOf(it.id,b.id):0));
+      const total=rowTotalText(it.id);
       let cells=`<td class="bookcol row-name">${it.name}</td>`;
       BRANCHES.forEach(b=>{
-        const qty=rowVals[b.id]||0;
-        cells+=`<td class="${qtyClass(qty,maxInRow)}"><span style="display:inline-block;min-width:28px;font-family:var(--mono);font-weight:700;">${qty}</span></td>`;
+        const shown=counted(it.id,b.id)?String(qtyOf(it.id,b.id)):'—';
+        cells+=`<td class="${cellClass(it.id,b.id,maxInRow)}"><span style="display:inline-block;min-width:28px;font-family:var(--mono);font-weight:700;">${shown}</span></td>`;
       });
       cells+=`<td class="total-cell">${total}</td>`;
       rowsHtml+=`<tr>${cells}</tr>`;
@@ -1251,7 +1302,7 @@ async function captureAsImage(){
       <div style="font-size:22px;font-weight:800;margin-top:4px;">교재 재고 스냅샷</div>
       <div style="font-size:12.5px;color:var(--sub);margin-top:4px;">${now.toLocaleDateString('ko-KR')} 기준 · ${BRANCHES.map(b=>b.name).join(' · ')}</div>
     </div>${bodyHtml}
-    <div style="font-size:11px;color:var(--sub);margin-top:6px;">빨강=재고 0권 · 노랑=여유 적음 · 초록=재고 충분</div>`;
+    <div style="font-size:11px;color:var(--sub);margin-top:6px;">빨강=재고 0권 · 노랑=여유 적음 · 초록=재고 충분 · <b>—</b>=아직 세어 보지 않음</div>`;
   document.body.appendChild(capture);
   try{
     const canvas=await html2canvas(capture,{backgroundColor:'#ffffff',scale:2,useCORS:true});
@@ -1265,10 +1316,9 @@ async function captureAsImage(){
 function exportCSV(){
   const rows=[['카테고리','섹션','교재명',...BRANCHES.map(b=>b.name),'합계']];
   ALL_ITEMS.forEach(it=>{
-    const rowVals=stockData[it.id]||defaultQtyRow();
-    const total=BRANCHES.reduce((s,b)=>s+(rowVals[b.id]||0),0);
     const catTitle=(CATALOG.find(c=>c.id===it.catId)||{}).title||it.catId;
-    rows.push([catTitle,it.sectionTitle,it.name,...BRANCHES.map(b=>rowVals[b.id]||0),total]);
+    // 미입력 칸은 0 이 아니라 빈칸으로 내보낸다 (엑셀에서 0권과 구분되도록)
+    rows.push([catTitle,it.sectionTitle,it.name,...BRANCHES.map(b=>qtyText(it.id,b.id)),rowTotalText(it.id)]);
   });
   const csv=rows.map(r=>r.map(v=>{
     const s=String(v);
