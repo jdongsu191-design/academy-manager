@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BMAPS 재고관리 v0.8</title>
+<title>BMAPS 재고관리 v1.0</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
@@ -177,6 +177,31 @@
   .vhint{color:var(--sub); font-size:12.5px; margin:14px 2px; line-height:1.6;}
   kbd{background:var(--bg); border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:0 6px; font-size:12px;}
 
+  /* ── 재고 화면: 모드 띠 ── */
+  .modebar{display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:var(--card);
+    border:1px solid var(--line); border-left:4px solid var(--brand); border-radius:10px;
+    padding:10px 14px; margin-bottom:12px; box-shadow:var(--sh);}
+  .mb-tag{font-size:12px; font-weight:800; border-radius:999px; padding:3px 11px; white-space:nowrap;}
+  .mb-tag.entry{background:var(--brand-soft); color:var(--brand-deep);}
+  .mb-tag.compare{background:#eef1f6; color:#5b6b80;}
+  .mb-txt{font-size:13.5px; color:var(--sub);} .mb-txt b{color:var(--ink);}
+  .mb-txt .ro{font-size:11.5px; font-weight:700; color:#8a97a8; background:#eef1f6; border-radius:5px; padding:1px 7px; margin-left:5px;}
+  .mb-hint{font-size:12px; color:var(--sub); white-space:nowrap;}
+  .mb-sel{border:1.5px solid var(--line-strong); border-radius:8px; padding:6px 10px; font:inherit;
+    font-size:13px; font-weight:700; color:var(--ink); background:#fff; cursor:pointer;}
+  .mb-sel:hover{border-color:var(--brand);}
+  /* 비교 모드 = 읽기 전용 칸 */
+  .mtx td.ro-cell{font-variant-numeric:tabular-nums;}
+  .mtx td.ro-cell .ro-v{display:inline-block; min-width:34px; font-weight:700; font-family:var(--mono);}
+  .mtx td.unset-cell .ro-v{color:#c3ccd9;}
+  .mtx td.zero-cell .ro-v{color:var(--red); font-weight:800;}
+  .mtx td.low-cell .ro-v{color:var(--amber);}
+  /* 입력 행의 '다른 분원 보유' 참고 열 */
+  .crow .others{font-size:12px; color:var(--sub); min-width:180px; text-align:right; white-space:nowrap;}
+  .crow .others b{color:var(--navy); font-weight:700;}
+  .crow .others .none{color:#c3ccd9;}
+  @media(max-width:900px){.crow .others{display:none;}}
+
   /* ── 현황 ── */
   .filters{display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap;}
   #searchInput{border:1px solid var(--line); border-radius:8px; padding:8px 12px; width:260px; background:#fff; font-size:13.5px;}
@@ -345,7 +370,7 @@
 <!-- ══ 본 화면 ══ -->
 <div id="appScreen" class="hidden">
   <div class="topbar">
-    <div class="logo">📦 재고관리 <small>BMAPS</small><span class="ver">v0.8</span></div>
+    <div class="logo">📦 재고관리 <small>BMAPS</small><span class="ver">v1.0</span></div>
     <!-- 분원 선택 — 화면 전체의 기준이 되므로 로고 바로 옆(가장 눈에 띄는 자리)에 둔다 -->
     <label class="branch-pick" for="myBranchSel">
       <span class="bp-label">🏢 분원</span>
@@ -353,8 +378,7 @@
     </label>
     <nav class="mainnav">
       <button id="nav-home" onclick="showView('home')">🏠 홈</button>
-      <button id="nav-status" onclick="showView('status')">📚 현황</button>
-      <button id="nav-input" onclick="showView('input')">✏️ 재고 입력</button>
+      <button id="nav-stock" onclick="showView('stock')">📦 재고</button>
       <button id="nav-bind" onclick="showView('bind')">🖨 제본기</button>
       <button id="nav-setup" onclick="showView('setup')">⚙️ 설정</button>
     </nav>
@@ -387,12 +411,25 @@
     </div>
   </section>
 
-  <!-- ════════ 📚 현황 ════════ -->
-  <section class="view" id="view-status">
-    <div class="vh2">전체 현황</div>
-    <div class="vdesc">모든 관의 재고를 한눈에. 칸의 숫자는 바로 고칠 수 있습니다 — 내 관 열이 강조됩니다</div>
+  <!-- ════════ 📦 재고 (분원 선택이 모드를 정한다) ════════
+       분원 하나 → 입력 모드 (그 분원 1열, Enter 로 이어 입력)
+       분원 전체 → 비교 모드 (5관 매트릭스, 읽기 전용)
+       v0.4~0.6 때 "언제 모드가 바뀌는지 몰랐던" 문제를 막으려고
+       화면 맨 위에 지금 어느 모드인지 띠로 항상 알려 준다. -->
+  <section class="view" id="view-stock">
+    <div class="vh2" id="stockTitle">재고</div>
+    <div class="vdesc" id="stockDesc"></div>
+
+    <div class="modebar" id="modeBar">
+      <span class="mb-tag" id="mbTag"></span>
+      <span class="mb-txt" id="mbTxt"></span>
+      <span class="spacer"></span>
+      <span class="mb-hint" id="mbHint"></span>
+      <select class="mb-sel" id="modeSel" onchange="onModeSelChange()"></select>
+    </div>
+
     <div class="filters">
-      <input id="searchInput" type="text" placeholder="🔍 교재명 검색" oninput="renderStatus()">
+      <input id="searchInput" type="text" placeholder="🔍 교재명 검색" oninput="renderStock()">
       <button class="chip-f" data-g="" onclick="setGroupFilter('')">전체</button>
       <button class="chip-f" data-g="초등부" onclick="setGroupFilter('초등부')">초등부</button>
       <button class="chip-f" data-g="중등부" onclick="setGroupFilter('중등부')">중등부</button>
@@ -407,22 +444,23 @@
       <button class="mini-btn" onclick="captureAsImage()">📸 이미지 저장</button>
       <button class="mini-btn" onclick="exportCSV()">⬇️ CSV</button>
     </div>
-    <div class="mtx" id="statusRoot"><p style="color:var(--sub); padding:20px;">불러오는 중…</p></div>
-  </section>
 
-  <!-- ════════ ✏️ 재고 입력 ════════ -->
-  <section class="view" id="view-input">
-    <div class="vh2" id="inputTitle">재고 입력</div>
-    <div class="vdesc">칸에 수량을 넣고 <kbd>Enter</kbd> — 바로 저장되고 다음 교재로 넘어갑니다</div>
-    <div class="count-head">
-      <div style="font-size:13.5px; color:var(--sub)" id="inputLatest"></div>
-      <span class="spacer"></span>
+    <!-- 비교 모드 (분원 전체) -->
+    <div id="stockCompare">
+      <div class="mtx" id="statusRoot"><p style="color:var(--sub); padding:20px;">불러오는 중…</p></div>
     </div>
-    <div class="count-wrap" id="inputWrap">
-      <div class="cats" id="inputCats"></div>
-      <div id="inputRoot"></div>
+
+    <!-- 입력 모드 (분원 하나) -->
+    <div id="stockEntry" class="hidden">
+      <div class="count-head">
+        <div style="font-size:13.5px; color:var(--sub)" id="inputLatest"></div>
+        <span class="spacer"></span>
+      </div>
+      <div class="count-wrap" id="inputWrap">
+        <div class="cats" id="inputCats"></div>
+        <div id="inputRoot"></div>
+      </div>
     </div>
-    <p class="vhint" id="inputHint" style="display:none">좌측 상단 <b>🏢 분원</b>에서 입력할 분원을 먼저 골라 주세요. 고른 분원의 수량을 입력하게 됩니다.</p>
   </section>
 
   <!-- ════════ 🖨 제본기 ════════ -->
@@ -569,7 +607,10 @@
           <div id="brTitle">분원</div>
           <div class="br-sub" id="brSub"></div>
         </div>
-        <button class="br-x" onclick="closeBranchDetail()">&times;</button>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="mini-btn primary" id="brGo" onclick="goEnterFromDetail()">✏️ 이 분원 입력하기</button>
+          <button class="br-x" onclick="closeBranchDetail()">&times;</button>
+        </div>
       </div>
       <div class="br-tools">
         <input id="brSearch" type="text" placeholder="🔍 교재명 검색" oninput="renderBranchDetail()">
@@ -618,7 +659,7 @@
    - 데이터·저장 로직은 v0.6 그대로: inventory_stock 셀 upsert + inventory_kv
    - 접근: admin(마스터 포함) · desk · vice_director
    ========================================================= */
-window.INVENTORY_VERSION = 'v0.8';
+window.INVENTORY_VERSION = 'v1.0';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -686,14 +727,43 @@ async function enterApp(){
 let curView = 'home';
 function showView(name){
   curView = name;
-  ['home','status','input','bind','setup'].forEach(v => {
+  ['home','stock','bind','setup'].forEach(v => {
     $('view-'+v).classList.toggle('on', v===name);
     $('nav-'+v).classList.toggle('on', v===name);
   });
   if(name==='home') renderHome();
-  else if(name==='status') renderStatus();
-  else if(name==='input') renderInput();
+  else if(name==='stock') renderStock();
   else if(name==='setup') setupInit();
+}
+/* 재고 화면 — 분원 선택이 모드를 정한다 (분원 하나=입력 / 전체=비교) */
+function renderStock(){
+  const entry = !!myBranch;
+  $('stockEntry').classList.toggle('hidden', !entry);
+  $('stockCompare').classList.toggle('hidden', entry);
+  // 모드 띠 — 지금 무엇을 하는 화면인지 항상 보이게
+  $('mbTag').textContent = entry ? '✏️ 입력' : '📊 비교';
+  $('mbTag').className = 'mb-tag ' + (entry ? 'entry' : 'compare');
+  $('mbTxt').innerHTML = entry
+    ? `<b>${myBranchName()}</b>의 수량을 입력하는 중입니다`
+    : `<b>전 분원</b>을 나란히 보는 중입니다 <span class="ro">읽기 전용</span>`;
+  $('mbHint').textContent = entry ? '다른 분원과 비교하려면 →' : '수량을 입력하려면 분원을 고르세요 →';
+  const sel = $('modeSel');
+  sel.innerHTML = '<option value="">📊 분원 전체 (비교)</option>'
+    + BRANCHES.map(b=>`<option value="${b.id}">✏️ ${b.name} 입력</option>`).join('');
+  sel.value = myBranch;
+  $('stockTitle').textContent = entry ? (myBranchName()+' 재고 입력') : '전 분원 재고 현황';
+  $('stockDesc').innerHTML = entry
+    ? '칸에 수량을 넣고 <kbd>Enter</kbd> — 바로 저장되고 다음 교재로 넘어갑니다. 오른쪽에 다른 분원 보유량이 참고로 보입니다.'
+    : '모든 분원의 재고를 한 표에서 봅니다. 여기서는 고칠 수 없고, <b>분원을 고르면 그 분원 입력 화면</b>으로 바뀝니다.';
+  $('chipTransfer').classList.toggle('hidden', !myBranch);
+  if(entry) renderEntry(); else renderStockCompare();
+}
+/* 모드 띠의 셀렉트 = 상단 분원 셀렉트와 같은 값 */
+function onModeSelChange(){
+  myBranch = $('modeSel').value;
+  localStorage.setItem('inv_my_branch', myBranch);
+  $('myBranchSel').value = myBranch;
+  renderStock();
 }
 
 /* ---------- inventory_kv 헬퍼 ---------- */
@@ -887,7 +957,8 @@ function buildMyBranchSel(){
 function onMyBranchChange(){
   myBranch = $('myBranchSel').value;
   localStorage.setItem('inv_my_branch', myBranch);
-  showView(curView);
+  // 분원을 바꾸면 재고 화면의 모드가 바뀐다 — 다른 화면에 있었다면 재고로 데려간다
+  if(curView==='stock') renderStock(); else showView(curView);
 }
 function myBranchName(){ const b=BRANCHES.find(x=>x.id===myBranch); return b?b.name:''; }
 
@@ -949,14 +1020,14 @@ function subscribeRealtime(){
         updateRowWhen(r.item_id, r.branch);
         renderInputHead();
         if(curView==='home') renderHome();
-        else if(curView==='input') renderInputCats();
+        else if(curView==='stock' && myBranch) renderInputCats();
       })
       .on('postgres_changes', { event:'*', schema:'public', table:'inventory_kv' }, payload=>{
         const r = payload.new;
         if(!r || !r.key) return;
         if(r.key === 'stock_catalog'){
           applyCatalog(r.value);
-          if(curView==='home'||curView==='status'||curView==='input') showView(curView);
+          if(curView==='home'||curView==='stock') showView(curView);
         } else if(r.key.startsWith('bindery|')){
           const ym = r.key.slice(8);
           bMonths[ym] = r.value;
@@ -1144,7 +1215,7 @@ function renderHome(){
         : `<div class="prog empty">아직 재고를 세지 않았습니다</div>
            <div class="kv"><div>전체<b class="dim">${st.items.toLocaleString()}종</b></div></div>`}
       <div class="card-more">교재별 현황 보기 →</div>
-      ${mine?`<button class="go" onclick="event.stopPropagation();showView('input')">✏️ ${started?'재고 입력 이어서':'재고 입력 시작'}</button>`:''}
+      ${mine?`<button class="go" onclick="event.stopPropagation();showView('stock')">✏️ ${started?'재고 입력 이어서':'재고 입력 시작'}</button>`:''}
     </div>`;
   });
   $('homeCards').innerHTML=html;
@@ -1171,6 +1242,14 @@ function openBranchDetail(bid){
   renderBranchDetail();
 }
 function closeBranchDetail(){ $('brMask').classList.add('hidden'); _brBranch=''; }
+function goEnterFromDetail(){
+  const bid=_brBranch;
+  closeBranchDetail();
+  myBranch=bid;
+  localStorage.setItem('inv_my_branch', myBranch);
+  $('myBranchSel').value=myBranch;
+  showView('stock');
+}
 function setBrFilter(f){ _brFilter = (_brFilter===f ? '' : f); renderBranchDetail(); }
 function renderBranchDetail(){
   if(!_brBranch) return;
@@ -1279,61 +1358,68 @@ async function captureTransfer(){
   finally{ document.body.removeChild(capture); }
 }
 
-/* ════════ 📚 현황 (5관 매트릭스) ════════ */
+/* ════════ 📊 비교 모드 (분원 전체 · 읽기 전용) ════════
+   여기서는 고치지 않는다. 고치려면 분원을 골라 입력 모드로 간다
+   — 그래야 남의 분원 수량을 실수로 건드리는 일이 없다. */
 let statusGroup = '';                 // '' = 전체
-let statusFilter = '';                // '' | 'zero' | 'low' | 'transfer'
-function setGroupFilter(g){ statusGroup=g; renderStatus(); }
-function setStatusFilter(s){ statusFilter = (statusFilter===s ? '' : s); renderStatus(); }
-function renderStatus(){
-  // 칩 상태
-  document.querySelectorAll('#view-status .chip-f[data-g]').forEach(b=>b.classList.toggle('on', b.dataset.g===statusGroup));
-  document.querySelectorAll('#view-status .chip-f[data-s]').forEach(b=>b.classList.toggle('on', b.dataset.s===statusFilter));
-  $('chipTransfer').classList.toggle('hidden', !myBranch);
-  if(statusFilter==='transfer' && !myBranch) statusFilter='';
-  const q=($('searchInput').value||'').trim().toLowerCase();
-  const trSet = statusFilter==='transfer' ? new Set(transferList(myBranch).map(f=>f.it.id)) : null;
-  const pass=it=>{
-    if(q && !it.name.toLowerCase().includes(q)) return false;
+let statusFilter = '';                // '' | 'zero' | 'low' | 'unset' | 'transfer'
+function setGroupFilter(g){ statusGroup=g; renderStock(); }
+function setStatusFilter(s){ statusFilter = (statusFilter===s ? '' : s); renderStock(); }
+function stockPass(it, q, trSet){
+  if(q && !it.name.toLowerCase().includes(q)) return false;
+  if(myBranch){
+    // 입력 모드: 고른 분원 기준으로 본다
+    const has=counted(it.id,myBranch), v=qtyOf(it.id,myBranch);
+    if(statusFilter==='zero'  && !(has && v===0)) return false;
+    if(statusFilter==='unset' &&  has) return false;
+    if(statusFilter==='low'   && !(has && v>0 && v<=2)) return false;
+  } else {
     if(statusFilter==='zero'  && !hasZeroBranch(it.id)) return false;      // 세어 봤는데 0권
     if(statusFilter==='unset' && !hasUnsetBranch(it.id)) return false;     // 아직 안 센 관이 있음
     if(statusFilter==='low'){
       const anyLow=BRANCHES.some(b=>{ if(!counted(it.id,b.id)) return false; const v=qtyOf(it.id,b.id); return v>0 && v<=2; });
       if(!anyLow) return false;
     }
-    if(trSet && !trSet.has(it.id)) return false;
-    return true;
-  };
-  let body='';
-  let shown=0;
+  }
+  if(trSet && !trSet.has(it.id)) return false;
+  return true;
+}
+function syncChips(){
+  document.querySelectorAll('#view-stock .chip-f[data-g]').forEach(b=>b.classList.toggle('on', b.dataset.g===statusGroup));
+  document.querySelectorAll('#view-stock .chip-f[data-s]').forEach(b=>b.classList.toggle('on', b.dataset.s===statusFilter));
+}
+function renderStockCompare(){
+  syncChips();
+  if(statusFilter==='transfer' && !myBranch) statusFilter='';
+  const q=($('searchInput').value||'').trim().toLowerCase();
+  let body='', shown=0;
   CATALOG.forEach(cat=>{
     if(statusGroup && cat.group!==statusGroup) return;
     let catHtml='';
     cat.sections.forEach(sec=>{
-      const items=sec.items.filter(pass);
+      const items=sec.items.filter(it=>stockPass(it, q, null));
       if(!items.length) return;
       catHtml+=`<tr class="cat-row"><td class="name">${cat.title} · ${sec.title}</td><td colspan="${BRANCHES.length+1}"></td></tr>`;
       items.forEach(it=>{
         shown++;
         const maxInRow=Math.max(...BRANCHES.map(b=>counted(it.id,b.id)?qtyOf(it.id,b.id):0));
-        catHtml+=`<tr data-item-id="${it.id}"><td class="name row-name">${it.name}</td>`;
+        catHtml+=`<tr><td class="name row-name">${it.name}</td>`;
         BRANCHES.forEach(b=>{
-          catHtml+=`<td class="${cellClass(it.id,b.id,maxInRow)}${b.id===myBranch?' mine-col':''}"><input type="number" min="0" step="1" placeholder="—" value="${qtyText(it.id,b.id)}" data-item="${it.id}" data-branch="${b.id}"></td>`;
+          const has=counted(it.id,b.id);
+          catHtml+=`<td class="${cellClass(it.id,b.id,maxInRow)} ro-cell" title="${b.name}에 입력하려면 위에서 분원을 고르세요"><span class="ro-v">${has?qtyOf(it.id,b.id):'—'}</span></td>`;
         });
-        catHtml+=`<td class="total-cell" data-cell="total">${rowTotalText(it.id)}</td></tr>`;
+        catHtml+=`<td class="total-cell">${rowTotalText(it.id)}</td></tr>`;
       });
     });
     body+=catHtml;
   });
   const root=$('statusRoot');
-  if(!shown){
-    root.innerHTML='<p style="color:var(--sub); padding:20px;">조건에 맞는 교재가 없습니다.</p>';
-    return;
-  }
-  root.innerHTML=`<table><thead><tr><th class="name">교재</th>${BRANCHES.map(b=>`<th class="${b.id===myBranch?'mine-col':''}">${b.name}</th>`).join('')}<th>합계</th></tr></thead><tbody>${body}</tbody></table>`;
-  wireStockRoot(root);
+  root.innerHTML = shown
+    ? `<table><thead><tr><th class="name">교재</th>${BRANCHES.map(b=>`<th>${b.name}</th>`).join('')}<th>합계</th></tr></thead><tbody>${body}</tbody></table>`
+    : '<p style="color:var(--sub); padding:20px;">조건에 맞는 교재가 없습니다.</p>';
 }
 
-/* ════════ ✏️ 재고 입력 (내 관) ════════ */
+/* ════════ ✏️ 입력 모드 (고른 분원) ════════ */
 let selCat = localStorage.getItem('inv_sel_cat') || CATALOG[0].id;
 if(!CATALOG.some(c=>c.id===selCat)) selCat = CATALOG[0].id;
 function catStats(cat){
@@ -1379,35 +1465,49 @@ function selectCat(id){
   localStorage.setItem('inv_sel_cat', id);
   renderInputCats(); renderInputRows();
 }
+/* 다른 분원 보유량 (참고) — 입력하면서 비교 화면으로 갈 일을 없앤다 */
+function othersText(itemId){
+  const parts = BRANCHES.filter(b=>b.id!==myBranch && counted(itemId,b.id) && qtyOf(itemId,b.id)>0)
+    .map(b=>`<b>${b.name.replace('관','')}</b> ${qtyOf(itemId,b.id)}`);
+  if(parts.length) return parts.join(' · ');
+  const anyCounted = BRANCHES.some(b=>b.id!==myBranch && counted(itemId,b.id));
+  return `<span class="none">${anyCounted?'다른 분원도 없음':'다른 분원도 미입력'}</span>`;
+}
 function renderInputRows(){
   const cat=CATALOG.find(c=>c.id===selCat);
   const root=$('inputRoot');
   if(!cat){ root.innerHTML=''; return; }
-  let html='';
-  cat.sections.forEach(sec=>{
-    html+=`<div class="sec-h">${sec.title}</div>`;
-    sec.items.forEach(it=>{
-      const has=counted(it.id, myBranch);
-      const qty=qtyOf(it.id, myBranch);
-      const when=fmtDT(stockMeta[it.id+'|'+myBranch]);
-      html+=`<div class="crow ${has&&qty===0?'z':''} ${has?'':'u'}" data-inrow="${it.id}">
-        <span class="nm">${it.name}</span>
-        <span class="prev" data-when>${has?(when||''):'아직 입력 없음'}</span>
-        <input type="number" min="0" step="1" placeholder="—" value="${qtyText(it.id, myBranch)}" data-item="${it.id}" data-branch="${myBranch}">
-      </div>`;
+  const q=($('searchInput').value||'').trim().toLowerCase();
+  // 검색어가 있으면 카테고리를 넘어 전체에서 찾는다
+  const cats = q ? CATALOG : [cat];
+  let html='', shown=0;
+  cats.forEach(c=>{
+    c.sections.forEach(sec=>{
+      const items=sec.items.filter(it=>stockPass(it, q, null));
+      if(!items.length) return;
+      html+=`<div class="sec-h">${q?c.title+' · ':''}${sec.title}</div>`;
+      items.forEach(it=>{
+        shown++;
+        const has=counted(it.id, myBranch);
+        const qty=qtyOf(it.id, myBranch);
+        const when=fmtDT(stockMeta[it.id+'|'+myBranch]);
+        html+=`<div class="crow ${has&&qty===0?'z':''} ${has?'':'u'}" data-inrow="${it.id}">
+          <span class="nm">${it.name}</span>
+          <span class="others">${othersText(it.id)}</span>
+          <span class="prev" data-when>${has?(when||''):'아직 입력 없음'}</span>
+          <input type="number" min="0" step="1" placeholder="—" value="${qtyText(it.id, myBranch)}" data-item="${it.id}" data-branch="${myBranch}">
+        </div>`;
+      });
     });
   });
-  html+=`<div class="vhint">빈칸(<b>—</b>)은 <b>아직 세어 보지 않은 교재</b>입니다. 0을 넣으면 "재고 없음"으로 기록됩니다 — 둘은 다릅니다.<br>
-    값을 넣으면 즉시 저장되고, 교재 옆에 마지막 입력 날짜·시간이 표시됩니다.</div>`;
+  if(!shown) html='<p style="color:var(--sub); padding:20px;">조건에 맞는 교재가 없습니다.</p>';
+  else html+=`<div class="vhint">빈칸(<b>—</b>)은 <b>아직 세어 보지 않은 교재</b>입니다. 0을 넣으면 "재고 없음"으로 기록됩니다 — 둘은 다릅니다.<br>
+    가운데 회색 글씨는 <b>다른 분원 보유량(참고)</b>이고, 값을 넣으면 즉시 저장됩니다.</div>`;
   root.innerHTML=html;
   wireStockRoot(root);
 }
-function renderInput(){
-  const has=!!myBranch;
-  $('inputWrap').classList.toggle('hidden', !has);
-  $('inputHint').style.display=has?'none':'block';
-  $('inputTitle').textContent=has?(myBranchName()+' 재고 입력'):'재고 입력';
-  if(!has) return;
+function renderEntry(){
+  syncChips();
   renderInputHead();
   renderInputCats();
   renderInputRows();
