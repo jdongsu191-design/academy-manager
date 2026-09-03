@@ -28383,6 +28383,14 @@ function renderStudents() {
 // 관리자 학생 목록 액션 버튼 업데이트
 const _renderAdminStudentsBase = renderAdminStudents;
 
+/* 학생의 소속 분원 — 본인 branch_id 가 없으면 담당 선생님의 분원을 따른다 */
+function _admBranchOf(u) {
+  if (!u) return null;
+  if (u.branch_id) return u.branch_id;
+  var t = allUsers.find(function(x){ return x.id === u.teacher_id; });
+  return (t && t.branch_id) || null;
+}
+
 /* 학년 표기 통일: 데이터에 '1' 과 '1학년' 이 섞여 있어 숫자만 뽑아 묶는다 */
 function _gradeKey(g){ var m = String(g==null?'':g).match(/\d+/); return m ? m[0] : ''; }
 function _gradeLabel(k){ return k ? (k + '학년') : ''; }
@@ -28417,14 +28425,29 @@ function renderAdminStudents() {
   const q        = (document.getElementById('admSearch')?.value || '').toLowerCase();
   const branchId = document.getElementById('admBranchFilter')?.value || '';
   const teacherId= document.getElementById('admTeacherFilter')?.value || '';
-  const schoolF  = document.getElementById('admSchoolFilter')?.value || '';
-  const gradeF   = document.getElementById('admGradeFilter')?.value  || '';
   const isDeskMode       = currentUser.role === 'desk';
   const allowedBranchIds = isDeskMode ? getDeskAllowedBranchIds() : [];
 
   // 전체 학생에서 시작 — 상태 필터(_admStudentStatusFilter)는 filtered 단계에서 적용
   const srcList = allUsers.filter(u => isAcademyStudent(u));
-  _admFillSchoolGrade(srcList);
+
+  /* [연동 필터] 분원(·선생님·데스크 허용분원)을 먼저 적용한 범위에서만
+     학교·학년 옵션을 만든다 — 분원을 고르면 그 분원 학교만 보인다.
+     범위 밖 값이 선택돼 있었다면 옵션에 없으므로 자동으로 '전체'로 떨어지고,
+     그래서 학교·학년 값은 옵션을 채운 뒤에 읽어야 한다. */
+  const scopeList = srcList.filter(u => {
+    if (teacherId && u.teacher_id !== teacherId) return false;
+    if (branchId && _admBranchOf(u) !== branchId) return false;
+    if (isDeskMode && allowedBranchIds.length) {
+      const ub = _admBranchOf(u);
+      if (!ub || !allowedBranchIds.includes(ub)) return false;
+    }
+    return true;
+  });
+  _admFillSchoolGrade(scopeList);
+
+  const schoolF  = document.getElementById('admSchoolFilter')?.value || '';
+  const gradeF   = document.getElementById('admGradeFilter')?.value  || '';
 
   // 신입/퇴원 연·월 필터 (신입=enrolled_at, 퇴원=withdrawn_at 기준)
   const isNewMode = _admStudentStatusFilter === 'new';
@@ -28460,15 +28483,10 @@ function renderAdminStudents() {
     if (teacherId && u.teacher_id !== teacherId)  return false;
     if (schoolF && String(u.school || '') !== schoolF) return false;
     if (gradeF  && _gradeKey(u.grade) !== gradeF)      return false;
-    if (branchId) {
-      const t = allUsers.find(x => x.id === u.teacher_id);
-      const uBranch = u.branch_id || (t && t.branch_id);
-      if (uBranch !== branchId) return false;
-    }
+    if (branchId && _admBranchOf(u) !== branchId) return false;
     if (isDeskMode && allowedBranchIds.length) {
-      const t = allUsers.find(x => x.id === u.teacher_id);
-      const uBranch = u.branch_id || (t && t.branch_id);
-      if (!uBranch || !allowedBranchIds.includes(uBranch)) return false;
+      const ub = _admBranchOf(u);
+      if (!ub || !allowedBranchIds.includes(ub)) return false;
     }
     return true;
   });
