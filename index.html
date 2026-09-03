@@ -1904,6 +1904,30 @@
               <div id="by-teacher-chk-list"></div>
             </div>
           </div>
+          <!-- 학교 필터 -->
+          <div style="flex:0 0 auto">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">학교</div>
+            <select id="by-school-filter" onchange="byApplyFilter()"
+              style="padding:8px 12px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff;cursor:pointer;max-width:150px">
+              <option value="">전체 학교</option>
+            </select>
+          </div>
+          <!-- 학년 필터 -->
+          <div style="flex:0 0 auto">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">학년</div>
+            <select id="by-grade-filter" onchange="byApplyFilter()"
+              style="padding:8px 12px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff;cursor:pointer">
+              <option value="">전체 학년</option>
+            </select>
+          </div>
+          <!-- 레벨 필터 -->
+          <div style="flex:0 0 auto">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">레벨</div>
+            <select id="by-level-filter" onchange="byApplyFilter()"
+              style="padding:8px 12px;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;outline:none;background:#fff;cursor:pointer">
+              <option value="">전체 레벨</option>
+            </select>
+          </div>
           <!-- 버튼 그룹 -->
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-left:auto">
             <button onclick="byLoadData()" title="최신 데이터로 새로고침"
@@ -1958,6 +1982,8 @@
           </div>
           </div>
         </div>
+        <!-- 필터 적용 안내 (숨은 행이 있을 때만) -->
+        <div id="by-filter-info" style="display:none;padding:7px 12px;background:#fefce8;border:1px solid #fde68a;border-radius:8px;margin-bottom:8px;font-size:12px;color:#92400e;font-weight:700"></div>
         <!-- 학생 입력 테이블 -->
         <div id="by-table-wrap">
           <div style="text-align:center;padding:50px 20px;color:#9ca3af">
@@ -2264,6 +2290,12 @@
               </div>
               <select class="filter" id="admTeacherFilter" onchange="renderAdminStudents()" style="flex:1;min-width:100px">
                 <option value="">전체 선생님</option>
+              </select>
+              <select class="filter" id="admSchoolFilter" onchange="renderAdminStudents()" style="flex:1;min-width:110px">
+                <option value="">전체 학교</option>
+              </select>
+              <select class="filter" id="admGradeFilter" onchange="renderAdminStudents()" style="flex:1;min-width:90px">
+                <option value="">전체 학년</option>
               </select>
             </div>
             <!-- 신입/퇴원 연·월 필터 -->
@@ -10994,9 +11026,68 @@ function byRenderTable() {
   html += _wkPagerHtml('byGoPage', _byPg, '#92400e');
   wrap.innerHTML = html;
   byInitKeyNav();
+  byPopulateFilters();
+  byApplyFilter();
 }
 
 /* ── 키보드 네비게이션 ────────────────────────────────────── */
+/* ── 베티 학교/학년/레벨 필터 (행 show/hide — 재렌더 없음, 저장 안전)
+      ⚠ 숨긴 행은 일괄처리 대상에서 빠진다(_wkBulkTargets 가 보이는 행만 잡는다) ── */
+function byPopulateFilters() {
+  var scSel = document.getElementById('by-school-filter');
+  var grSel = document.getElementById('by-grade-filter');
+  var lvSel = document.getElementById('by-level-filter');
+  if (!scSel || !grSel || !lvSel) return;
+  var schools = [], grades = [], levels = [], a = {}, b = {}, c = {};
+  (typeof _byStudents !== 'undefined' ? _byStudents : []).forEach(function(s){
+    var sc = String(s.school || '').trim();
+    var gr = String(s.grade  || '').trim();
+    if (sc && !a[sc]) { a[sc] = 1; schools.push(sc); }
+    if (gr && !b[gr]) { b[gr] = 1; grades.push(gr); }
+  });
+  document.querySelectorAll('#by-table-wrap tbody [data-field="level"]').forEach(function(el){
+    var v = (el.value || '').trim();
+    if (v && !c[v]) { c[v] = 1; levels.push(v); }
+  });
+  schools.sort(function(x,y){ return x.localeCompare(y, 'ko'); });
+  grades.sort(function(x,y){ return x.localeCompare(y, 'ko', {numeric:true}); });
+  levels.sort();
+  var cs = scSel.value, cg = grSel.value, cl = lvSel.value;
+  scSel.innerHTML = '<option value="">전체 학교</option>'
+    + schools.map(function(x){ return '<option value="'+_esc(x)+'">'+_esc(x)+'</option>'; }).join('');
+  grSel.innerHTML = '<option value="">전체 학년</option>'
+    + grades.map(function(x){ return '<option value="'+_esc(x)+'">'+_esc(x)+'</option>'; }).join('');
+  lvSel.innerHTML = '<option value="">전체 레벨</option>'
+    + levels.map(function(x){ return '<option value="'+_esc(x)+'">'+_esc(x)+'</option>'; }).join('');
+  scSel.value = cs; grSel.value = cg; lvSel.value = cl;
+}
+
+function byApplyFilter() {
+  var scF = (document.getElementById('by-school-filter')||{}).value || '';
+  var grF = (document.getElementById('by-grade-filter')||{}).value  || '';
+  var lvF = (document.getElementById('by-level-filter')||{}).value  || '';
+  var shown = 0, total = 0;
+  document.querySelectorAll('#by-table-wrap tbody tr[id^="by-row-"]').forEach(function(row){
+    total++;
+    var sid = row.id.replace('by-row-','');
+    var s   = (typeof _byStudents !== 'undefined' ? _byStudents.find(function(x){ return x.id === sid; }) : null) || {};
+    var lvEl= row.querySelector('[data-field="level"]');
+    var lv  = lvEl ? (lvEl.value||'').trim() : '';
+    var ok = true;
+    if (scF && String(s.school||'').trim() !== scF) ok = false;
+    if (grF && String(s.grade ||'').trim() !== grF) ok = false;
+    if (lvF && lv !== lvF) ok = false;
+    row.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  });
+  var info = document.getElementById('by-filter-info');
+  if (info) {
+    var on = scF || grF || lvF;
+    info.textContent = on ? ('필터 적용 — ' + total + '명 중 ' + shown + '명 표시') : '';
+    info.style.display = on ? '' : 'none';
+  }
+}
+
 function byInitKeyNav() {
   var focusables = Array.from(document.querySelectorAll('.by-focusable'));
   var cols = 7; // level(sel), attend_time, attendance, wrong_done, score, result, note
@@ -28270,6 +28361,28 @@ function renderStudents() {
 // 관리자 학생 목록 액션 버튼 업데이트
 const _renderAdminStudentsBase = renderAdminStudents;
 
+/* 학교·학년 필터 옵션 — 실제 학생 데이터에 있는 값만 채운다 (선택값은 유지) */
+function _admFillSchoolGrade(list) {
+  var sSel = document.getElementById('admSchoolFilter');
+  var gSel = document.getElementById('admGradeFilter');
+  if (!sSel || !gSel) return;
+  var schools = [], grades = [], sSeen = {}, gSeen = {};
+  list.forEach(function(u){
+    var sc = String(u.school || '').trim();
+    var gr = String(u.grade  || '').trim();
+    if (sc && !sSeen[sc]) { sSeen[sc] = 1; schools.push(sc); }
+    if (gr && !gSeen[gr]) { gSeen[gr] = 1; grades.push(gr); }
+  });
+  schools.sort(function(a,b){ return a.localeCompare(b, 'ko'); });
+  grades.sort(function(a,b){ return a.localeCompare(b, 'ko', {numeric:true}); });
+  var curS = sSel.value, curG = gSel.value;
+  sSel.innerHTML = '<option value="">전체 학교</option>'
+    + schools.map(function(x){ return '<option value="'+_esc(x)+'">'+_esc(x)+'</option>'; }).join('');
+  gSel.innerHTML = '<option value="">전체 학년</option>'
+    + grades.map(function(x){ return '<option value="'+_esc(x)+'">'+_esc(x)+'</option>'; }).join('');
+  sSel.value = curS; gSel.value = curG;   // 목록에 없으면 ''(전체)로 떨어진다
+}
+
 function renderAdminStudents() {
   const el = document.getElementById('adminStudentList');
   if (!el) return;
@@ -28278,11 +28391,14 @@ function renderAdminStudents() {
   const q        = (document.getElementById('admSearch')?.value || '').toLowerCase();
   const branchId = document.getElementById('admBranchFilter')?.value || '';
   const teacherId= document.getElementById('admTeacherFilter')?.value || '';
+  const schoolF  = document.getElementById('admSchoolFilter')?.value || '';
+  const gradeF   = document.getElementById('admGradeFilter')?.value  || '';
   const isDeskMode       = currentUser.role === 'desk';
   const allowedBranchIds = isDeskMode ? getDeskAllowedBranchIds() : [];
 
   // 전체 학생에서 시작 — 상태 필터(_admStudentStatusFilter)는 filtered 단계에서 적용
   const srcList = allUsers.filter(u => u.role==='student' && !u.reading_room_yn);
+  _admFillSchoolGrade(srcList);
 
   // 신입/퇴원 연·월 필터 (신입=enrolled_at, 퇴원=withdrawn_at 기준)
   const isNewMode = _admStudentStatusFilter === 'new';
@@ -28316,6 +28432,8 @@ function renderAdminStudents() {
       if ((ymY || ymM) && !_ymMatch(u.withdrawn_at, ymY, ymM)) return false;
     }
     if (teacherId && u.teacher_id !== teacherId)  return false;
+    if (schoolF && String(u.school || '') !== schoolF) return false;
+    if (gradeF  && String(u.grade  || '') !== gradeF)  return false;
     if (branchId) {
       const t = allUsers.find(x => x.id === u.teacher_id);
       const uBranch = u.branch_id || (t && t.branch_id);
