@@ -14590,7 +14590,7 @@ function updateAcctStats() {
     return !!(t && t.branch_id && _allowed.indexOf(t.branch_id) !== -1);
   };
   var teachers = all.filter(function(u){ return u.role==='teacher' && u.status==='active' && !u.deleted_at && _inScope(u); }).length;
-  var stus     = all.filter(function(u){ return u.role==='student' && !u.reading_room_yn && u.status==='active' && _inScope(u); }).length;
+  var stus     = all.filter(function(u){ return isAcademyStudent(u) && u.status==='active' && _inScope(u); }).length;
   var pending  = all.filter(function(u){ return u.role==='teacher' && u.status==='pending' && _inScope(u); }).length;
   var tEl = document.getElementById('adm-teachers'); if (tEl) tEl.textContent = teachers;
   var sEl = document.getElementById('adm-students');  if (sEl) sEl.textContent = stus;
@@ -25355,6 +25355,25 @@ function toggleSetupCard(bodyId, btn) {
   if (btn) btn.textContent = collapsed ? '▲ 접기' : '▼ 펼치기';
 }
 
+/* ── [독서실 계정 판정] ─────────────────────────────────
+   reading_room_yn 플래그만 믿으면 안 된다. 2026-09-02 실측: 독서실 반
+   (reading_room_class)과 출입 코드가 있고 실제로 독서실을 쓰는데도
+   플래그가 꺼진 계정이 71명 있었다(전체 독서실 계정 147명 중).
+   그래서 이 계정들이 학원 학생 명단·재원 수에 섞여 있었다.
+   → 플래그 또는 독서실 반, 둘 중 하나라도 있으면 독서실 계정으로 본다.
+   ⚠ 겸업(학원+독서실) 계정은 0명임을 확인하고 적용했다. 나중에 겸업이
+     생기면 이 판정을 다시 봐야 한다. */
+function isReadingRoomAccount(u) {
+  if (!u) return false;
+  if (u.reading_room_yn) return true;
+  var c = u.reading_room_class;
+  return c != null && String(c).trim() !== '';
+}
+// 학원 학생(독서실 전용 계정 제외)
+function isAcademyStudent(u) {
+  return !!u && u.role === 'student' && !isReadingRoomAccount(u);
+}
+
 const ID_IN_CHUNK = 150;
 async function fetchRowsByIds(makeQuery, ids, chunkSize) {
   const size = chunkSize || ID_IN_CHUNK;
@@ -25392,8 +25411,8 @@ async function loadAdminData() {
   const allowedBranchIds = isDeskMode ? getDeskAllowedBranchIds() : [];
 
   // 통계
-  let activeStudents    = allUsers.filter(u => u.role==='student' && !u.reading_room_yn && u.status==='active');
-  let withdrawnStudents = allUsers.filter(u => u.role==='student' && !u.reading_room_yn && u.status==='inactive');  // 'cancelled'(등록취소) 제외
+  let activeStudents    = allUsers.filter(u => isAcademyStudent(u) && u.status==='active');
+  let withdrawnStudents = allUsers.filter(u => isAcademyStudent(u) && u.status==='inactive');  // 'cancelled'(등록취소) 제외
   let activeTeachers    = allUsers.filter(u => u.role==='teacher' && u.status==='active' && !u.deleted_at);
 
   if (isDeskMode && allowedBranchIds.length) {
@@ -27303,7 +27322,7 @@ let _editStudentIsAdmin = false;
 function openEditStudentModal(studentId, isAdmin = false) {
   _editStudentIsAdmin = isAdmin;
   const srcList = isAdmin
-    ? allUsers.filter(u => u.role === 'student' && !u.reading_room_yn)
+    ? allUsers.filter(u => isAcademyStudent(u))
     : [...students, ..._withdrawnStudents];
   const s = srcList.find(x => x.id === studentId);
   if (!s) { alert('학생 정보를 찾을 수 없습니다'); return; }
@@ -27418,7 +27437,7 @@ async function submitEditStudent() {
 
   // 퇴원일 입력 시 status 자동 처리
   const srcList = _editStudentIsAdmin
-    ? allUsers.filter(u => u.role === 'student' && !u.reading_room_yn)
+    ? allUsers.filter(u => isAcademyStudent(u))
     : [...students, ..._withdrawnStudents];
   const s = srcList.find(x => x.id === id);
   let status = s?.status || 'active';
@@ -27895,7 +27914,7 @@ async function issueCodesForAll() {
 }
 
 function copyAllStudentCodes() {
-  const list = (currentUser.role === 'teacher' ? students : allUsers.filter(u => u.role==='student' && !u.reading_room_yn && u.status==='active'))
+  const list = (currentUser.role === 'teacher' ? students : allUsers.filter(u => isAcademyStudent(u) && u.status==='active'))
     .filter(s => s.student_code);
   if (!list.length) { alert('코드가 발급된 학생이 없습니다'); return; }
   const text = list.map(s => s.name + ' - ' + s.student_code).join('\n');
@@ -27905,7 +27924,7 @@ function copyAllStudentCodes() {
 }
 
 function downloadStudentCodes() {
-  const list = currentUser.role === 'teacher' ? students : allUsers.filter(u => u.role==='student' && !u.reading_room_yn);
+  const list = currentUser.role === 'teacher' ? students : allUsers.filter(u => isAcademyStudent(u));
   if (!list.length) { alert('학생이 없습니다'); return; }
   const clsList = currentUser.role === 'teacher' ? classes : allClasses;
   const rows = [['이름','코드','상태','반']];
@@ -28404,7 +28423,7 @@ function renderAdminStudents() {
   const allowedBranchIds = isDeskMode ? getDeskAllowedBranchIds() : [];
 
   // 전체 학생에서 시작 — 상태 필터(_admStudentStatusFilter)는 filtered 단계에서 적용
-  const srcList = allUsers.filter(u => u.role==='student' && !u.reading_room_yn);
+  const srcList = allUsers.filter(u => isAcademyStudent(u));
   _admFillSchoolGrade(srcList);
 
   // 신입/퇴원 연·월 필터 (신입=enrolled_at, 퇴원=withdrawn_at 기준)
