@@ -190,12 +190,8 @@
   .mb-sel{border:1.5px solid var(--line-strong); border-radius:8px; padding:6px 10px; font:inherit;
     font-size:13px; font-weight:700; color:var(--ink); background:#fff; cursor:pointer;}
   .mb-sel:hover{border-color:var(--brand);}
-  /* 비교 모드 = 읽기 전용 칸 */
-  .mtx td.ro-cell{font-variant-numeric:tabular-nums;}
-  .mtx td.ro-cell .ro-v{display:inline-block; min-width:34px; font-weight:700; font-family:var(--mono);}
-  .mtx td.unset-cell .ro-v{color:#c3ccd9;}
-  .mtx td.zero-cell .ro-v{color:var(--red); font-weight:800;}
-  .mtx td.low-cell .ro-v{color:var(--amber);}
+  /* 비교 모드에서도 칸을 바로 고칠 수 있다 — 어느 분원 칸인지 헷갈리지 않게 열에 hover 표시 */
+  .mtx tbody td:hover{box-shadow:inset 0 0 0 2px var(--brand-soft);}
   /* 입력 행의 '다른 분원 보유' 참고 열 */
   .crow .others{font-size:12px; color:var(--sub); min-width:180px; text-align:right; white-space:nowrap;}
   .crow .others b{color:var(--navy); font-weight:700;}
@@ -413,7 +409,7 @@
 
   <!-- ════════ 📦 재고 (분원 선택이 모드를 정한다) ════════
        분원 하나 → 입력 모드 (그 분원 1열, Enter 로 이어 입력)
-       분원 전체 → 비교 모드 (5관 매트릭스, 읽기 전용)
+       분원 전체 → 비교 모드 (5관 매트릭스, 어느 칸이든 입력 가능)
        v0.4~0.6 때 "언제 모드가 바뀌는지 몰랐던" 문제를 막으려고
        화면 맨 위에 지금 어느 모드인지 띠로 항상 알려 준다. -->
   <section class="view" id="view-stock">
@@ -745,8 +741,8 @@ function renderStock(){
   $('mbTag').className = 'mb-tag ' + (entry ? 'entry' : 'compare');
   $('mbTxt').innerHTML = entry
     ? `<b>${myBranchName()}</b>의 수량을 입력하는 중입니다`
-    : `<b>전 분원</b>을 나란히 보는 중입니다 <span class="ro">읽기 전용</span>`;
-  $('mbHint').textContent = entry ? '다른 분원과 비교하려면 →' : '수량을 입력하려면 분원을 고르세요 →';
+    : `<b>전 분원</b>을 나란히 보는 중입니다 <span class="ro">어느 분원이든 입력 가능</span>`;
+  $('mbHint').textContent = entry ? '다른 분원과 비교하려면 →' : '한 분원만 집중해서 넣으려면 →';
   const sel = $('modeSel');
   sel.innerHTML = '<option value="">📊 분원 전체 (비교)</option>'
     + BRANCHES.map(b=>`<option value="${b.id}">✏️ ${b.name} 입력</option>`).join('');
@@ -754,7 +750,7 @@ function renderStock(){
   $('stockTitle').textContent = entry ? (myBranchName()+' 재고 입력') : '전 분원 재고 현황';
   $('stockDesc').innerHTML = entry
     ? '칸에 수량을 넣고 <kbd>Enter</kbd> — 바로 저장되고 다음 교재로 넘어갑니다. 오른쪽에 다른 분원 보유량이 참고로 보입니다.'
-    : '모든 분원의 재고를 한 표에서 봅니다. 여기서는 고칠 수 없고, <b>분원을 고르면 그 분원 입력 화면</b>으로 바뀝니다.';
+    : '모든 분원의 재고를 한 표에서 봅니다. <b>어느 칸이든 바로 고칠 수 있습니다</b> — 한 분원만 집중해서 넣으려면 위에서 분원을 고르세요.';
   $('chipTransfer').classList.toggle('hidden', !myBranch);
   if(entry) renderEntry(); else renderStockCompare();
 }
@@ -1358,9 +1354,9 @@ async function captureTransfer(){
   finally{ document.body.removeChild(capture); }
 }
 
-/* ════════ 📊 비교 모드 (분원 전체 · 읽기 전용) ════════
-   여기서는 고치지 않는다. 고치려면 분원을 골라 입력 모드로 간다
-   — 그래야 남의 분원 수량을 실수로 건드리는 일이 없다. */
+/* ════════ 📊 비교 모드 (분원 전체) ════════
+   5관을 나란히 놓고 보며, 어느 분원 칸이든 바로 고칠 수 있다(사용자 요청).
+   한 분원만 집중해서 넣을 때는 분원을 골라 입력 모드로 간다. */
 let statusGroup = '';                 // '' = 전체
 let statusFilter = '';                // '' | 'zero' | 'low' | 'unset' | 'transfer'
 function setGroupFilter(g){ statusGroup=g; renderStock(); }
@@ -1403,20 +1399,22 @@ function renderStockCompare(){
       items.forEach(it=>{
         shown++;
         const maxInRow=Math.max(...BRANCHES.map(b=>counted(it.id,b.id)?qtyOf(it.id,b.id):0));
-        catHtml+=`<tr><td class="name row-name">${it.name}</td>`;
+        catHtml+=`<tr data-item-id="${it.id}"><td class="name row-name">${it.name}</td>`;
         BRANCHES.forEach(b=>{
-          const has=counted(it.id,b.id);
-          catHtml+=`<td class="${cellClass(it.id,b.id,maxInRow)} ro-cell" title="${b.name}에 입력하려면 위에서 분원을 고르세요"><span class="ro-v">${has?qtyOf(it.id,b.id):'—'}</span></td>`;
+          catHtml+=`<td class="${cellClass(it.id,b.id,maxInRow)}" title="${b.name}"><input type="number" min="0" step="1" placeholder="—" value="${qtyText(it.id,b.id)}" data-item="${it.id}" data-branch="${b.id}"></td>`;
         });
-        catHtml+=`<td class="total-cell">${rowTotalText(it.id)}</td></tr>`;
+        catHtml+=`<td class="total-cell" data-cell="total">${rowTotalText(it.id)}</td></tr>`;
       });
     });
     body+=catHtml;
   });
   const root=$('statusRoot');
-  root.innerHTML = shown
-    ? `<table><thead><tr><th class="name">교재</th>${BRANCHES.map(b=>`<th>${b.name}</th>`).join('')}<th>합계</th></tr></thead><tbody>${body}</tbody></table>`
-    : '<p style="color:var(--sub); padding:20px;">조건에 맞는 교재가 없습니다.</p>';
+  if(!shown){
+    root.innerHTML='<p style="color:var(--sub); padding:20px;">조건에 맞는 교재가 없습니다.</p>';
+    return;
+  }
+  root.innerHTML=`<table><thead><tr><th class="name">교재</th>${BRANCHES.map(b=>`<th>${b.name}</th>`).join('')}<th>합계</th></tr></thead><tbody>${body}</tbody></table>`;
+  wireStockRoot(root);
 }
 
 /* ════════ ✏️ 입력 모드 (고른 분원) ════════ */
