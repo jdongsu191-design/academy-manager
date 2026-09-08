@@ -240,7 +240,11 @@
   .tr-src b{color:var(--navy);}
 
   /* ── 설정 ── */
-  .setup-toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:14px;}
+  .setup-toolbar{position:sticky; top:0; z-index:30; background:var(--bg); padding-top:6px; padding-bottom:6px;
+  display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:14px;}
+  /* 저장 안 한 변경이 있을 때 — 버튼이 스스로 티를 낸다 */
+  .mini-btn.dirty{background:#b45309 !important; border-color:#b45309 !important; color:#fff !important;
+    box-shadow:0 0 0 3px rgba(180,83,9,.18);}
   .hint-box{font-size:12.5px; color:var(--sub); background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px 16px; line-height:1.6;}
   .cat-group-label{font-size:12px; font-weight:800; color:var(--sub); letter-spacing:.08em;
     margin:14px 2px 6px; display:flex; align-items:center; gap:8px;}
@@ -584,9 +588,10 @@
     <div class="setup-toolbar">
       <button class="mini-btn" style="font-size:13px; padding:9px 14px;" onclick="openAddModal('cat')">＋ 카테고리 추가</button>
       <span style="font-size:12px; color:var(--sub);">이름만 바꾸면 기존 수량은 유지됩니다.</span>
-      <span style="margin-left:auto; display:flex; gap:8px;">
+      <span style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+        <span id="setupDirtyTip" class="hidden" style="font-size:12px; font-weight:700; color:#b45309;">저장해야 반영됩니다</span>
         <button class="mini-btn" style="font-size:13px; padding:9px 14px;" onclick="setupReset()">되돌리기</button>
-        <button class="mini-btn primary" style="font-size:13px; padding:9px 14px;" onclick="setupSave()">💾 저장</button>
+        <button id="setupSaveBtn" class="mini-btn primary" style="font-size:13px; padding:9px 14px;" onclick="setupSave()">💾 저장</button>
       </span>
     </div>
     <p class="hint-box" style="margin:0 0 14px;">
@@ -674,6 +679,17 @@ function showScreen(name){
 function canAccess(u){
   return !!u && (u.role === 'admin' || u.role === 'desk' || u.role === 'vice_director');
 }
+/* 제본기는 관리자와 정대수 선생님만.
+   ⚠ 정대수 선생님은 부원장이라 역할로는 다른 부원장과 못 가른다 → id 로 지정한다 */
+const BINDERY_USER_IDS = ['4bb2068e-89d3-441f-9730-75039c9cc677'];   // 정대수
+function canSeeBindery(u){
+  return !!u && (u.role === 'admin' || BINDERY_USER_IDS.includes(u.id));
+}
+function applyBinderyPerm(){
+  const on = canSeeBindery(currentUser);
+  const nav = $('nav-bind');       if(nav) nav.classList.toggle('hidden', !on);
+  const panel = $('homeBindPanel'); if(panel) panel.classList.toggle('hidden', !on);
+}
 async function init(){
   const savedId = localStorage.getItem('savedUserId');
   if(!savedId){ showScreen('loginScreen'); return; }
@@ -718,12 +734,22 @@ async function enterApp(){
   $('ym').value = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
   buildBindTables();
   loadMonth();
+  applyBinderyPerm();
   showView('home');
 }
 
 /* ---------- 화면 전환 ---------- */
 let curView = 'home';
 function showView(name){
+  if(name === 'bind' && !canSeeBindery(currentUser)){
+    alert('제본기 결산은 관리자와 담당 선생님만 볼 수 있습니다.');
+    return;
+  }
+  // 설정에서 나갈 때 저장 안 한 변경이 있으면 붙잡는다 (초안은 메모리에만 있다)
+  if(curView === 'setup' && name !== 'setup' && setupDirtyCount() > 0){
+    if(!confirm('저장하지 않은 변경이 ' + setupDirtyCount() + '건 있습니다.\n'
+              + '지금 나가면 사라집니다. 그래도 나갈까요?')) return;
+  }
   curView = name;
   ['home','stock','bind','setup'].forEach(v => {
     $('view-'+v).classList.toggle('on', v===name);
@@ -1602,6 +1628,27 @@ function itemQtySum(itemId){
   const rowVals = stockData[itemId] || {};
   return BRANCHES.reduce((s,b)=>s+(rowVals[b.id]||0),0);
 }
+/* 초안이 저장된 카탈로그와 몇 군데 다른가 — 저장 버튼에 띄운다 */
+function setupDirtyCount(){
+  if(!setupDraft) return 0;
+  const norm = c => JSON.stringify({t:(c.title||'').trim(), g:c.group, tag:(c.tag||'').trim(),
+    s:(c.sections||[]).map(x=>({t:(x.title||'').trim(),
+      i:(x.items||[]).map(y=>((y.name||'').trim()))}))});
+  const now = setupDraft.map(norm), was = CATALOG.map(norm);
+  let n = Math.abs(now.length - was.length);
+  const len = Math.min(now.length, was.length);
+  for(let i=0;i<len;i++) if(now[i] !== was[i]) n++;
+  return n;
+}
+function renderSetupDirty(){
+  const btn = $('setupSaveBtn');
+  if(!btn) return;
+  const n = setupDirtyCount();
+  btn.textContent = n ? ('💾 저장 (변경 ' + n + '건)') : '💾 저장';
+  btn.classList.toggle('dirty', n > 0);
+  const tip = $('setupDirtyTip');
+  if(tip) tip.classList.toggle('hidden', n === 0);
+}
 function setupInit(force){
   if(setupDraft && !force){ renderSetup(); return; }
   setupDraft = JSON.parse(JSON.stringify(CATALOG));
@@ -1629,6 +1676,7 @@ function renderSetup(){
         </select>
         <input value="${esc(cat.tag||'')}" style="flex:0 0 100px; font-weight:600; font-size:12px;" title="꼬리표" oninput="setupDraft[${ci}].tag=this.value">
         <button class="mini-btn" onclick="openAddModal('sec',${ci})">＋ 레벨/구역</button>
+        <button class="mini-btn" onclick="setupCopyCat(${ci})">⧉ 카테고리 복사</button>
         <button class="mini-btn del" onclick="setupDelCat(${ci})">카테고리 삭제</button>
       </div>
       <div class="setup-body">
@@ -1637,6 +1685,7 @@ function renderSetup(){
             <div class="ss-head">
               <input value="${esc(sec.title)}" oninput="setupDraft[${ci}].sections[${si}].title=this.value">
               <button class="mini-btn" onclick="openAddModal('item',${ci},${si})">＋ 교재</button>
+              <button class="mini-btn" onclick="setupCopySec(${ci},${si})">⧉ 복사</button>
               <button class="mini-btn del" onclick="setupDelSec(${ci},${si})">구역 삭제</button>
             </div>
             <div class="setup-items">
@@ -1653,6 +1702,7 @@ function renderSetup(){
     });
   });
   root.innerHTML = html;
+  renderSetupDirty();
 }
 
 /* --- 추가 모달 --- */
@@ -1704,6 +1754,34 @@ function confirmAddModal(){
   }
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* --- 복사 ---
+   ⚠ 교재 id 를 새로 발급해야 한다. 그대로 두면 원본과 복사본이 같은 재고 칸을 쓴다 */
+function cloneSection(sec){
+  return { title: (sec.title||'') , items: (sec.items||[]).map(it=>({ id:newId(), name:it.name })) };
+}
+function setupCopySec(ci,si){
+  const src = setupDraft[ci].sections[si];
+  const cp = cloneSection(src);
+  cp.title = (src.title||'') + ' (복사본)';
+  setupDraft[ci].sections.splice(si+1, 0, cp);
+  renderSetup();
+  const el = document.querySelector('#setup-cat-'+ci);
+  if(el) el.scrollIntoView({behavior:'smooth', block:'center'});
+}
+function setupCopyCat(ci){
+  const src = setupDraft[ci];
+  const cp = {
+    id: newId(),
+    title: (src.title||'') + ' (복사본)',
+    tag: src.tag,
+    group: src.group,
+    sections: (src.sections||[]).map(cloneSection)
+  };
+  setupDraft.splice(ci+1, 0, cp);
+  renderSetup();
+  const el = document.querySelector('#setup-cat-'+(ci+1));
+  if(el) el.scrollIntoView({behavior:'smooth', block:'center'});
+}
 function setupDelItem(ci,si,ii){
   const it = setupDraft[ci].sections[si].items[ii];
   const q = itemQtySum(it.id);
@@ -1742,6 +1820,7 @@ async function setupSave(){
     await kvSet('stock_catalog', setupDraft);
     applyCatalog(JSON.parse(JSON.stringify(setupDraft)));
     ALL_ITEMS.forEach(it=>{ if(!stockData[it.id]) stockData[it.id]=defaultQtyRow(); });
+    renderSetup();
     alert('저장했습니다. 모든 계정에 반영됩니다.');
   }catch(e){ console.error(e); alert('저장 실패: '+(e.message||e)); }
 }
