@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BMAPS 재고관리 v1.0</title>
+<title>BMAPS 재고관리 v1.1</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
@@ -372,7 +372,7 @@
 <!-- ══ 본 화면 ══ -->
 <div id="appScreen" class="hidden">
   <div class="topbar">
-    <div class="logo">📦 재고관리 <small>BMAPS</small><span class="ver">v1.0</span></div>
+    <div class="logo">📦 재고관리 <small>BMAPS</small><span class="ver">v1.1</span></div>
     <!-- 분원 선택 — 화면 전체의 기준이 되므로 로고 바로 옆(가장 눈에 띄는 자리)에 둔다 -->
     <label class="branch-pick" for="myBranchSel">
       <span class="bp-label">🏢 분원</span>
@@ -662,7 +662,7 @@
    - 데이터·저장 로직은 v0.6 그대로: inventory_stock 셀 upsert + inventory_kv
    - 접근: admin(마스터 포함) · desk · vice_director
    ========================================================= */
-window.INVENTORY_VERSION = 'v1.0';
+window.INVENTORY_VERSION = 'v1.1';
 
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -1633,7 +1633,7 @@ function setupDirtyCount(){
   if(!setupDraft) return 0;
   const norm = c => JSON.stringify({t:(c.title||'').trim(), g:c.group, tag:(c.tag||'').trim(),
     s:(c.sections||[]).map(x=>({t:(x.title||'').trim(),
-      i:(x.items||[]).map(y=>((y.name||'').trim()))}))});
+      i:(x.items||[]).map(y=>((y.name||'').trim())).filter(Boolean)}))});
   // ⚠ 위치로 견주면 하나를 끼워 넣었을 때 뒤가 전부 다르다고 잡힌다(복사 2번에 10건).
   //    카테고리 id 로 짝지어 '더해짐 · 빠짐 · 고쳐짐' 만 센다.
   const now = new Map(setupDraft.map(c=>[c.id, norm(c)]));
@@ -1694,7 +1694,9 @@ function renderSetup(){
             <div class="setup-items">
               ${sec.items.map((it,ii)=>`
                 <div class="setup-item">
-                  <input value="${esc(it.name)}" oninput="setupDraft[${ci}].sections[${si}].items[${ii}].name=this.value">
+                  <input id="si-${ci}-${si}-${ii}" value="${esc(it.name)}"
+                    oninput="setupDraft[${ci}].sections[${si}].items[${ii}].name=this.value"
+                    onkeydown="setupItemKey(event,${ci},${si},${ii})">
                   <span class="qtyinfo">${itemQtySum(it.id)?('보유 '+itemQtySum(it.id)+'권'):''}</span>
                   <button class="mini-btn del" onclick="setupDelItem(${ci},${si},${ii})">삭제</button>
                 </div>`).join('')}
@@ -1706,6 +1708,34 @@ function renderSetup(){
   });
   root.innerHTML = html;
   renderSetupDirty();
+}
+
+/* --- 교재 칸 엔터 이동 ------------------------------------------
+   엔터를 치면 아래 칸으로, 마지막 칸이면 새 행을 만들어 거기로 간다.
+   ⚠ 한글은 조합 중에도 엔터로 글자를 확정한다(isComposing). 그때 칸을
+     옮기면 마지막 글자를 잃으므로 그 엔터는 흘려보낸다.
+   ⚠ renderSetup() 이 innerHTML 로 통째로 다시 그려서 입력 칸이 새로
+     만들어진다. 그래서 다시 그린 뒤 id 로 찾아 포커스를 준다. */
+function setupFocusItem(ci, si, ii){
+  const el = document.getElementById('si-'+ci+'-'+si+'-'+ii);
+  if(!el) return;
+  el.focus();
+  const end = el.value.length;
+  try{ el.setSelectionRange(end, end); }catch(_){}   // 끝에 커서를 둔다
+}
+function setupItemKey(e, ci, si, ii){
+  if(e.key !== 'Enter') return;
+  if(e.isComposing || e.keyCode === 229) return;   // 한글 조합 확정용 엔터
+  e.preventDefault();
+  const sec = (((setupDraft||[])[ci]||{}).sections||[])[si];
+  if(!sec) return;
+  const list = sec.items || [];
+  if(ii < list.length - 1){ setupFocusItem(ci, si, ii + 1); return; }
+  // 마지막 칸 — 비어 있으면 새로 만들지 않는다(엔터 연타로 빈 줄이 쌓이지 않게)
+  if(!String(list[ii] && list[ii].name || '').trim()) return;
+  list.push({ id:newId(), name:'' });
+  renderSetup();
+  setupFocusItem(ci, si, list.length - 1);
 }
 
 /* --- 추가 모달 --- */
