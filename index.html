@@ -14701,6 +14701,57 @@ function updateRrStats() {
   if (sEl2) sEl2.textContent = '원생 ' + mem + ' · 비원생 ' + non + (etc ? ' · 미분류 ' + etc : '');
 }
 
+/* ── [독서실 뱃지] 독서실 계정을 학원 학생과 잇는다 ────────
+   독서실 계정은 학원 계정과 **별개 행**이다 — 반·학생코드가 없고 학년이
+   숫자만 들어 있다. 이어 붙일 열쇠가 이름뿐이라 학교·학년으로 추린다.
+
+   규칙 (2026-09-08 실측으로 확정)
+     · 이름이 같고 학교·학년까지 같은 학원 학생이 정확히 하나면 붙인다
+     · 그런 후보가 여럿이면 재원 계정을 고른다
+       (과목 변경 등으로 퇴원 후 재등록하면 계정이 둘 남는다)
+     · 그래도 못 고르면 **붙이지 않는다** — 틀리게 붙이느니 안 붙인다
+
+   실측 결과: 현역 76명 중 원생 38명은 전원 재원 계정에, 비원생 8명은
+   퇴원 계정에 붙었고, 나머지 비원생 30명은 학원 계정이 아예 없는
+   외부생이라 붙지 않았다. 어긋나게 붙은 것은 0건.
+
+   ⚠ 이건 어디까지나 이름으로 하는 추측이다. 항구적으로 잇자면
+     users 에 연결 컬럼을 두어야 한다. */
+var _rrLinkMap = null;   // { 학원학생id: '원생' | '비원생' }
+var _rrLinkSrc = null;   // 이 맵을 만든 allUsers — 바뀌면 다시 만든다
+function getRrLinkMap() {
+  if (_rrLinkMap && _rrLinkSrc === allUsers) return _rrLinkMap;
+  var all = allUsers || [];
+  var sk = function(v) { return String(v == null ? '' : v).replace(/\s/g, ''); };
+  var gk = function(v) { var m = String(v == null ? '' : v).match(/\d+/); return m ? m[0] : ''; };
+
+  var byName = {};
+  all.forEach(function(u) {
+    if (!isAcademyStudent(u)) return;
+    var n = String(u.name || '').trim();
+    if (!n) return;
+    (byName[n] = byName[n] || []).push(u);
+  });
+
+  var map = {};
+  all.forEach(function(r) {
+    if (!r || r.role !== 'student' || !r.reading_room_yn) return;
+    var cand = byName[String(r.name || '').trim()] || [];
+    var exact = cand.filter(function(c) {
+      return sk(c.school) === sk(r.school) && gk(c.grade) === gk(r.grade);
+    });
+    if (exact.length > 1) {
+      var live = exact.filter(function(c) { return c.status === 'active'; });
+      if (live.length === 1) exact = live;
+    }
+    if (exact.length !== 1) return;
+    map[exact[0].id] = (sk(r.reading_room_class) === '독서실비원생') ? '비원생' : '원생';
+  });
+
+  _rrLinkMap = map; _rrLinkSrc = allUsers;
+  return map;
+}
+
 /* ── 승인 대기 목록 ─────────────────────────────────────── */
 function renderPendingList(pending) {
   var el = document.getElementById('pendingList');
@@ -28697,7 +28748,11 @@ function renderAdminStudents() {
     }
   }
 
+  // 독서실 뱃지 — 요약과 같이 관리자에게만 보인다
+  const rrMap = (currentUser && currentUser.role === 'admin') ? getRrLinkMap() : {};
+
   el.innerHTML = header + filtered.map(u => {
+    const rrKind      = rrMap[u.id] || '';
     const teacher     = allUsers.find(t => t.id === u.teacher_id && t.role==='teacher');
     const cls         = allClasses.find(c => c.id === u.class_id);
     const branch      = _allBranches.find(b => b.id === (u.branch_id || (teacher && teacher.branch_id)));
@@ -28730,6 +28785,7 @@ function renderAdminStudents() {
           <span style="font-size:10px;padding:2px 7px;border-radius:100px;font-weight:700;background:${isActive?'#f0fdf4':(isCancelled?'#fff7ed':'#fef2f2')};color:${isActive?'#16a34a':(isCancelled?'#ea580c':'#dc2626')}">${isActive?'재원':(isCancelled?'등록취소':'퇴원')}</span>
           ${cls    ? `<span style="font-size:11px;padding:2px 7px;border-radius:100px;background:#eef3f8;color:var(--navy);font-weight:600">${_esc(cls.name)}</span>` : ''}
           ${branch ? `<span style="font-size:11px;padding:2px 7px;border-radius:100px;background:#f5f3ff;color:#7c3aed;font-weight:600">${_esc(branch.name)}</span>` : ''}
+          ${rrKind ? `<span title="독서실 이용 중 (이름·학교·학년으로 이어 붙임)" style="font-size:11px;padding:2px 7px;border-radius:100px;font-weight:600;background:${rrKind==='원생'?'#e0f2fe':'#f1f5f9'};color:${rrKind==='원생'?'#0369a1':'#64748b'}">🪑 독서실 ${rrKind}</span>` : ''}
         </div>
         <div style="font-size:11px;color:var(--text-sub);margin-top:2px">
           ${teacher ? '👤 ' + teacher.name + 'T · ' : ''}${schoolGrade ? schoolGrade + ' · ' : ''}${u.phone || '연락처 없음'}
