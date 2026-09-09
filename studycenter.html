@@ -5660,6 +5660,45 @@
     }catch(e){ console.error('삭제 실패:',e); alert('삭제 실패: '+(e.message||e)); }
   }
 
+  /* 붙여넣기로 한꺼번에 등록할 때 학원 학생을 찾아 이어 붙인다.
+     규칙은 등록 폼과 같다 — 이름 + 학교·학년 정확일치 1건,
+     여럿이면 재원 계정. 못 고르면 잇지 않는다.
+     한 학원생에 두 명이 붙지 않도록 이미 쓴 학생은 건너뛴다. */
+  var _scResultLinked = 0;
+  async function scBulkLink(rows){
+    var out = {};
+    try{
+      var names = rows.map(function(r){ return r.name; }).filter(Boolean);
+      if(!names.length) return out;
+      var ar = await db.from('users')
+        .select('id,name,school,grade,status,role,reading_room_yn,reading_room_class')
+        .in('name', names).limit(1000);
+      if(ar.error) throw ar.error;
+      var pool = (ar.data || []).filter(scIsAcademy);
+      var gk = function(v){ var m=String(v==null?'':v).match(/\d+/); return m?m[0]:''; };
+      var nk = function(v){ return String(v==null?'':v).replace(/\s/g,''); };
+      var used = {};
+      rows.forEach(function(r){
+        var ex = pool.filter(function(c){
+          return String(c.name||'').trim() === String(r.name||'').trim()
+              && nk(c.school) === nk(r.school)
+              && gk(c.grade)  === gk(r.grade);
+        });
+        if(ex.length > 1){
+          var live = ex.filter(function(c){ return c.status==='active'; });
+          if(live.length === 1) ex = live;
+        }
+        if(ex.length !== 1) return;
+        if(used[ex[0].id]) return;
+        used[ex[0].id] = true;
+        out[r.code] = ex[0].id;
+      });
+    }catch(e){
+      console.error('학원 연결 조회 실패 (등록은 그대로 진행):', e);
+    }
+    return out;
+  }
+
   async function scRegisterAll(){
     var valid = _scParsedRows.filter(function(r){ return !r.err && r.code; });
     if(!valid.length){ alert("등록할 정상 데이터가 없습니다."); return; }
@@ -5667,14 +5706,20 @@
     var btn = document.getElementById("reg-save-btn");
     if(btn){ btn.disabled = true; btn.textContent = "⏳ 등록 중..."; }
     try {
+      // 학원 학생과 이어 붙인다 — 이름·학교·학년이 정확히 하나 맞을 때만.
+      // 못 고르면 안 잇는다(null). 조회가 실패해도 등록 자체는 그대로 진행한다.
+      var linkBy = await scBulkLink(valid);
+
       var payload = valid.map(function(r){
         return {
           name: r.name, school: r.school || null, grade: r.grade || null,
           phone: r.phone || null, reading_room_class: r.rrClass || null,
           reading_room_code: r.code, reading_room_yn: true,
+          linked_student_id: linkBy[r.code] || null,
           role: "student", status: "active"
         };
       });
+      _scResultLinked = Object.keys(linkBy).length;
       var res = await db.from("users").insert(payload).select("id, name, reading_room_code");
       if(res.error) throw res.error;
       _scResultRows = (res.data || []).map(function(u){ return { name: u.name, code: u.reading_room_code }; });
@@ -5691,7 +5736,8 @@
     var sec = document.getElementById("reg-result-section");
     var wrap = document.getElementById("reg-result-wrap");
     var sum = document.getElementById("reg-result-summary");
-    sum.innerHTML = "✅ <b style=\"color:#16a34a\">" + _scResultRows.length + "명</b> 등록 완료! 아래 코드를 복사해 공지하세요.";
+    sum.innerHTML = "✅ <b style=\"color:#16a34a\">" + _scResultRows.length + "명</b> 등록 완료! 아래 코드를 복사해 공지하세요."
+      + " <span style=\"font-size:12px;color:#64748b\">(학원 학생과 연결됨 " + _scResultLinked + "명)</span>";
     var h = "<table class=\"reg-tbl\"><thead><tr><th>이름</th><th>코드</th></tr></thead><tbody>";
     _scResultRows.forEach(function(r){
       h += "<tr><td><b>" + scEsc(r.name) + "</b></td><td><span class=\"code-cell\">" + scEsc(r.code) + "</span></td></tr>";
