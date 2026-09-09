@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.97-link]</title>
+<title>BMAPS · 독서실 출결 [v0.98-link]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -843,7 +843,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.97-link</span>
+    <span class="tb-ver" id="sc-ver">v0.98-link</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1203,7 +1203,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.97-link';
+  window.STUDYCENTER_VERSION = 'v0.98-link';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -5481,40 +5481,108 @@
      독서실 퇴원자는 뺀다(구분이 더는 의미 없다). */
   async function scWarnLoad(){
     var box=document.getElementById('rl-warn'); if(!box) return;
-    var rows=(_scListData||[]).filter(function(s){
-      return s.linked_student_id && !s.reading_room_withdrawn_at;
-    });
-    if(!rows.length){ box.style.display='none'; box.innerHTML=''; return; }
+    function hide(){ box.style.display='none'; box.innerHTML=''; }
+    var live=(_scListData||[]).filter(function(s){ return !s.reading_room_withdrawn_at; });
+    var tied=live.filter(function(s){ return s.linked_student_id; });
+    var loose=live.filter(function(s){ return !s.linked_student_id; });
+    if(!tied.length && !loose.length){ hide(); return; }
     try{
-      var ids=rows.map(function(s){ return s.linked_student_id; });
-      var res=await db.from('users').select('id,name,school,grade,status,student_code').in('id',ids);
-      if(res.error) throw res.error;
-      var by={}; (res.data||[]).forEach(function(a){ by[a.id]=a; });
+      var html='';
 
-      var bad=[];
-      rows.forEach(function(s){
-        var a=by[s.linked_student_id]; if(!a) return;
-        var isB=String(s.reading_room_class||'').indexOf('비원생')>=0;
-        if(!isB && a.status!=='active') bad.push({ s:s, a:a, to:'비원생', why:'학원은 퇴원인데 독서실은 원생' });
-        if(isB  && a.status==='active') bad.push({ s:s, a:a, to:'원생',   why:'학원은 재원인데 독서실은 비원생' });
-      });
-      if(!bad.length){ box.style.display='none'; box.innerHTML=''; return; }
+      /* ㉠ 이어둔 학생인데 학원 상태와 구분이 어긋난 경우 */
+      if(tied.length){
+        var ids=tied.map(function(s){ return s.linked_student_id; });
+        var res=await db.from('users').select('id,name,school,grade,status,student_code').in('id',ids);
+        if(res.error) throw res.error;
+        var by={}; (res.data||[]).forEach(function(a){ by[a.id]=a; });
 
-      box.style.display='';
-      box.innerHTML='<div style="border:1px solid #fcd34d;background:#fffbeb;border-radius:8px;padding:9px 11px;margin-bottom:8px">'
-        +'<div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px">⚠️ 학원 상태와 구분이 어긋난 학생 '+bad.length+'명</div>'
-        + bad.map(function(b){
-            return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;flex-wrap:wrap">'
-              +'<span style="font-size:12px;color:#78350f"><b>'+scEsc(b.s.name||'')+'</b> · '+scEsc(b.why)+'</span>'
-              +'<button onclick="scFixClass(\''+b.s.id+'\',\''+b.to+'\')" '
-              +'style="padding:2px 8px;border:1px solid #f59e0b;border-radius:6px;background:#fff;color:#b45309;font-size:11px;font-weight:700;cursor:pointer">'
-              +b.to+'으로 바꾸기</button></div>';
-          }).join('')
-        +'</div>';
+        var bad=[];
+        tied.forEach(function(s){
+          var a=by[s.linked_student_id]; if(!a) return;
+          var isB=String(s.reading_room_class||'').indexOf('비원생')>=0;
+          if(!isB && a.status!=='active') bad.push({ s:s, a:a, to:'비원생', why:'학원은 퇴원인데 독서실은 원생' });
+          if(isB  && a.status==='active') bad.push({ s:s, a:a, to:'원생',   why:'학원은 재원인데 독서실은 비원생' });
+        });
+        if(bad.length){
+          html+='<div style="border:1px solid #fcd34d;background:#fffbeb;border-radius:8px;padding:9px 11px;margin-bottom:8px">'
+            +'<div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px">⚠️ 학원 상태와 구분이 어긋난 학생 '+bad.length+'명</div>'
+            + bad.map(function(b){
+                return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;flex-wrap:wrap">'
+                  +'<span style="font-size:12px;color:#78350f"><b>'+scEsc(b.s.name||'')+'</b> · '+scEsc(b.why)+'</span>'
+                  +'<button onclick="scFixClass(\''+b.s.id+'\',\''+b.to+'\')" '
+                  +'style="padding:2px 8px;border:1px solid #f59e0b;border-radius:6px;background:#fff;color:#b45309;font-size:11px;font-weight:700;cursor:pointer">'
+                  +b.to+'으로 바꾸기</button></div>';
+              }).join('')
+            +'</div>';
+        }
+      }
+
+      /* ㉡ 아직 안 이어졌는데 그새 학원에 등록된 것 같은 학생
+         — 독서실을 먼저 등록하고 학원에 나중 들어오면 아무도 안 이어준다.
+           이름 + 학교·학년이 정확히 하나 맞고 그 학원생이 재원일 때만 짚는다.
+           애매하면 아예 안 띄운다. 누르기 전엔 아무것도 바꾸지 않는다. */
+      if(loose.length){
+        var names=loose.map(function(s){ return s.name; }).filter(Boolean);
+        var ar=await db.from('users')
+          .select('id,name,school,grade,status,student_code,role,reading_room_yn,reading_room_class')
+          .in('name', names).limit(1000);
+        if(ar.error) throw ar.error;
+        var pool=(ar.data||[]).filter(function(u){ return scIsAcademy(u) && u.status==='active'; });
+        // 이미 다른 독서실 행이 차지한 학원 학생은 후보에서 뺀다
+        var taken={};
+        (_scListData||[]).forEach(function(s){ if(s.linked_student_id) taken[s.linked_student_id]=true; });
+
+        var gk=function(v){ var m=String(v==null?'':v).match(/\d+/); return m?m[0]:''; };
+        var nk=function(v){ return String(v==null?'':v).replace(/\s/g,''); };
+        var find=[];
+        loose.forEach(function(s){
+          var ex=pool.filter(function(c){
+            return String(c.name||'').trim()===String(s.name||'').trim()
+                && nk(c.school)===nk(s.school)
+                && gk(c.grade)===gk(s.grade)
+                && !taken[c.id];
+          });
+          if(ex.length!==1) return;
+          taken[ex[0].id]=true;
+          find.push({ s:s, a:ex[0] });
+        });
+        if(find.length){
+          html+='<div style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;padding:9px 11px;margin-bottom:8px">'
+            +'<div style="font-size:12px;font-weight:700;color:#1d4ed8;margin-bottom:6px">🔗 학원에 등록된 것 같은 학생 '+find.length+'명</div>'
+            +'<div style="font-size:11px;color:#3b82f6;margin-bottom:5px">연결하면 원생으로 함께 바뀝니다. 확인 후 눌러 주세요.</div>'
+            + find.map(function(b){
+                var t=[b.a.school||'', b.a.grade||''].filter(Boolean).join(' ')
+                    + (b.a.student_code?(' · '+b.a.student_code):'');
+                return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;flex-wrap:wrap">'
+                  +'<span style="font-size:12px;color:#1e3a8a"><b>'+scEsc(b.s.name||'')+'</b> → 학원 '+scEsc(t)+'</span>'
+                  +'<button onclick="scLinkNow(\''+b.s.id+'\',\''+b.a.id+'\')" '
+                  +'style="padding:2px 8px;border:1px solid #3b82f6;border-radius:6px;background:#fff;color:#1d4ed8;font-size:11px;font-weight:700;cursor:pointer">'
+                  +'연결하기</button></div>';
+              }).join('')
+            +'</div>';
+        }
+      }
+
+      if(!html){ hide(); return; }
+      box.style.display=''; box.innerHTML=html;
     }catch(e){
       console.error('어긋남 점검 실패:', e);
-      box.style.display='none';
+      hide();
     }
+  }
+  /* 짚어 준 짝을 실제로 잇는다 — 반드시 사람이 눌러야 한다.
+     학원 재원인 학생과 잇는 것이므로 구분도 원생으로 함께 맞춘다. */
+  async function scLinkNow(rrId, academyId){
+    var s=(_scListData||[]).find(function(x){ return x.id===rrId; });
+    if(!s) return;
+    if(!confirm((s.name||'')+' 학생을 학원 계정과 연결할까요?\n구분도 \'원생\'으로 함께 바뀝니다.')) return;
+    try{
+      var res=await db.from('users')
+        .update({ linked_student_id: academyId, reading_room_class: '독서실   원생' })
+        .eq('id', rrId);
+      if(res.error) throw res.error;
+      await scListLoad();
+    }catch(e){ console.error('연결 실패:', e); alert('연결 실패: '+(e.message||e)); }
   }
   async function scFixClass(id, to){
     var s=(_scListData||[]).find(function(x){ return x.id===id; });
