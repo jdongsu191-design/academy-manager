@@ -978,7 +978,7 @@
               </div>
             </div>
             <div class="rf-row"><label class="rf-label">이름</label><input id="rf-name" class="rf-input" placeholder="학생 이름" onblur="scLinkSearch()"></div>
-            <div class="rf-row"><label class="rf-label">학원연결</label><select id="rf-link" class="rf-input" onchange="scLinkPick()"><option value="">학원생 아님 (외부생)</option></select></div>
+            <div class="rf-row"><label class="rf-label">학원연결</label><select id="rf-link" class="rf-input" onchange="scLinkChoose()"><option value="">학원생 아님 (외부생)</option></select></div>
             <div class="rf-row" id="rf-link-hint-row" style="display:none"><label class="rf-label"></label><div class="reg-hint" id="rf-link-hint"></div></div>
             <div class="rf-row"><label class="rf-label">연락처</label><input id="rf-phone" class="rf-input" placeholder="010-1234-5678"></div>
             <div class="rf-row" id="rf-code-row" style="display:none"><label class="rf-label">코드</label><input id="rf-code" class="rf-input" inputmode="numeric" maxlength="6" placeholder="숫자 4~5자리 (보통 전화 뒷자리)"></div>
@@ -5352,7 +5352,9 @@
     var ttl=document.querySelector('#reg-form-section .reg-step-title'); if(ttl) ttl.textContent='✏️ 학생 수정';
     var msg=document.getElementById('rf-msg'); if(msg){ msg.textContent='수정 중: '+(s.name||''); msg.style.color='#0369a1'; }
     var nm=document.getElementById('rf-name'); if(nm) nm.focus({preventScroll:true});
-    scLinkSearch(s.linked_student_id || '');   // _scEditId 가 이미 세팅돼 있어 자동선택은 안 된다
+    _scLinkFixed = s.linked_student_id || '';   // 불러온 짝을 확정으로 붙들어 둔다
+    _scLinkTouched = true;
+    scLinkSearch();
   }
 
   /* ════════════════════════════════════════════════════════════
@@ -5363,12 +5365,21 @@
      에 박아 둔다. 한 번 이어두면 이름이 바뀌어도 안 끊긴다.
      ════════════════════════════════════════════════════════════ */
   var _scLinkBusy = false;
+  /* 확정된 짝 — DB 에서 불러온 값이거나 사람이 드롭다운에서 직접 고른 값.
+     이름 칸에서 포커스가 빠질 때마다 후보를 다시 찾는데, 그때 이 값이
+     없으면 골라둔 게 풀려 버린다. 그래서 따로 붙들어 둔다. */
+  var _scLinkFixed = '';
+  /* 사람이 골랐거나 DB 에서 불러왔는가. '외부생을 일부러 골랐다'와
+     '아직 아무도 안 골랐다'를 가른다 — 이걸 안 나누면 외부생을 고른
+     직후 다른 곳을 클릭했을 때 자동 선택이 다시 돌아 원생이 된다. */
+  var _scLinkTouched = false;
 
   function scLinkVal(){
     var el=document.getElementById('rf-link');
     return (el && el.value) ? el.value : null;
   }
   function scLinkClear(){
+    _scLinkFixed=''; _scLinkTouched=false;
     var el=document.getElementById('rf-link');
     if(el) el.innerHTML='<option value="">학원생 아님 (외부생)</option>';
     var hr=document.getElementById('rf-link-hint-row'); if(hr) hr.style.display='none';
@@ -5387,14 +5398,21 @@
     if(!t){ hr.style.display='none'; return; }
     hr.style.display=''; h.textContent=t; h.style.color=color||'#64748b';
   }
-  // 이름으로 학원 학생 후보를 찾아 고르게 한다. presetId 가 있으면 그걸 선택해 둔다.
+  /* 이름으로 학원 학생 후보를 찾아 고르게 한다.
+     인자 없이 부르면(이름 칸 blur) 이미 확정된 짝을 그대로 유지한다 —
+     예전엔 여기서 선택이 풀려, 수정 화면에서 아무 데나 클릭하면
+     이어둔 학원 학생이 사라져 보였다. */
   async function scLinkSearch(presetId){
     var el=document.getElementById('rf-link'); if(!el) return;
     // 수정 중에는 자동으로 고르지 않는다 — 저장돼 있던 구분을 덮어쓰면 안 된다
     var isEdit = !!_scEditId;
+    // 이름 칸 blur 로 다시 불려도, 이미 정해진 짝은 그대로 쓴다
+    if(presetId !== undefined && presetId !== null){ _scLinkFixed = String(presetId); _scLinkTouched = true; }
+    var fixed = _scLinkTouched ? _scLinkFixed : '';
     var name=(document.getElementById('rf-name').value||'').trim();
     if(_scLinkBusy) return;
-    if(!name){ scLinkClear(); return; }
+    // 수정 중 이름을 잠깐 비웠다고 이어둔 짝을 버리면 안 된다
+    if(!name){ if(!isEdit) scLinkClear(); return; }
     _scLinkBusy=true;
     try{
       var res=await db.from('users')
@@ -5403,11 +5421,11 @@
       if(res.error) throw res.error;
       var cand=(res.data||[]).filter(scIsAcademy);
 
-      // 이미 이어진 학생이 이름이 달라 후보에 없으면 따로 가져온다
-      if(presetId && !cand.some(function(c){ return c.id===presetId; })){
+      // 확정된 짝이 이름이 달라 후보에 없으면 따로 가져온다
+      if(fixed && !cand.some(function(c){ return c.id===fixed; })){
         var one=await db.from('users')
           .select('id,name,school,grade,status,student_code,role,reading_room_yn,reading_room_class')
-          .eq('id',presetId).maybeSingle();
+          .eq('id',fixed).maybeSingle();
         if(!one.error && one.data) cand.unshift(one.data);
       }
 
@@ -5419,9 +5437,10 @@
             && (!grade  || gk(c.grade)===grade);
       });
       var live=exact.filter(function(c){ return c.status==='active'; });
-      var auto = presetId ? presetId
+      var auto = _scLinkTouched ? fixed
                : (isEdit ? ''
                          : (exact.length===1 ? exact[0].id : (live.length===1 ? live[0].id : '')));
+      if(!_scLinkTouched) _scLinkFixed = auto;   // 자동으로 찾아낸 값도 기억해 둔다
 
       el.innerHTML='<option value="">학원생 아님 (외부생)</option>'
         + cand.map(function(c){
@@ -5431,15 +5450,24 @@
             return '<option value="'+c.id+'"'+(c.id===auto?' selected':'')+'>'+scEsc(t)+'</option>';
           }).join('');
 
-      if(!cand.length) scLinkHint('학원 명단에 같은 이름이 없습니다 — 외부생으로 둡니다.', '#64748b');
-      else if(!auto)   scLinkHint('후보가 '+cand.length+'명입니다. 직접 골라 주세요.', '#b45309');
-      else             scLinkHint('');
-      // 구분 자동 맞춤은 신규 등록에서만. 수정 화면에서는 손대지 않는다
-      if(!isEdit) scLinkPick();
+      if(!cand.length)      scLinkHint('학원 명단에 같은 이름이 없습니다 — 외부생으로 둡니다.', '#64748b');
+      else if(auto)             scLinkHint('');
+      else if(_scLinkTouched)   scLinkHint('외부생으로 둡니다.', '#64748b');
+      else if(isEdit)           scLinkHint('지금은 외부생입니다. 학원에 다니면 골라 주세요.', '#64748b');
+      else                      scLinkHint('후보가 '+cand.length+'명입니다. 직접 골라 주세요.', '#b45309');
+      // 구분(원생/비원생) 자동 맞춤은 신규 등록에서 스스로 찾아냈을 때만.
+      // 수정 화면이나 사람이 이미 고른 뒤에는 손대지 않는다.
+      if(!isEdit && !_scLinkTouched && auto) scLinkPick();
     }catch(e){
       console.error('학원 연결 조회 실패:', e);
       scLinkHint('학원 명단을 불러오지 못했습니다: '+(e.message||e), '#dc2626');
     }finally{ _scLinkBusy=false; }
+  }
+  // 사람이 드롭다운에서 직접 골랐을 때 — 이 선택은 다시 찾아도 안 풀린다
+  function scLinkChoose(){
+    _scLinkFixed = scLinkVal() || '';
+    _scLinkTouched = true;      // 외부생을 고른 것도 '고른 것'이다
+    scLinkPick();
   }
   // 학원 학생을 고르면 원생, 외부생이면 비원생으로 맞춘다 (사람이 다시 바꿔도 된다)
   function scLinkPick(){
