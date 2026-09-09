@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.96-autopoint]</title>
+<title>BMAPS · 독서실 출결 [v0.97-link]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -843,7 +843,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.96-autopoint</span>
+    <span class="tb-ver" id="sc-ver">v0.97-link</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -977,7 +977,9 @@
                 <label class="rf-check"><input type="checkbox" id="rf-mentoring"> 멘토링</label>
               </div>
             </div>
-            <div class="rf-row"><label class="rf-label">이름</label><input id="rf-name" class="rf-input" placeholder="학생 이름"></div>
+            <div class="rf-row"><label class="rf-label">이름</label><input id="rf-name" class="rf-input" placeholder="학생 이름" onblur="scLinkSearch()"></div>
+            <div class="rf-row"><label class="rf-label">학원연결</label><select id="rf-link" class="rf-input" onchange="scLinkPick()"><option value="">학원생 아님 (외부생)</option></select></div>
+            <div class="rf-row" id="rf-link-hint-row" style="display:none"><label class="rf-label"></label><div class="reg-hint" id="rf-link-hint"></div></div>
             <div class="rf-row"><label class="rf-label">연락처</label><input id="rf-phone" class="rf-input" placeholder="010-1234-5678"></div>
             <div class="rf-row" id="rf-code-row" style="display:none"><label class="rf-label">코드</label><input id="rf-code" class="rf-input" inputmode="numeric" maxlength="6" placeholder="숫자 4~5자리 (보통 전화 뒷자리)"></div>
             <div class="rf-row"><label class="rf-label">학교급</label><select id="rf-level" class="rf-input"><option value="">선택</option><option value="middle">중등</option><option value="high">고등</option></select></div>
@@ -1002,6 +1004,7 @@
               <button class="rl-fbtn" data-filter="withdrawn" onclick="scListSetFilter('withdrawn')">퇴원</button>
               <input type="text" id="rl-search" class="rl-search" placeholder="이름 · 학교 · 코드 검색..." oninput="scListRender()">
             </div>
+            <div id="rl-warn" style="display:none"></div>
             <div class="rl-count" id="rl-count"></div>
             <div class="rl-list" id="rl-list"><div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">불러오는 중...</div></div>
           </div>
@@ -1200,7 +1203,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.96-autopoint';
+  window.STUDYCENTER_VERSION = 'v0.97-link';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -5323,6 +5326,7 @@
     var msg=document.getElementById('rf-msg'); if(msg){ msg.textContent=''; msg.style.color=''; }
     var btn=document.getElementById('rf-add-btn'); if(btn) btn.textContent='➕ 학생 추가';
     var ttl=document.querySelector('#reg-form-section .reg-step-title'); if(ttl) ttl.textContent='➕ 학생 추가';
+    scLinkClear();
   }
   // [학생 수정] 명단 → 폼 로드
   function scFormLoad(id){
@@ -5348,6 +5352,153 @@
     var ttl=document.querySelector('#reg-form-section .reg-step-title'); if(ttl) ttl.textContent='✏️ 학생 수정';
     var msg=document.getElementById('rf-msg'); if(msg){ msg.textContent='수정 중: '+(s.name||''); msg.style.color='#0369a1'; }
     var nm=document.getElementById('rf-name'); if(nm) nm.focus({preventScroll:true});
+    scLinkSearch(s.linked_student_id || '');   // _scEditId 가 이미 세팅돼 있어 자동선택은 안 된다
+  }
+
+  /* ════════════════════════════════════════════════════════════
+     [학원 연결] 독서실 계정 ↔ 학원 학생
+     독서실 계정과 학원 계정은 같은 사람이라도 users 의 별개 행이다.
+     예전에는 이름·학교·학년으로 매번 추측했는데, 표기가 한 글자만
+     달라도 어긋났다. 이제 등록할 때 사람이 직접 골라 users.linked_student_id
+     에 박아 둔다. 한 번 이어두면 이름이 바뀌어도 안 끊긴다.
+     ════════════════════════════════════════════════════════════ */
+  var _scLinkBusy = false;
+
+  function scLinkVal(){
+    var el=document.getElementById('rf-link');
+    return (el && el.value) ? el.value : null;
+  }
+  function scLinkClear(){
+    var el=document.getElementById('rf-link');
+    if(el) el.innerHTML='<option value="">학원생 아님 (외부생)</option>';
+    var hr=document.getElementById('rf-link-hint-row'); if(hr) hr.style.display='none';
+  }
+  // 학원 학생만 (독서실 계정 제외) — index.html 의 isAcademyStudent 와 같은 판정
+  function scIsAcademy(u){
+    if(!u || u.role!=='student') return false;
+    if(u.reading_room_yn) return false;
+    var c=u.reading_room_class;
+    return !(c!=null && String(c).trim()!=='');
+  }
+  function scLinkHint(t, color){
+    var hr=document.getElementById('rf-link-hint-row');
+    var h=document.getElementById('rf-link-hint');
+    if(!hr||!h) return;
+    if(!t){ hr.style.display='none'; return; }
+    hr.style.display=''; h.textContent=t; h.style.color=color||'#64748b';
+  }
+  // 이름으로 학원 학생 후보를 찾아 고르게 한다. presetId 가 있으면 그걸 선택해 둔다.
+  async function scLinkSearch(presetId){
+    var el=document.getElementById('rf-link'); if(!el) return;
+    // 수정 중에는 자동으로 고르지 않는다 — 저장돼 있던 구분을 덮어쓰면 안 된다
+    var isEdit = !!_scEditId;
+    var name=(document.getElementById('rf-name').value||'').trim();
+    if(_scLinkBusy) return;
+    if(!name){ scLinkClear(); return; }
+    _scLinkBusy=true;
+    try{
+      var res=await db.from('users')
+        .select('id,name,school,grade,status,student_code,role,reading_room_yn,reading_room_class')
+        .eq('role','student').eq('name',name).limit(50);
+      if(res.error) throw res.error;
+      var cand=(res.data||[]).filter(scIsAcademy);
+
+      // 이미 이어진 학생이 이름이 달라 후보에 없으면 따로 가져온다
+      if(presetId && !cand.some(function(c){ return c.id===presetId; })){
+        var one=await db.from('users')
+          .select('id,name,school,grade,status,student_code,role,reading_room_yn,reading_room_class')
+          .eq('id',presetId).maybeSingle();
+        if(!one.error && one.data) cand.unshift(one.data);
+      }
+
+      var school=(document.getElementById('rf-school').value||'').replace(/\s/g,'');
+      var grade=(document.getElementById('rf-grade').value||'').trim();
+      var gk=function(v){ var m=String(v==null?'':v).match(/\d+/); return m?m[0]:''; };
+      var exact=cand.filter(function(c){
+        return (!school || String(c.school||'').replace(/\s/g,'')===school)
+            && (!grade  || gk(c.grade)===grade);
+      });
+      var live=exact.filter(function(c){ return c.status==='active'; });
+      var auto = presetId ? presetId
+               : (isEdit ? ''
+                         : (exact.length===1 ? exact[0].id : (live.length===1 ? live[0].id : '')));
+
+      el.innerHTML='<option value="">학원생 아님 (외부생)</option>'
+        + cand.map(function(c){
+            var t=[c.school||'', c.grade||''].filter(Boolean).join(' ')
+                + (c.student_code?(' · '+c.student_code):'')
+                + ' (' + (c.status==='active'?'재원':'퇴원') + ')';
+            return '<option value="'+c.id+'"'+(c.id===auto?' selected':'')+'>'+scEsc(t)+'</option>';
+          }).join('');
+
+      if(!cand.length) scLinkHint('학원 명단에 같은 이름이 없습니다 — 외부생으로 둡니다.', '#64748b');
+      else if(!auto)   scLinkHint('후보가 '+cand.length+'명입니다. 직접 골라 주세요.', '#b45309');
+      else             scLinkHint('');
+      // 구분 자동 맞춤은 신규 등록에서만. 수정 화면에서는 손대지 않는다
+      if(!isEdit) scLinkPick();
+    }catch(e){
+      console.error('학원 연결 조회 실패:', e);
+      scLinkHint('학원 명단을 불러오지 못했습니다: '+(e.message||e), '#dc2626');
+    }finally{ _scLinkBusy=false; }
+  }
+  // 학원 학생을 고르면 원생, 외부생이면 비원생으로 맞춘다 (사람이 다시 바꿔도 된다)
+  function scLinkPick(){
+    var v=scLinkVal();
+    var r=document.querySelector('input[name="rf-class"][value="'+(v?'원생':'비원생')+'"]');
+    if(r) r.checked=true;
+  }
+
+  /* ── [어긋남 점검] 학원 상태와 독서실 구분이 안 맞는 학생 ──────────
+     연결된 학생만 본다 — 추측이 없으므로 오탐이 없다.
+     독서실 퇴원자는 뺀다(구분이 더는 의미 없다). */
+  async function scWarnLoad(){
+    var box=document.getElementById('rl-warn'); if(!box) return;
+    var rows=(_scListData||[]).filter(function(s){
+      return s.linked_student_id && !s.reading_room_withdrawn_at;
+    });
+    if(!rows.length){ box.style.display='none'; box.innerHTML=''; return; }
+    try{
+      var ids=rows.map(function(s){ return s.linked_student_id; });
+      var res=await db.from('users').select('id,name,school,grade,status,student_code').in('id',ids);
+      if(res.error) throw res.error;
+      var by={}; (res.data||[]).forEach(function(a){ by[a.id]=a; });
+
+      var bad=[];
+      rows.forEach(function(s){
+        var a=by[s.linked_student_id]; if(!a) return;
+        var isB=String(s.reading_room_class||'').indexOf('비원생')>=0;
+        if(!isB && a.status!=='active') bad.push({ s:s, a:a, to:'비원생', why:'학원은 퇴원인데 독서실은 원생' });
+        if(isB  && a.status==='active') bad.push({ s:s, a:a, to:'원생',   why:'학원은 재원인데 독서실은 비원생' });
+      });
+      if(!bad.length){ box.style.display='none'; box.innerHTML=''; return; }
+
+      box.style.display='';
+      box.innerHTML='<div style="border:1px solid #fcd34d;background:#fffbeb;border-radius:8px;padding:9px 11px;margin-bottom:8px">'
+        +'<div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px">⚠️ 학원 상태와 구분이 어긋난 학생 '+bad.length+'명</div>'
+        + bad.map(function(b){
+            return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;flex-wrap:wrap">'
+              +'<span style="font-size:12px;color:#78350f"><b>'+scEsc(b.s.name||'')+'</b> · '+scEsc(b.why)+'</span>'
+              +'<button onclick="scFixClass(\''+b.s.id+'\',\''+b.to+'\')" '
+              +'style="padding:2px 8px;border:1px solid #f59e0b;border-radius:6px;background:#fff;color:#b45309;font-size:11px;font-weight:700;cursor:pointer">'
+              +b.to+'으로 바꾸기</button></div>';
+          }).join('')
+        +'</div>';
+    }catch(e){
+      console.error('어긋남 점검 실패:', e);
+      box.style.display='none';
+    }
+  }
+  async function scFixClass(id, to){
+    var s=(_scListData||[]).find(function(x){ return x.id===id; });
+    if(!s) return;
+    if(!confirm((s.name||'')+' 학생의 구분을 \''+to+'\'으로 바꿀까요?')) return;
+    try{
+      var res=await db.from('users')
+        .update({ reading_room_class: (to==='비원생' ? '독서실   비원생' : '독서실   원생') })
+        .eq('id',id);
+      if(res.error) throw res.error;
+      await scListLoad();
+    }catch(e){ console.error('구분 변경 실패:', e); alert('변경 실패: '+(e.message||e)); }
   }
   // [학생 추가 폼] 저장 (단일 insert, 코드 자동생성 재사용)
   async function scFormAdd(){
@@ -5386,7 +5537,7 @@
           if(_dup.error){ showErr('코드 확인 실패: '+_dup.error.message); return; }
           if((_dup.data||[]).length){ showErr('이미 사용 중인 코드입니다: '+_newCode); return; }
         }
-        var upd={ name:name, school:school||null, school_level:level||null, grade:grade||null, phone:phone||null, reading_room_class:classVal, reading_room_mentoring:mentoring, enrolled_at:enrolled||null, required_study_minutes:reqMin };
+        var upd={ name:name, school:school||null, school_level:level||null, grade:grade||null, phone:phone||null, reading_room_class:classVal, reading_room_mentoring:mentoring, enrolled_at:enrolled||null, required_study_minutes:reqMin, linked_student_id:scLinkVal() };
         if(_newCode) upd.reading_room_code=_newCode;
         var ur=await db.from('users').update(upd).eq('id',_scEditId).select('id,name').maybeSingle();
         if(ur.error) throw ur.error;
@@ -5403,6 +5554,7 @@
         reading_room_class:classVal, reading_room_mentoring:mentoring,
         reading_room_code:rows[0].code, reading_room_yn:true,
         enrolled_at:enrolled||null, required_study_minutes:reqMin,
+        linked_student_id:scLinkVal(),
         role:'student', status:'active'
       };
       var res=await db.from('users').insert(payload).select('id,name,reading_room_code').maybeSingle();
@@ -5425,11 +5577,12 @@
     var el=document.getElementById('rl-list');
     try{
       var res=await db.from('users')
-        .select('id,name,school,school_level,grade,phone,enrolled_at,reading_room_class,reading_room_mentoring,reading_room_code,required_study_minutes,reading_room_withdrawn_at')
+        .select('id,name,school,school_level,grade,phone,enrolled_at,reading_room_class,reading_room_mentoring,reading_room_code,required_study_minutes,reading_room_withdrawn_at,linked_student_id')
         .eq('reading_room_yn',true).order('name');
       if(res.error) throw res.error;
       _scListData=res.data||[];
       scListRender();
+      scWarnLoad();
     }catch(e){ console.error('명단 로드 실패:',e); if(el) el.innerHTML='<div style="padding:14px;color:#dc2626;font-size:13px">명단 로드 실패: '+scEsc(e.message||'')+'</div>'; }
   }
   function scListSetFilter(f){
