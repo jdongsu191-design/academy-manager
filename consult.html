@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BMAPS 입학 상담 관리 v1.8</title>
+  <title>BMAPS 입학 상담 관리 v1.9</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -522,7 +522,7 @@
        - 별도 페이지 / index.html 과 동일 anon 클라이언트 + savedUserId 공유
        - 접근: admin 또는 (vice_director && permissions.consult_manage)
        ========================================================= */
-    window.CONSULT_VERSION = 'v1.8';
+    window.CONSULT_VERSION = 'v1.9';
 
     const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
@@ -1526,7 +1526,14 @@
 
     /* ========== 통계 모달 (입퇴원 종합 · 연/월 탐색 · 그래프) ==========
        표 필터(월·검색어)와 분리된 자체 기간·분원 컨트롤을 쓴다. 분원 범위는 화면 선택 안에서 좁힌다.
-       집계는 상담 수·퇴원 수만 (등록·순증감은 데이터 정비 전이라 뺌 — 2026-08 사용자 결정) */
+       집계: 상담 수 · 등록 수 · 전환율 · 퇴원 수
+       (순증감은 여전히 뺀다 — 데이터 정비 전, 2026-08 사용자 결정)
+
+       ⚠ 전환율의 분모는 **전체 상담**이다. 2026-09-10 실측에서 등록 여부를
+         안 적은 상담이 578건 중 211건(37%)이었다. 등록한 사람만 '등록'이라
+         적고 안 한 사람은 비워두는 쪽에 가까워, 결론 난 건만으로 계산하면
+         90%가 나와 실제보다 훨씬 좋아 보인다. 전체를 분모로 쓰기로 했다
+         (2026-09-10 사용자 결정). 대신 미입력 건수를 안내에 함께 띄운다 */
     let _stTab = 'admission';     // 'admission' | 'withdrawal'
     let _stYear = '';             // '' = 전체 기간, 'YYYY'
     let _stMonth = '';            // '' = 연도 전체, 'YYYY-MM'
@@ -1584,6 +1591,22 @@
     function stPickYear(y){ _stYear=y; _stMonth=''; renderStats(); }
     function stPickMonth(m){ _stMonth = (_stMonth===m) ? '' : m; renderStats(); }
 
+    /* 등록 여부 판정 — reg_status 는 표준 목록 밖 자유 입력이 많다
+       (2026-09-10 실측 578건에 27가지). 그래서 네 갈래로만 가른다.
+       ⚠ '미등록'은 '등록'을 품고 있으므로 부분일치로 재지 말 것 */
+    function _stRegKind(v){
+      var t = String(v == null ? '' : v).replace(/\s/g, '');
+      if(!t || t === '-') return 'none';                                  // 미입력
+      if(t === '등록' || t === '재등록' || t === '재입학' || t === '등원') return 'yes';
+      if(t === '상담중' || t === '고민중' || t.indexOf('보류') === 0) return 'pending';
+      return 'no';                                                        // 거절·미등록·연락없음 등
+    }
+    function _stRegTally(rows){
+      var t = { yes:0, no:0, pending:0, none:0 };
+      rows.forEach(function(r){ t[_stRegKind(r.reg_status)]++; });
+      return t;
+    }
+
     // 기간 판정 — 날짜 없는 기록은 '전체 기간'에서만 집계된다
     function _stIn(d){
       if(!d) return !_stYear;
@@ -1638,12 +1661,24 @@
       html += '<span class="st-scope">'+esc(scopeName)+' · '+esc(_stPeriodLabel())+'</span></div>';
 
       // ── 데이터 정확도 안내 ──
-      html += '<div class="st-note">⚠ 2026년 9월 이전의 데이터는 정확하지 않을 수 있습니다.</div>';
+      var reg = _stRegTally(cons);
+      var convPct = cons.length ? Math.round(reg.yes*1000/cons.length)/10 : 0;
+
+      html += '<div class="st-note">'
+        + '<div>⚠ 2026년 9월 이전의 데이터는 정확하지 않을 수 있습니다.</div>'
+        + '<div style="margin-top:5px">⚠ 신입생 등록은 자동으로 반영되지 않습니다. '
+        +   '상담에 직접 기록한 내용만 집계됩니다.</div>'
+        + '<div style="margin-top:5px">ℹ 전환율은 <b>전체 상담</b>을 분모로 씁니다. '
+        +   '지금 기간에 등록 여부를 적지 않은 상담이 <b>'+reg.none+'건</b> 있고, '
+        +   '이것도 분모에 들어가므로 실제보다 낮게 보일 수 있습니다.</div>'
+        + '</div>';
 
       // ── 요약 카드 ──
       function card(k,v){ return '<div class="st-card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'; }
       html += '<div class="st-cards">'
         + card('상담 수', cons.length+'<small>건</small>')
+        + card('등록 수', reg.yes+'<small>건</small>')
+        + card('등록 전환율', convPct+'<small>%</small>')
         + card('퇴원 수', wds.length+'<small>건</small>')
         + '</div>';
 
@@ -1658,6 +1693,12 @@
 
       // ── 항목별 집계 (탭별) ──
       if(_stTab==='admission'){
+        html += '<div class="st-sec">등록 여부 <span style="font-weight:600;color:#99a">— '
+          + cons.length + '건 기준</span></div>'
+          + _stRegRow('등록',     reg.yes,     cons.length, '#1e3a6e')
+          + _stRegRow('미등록',   reg.no,      cons.length, '#dc2626')
+          + _stRegRow('진행·보류', reg.pending, cons.length, '#d97706')
+          + _stRegRow('미입력',   reg.none,    cons.length, '#94a3b8');
         html += _stBars('입학 경로별', ADMISSION_PATHS, cons, function(r){ return r.admission_paths; }, true);
       } else {
         html += _stBars('퇴원 사유별', WITHDRAW_REASONS, wds, function(r){ return r.withdraw_reasons; }, true);
@@ -1672,6 +1713,14 @@
       }
 
       $('stats-body').innerHTML = html;
+    }
+
+    // 등록 여부 한 줄 — _stBars 와 같은 모양이되 색을 갈래마다 달리 준다
+    function _stRegRow(label, n, total, color){
+      var pct = total ? Math.round(n*1000/total)/10 : 0;
+      return '<div class="stat-row"><div class="stat-label">'+esc(label)+'</div>'
+        + '<div class="stat-bar"><i style="width:'+(n?Math.max(3, n*100/total):0)+'%;background:'+color+'"></i></div>'
+        + '<div class="stat-num">'+n+'건 ('+pct+'%)</div></div>';
     }
 
     // 항목별 가로 막대 묶음. getArr 가 null/빈 배열이면 미입력으로 센다
