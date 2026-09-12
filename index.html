@@ -3708,6 +3708,7 @@
     </div>
     <div style="padding:20px;display:flex;flex-direction:column;gap:12px">
       <input type="hidden" id="withdraw-student-id">
+      <div id="withdraw-grad-note" style="display:none;padding:10px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:12px;color:#1e40af;line-height:1.6"></div>
       <div id="withdraw-info-block" style="display:none;padding:10px;background:var(--bg);border-radius:8px;font-size:12px">
         <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:6px" id="wd-info-name"></div>
         <div style="color:var(--text-sub)">
@@ -27998,6 +27999,7 @@ async function submitEditStudent() {
    [SECTION: WITHDRAW] 퇴원 처리
 ============================================================ */
 function openWithdrawModal(studentId, studentName) {
+  if (studentId !== '__bulk__') window._bulkWithdrawGraduation = false;   // 한 명 퇴원은 졸업 모드가 아니다
   document.getElementById('withdraw-student-id').value = studentId;
   const today = _localYMD(new Date());
   document.getElementById('withdraw-date').value       = today;
@@ -28027,6 +28029,22 @@ function openWithdrawModal(studentId, studentName) {
   } else {
     if (infoBlock) infoBlock.style.display = 'none';
   }
+
+  // 졸업 일괄 퇴원이면 사유를 미리 채우고 안내를 띄운다
+  var _gn = document.getElementById('withdraw-grad-note');
+  if (isBulk && window._bulkWithdrawGraduation) {
+    var _n = (window._bulkWithdrawStudents || []).length;
+    if (_gn) {
+      _gn.style.display = '';
+      _gn.innerHTML = '🎓 <b>졸업자 ' + _n + '명</b>을 한꺼번에 퇴원 처리합니다.<br>'
+        + '퇴원 사유는 <b>' + WD_GRAD_REASON + '</b>로 남습니다 — 따로 고르지 않으셔도 됩니다.<br>'
+        + '퇴원일과 마지막 수업일만 확인해 주세요.';
+    }
+    document.getElementById('withdraw-reason').value = WD_GRAD_REASON;
+  } else if (_gn) {
+    _gn.style.display = 'none'; _gn.innerHTML = '';
+  }
+
   openModal('withdraw');
 }
 
@@ -28042,10 +28060,20 @@ async function confirmWithdraw() {
   const reasonSel = Array.from(document.querySelectorAll('#withdraw-reasons .wd-reason:checked')).map(c => c.value);
   if (!date) { alert('퇴원일을 입력하세요'); return; }
   if (!lastClass) { alert('마지막 수업일을 입력하세요'); return; }
-  if (!isCancelled && reasonSel.length === 0) { alert('퇴원 사유를 최소 1개 선택하세요'); return; }
+  // 졸업 일괄 퇴원은 사유가 정해져 있다 — 체크박스를 고르게 하지 않는다
+  const isGrad = isBulk && !!window._bulkWithdrawGraduation;
+  if (!isCancelled && !isGrad && reasonSel.length === 0) { alert('퇴원 사유를 최소 1개 선택하세요'); return; }
   if (reasonSel.includes('기타') && !reason) { alert('기타를 선택한 경우 상세 사유를 입력하세요'); return; }
   // 사람이 읽는 요약: "사유1 · 사유2 — 상세" (users·퇴원보고서에 이 형태로 남긴다)
-  const reasonText = reasonSel.join(' · ') + (reason ? (reasonSel.length ? ' — ' : '') + reason : '');
+  // 졸업 모드에서는 상세 칸이 WD_GRAD_REASON 으로 미리 채워져 있다.
+  // 선생님이 그 뒤에 덧붙여 쓰면 문구가 두 번 들어가므로, 앞의 정해진
+  // 문구를 떼어내고 남은 메모만 뒤에 붙인다.
+  const _gradMemo = isGrad
+    ? String(reason || '').split(WD_GRAD_REASON).join('').replace(/^[\s\/·,\-—]+/, '').trim()
+    : '';
+  const reasonText = isGrad
+    ? (WD_GRAD_REASON + (_gradMemo ? ' — ' + _gradMemo : ''))
+    : (reasonSel.join(' · ') + (reason ? (reasonSel.length ? ' — ' : '') + reason : ''));
 
   const targets = isBulk
     ? (window._bulkWithdrawStudents || [])
@@ -28211,6 +28239,7 @@ async function confirmWithdraw() {
   closeWithdrawModal();
   clearStudentSelection();
   window._bulkWithdrawStudents = [];
+  window._bulkWithdrawGraduation = false;   // 다음 퇴원이 졸업으로 잘못 처리되지 않게
 
   if (errors.length) { alert('⚠️ 완료: ' + success + '건\n실패:\n' + errors.join('\n')); }
   else { alert('✅ 퇴원 처리 완료!' + (success > 1 ? ' (' + success + '명)' : '')); }
@@ -28490,6 +28519,7 @@ function bulkTransfer() {
 function bulkWithdraw() {
   if (_selectedStudentIds.size === 0) { alert('학생을 선택하세요'); return; }
   window._bulkWithdrawStudents = students.filter(s => _selectedStudentIds.has(s.id));
+  window._bulkWithdrawGraduation = false;   // 일반 일괄 퇴원이다
   openWithdrawModal('__bulk__', null);
 }
 
@@ -28807,6 +28837,7 @@ function renderStudents() {
   // ── 재원 목록 상단 배너 (코드 미발급 경고 + 전체 복사/다운로드) ──
   let header = '';
   if (!_showWithdrawn) {
+    header += _gradBanner();
     header += _prepBanner(filtered, 'stSchoolFilter', 'renderStudents');
     const noCode = filtered.filter(s => !s.student_code);
     if (noCode.length) {
@@ -28875,6 +28906,7 @@ function renderStudents() {
           ${cls2 ? `<span style="font-size:11px;padding:2px 7px;border-radius:100px;background:#f0fdf4;color:#16a34a;font-weight:600">${_esc(cls2.name)}</span>` : ''}
           ${s.student_code ? `<span style="font-size:10px;padding:2px 6px;border-radius:6px;background:#f0f7ff;color:#1d4ed8;font-family:monospace;font-weight:700">${s.student_code}</span>` : ''}
           ${_prepBadge(s)}
+          ${_gradBadge(s)}
         </div>
         <div style="font-size:11px;color:var(--text-sub);margin-top:2px">
           ${schoolGrade ? schoolGrade + ' · ' : ''}${s.phone || '연락처 없음'}
@@ -28925,6 +28957,47 @@ function _prepBanner(list, schoolSelId, renderFnName) {
     + '<span style="margin-left:auto;display:flex;gap:6px">' + link('예비중', mid, '예비중') + link('예비고', hi, '예비고') + '</span>'
     + '</div>';
 }
+/* ── [졸업] ─────────────────────────────────────────────
+   승급은 고3에게 graduated_at 만 찍어 둔다. 퇴원은 담당 선생님이
+   확인하고 일괄로 한다 — 자동으로 빼면 되돌리기 어렵기 때문이다. */
+var WD_GRAD_REASON = '고등학교 졸업으로 퇴원처리';
+function _isGraduated(s) { return !!(s && s.graduated_at && s.status === 'active'); }
+function _gradBadge(s) {
+  if (!_isGraduated(s)) return '';
+  return '<span title="졸업 처리됨 — 아직 재원 상태입니다. 일괄 퇴원으로 정리하세요"'
+    + ' style="font-size:10px;padding:2px 7px;border-radius:100px;background:#f5f3ff;color:#6d28d9;'
+    + 'border:1px solid #ddd6fe;font-weight:800">🎓 졸업</span>';
+}
+/* 내가 담당하는 졸업생 (아직 재원) */
+function _myGraduates() {
+  return (students || []).filter(function(s) {
+    return _isGraduated(s) && (!currentUser || !s.teacher_id || s.teacher_id === currentUser.id);
+  });
+}
+function _gradBanner() {
+  var g = _myGraduates();
+  if (!g.length) return '';
+  return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;'
+    + 'background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;flex-wrap:wrap">'
+    + '<span style="font-size:12px;color:#5b21b6;font-weight:700">🎓 졸업 처리된 학생 ' + g.length + '명</span>'
+    + '<span style="font-size:11px;color:#6d28d9">아직 재원 상태입니다. 퇴원으로 정리해 주세요</span>'
+    + '<button onclick="bulkWithdrawGraduates()" style="margin-left:auto;padding:4px 12px;border:none;'
+    + 'border-radius:7px;background:#6d28d9;color:#fff;font-size:11.5px;font-weight:700;cursor:pointer">'
+    + '졸업자 ' + g.length + '명 일괄 퇴원</button></div>';
+}
+/* 졸업자만 골라 일괄 퇴원 모달을 연다 */
+function bulkWithdrawGraduates() {
+  var g = _myGraduates();
+  if (!g.length) { alert('졸업 처리된 학생이 없습니다.'); return; }
+  if (!confirm('졸업자 ' + g.length + '명을 한꺼번에 퇴원 처리합니다.\n\n' +
+    g.slice(0, 12).map(function(s) { return '· ' + (s.name || ''); }).join('\n') +
+    (g.length > 12 ? '\n… 외 ' + (g.length - 12) + '명' : '') +
+    '\n\n다음 화면에서 퇴원일과 마지막 수업일을 확인하세요.')) return;
+  window._bulkWithdrawStudents = g;
+  window._bulkWithdrawGraduation = true;
+  openWithdrawModal('__bulk__', null);
+}
+
 function _prepFilterTo(selId, val, renderFnName) {
   var el = document.getElementById(selId);
   if (el) el.value = val;
@@ -29104,6 +29177,7 @@ function renderAdminStudents() {
           ${branch ? `<span style="font-size:11px;padding:2px 7px;border-radius:100px;background:#f5f3ff;color:#7c3aed;font-weight:600">${_esc(branch.name)}</span>` : ''}
           ${rrKind ? `<span title="독서실 이용 중 (이름·학교·학년으로 이어 붙임)" style="font-size:11px;padding:2px 7px;border-radius:100px;font-weight:600;background:${rrKind==='원생'?'#e0f2fe':'#f1f5f9'};color:${rrKind==='원생'?'#0369a1':'#64748b'}">🪑 독서실 ${rrKind}</span>` : ''}
           ${_prepBadge(u)}
+          ${_gradBadge(u)}
         </div>
         <div style="font-size:11px;color:var(--text-sub);margin-top:2px">
           ${teacher ? '👤 ' + teacher.name + 'T · ' : ''}${schoolGrade ? schoolGrade + ' · ' : ''}${u.phone || '연락처 없음'}
