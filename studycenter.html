@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.98-link]</title>
+<title>BMAPS · 독서실 출결 [v0.99-code]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -843,7 +843,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.98-link</span>
+    <span class="tb-ver" id="sc-ver">v0.99-code</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1203,7 +1203,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.98-link';
+  window.STUDYCENTER_VERSION = 'v0.99-code';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -5207,12 +5207,21 @@
     return line.split(/\s{2,}/);   // 2칸 이상 공백
   }
 
-  // 기존 DB 코드 + 이번 배치를 합쳐 충돌 없는 코드 생성
+  /* 기존 DB 코드 + 이번 배치를 합쳐 충돌 없는 코드 생성
+
+     ⚠ 피해야 할 코드는 **명단에 있는 사람(reading_room_yn=true)** 것뿐이다.
+       명단에서 내려간 행(scDelete → yn=false)까지 세면, 퇴원했다 돌아온
+       학생이 원래 쓰던 4자리를 못 쓰고 5자리로 밀린다.
+       2026-09-12 실측: 5자리로 밀린 현역 7명이 **전원 본인의 내려간 행**에
+       막혀 있었다(김종호·김아영·엄동연·이세연·진우혁·김중서·신수민).
+     코드로 학생을 찾는 곳은 모두 yn=true 로 걸러 본다(키오스크 조회·좌석
+     배치도 명단·학생 명단). 복원(scRestore)은 퇴원 표시만 되돌리므로
+     내려간 행을 명단에 다시 올리지 않는다 → 겹칠 일이 없다. */
   async function scGenerateCodes(rows){
-    // 기존 DB의 모든 reading_room_code 수집 (충돌 방지)
     var existing = {};
     try {
-      var res = await db.from("users").select("reading_room_code").not("reading_room_code","is",null);
+      var res = await db.from("users").select("reading_room_code")
+        .not("reading_room_code","is",null).eq("reading_room_yn", true);
       (res.data || []).forEach(function(u){ if(u.reading_room_code) existing[u.reading_room_code] = true; });
     } catch(e){ console.warn("기존 코드 조회 실패(무시 진행):", e); }
 
@@ -5629,9 +5638,16 @@
         var _newCode=(document.getElementById('rf-code').value||'').trim();
         if(_newCode){
           if(!/^\d{4,6}$/.test(_newCode)){ showErr('코드는 숫자 4~6자리로 입력하세요.'); return; }
-          var _dup=await db.from('users').select('id').eq('reading_room_code',_newCode).neq('id',_scEditId).limit(1);
+          // 명단에 있는 사람만 본다 — 내려간 행이 쥔 코드는 다시 쓸 수 있다
+          // (scGenerateCodes 의 긴 설명 참고)
+          var _dup=await db.from('users').select('id,name').eq('reading_room_code',_newCode)
+            .eq('reading_room_yn', true).neq('id',_scEditId).limit(1);
           if(_dup.error){ showErr('코드 확인 실패: '+_dup.error.message); return; }
-          if((_dup.data||[]).length){ showErr('이미 사용 중인 코드입니다: '+_newCode); return; }
+          if((_dup.data||[]).length){
+            // 누가 쓰는지 알려 준다 — '아무도 안 쓰는데 왜 막나' 싶은 일이 많았다
+            showErr('이미 사용 중인 코드입니다: '+_newCode+' ('+(_dup.data[0].name||'이름 없음')+' 학생)');
+            return;
+          }
         }
         var upd={ name:name, school:school||null, school_level:level||null, grade:grade||null, phone:phone||null, reading_room_class:classVal, reading_room_mentoring:mentoring, enrolled_at:enrolled||null, required_study_minutes:reqMin, linked_student_id:scLinkVal() };
         if(_newCode) upd.reading_room_code=_newCode;
