@@ -2886,6 +2886,36 @@
         </div>
       </div>
 
+      <!-- 학년 승급 (관리자 전용) -->
+      <div class="panel" id="panel-admin-promote">
+        <div style="margin-bottom:14px">
+          <div style="font-size:18px;font-weight:700;color:var(--navy)">📈 학년 승급</div>
+          <div style="font-size:12px;color:var(--text-sub);margin-top:2px">매년 1월 1일 00:00(한국시각)에 자동으로 반영됩니다</div>
+        </div>
+
+        <div class="card" style="border:1.5px solid #bfdbfe;background:#f0f7ff;margin-bottom:14px">
+          <div style="font-size:12.5px;color:#1e40af;line-height:1.75">
+            · 초6 → <b>예비중 1학년</b> · 중3 → <b>예비고 1학년</b> · 고3 → <b>졸업 표시</b> (나머지는 학년 +1)<br>
+            · 학교급은 <b>학교명 끝글자</b>로 판단합니다 — 월별 수강인원과 같은 기준입니다<br>
+            · <b>예비중·예비고는 학교 발표 뒤 학교명을 직접 고쳐야</b> 합니다. 학생 목록에 표시해 둡니다<br>
+            · 졸업생은 자동으로 빠지지 않습니다. 선생님이 <b>졸업자 일괄 퇴원</b>으로 처리합니다<br>
+            · <b>반 배정은 그대로 남습니다.</b> 새 학년 반으로 다시 배정해 주세요
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:13px;font-weight:700;color:var(--text)">승급 연도</span>
+            <select id="gp-year" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;background:#fff"></select>
+            <span style="font-size:11.5px;color:var(--text-sub)">그 해 1월 1일에 반영되는 승급입니다</span>
+            <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="gpPreview()">🔍 미리보기</button>
+          </div>
+        </div>
+
+        <div id="gp-result"></div>
+        <div id="gp-runs" style="margin-top:16px"></div>
+      </div>
+
       <div class="panel" id="panel-admin-monthly-report">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
           <div>
@@ -4610,6 +4640,7 @@ function buildAdminSidebar() {
       ${menuItemId('amenu-worklog',        'admin-worklog',        '📋', '업무일지 조회')}
       ${menuItemId('amenu-timetable',      'admin-timetable',      '🗓️', '시간표 조회')}
       ${menuItemId('amenu-monthly-report', 'admin-monthly-report', '📊', '월별 수강인원')}
+      ${menuItemId('amenu-promote', 'admin-promote', '📈', '학년 승급', currentUser.role === 'admin' ? '' : 'display:none')}
       <button class="menu-item" id="amenu-consult" onclick="openConsultPage()">
         <span class="mi-icon">📋</span>
         <span class="mi-label">입퇴원 상담</span>
@@ -4770,6 +4801,7 @@ function switchPanel(panelId, btn) {
   if (panelId === 'students'                && typeof renderStudents            === 'function') renderStudents();
   if (panelId === 'questions'               && typeof loadTeacherQuestions     === 'function') loadTeacherQuestions();
   if (panelId === 'handover'                && typeof hoInit                   === 'function') hoInit();
+  if (panelId === 'admin-promote'           && typeof initGradePromote         === 'function') initGradePromote();
 }
 
 function switchPanelAdmin(tabId, btn) {
@@ -4867,7 +4899,7 @@ var DESK_PERM_TO_TABS = {
 var ADMIN_SIDEBAR_BUTTON_IDS = [
   'amenu-accounts', 'amenu-notify', 'amenu-lp-view', 'amenu-homework',
   'amenu-naje-accordion', 'amenu-syllabus', 'amenu-branches', 'amenu-worklog',
-  'amenu-timetable', 'amenu-monthly-report', 'amenu-consult', 'amenu-weekend-group',
+  'amenu-timetable', 'amenu-monthly-report', 'amenu-promote', 'amenu-consult', 'amenu-weekend-group',
   'amenu-naesin-group', 'amenu-reading-room-group'
 ];
 
@@ -14646,6 +14678,227 @@ function hoScrollToDay(){
   }
 }
 
+
+/* ══════════════════════════════════════════════════════════
+   [SECTION: GRADE PROMOTION] 학년 승급 (관리자 전용)
+
+   계산은 전부 DB 함수 promote_grades() 가 한다. 화면은 그 결과를
+   보여주기만 한다 — 미리보기와 실제 실행이 **같은 코드**를 쓰게 해서,
+   화면에서 본 것과 다른 일이 벌어지지 않게 하려는 것이다.
+   자동 실행(pg_cron)도 같은 함수를 부른다.
+
+   ⚠ 813명의 학년을 한 번에 바꾸는 일이다. 실수로 눌리지 않도록
+     승급 기간(12/20~1/10)이 아니면 실행 버튼을 잠그고, 풀려면
+     문장을 그대로 입력하게 한다. 미리보기는 언제든 자유롭게 볼 수 있다.
+   ══════════════════════════════════════════════════════════ */
+/* 관리자만. 메뉴를 숨기는 것만으로는 부족하다 — 콘솔로 직접 부를 수 있으므로
+   기능 입구마다 막는다.
+   ⚠ 다만 이건 화면 쪽 잠금이다. RLS 가 꺼져 있어 키만 있으면 DB 함수를
+     직접 부를 수 있는 건 이 앱 전체가 같은 처지다(별도 과제). */
+function gpIsAdmin(){ return !!(currentUser && currentUser.role === 'admin'); }
+
+var _gpData   = null;   // 마지막 미리보기 결과
+var _gpFilter = '';     // '' | '학년+1' | '예비중' | '예비고' | '졸업'
+var GP_CONFIRM_TEXT = '올해 승급을 지금 실행합니다';
+
+/* 승급 기간인가 — 12월 20일 ~ 1월 10일 */
+function gpInWindow() {
+  var d = new Date(), m = d.getMonth() + 1, day = d.getDate();
+  return (m === 12 && day >= 20) || (m === 1 && day <= 10);
+}
+/* 기본 승급 연도 — 1월 초면 올해, 그 밖이면 내년 */
+function gpDefaultYear() {
+  var d = new Date(), y = d.getFullYear();
+  return (d.getMonth() === 0 && d.getDate() <= 10) ? y : y + 1;
+}
+function gpYear() {
+  var el = document.getElementById('gp-year');
+  return el ? parseInt(el.value, 10) : gpDefaultYear();
+}
+
+function initGradePromote() {
+  if (!gpIsAdmin()) {
+    var b = document.getElementById('gp-result');
+    if (b) b.innerHTML = '<div class="card" style="color:#b45309">관리자만 쓸 수 있는 기능입니다.</div>';
+    var r = document.getElementById('gp-runs'); if (r) r.innerHTML = '';
+    return;
+  }
+  var sel = document.getElementById('gp-year');
+  if (sel && !sel.options.length) {
+    var base = gpDefaultYear(), html = '';
+    for (var y = base - 1; y <= base + 1; y++) {
+      html += '<option value="' + y + '"' + (y === base ? ' selected' : '') + '>' + y + '년</option>';
+    }
+    sel.innerHTML = html;
+  }
+  document.getElementById('gp-result').innerHTML = '';
+  gpLoadRuns();
+}
+
+/* 실행 기록 — 되돌리기는 여기서 한다 */
+async function gpLoadRuns() {
+  if (!gpIsAdmin()) return;
+  var box = document.getElementById('gp-runs');
+  if (!box) return;
+  var r = await db.from('grade_promotion_runs')
+    .select('run_year,run_at,total,undone_at').order('run_year', { ascending: false });
+  if (r.error) { box.innerHTML = '<div style="font-size:12px;color:#dc2626">실행 기록을 불러오지 못했습니다: ' + _esc(r.error.message) + '</div>'; return; }
+  var rows = r.data || [];
+  if (!rows.length) { box.innerHTML = '<div style="font-size:12px;color:var(--text-sub)">아직 실행된 승급이 없습니다.</div>'; return; }
+  box.innerHTML = '<div class="card"><div class="card-title">실행 기록</div>'
+    + rows.map(function(x) {
+        var when = (x.run_at || '').replace('T', ' ').slice(0, 16);
+        return '<div style="display:flex;align-items:center;gap:10px;padding:8px 2px;border-bottom:1px solid var(--border);flex-wrap:wrap">'
+          + '<b style="font-size:13px">' + x.run_year + '년</b>'
+          + '<span style="font-size:12px;color:var(--text-sub)">' + _esc(when) + ' · ' + x.total + '명</span>'
+          + (x.undone_at
+              ? '<span style="font-size:11px;padding:2px 8px;border-radius:100px;background:#f1f5f9;color:#64748b;font-weight:700">되돌림</span>'
+              : '<button class="btn btn-sm" style="margin-left:auto;border-color:#fca5a5;color:#dc2626;background:#fef2f2" onclick="gpUndo(' + x.run_year + ')">↩️ 되돌리기</button>')
+          + '</div>';
+      }).join('')
+    + '</div>';
+}
+
+async function gpPreview() {
+  if (!gpIsAdmin()) return;
+  var box = document.getElementById('gp-result');
+  box.innerHTML = '<div class="loading"><div class="spinner"></div>미리보기를 계산하는 중...</div>';
+  var r = await db.rpc('promote_grades', { p_year: gpYear(), p_dry_run: true });
+  if (r.error) { box.innerHTML = '<div class="card" style="color:#dc2626">미리보기 실패: ' + _esc(r.error.message) + '</div>'; return; }
+  _gpData = r.data; _gpFilter = '';
+  gpRender();
+}
+
+function gpCount(kind) {
+  return ((_gpData && _gpData.changes) || []).filter(function(c) { return c.kind === kind; }).length;
+}
+
+function gpRender() {
+  var box = document.getElementById('gp-result');
+  if (!_gpData) { box.innerHTML = ''; return; }
+  var all  = _gpData.changes || [];
+  var skip = _gpData.skipped || [];
+  var done = !!_gpData.already_done;
+
+  function card(k, v, color) {
+    return '<div class="stat-item"><div class="sv" style="color:' + color + '">' + v + '</div><div class="sl">' + k + '</div></div>';
+  }
+  var html = '<div class="stats-grid" style="grid-template-columns:repeat(5,1fr)">'
+    + card('대상',    all.length,      'var(--primary)')
+    + card('학년 +1', gpCount('학년+1'), '#0f766e')
+    + card('예비중',  gpCount('예비중'), '#0369a1')
+    + card('예비고',  gpCount('예비고'), '#7c3aed')
+    + card('졸업',    gpCount('졸업'),   '#dc2626')
+    + '</div>';
+
+  if (skip.length) {
+    html += '<div class="card" style="border:1.5px solid #fcd34d;background:#fffbeb;margin-bottom:12px">'
+      + '<div style="font-size:12.5px;font-weight:700;color:#92400e;margin-bottom:6px">⚠️ 판정하지 못해 건너뛸 학생 ' + skip.length + '명</div>'
+      + skip.map(function(x) {
+          return '<div style="font-size:12px;color:#78350f;padding:2px 0">' + _esc(x.name || '') + ' · '
+            + _esc(x.school || '(학교 없음)') + ' ' + _esc(x.grade || '') + ' — ' + _esc(x.why) + '</div>';
+        }).join('')
+      + '<div style="font-size:11.5px;color:#92400e;margin-top:6px">학교명·학년을 고친 뒤 다시 미리보기 하세요. 이대로 실행하면 이 학생들은 그대로 남습니다.</div>'
+      + '</div>';
+  }
+
+  // 종류 필터
+  var kinds = ['', '학년+1', '예비중', '예비고', '졸업'];
+  html += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">'
+    + kinds.map(function(k) {
+        var on = (_gpFilter === k);
+        return '<button class="btn btn-sm" onclick="gpSetFilter(\'' + k + '\')" style="'
+          + (on ? 'background:var(--navy);color:#fff;border-color:var(--navy);font-weight:700' : '') + '">'
+          + (k === '' ? '전체' : k) + ' ' + (k === '' ? all.length : gpCount(k)) + '</button>';
+      }).join('')
+    + '</div>';
+
+  var list = _gpFilter ? all.filter(function(c) { return c.kind === _gpFilter; }) : all;
+  html += '<div class="card" style="max-height:420px;overflow:auto;padding:0 4px">'
+    + list.map(function(c) {
+        var lvUp = c.level_from !== c.level_to;
+        var tone = c.kind === '졸업' ? '#dc2626' : (c.kind === '예비중' ? '#0369a1' : (c.kind === '예비고' ? '#7c3aed' : '#0f766e'));
+        return '<div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid var(--border);font-size:12.5px;flex-wrap:wrap">'
+          + '<span style="font-weight:700;min-width:62px">' + _esc(c.name || '') + '</span>'
+          + '<span style="font-size:10px;padding:2px 7px;border-radius:100px;background:#f1f5f9;color:' + tone + ';font-weight:700">' + _esc(c.kind) + '</span>'
+          + '<span style="color:var(--text-sub)">' + _esc(c['from']) + '</span>'
+          + '<span style="color:#94a3b8">→</span>'
+          + '<span style="font-weight:600">' + _esc(c.to) + '</span>'
+          + (lvUp ? '<span style="font-size:10px;padding:2px 7px;border-radius:100px;background:#ecfdf5;color:#047857;font-weight:700">' + _esc(c.level_from || '-') + '→' + _esc(c.level_to || '-') + '</span>' : '')
+          + '</div>';
+      }).join('')
+    + '</div>';
+
+  // ── 실행 ──
+  html += '<div class="card" style="margin-top:14px;border:1.5px solid ' + (done ? '#e2e8f0' : '#fca5a5') + '">';
+  if (done) {
+    html += '<div style="font-size:13px;font-weight:700;color:#16a34a">✅ ' + _gpData.year + '년 승급은 이미 끝났습니다.</div>'
+      + '<div style="font-size:12px;color:var(--text-sub);margin-top:4px">다시 하려면 아래 실행 기록에서 되돌린 뒤 실행하세요.</div>';
+  } else if (!gpInWindow()) {
+    html += '<div style="font-size:13px;font-weight:700;color:#b45309">🔒 지금은 승급 기간이 아닙니다 (12월 20일 ~ 1월 10일)</div>'
+      + '<div style="font-size:12px;color:var(--text-sub);margin:6px 0 10px">1월 1일 00:00에 자동으로 실행되므로 보통은 손대실 일이 없습니다. '
+      + '그래도 지금 실행하려면 아래 문장을 그대로 입력하세요.</div>'
+      + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+      + '<code style="font-size:12px;background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:5px 9px">' + GP_CONFIRM_TEXT + '</code>'
+      + '<input id="gp-unlock" oninput="gpRenderRunBtn()" placeholder="위 문장을 그대로 입력" '
+      + 'style="flex:1;min-width:190px;padding:8px 11px;border:1.5px solid var(--border);border-radius:9px;font-size:13px">'
+      + '</div><div id="gp-runbtn" style="margin-top:10px"></div>';
+  } else {
+    html += '<div style="font-size:13px;font-weight:700;color:#dc2626">승급 실행</div>'
+      + '<div style="font-size:12px;color:var(--text-sub);margin:4px 0 10px">위 목록 그대로 반영됩니다. 실행 뒤에도 되돌릴 수 있습니다.</div>'
+      + '<div id="gp-runbtn"></div>';
+  }
+  html += '</div>';
+
+  box.innerHTML = html;
+  if (!done) gpRenderRunBtn();
+}
+
+function gpSetFilter(k) { _gpFilter = k; gpRender(); }
+
+/* 잠금 상태에 따라 실행 버튼을 그린다 */
+function gpRenderRunBtn() {
+  var wrap = document.getElementById('gp-runbtn');
+  if (!wrap) return;
+  var un = document.getElementById('gp-unlock');
+  var ok = gpInWindow() || (un && un.value.trim() === GP_CONFIRM_TEXT);
+  wrap.innerHTML = ok
+    ? '<button class="btn" style="background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700" onclick="gpRun()">📈 ' + _gpData.year + '년 승급 실행 (' + (_gpData.changes || []).length + '명)</button>'
+    : '<button class="btn" disabled style="opacity:.5;cursor:not-allowed">📈 승급 실행 (잠김)</button>';
+}
+
+async function gpRun() {
+  if (!gpIsAdmin()) { alert('관리자만 실행할 수 있습니다.'); return; }
+  var y = _gpData ? _gpData.year : gpYear();
+  var n = (_gpData && _gpData.changes || []).length;
+  if (!confirm(y + '년 승급을 실행합니다.\n\n· 대상 ' + n + '명의 학년·학교명이 바뀝니다\n'
+    + '· 졸업 ' + gpCount('졸업') + '명은 졸업 표시만 되고 퇴원은 되지 않습니다\n'
+    + '· 실행 뒤에도 되돌릴 수 있습니다\n\n계속할까요?')) return;
+  var box = document.getElementById('gp-result');
+  box.innerHTML = '<div class="loading"><div class="spinner"></div>승급을 반영하는 중...</div>';
+  var r = await db.rpc('promote_grades', { p_year: y, p_dry_run: false });
+  if (r.error) { box.innerHTML = '<div class="card" style="color:#dc2626">실행 실패: ' + _esc(r.error.message) + '</div>'; return; }
+  if (r.data && r.data.ok === false) {
+    box.innerHTML = '<div class="card" style="color:#b45309">' + _esc(r.data.error || '실행하지 못했습니다.') + '</div>';
+    gpLoadRuns(); return;
+  }
+  alert(y + '년 승급을 반영했습니다. (' + ((r.data && r.data.total) || 0) + '명)');
+  await loadAdminData();                 // 바뀐 학년으로 화면 전체를 다시 읽는다
+  _gpData = null;
+  initGradePromote();
+}
+
+async function gpUndo(year) {
+  if (!gpIsAdmin()) { alert('관리자만 되돌릴 수 있습니다.'); return; }
+  if (!confirm(year + '년 승급을 되돌립니다.\n\n학년·학교명·학교급·졸업 표시가 승급 직전 값으로 돌아갑니다.\n계속할까요?')) return;
+  var r = await db.rpc('undo_grade_promotion', { p_year: year });
+  if (r.error) { alert('되돌리기 실패: ' + r.error.message); return; }
+  if (r.data && r.data.ok === false) { alert(r.data.error || '되돌리지 못했습니다.'); gpLoadRuns(); return; }
+  alert(year + '년 승급을 되돌렸습니다. (' + ((r.data && r.data.restored) || 0) + '명)');
+  await loadAdminData();
+  _gpData = null;
+  initGradePromote();
+}
 
 /* ── 통계 카드 업데이트 ─────────────────────────────────── */
 function updateAcctStats() {
