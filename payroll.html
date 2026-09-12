@@ -125,6 +125,10 @@
   .permsel{font:inherit;font-size:12px;padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;font-weight:700;color:var(--ink)}
   .staff .br{font-size:11px;color:var(--maroon);margin-left:6px;background:var(--maroon-l);padding:1px 6px;border-radius:6px}
   .dnm-br{font-size:12px;color:var(--maroon);font-weight:600;margin-left:8px;background:var(--maroon-l);padding:2px 8px;border-radius:6px}
+  /* 상세 머리의 분원 변경 select — 읽기 전용 뱃지(.dnm-br)처럼 보이게.
+     ⚠ 위 .brrow .brsel 은 '분원 관리' 모달의 것이다. 이름을 나눠 둔다 */
+  .permsel.dbrsel{margin-left:8px;padding:3px 8px;font-size:12px;border-color:transparent}
+  .permsel.dbrsel:hover{border-color:var(--line)}
   .del-staff{color:#b91c1c;border-color:#e7b8b8;margin-left:8px;font-size:12px;padding:4px 10px;align-self:center}
   .del-staff:hover{background:#fdf2f2}
   .mgrbtn{width:100%;margin-top:6px}
@@ -829,7 +833,14 @@ function renderDetail(){
   body.innerHTML = modeBar +
     '<div class="dhead">' +
       '<span class="dnm">'+s.name+'</span>' +
-      (s.branch_id?'<span class="dnm-br" style="background:'+branchColor(s.branch_id).bg+';color:'+branchColor(s.branch_id).fg+'">'+esc(branchName(s.branch_id))+'</span>':'') +
+      // 분원 — 관리자는 여기서 바로 바꿀 수 있다. 그 외에는 읽기 전용 뱃지
+      (APP_MODE==='admin'
+        ? '<select class="permsel dbrsel" title="소속 분원 변경" onchange="setStaffBranch(\''+s.id+'\', this.value)"'
+          + ' style="background:'+branchColor(s.branch_id).bg+';color:'+branchColor(s.branch_id).fg+'">'
+          + branchOptions(s.branch_id||'') + '</select>'
+        : (s.branch_id
+            ? '<span class="dnm-br" style="background:'+branchColor(s.branch_id).bg+';color:'+branchColor(s.branch_id).fg+'">'+esc(branchName(s.branch_id))+'</span>'
+            : '')) +
       '<span class="tag '+(mtActive?'mt':'')+'">'+(mtActive?'일반+멘토링':'일반')+'</span>' +
       '<div class="monthnav">' +
         '<button onclick="shiftMonth(-1)">‹</button>' +
@@ -1166,6 +1177,34 @@ function renderBranchList(){
     '</div>';
   }).join('');
 }
+/* 소속 분원 변경 — 관리자만.
+   ⚠ 분원은 단순 표시가 아니다. ①알바 로그인에서 고르는 분원 ②권한자가
+     관리하는 범위 ③급여 추출 탭의 분원 묶음이 모두 이 값을 본다.
+     특히 급여 추출은 지난 달도 이 값으로 묶으므로 과거분까지 새 분원으로
+     잡힌다. 되돌릴 수는 있지만 모르고 바꾸면 헷갈리니 확인을 받는다.
+   근무기록(pt_log)·시급(pt_rate)은 staff_id 로 매여 있어 영향 없다. */
+async function setStaffBranch(id, value){
+  if(APP_MODE!=='admin'){ renderDetail(); return; }      // 권한자·알바는 못 바꾼다
+  var s=staffById(id); if(!s) return;
+  var next = value || null;
+  if(next === (s.branch_id||null)){ renderDetail(); return; }              // 변화 없음
+  if(next && !DB.branches.some(function(b){ return b.id===next; })){ renderDetail(); return; }
+  var from = s.branch_id ? branchName(s.branch_id) : '(분원 미지정)';
+  var to   = next ? branchName(next) : '(분원 미지정)';
+  if(!confirm(s.name+' 님의 소속 분원을 바꿉니다.\n\n'+from+'  →  '+to
+    +'\n\n· 알바 로그인에서 고르는 분원이 바뀝니다.'
+    +'\n· 급여 추출은 지난 달도 새 분원으로 묶입니다.'
+    +'\n· 근무기록과 시급은 그대로 따라갑니다.'
+    +'\n\n계속할까요?')){ renderDetail(); return; }
+  var up=await sb.from('pt_staff').update({branch_id:next}).eq('id',id);
+  if(up.error){ alert('분원 변경 실패: '+up.error.message); renderDetail(); return; }
+  s.branch_id = next;
+  // 분원 필터가 걸려 있으면 옮긴 사람이 왼쪽 목록에서 사라져 헷갈린다 → 필터를 푼다
+  var fb=document.getElementById('flt_branch');
+  if(fb && fb.value && fb.value!==(next||'')) fb.value='';
+  renderStaffList(); renderDetail();
+}
+
 async function setStaffRole(id, value){
   var s=staffById(id); if(!s) return;
   if(value!=='viewer' && value!=='inputter' && value!=='manager'){ renderDetail(); return; }
