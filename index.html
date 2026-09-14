@@ -25104,13 +25104,13 @@ async function openLpClassModal(classId, className){
    그래서 반·날짜로 한 번에 읽어 표로 펴 놓고, 고칠 것만 고친 뒤
    한 번에 upsert 한다. 한 명씩 열면 21명 반은 모달 21번 + 쿼리 100번쯤 든다.
 
-   ⚠ 개별 진도·개별 숙제는 이 표에 넣지 않는다(학생마다 여러 줄이라
-     표가 못 쓰게 된다). 대신 저장할 때 **기존 값을 그대로 넘겨** 지워지지
-     않게 한다. 세밀한 편집은 기존 [📝 작성] 모달에서 한다.
+   개별 진도·숙제는 학생마다 **아랫줄**에 둔다. 표를 옆으로 넓히면 가로
+   스크롤이 길어지고 칸이 좁아 못 쓴다. 값이 문자열 배열이라 '한 줄에 하나'로
+   쓰면 그대로 대응된다(기존 lpGetIndivList 와 같은 규칙 — 잘라내고 빈 줄 버림).
    ⚠ 이미 기록이 있는 학생은 **체크를 꺼 둔다.** 정성껏 쓴 기록을 실수로
      덮어쓰지 않게 — 저장은 체크한 학생만 한다.
    ════════════════════════════════════════════════════════════ */
-var _lpBulk = null;   // {classId, className, students, indiv:{sid:{p,h}}}
+var _lpBulk = null;   // {classId, className, students}
 
 async function openLpBulkModal(classId, className){
   var ex = document.getElementById('lp-bulk-modal');
@@ -25136,7 +25136,7 @@ async function openLpBulkModal(classId, className){
   modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
   document.body.appendChild(modal);
 
-  _lpBulk = { classId: classId, className: className, students: [], indiv: {} };
+  _lpBulk = { classId: classId, className: className, students: [] };
   await lpBulkLoad(_localYMD(new Date()));
 }
 
@@ -25175,7 +25175,17 @@ async function lpBulkLoad(dateStr){
   }
 
   _lpBulk.students = studs;
-  _lpBulk.indiv = {};
+
+  /* 개별 진도·숙제를 칸에 넣을 글로 바꾼다.
+     learning_progress 쪽은 JSON 배열 문자열, work_log_students 쪽은 단일
+     문자열이라 형식이 다르다. 둘 다 '한 줄에 하나'로 펴 준다. */
+  function indivText(lpVal, slVal){
+    if(lpVal){
+      try { var a = JSON.parse(lpVal); if(Array.isArray(a)) return a.join('\n'); } catch(e){}
+      return String(lpVal);
+    }
+    return slVal ? String(slVal) : '';
+  }
 
   // 업무일지의 과제 상태를 사람이 읽는 말로 (한 명씩 작성 모달과 같은 규칙)
   function hwWord(v){
@@ -25189,13 +25199,8 @@ async function lpBulkLoad(dateStr){
   var rows = studs.map(function(s){
     var sl = slMap[s.id] || {};
     var lp = lpMap[s.id] || null;
-    // 개별 진도·숙제는 표에 안 보이지만 저장할 때 그대로 넘긴다
-    _lpBulk.indiv[s.id] = {
-      p: lp && lp.individual_progress ? lp.individual_progress
-         : (sl.individual_progress ? JSON.stringify([sl.individual_progress]) : '[]'),
-      h: lp && lp.individual_homework ? lp.individual_homework
-         : (sl.individual_homework ? JSON.stringify([sl.individual_homework]) : '[]')
-    };
+    var ipTxt = indivText(lp && lp.individual_progress, sl.individual_progress);
+    var ihTxt = indivText(lp && lp.individual_homework,  sl.individual_homework);
     var att  = (lp && lp.attendance)     || sl.attendance || '';
     var hw   = (lp && lp.homework_check) || hwWord(sl.homework_done);
     var nj   = (lp && lp.naje_check)     || (sl.n_count != null ? String(sl.n_count) : '');
@@ -25205,7 +25210,7 @@ async function lpBulkLoad(dateStr){
     var note = (lp && lp.note) || sl.note || '';
     var has  = !!lp;
     var opt = function(v, t){ return '<option value="'+v+'"'+(att===v?' selected':'')+'>'+t+'</option>'; };
-    return '<tr style="border-bottom:1px solid #f1f5f9;background:'+(has?'#faf5ff':'#fff')+'">'
+    return '<tr style="background:'+(has?'#faf5ff':'#fff')+'">'
       +'<td style="padding:7px 6px;text-align:center"><input type="checkbox" id="lpb-chk-'+s.id+'"'+(has?'':' checked')+' onchange="lpBulkRenderFoot()" style="width:16px;height:16px;accent-color:#7c3aed;cursor:pointer"></td>'
       +'<td style="padding:7px 6px;white-space:nowrap">'
         +'<div style="font-size:12.5px;font-weight:700;color:#1e293b">'+_esc(s.name)+'</div>'
@@ -25219,6 +25224,24 @@ async function lpBulkLoad(dateStr){
       +'<td style="padding:7px 4px"><input id="lpb-ts-'+s.id+'"   value="'+_esc(ts)+'"   placeholder="점수" style="width:62px;padding:5px 7px;border:1px solid #e5e7eb;border-radius:6px;font-size:12px"></td>'
       +'<td style="padding:7px 4px"><input id="lpb-pen-'+s.id+'"  type="number" min="0" value="'+pen+'" style="width:56px;padding:5px 7px;border:1px solid #fde68a;border-radius:6px;font-size:12px;text-align:center;font-weight:700"></td>'
       +'<td style="padding:7px 4px"><input id="lpb-note-'+s.id+'" value="'+_esc(note)+'" placeholder="특이사항" style="width:100%;min-width:130px;padding:5px 7px;border:1px solid #e5e7eb;border-radius:6px;font-size:12px"></td>'
+    +'</tr>'
+    // 개별 진도·숙제 — 이 학생에게만 다른 내용. 한 줄에 하나씩
+    +'<tr style="border-bottom:1px solid #e5e7eb;background:'+(has?'#faf5ff':'#fff')+'">'
+      +'<td></td>'
+      +'<td colspan="7" style="padding:0 6px 9px">'
+        +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
+          +'<div>'
+            +'<div style="font-size:10px;font-weight:700;color:#4f46e5;margin-bottom:3px">📖 개별 진도 <span style="color:#9ca3af;font-weight:400">— 한 줄에 하나씩</span></div>'
+            +'<textarea id="lpb-ip-'+s.id+'" rows="1" placeholder="이 학생에게만 다른 진도가 있을 때" '
+              +'style="width:100%;padding:5px 7px;border:1px solid #c7d2fe;border-radius:6px;font-size:11.5px;resize:vertical;box-sizing:border-box;font-family:inherit;line-height:1.5">'+_esc(ipTxt)+'</textarea>'
+          +'</div>'
+          +'<div>'
+            +'<div style="font-size:10px;font-weight:700;color:#4f46e5;margin-bottom:3px">📝 개별 숙제 <span style="color:#9ca3af;font-weight:400">— 한 줄에 하나씩</span></div>'
+            +'<textarea id="lpb-ih-'+s.id+'" rows="1" placeholder="이 학생에게만 다른 숙제가 있을 때" '
+              +'style="width:100%;padding:5px 7px;border:1px solid #c7d2fe;border-radius:6px;font-size:11.5px;resize:vertical;box-sizing:border-box;font-family:inherit;line-height:1.5">'+_esc(ihTxt)+'</textarea>'
+          +'</div>'
+        +'</div>'
+      +'</td>'
     +'</tr>';
   }).join('');
 
@@ -25255,7 +25278,7 @@ async function lpBulkLoad(dateStr){
         +'</tr></thead><tbody>'+rows+'</tbody></table></div>'
         +'<div style="font-size:11px;color:#9ca3af;margin-top:8px;line-height:1.6">'
         +'· 보라색 줄은 <b>이미 기록이 있는 학생</b>입니다. 덮어쓰지 않도록 체크를 꺼 두었습니다<br>'
-        +'· 개별 진도·숙제는 이 표에 없지만 <b>저장해도 지워지지 않습니다</b>. 고치려면 학생별 [📝 작성]을 쓰세요'
+        +'· 개별 진도·숙제는 <b>한 줄에 하나씩</b> 쓰시면 됩니다. 여러 개면 줄을 나누세요'
         +'</div>'
       : '<div style="text-align:center;padding:30px;color:#9ca3af">이 반에 학생이 없습니다</div>');
 
@@ -25305,6 +25328,10 @@ async function lpBulkSave(){
   var rows = ids.map(function(sid){
     var v = function(p){ var el = document.getElementById('lpb-'+p+'-'+sid); return el ? el.value : ''; };
     var ts = String(v('ts')).trim();
+    // 한 줄에 하나 → 배열. 기존 lpGetIndivList 와 같은 규칙(잘라내고 빈 줄 버림)
+    var toList = function(p){
+      return String(v(p) || '').split('\n').map(function(x){ return x.trim(); }).filter(Boolean);
+    };
     return {
       student_id:          sid,
       class_id:            _lpBulk.classId,
@@ -25318,8 +25345,8 @@ async function lpBulkSave(){
       attendance:          v('att'),
       note:                v('note'),
       test_score:          ts === '' ? null : ts,
-      individual_progress: (_lpBulk.indiv[sid] || {}).p || '[]',
-      individual_homework: (_lpBulk.indiv[sid] || {}).h || '[]',
+      individual_progress: JSON.stringify(toList('ip')),
+      individual_homework: JSON.stringify(toList('ih')),
       updated_at:          now
     };
   });
