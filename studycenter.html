@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v0.99-code]</title>
+<title>BMAPS · 독서실 출결 [v1.00-newbadge]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -246,6 +246,12 @@
   .rl-name { font-weight:700; font-size:13.5px; color:#0f172a; }
   .rl-meta { font-size:12px; color:#64748b; margin-top:1px; }
   .rl-badge { font-size:11px; font-weight:700; padding:2px 7px; border-radius:5px; }
+  /* 신입생 · 재입학 (여섯 화면 공용) */
+  .sc-newbadge { display:inline-block; background:#dcfce7; color:#15803d; border:1px solid #86efac;
+                 border-radius:5px; padding:2px 6px; margin-left:5px; font-size:10.5px; font-weight:800;
+                 white-space:nowrap; vertical-align:1px; }
+  .sc-newbadge.re { background:#ffedd5; color:#c2410c; border-color:#fdba74; }
+  .sc-newbadge.sm { font-size:9.5px; padding:1px 4px; margin-left:4px; }
   .rl-wd { background:#fee2e2; color:#dc2626; }
   .rl-edit { flex:0 0 auto; padding:5px 11px; border:1.5px solid #cbd5e1; border-radius:7px; background:#fff; color:#0369a1; font-size:12px; font-weight:700; cursor:pointer; }
   .rl-edit:hover { background:#f0f9ff; }
@@ -843,7 +849,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v0.99-code</span>
+    <span class="tb-ver" id="sc-ver">v1.00-newbadge</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1203,7 +1209,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v0.99-code';
+  window.STUDYCENTER_VERSION = 'v1.00-newbadge';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1217,6 +1223,78 @@
   /* ============================================================
      [ADMIN TABS] 관리자 화면 탭 전환
   ============================================================ */
+  /* ============================================================
+     [NEW] 신입생 · 재입학 표시
+     · 등록일 = 입학일(enrolled_at) 우선, 없으면 행 생성일(created_at)
+     · 등록일 포함 7일간. 현역(yn=true, 퇴원 아님)만 대상
+     · 재입학 = 같은 이름의 더 오래된 독서실 행이 있을 때
+       (독서실 등록은 언제나 새 행을 만들어서 옛 행이 그대로 남는다)
+     ⚠ 옛 행은 reading_room_yn=false 라 탭별 명단 조회에 안 걸린다.
+       그래서 여기서 한 번만 만들어 여섯 화면이 같이 본다.
+  ============================================================ */
+  var SC_NEW_DAYS = 7;
+  var _scNewMap = {};   // { student_id: 'new' | 'return' }
+  var _scNewAt  = 0;    // 마지막 로드 시각(ms). 0 이면 다음 호출에 다시 읽는다
+
+  function scNewReset(){ _scNewAt = 0; }
+
+  function scNewDate(u){
+    var v = String(u.enrolled_at || u.created_at || '').slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '';
+  }
+  // a 부터 b 까지 지난 날 수 (같은 날 0). 날짜 문자열만 쓰므로 시간대 영향 없음
+  function scNewDiff(a, b){
+    var t = function(x){ var p = x.split('-'); return Date.UTC(+p[0], +p[1] - 1, +p[2]); };
+    return Math.floor((t(b) - t(a)) / 86400000);
+  }
+
+  async function scNewEnsure(){
+    if(_scNewAt && (Date.now() - _scNewAt) < 300000) return _scNewMap;   // 5분 캐시
+    try{
+      // 내려간 행(yn=false)까지 봐야 재입학을 알 수 있다
+      var res = await db.from('users')
+        .select('id,name,enrolled_at,created_at,reading_room_yn,reading_room_withdrawn_at')
+        .or('reading_room_yn.eq.true,reading_room_class.not.is.null');
+      if(res.error) throw res.error;
+      var rows = res.data || [];
+      // 이름별 '가장 이른 등록일' — 그보다 뒤에 등록했으면 재입학
+      var first = {};
+      rows.forEach(function(u){
+        var d = scNewDate(u); if(!d) return;
+        var n = String(u.name || '').trim(); if(!n) return;
+        if(!first[n] || d < first[n]) first[n] = d;
+      });
+      var today = scRrToday();
+      var map = {};
+      rows.forEach(function(u){
+        if(!u.reading_room_yn || u.reading_room_withdrawn_at) return;   // 현역만
+        var d = scNewDate(u); if(!d) return;
+        if(scNewDiff(d, today) >= SC_NEW_DAYS) return;
+        var n = String(u.name || '').trim();
+        map[u.id] = (first[n] && first[n] < d) ? 'return' : 'new';
+      });
+      _scNewMap = map; _scNewAt = Date.now();
+    }catch(e){
+      console.warn('신입생 판정 로드 실패:', e);   // 실패해도 화면은 그대로 뜬다
+    }
+    return _scNewMap;
+  }
+
+  /* 이름 옆 뱃지. small=true 면 좁은 칸용으로 한 치수 작게 */
+  function scNewBadge(sid, small){
+    var k = _scNewMap[sid]; if(!k) return '';
+    var isNew = (k === 'new');
+    return '<span class="sc-newbadge' + (isNew ? '' : ' re') + (small ? ' sm' : '') + '">'
+         + (isNew ? '🌱 신입생' : '🔁 재입학') + '</span>';
+  }
+  /* 좌석 타일용 — 70×58px 라 글자가 안 들어간다. 모서리 표식만 */
+  function scNewMark(sid){
+    var k = _scNewMap[sid]; if(!k) return '';
+    var isNew = (k === 'new');
+    return '<span class="seat-new" title="' + (isNew ? '신입생' : '재입학') + '">'
+         + (isNew ? '🌱' : '🔁') + '</span>';
+  }
+
   function scAdminTab(tab){
     var panels={register:"admin-tab-register", weekly:"admin-tab-weekly", timeplan:"admin-tab-timeplan", points:"admin-tab-points", seatmap:"admin-tab-seatmap", late:"admin-tab-late"};
     var btns={register:"admin-tab-btn-register", weekly:"admin-tab-btn-weekly", timeplan:"admin-tab-btn-timeplan", points:"admin-tab-btn-points", seatmap:"admin-tab-btn-seatmap", late:"admin-tab-btn-late"};
@@ -1334,7 +1412,7 @@
       var lv=row.expected_check_out?scSeatHHMM(row.expected_check_out):"";
       st={ cls:"seat-in", sub: lv?"🏠 "+lv+" 하원예정":"재실" };
     }
-    return { empty:false, cls:st.cls, name:name, code:code, sub:st.sub };
+    return { empty:false, cls:st.cls, name:name, code:code, sub:st.sub, sid:sid };
   }
 
   async function scSeatLoadSeats(){
@@ -1344,6 +1422,7 @@
     }catch(e){ console.error("[scSeatLoadSeats]",e); }
   }
   async function scSeatLoad(){
+    await scNewEnsure();
     try{
       var ur=await db.from("users").select("id,name,reading_room_code,status,deleted_at,reading_room_withdrawn_at").eq("reading_room_yn",true);
       var roster=(ur.data||[]).filter(function(u){ return u.status!=="inactive" && !u.deleted_at && !u.reading_room_withdrawn_at; });
@@ -1395,7 +1474,8 @@
       '.seat-room-title .tag{font-size:13px;color:#64748b;font-weight:700;margin-left:6px}'+
       '.seat-floor{position:relative;border:3px solid #7c8794;border-radius:8px;background:linear-gradient(#f8fafc,#eef2f6);padding:26px 22px;box-shadow:0 8px 24px rgba(15,23,42,.12),inset 0 0 0 1px #fff}'+
       '.seat-grid{display:grid;gap:10px;justify-content:center}'+
-      '.seat{background:#fff;border:1px solid #cbd5e1;border-radius:7px;box-shadow:0 2px 5px rgba(15,23,42,.10);padding:8px 6px;text-align:center;min-height:58px;display:flex;flex-direction:column;justify-content:center;cursor:pointer}'+
+      '.seat{position:relative;background:#fff;border:1px solid #cbd5e1;border-radius:7px;box-shadow:0 2px 5px rgba(15,23,42,.10);padding:8px 6px;text-align:center;min-height:58px;display:flex;flex-direction:column;justify-content:center;cursor:pointer}'+
+      '.seat .seat-new{position:absolute;top:-7px;left:-6px;font-size:13px;line-height:1;background:#fff;border-radius:50%;padding:2px;box-shadow:0 1px 4px rgba(15,23,42,.30)}'+
       '.seat:hover{outline:2px solid #5eead4;outline-offset:1px}'+
       '.seat .no{font-size:11px;color:#94a3b8;font-weight:700}'+
       '.seat .no .cd{color:#cbd5e1;font-weight:600;font-size:10px;margin-left:3px}'+
@@ -1416,7 +1496,7 @@
       '.seat-tab{padding:8px 16px;border:1.5px solid #cbd5e1;border-radius:20px;background:#fff;color:#475569;font-size:13px;font-weight:700;cursor:pointer}'+
       '.seat-tab.on{background:#0f766e;color:#fff;border-color:#0f766e}'+
       '</style>';
-    var legend='<div class="seat-legend"><span><i class="lg-in"></i>재실</span><span><i class="lg-out"></i>외출</span><span><i class="lg-done"></i>하원</span><span><i class="lg-none"></i>미입실</span><span><i class="lg-eta"></i>등원예정</span><span><i class="lg-warn"></i>시간초과</span></div><div class="seat-hint">좌석을 클릭하면 학생을 배정·변경할 수 있습니다</div>';
+    var legend='<div class="seat-legend"><span><i class="lg-in"></i>재실</span><span><i class="lg-out"></i>외출</span><span><i class="lg-done"></i>하원</span><span><i class="lg-none"></i>미입실</span><span><i class="lg-eta"></i>등원예정</span><span><i class="lg-warn"></i>시간초과</span><span>🌱 신입생</span><span>🔁 재입학</span></div><div class="seat-hint">좌석을 클릭하면 학생을 배정·변경할 수 있습니다</div>';
     var list = (_scSeatSel==='all') ? SC_SEAT_ROOMS : [SC_SEAT_ROOMS[_scSeatSel]];
     var html=css+legend;
     list.forEach(function(room){
@@ -1431,7 +1511,7 @@
         else {
           var info=scSeatInfo(c);
           if(info.empty){ html+='<div class="seat seat-empty" onclick="scSeatEditOpen('+c+')"><div class="no">'+c+'</div><div class="add">＋ 배정</div></div>'; }
-          else { html+='<div class="seat '+info.cls+'" onclick="scSeatEditOpen('+c+')"><div class="no">'+c+(info.code?' <span class="cd">'+info.code+'</span>':'')+'</div><div class="nm">'+scWkEsc(info.name)+'</div>'+(info.sub?'<div class="sub">'+info.sub+'</div>':'')+'</div>'; }
+          else { html+='<div class="seat '+info.cls+'" onclick="scSeatEditOpen('+c+')">'+scNewMark(info.sid)+'<div class="no">'+c+(info.code?' <span class="cd">'+info.code+'</span>':'')+'</div><div class="nm">'+scWkEsc(info.name)+'</div>'+(info.sub?'<div class="sub">'+info.sub+'</div>':'')+'</div>'; }
         }
       }); });
       html+='</div></div></div>';
@@ -1584,6 +1664,7 @@
     scTpRender();
   }
   async function scTpLoad(){
+    await scNewEnsure();
     var today=scRrToday();
     var res=await db.from("reading_room_attendance").select("*").eq("attend_date",today);
     var rows=res.data||[];
@@ -1783,7 +1864,7 @@
       if(r.check_out_time){ actOutCell = '<span class="s-time">'+hm(r.check_out_time)+'</span>'; }
       else if(r.check_in_time){ actOutCell = '<span class="s-rsn">재실중</span>'; }
       else { actOutCell = none; }
-      return '<td class="s-name">'+tpName(r.student_id)+'<button class="u-edit" title="예상등원 수정" onclick="scTpExpOpen(\''+r.student_id+'\')">✏</button></td>'
+      return '<td class="s-name">'+tpName(r.student_id)+scNewBadge(r.student_id, true)+'<button class="u-edit" title="예상등원 수정" onclick="scTpExpOpen(\''+r.student_id+'\')">✏</button></td>'
         +'<td>'+actInCell+'</td>'
         +'<td>'+multi(outs)+'</td>'
         +'<td class="s-time">'+multi(expRets)+'</td>'
@@ -2038,6 +2119,7 @@
   }
 
   async function scWkLoad(silent){
+    await scNewEnsure();
     var monday = document.getElementById("wk-week-start").value;
     if(!monday){ monday = scWkMonday(scWkFmtDate(new Date())); document.getElementById("wk-week-start").value = monday; }
     _wkWeekDates = scWkBuildWeek(monday);
@@ -2567,6 +2649,7 @@
     scLtLoad();
   }
   async function scLtLoad(){
+    await scNewEnsure();
     if(!_ltMonday) _ltMonday = scWkMonday(scWkFmtDate(new Date()));
     _ltDates = scWkBuildWeek(_ltMonday);
     var wrap = document.getElementById("sc-late-wrap");
@@ -2689,7 +2772,7 @@
       return '<tr>'
         + '<td>' + (idx+1) + '</td>'
         + '<td class="lt-nm"><div class="lt-name-row">'
-            + '<div class="lt-name-info">' + scWkEsc(st.name) + (sub ? ('<span class="lt-sub">' + scWkEsc(sub) + '</span>') : '') + '</div>'
+            + '<div class="lt-name-info">' + scWkEsc(st.name) + scNewBadge(st.id, true) + (sub ? ('<span class="lt-sub">' + scWkEsc(sub) + '</span>') : '') + '</div>'
             + (info.extra > 0 ? ('<button class="lt-msg-btn" onclick="scLtCopyMsg(\'' + st.id + '\',this)" title="지각 안내 카톡 멘트를 클립보드로 복사">💬 멘트</button>') : '')
           + '</div></td>'
         + '<td class="lt-list">' + items + '</td>'
@@ -2914,6 +2997,7 @@
   /* ── 상벌점 요약 탭 (전체 누적) ─────────────────────────── */
   var _ptSum = [], _ptSumMap = {};
   async function scPtSummaryLoad(){
+    await scNewEnsure();
     var box = document.getElementById("pt-sum-wrap");
     if(!box) return;
     box.innerHTML = '<div class="pt-sum-empty">불러오는 중…</div>';
@@ -3029,7 +3113,7 @@
       }).join("");
       var kkBtn = r.lastDemerit ? '<button class="pt-kk-btn" onclick="scPtKakaoOpen(\''+r.sid+'\')">💬 카톡</button>' : '<span style="color:#cbd5e1;font-size:12px">-</span>';
       return '<tr class="pt-sum-row'+(warn?" rowwarn":"")+'">'
-        + '<td class="ps-nm">'+scWkEsc(r.s.name)+(sub?(' <span class="ps-sub">'+scWkEsc(sub)+'</span>'):'')+'</td>'
+        + '<td class="ps-nm">'+scWkEsc(r.s.name)+scNewBadge(r.sid, true)+(sub?(' <span class="ps-sub">'+scWkEsc(sub)+'</span>'):'')+'</td>'
         + '<td style="color:#1d4ed8;font-weight:800">'+r.merit+'</td>'
         + '<td style="color:#dc2626;font-weight:800">'+r.demerit+'</td>'
         + '<td style="color:'+netColor+';font-weight:900;font-size:15px">'+r.net+'</td>'
@@ -3809,7 +3893,7 @@
       }
       h += '<tr'+warnCls+' data-sid="'+sid+'">'
         + '<td class="wk-no">'+(idx+1)+'</td>'
-        + '<td class="wk-name"><div class="wk-name-row"><div class="wk-name-info">'+scWkEsc(st.name)+warnBadge
+        + '<td class="wk-name"><div class="wk-name-row"><div class="wk-name-info">'+scWkEsc(st.name)+scNewBadge(sid)+warnBadge
           + '<div class="wk-sub">'+scWkEsc(((st.school||'')+' '+(st.grade||'')).trim())
           + (st.reading_room_code ? ' · <span class="wk-code">'+scWkEsc(st.reading_room_code)+'</span>' : '')
           + '</div></div>'
@@ -5671,6 +5755,7 @@
       };
       var res=await db.from('users').insert(payload).select('id,name,reading_room_code').maybeSingle();
       if(res.error) throw res.error;
+      scNewReset();   // 방금 등록한 학생에게 바로 뱃지가 붙도록
       if(msg){ msg.textContent='✅ '+name+' 추가 완료 (코드 '+res.data.reading_room_code+')'; msg.style.color='#16a34a'; }
       scFormReset();
       await scListLoad();
@@ -5686,6 +5771,7 @@
   var _scListData = [];
   var _scListFilter = 'all';
   async function scListLoad(){
+    await scNewEnsure();
     var el=document.getElementById('rl-list');
     try{
       var res=await db.from('users')
@@ -5723,9 +5809,10 @@
       var cls=(s.reading_room_class||'').replace(/\s+/g,' ').trim();
       var mt=s.reading_room_mentoring?' <span class="rl-badge" style="background:#ede9fe;color:#6d28d9">멘토링</span>':'';
       var wd=s.reading_room_withdrawn_at?' <span class="rl-badge rl-wd">퇴원</span>':'';
+      var nb=scNewBadge(s.id);
       var req=(s.required_study_minutes!=null)?(Math.floor(s.required_study_minutes/60)+'시간 '+(s.required_study_minutes%60)+'분'):'-';
       return '<div class="rl-item"><div style="flex:1;min-width:0">'
-        +'<div class="rl-name">'+scEsc(s.name||'')+mt+wd+'</div>'
+        +'<div class="rl-name">'+scEsc(s.name||'')+nb+mt+wd+'</div>'
         +'<div class="rl-meta">'+[lv,scEsc(s.school||''),scEsc(s.grade||''),cls].filter(Boolean).join(' · ')+'</div>'
         +'<div class="rl-meta">코드 '+scEsc(s.reading_room_code||'-')+' · 의무 '+req+'</div>'
       +'</div>'
@@ -5746,6 +5833,7 @@
     if(!confirm((s.name||'')+' 학생을 퇴원 처리할까요?\n([퇴원] 필터에서 계속 보이며, 복원할 수 있습니다.)')) return;
     try{
       var res=await db.from('users').update({ reading_room_withdrawn_at: scRrToday() }).eq('id',id);
+      scNewReset();
       if(res.error) throw res.error;
       await scListLoad();
     }catch(e){ console.error('퇴원 실패:',e); alert('퇴원 처리 실패: '+(e.message||e)); }
@@ -5756,6 +5844,7 @@
     if(!confirm((s.name||'')+' 학생의 퇴원을 취소(복원)할까요?')) return;
     try{
       var res=await db.from('users').update({ reading_room_withdrawn_at: null }).eq('id',id);
+      scNewReset();
       if(res.error) throw res.error;
       await scListLoad();
     }catch(e){ console.error('복원 실패:',e); alert('복원 실패: '+(e.message||e)); }
@@ -5767,6 +5856,7 @@
     if(!confirm((s.name||'')+' 학생을 명단에서 삭제할까요?\n(독서실 명단에서 제외됩니다. 레코드는 보존되어 추후 복구할 수 있습니다.)')) return;
     try{
       var res=await db.from('users').update({ reading_room_yn: false }).eq('id',id);
+      scNewReset();
       if(res.error) throw res.error;
       await scListLoad();
     }catch(e){ console.error('삭제 실패:',e); alert('삭제 실패: '+(e.message||e)); }
@@ -5834,6 +5924,7 @@
       _scResultLinked = Object.keys(linkBy).length;
       var res = await db.from("users").insert(payload).select("id, name, reading_room_code");
       if(res.error) throw res.error;
+      scNewReset();   // 방금 등록한 학생들에게 바로 뱃지가 붙도록
       _scResultRows = (res.data || []).map(function(u){ return { name: u.name, code: u.reading_room_code }; });
       scRenderResult();
       if(btn){ btn.disabled = false; btn.textContent = "💾 전체 등록"; }
