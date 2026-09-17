@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v1.00-newbadge]</title>
+<title>BMAPS · 독서실 출결 [v1.01-leavereq]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -71,6 +71,14 @@
   .cf-no:hover { background: #e2e8f0; }
   /* 동작 화면 (입실/외출/복귀/하원) */
   .ac-name { font-size: 30px; font-weight: 800; color: #0369a1; margin-bottom: 6px; }
+  /* 하원 뒤 '이번 주 남은 의무시간' */
+  .ac-req { margin-top: 18px; }
+  .ac-req:empty { margin: 0; }   /* 의무시간 미설정이면 빈 칸도 남기지 않는다 */
+  .ac-req .req-lab { font-size: 14px; font-weight: 700; color: #64748b; }
+  .ac-req .req-big { font-size: 34px; font-weight: 800; color: #0f766e; margin: 2px 0 4px; letter-spacing: -0.5px; }
+  .ac-req .req-sub { font-size: 13px; font-weight: 700; color: #94a3b8; }
+  .ac-req .req-ok  { font-size: 20px; font-weight: 800; color: #15803d; background: #dcfce7;
+                     border-radius: 12px; padding: 14px 18px; display: inline-block; }
   .ac-status { font-size: 16px; font-weight: 700; margin-bottom: 26px; padding: 8px 16px; border-radius: 999px; display: inline-block; }
   .ac-status.st-out-room { background: #f1f5f9; color: #64748b; }
   .ac-status.st-studying { background: #dcfce7; color: #15803d; }
@@ -849,7 +857,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v1.00-newbadge</span>
+    <span class="tb-ver" id="sc-ver">v1.01-leavereq</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -898,6 +906,7 @@
           <div class="ac-status" id="ac-status">—</div>
           <div class="ac-btn-area" id="ac-btn-area"></div>
           <div class="ac-msg" id="ac-msg"></div>
+          <div class="ac-req" id="ac-req"></div>
           <button class="ac-back" onclick="scKioskReset()">← 돌아가기</button>
         </div>
 
@@ -1209,7 +1218,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v1.00-newbadge';
+  window.STUDYCENTER_VERSION = 'v1.01-leavereq';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -4887,6 +4896,7 @@
     var os = document.getElementById("kiosk-out-screen"); if(os) os.style.display = "none";
     var ds = document.getElementById("kiosk-code-screen"); if(ds) ds.style.display = "";
     var err = document.getElementById("kp-err"); if(err) err.textContent = "";
+    var req = document.getElementById("ac-req"); if(req) req.innerHTML = "";
     scKpRender();
   }
 
@@ -5053,19 +5063,95 @@
         );
       }
       scKioskMark("out");
-      scActDone("하원", now);
+      scActDone("하원", now, 5000);   // 의무시간을 읽을 시간
+      scLeaveRemain();                // 기다리지 않는다 — 확인 문구가 먼저 뜬다
     } catch(e){ scActError(e); }
     finally { _scActBusy = false; }
   }
 
-  function scActDone(label, time){
+  /* ── [하원] 이번 주 남은 의무시간 ────────────────────────────────
+     근무자 이행현황과 숫자가 갈리면 안 되므로 계산 함수를 그대로 쓴다.
+     ⚠ _wkStudents · _wkReqHistory · _lateWaivers 는 관리자 화면의 공유 상태라
+       한 학생분으로 덮으면 관리자 주간출결이 틀어진다 → 지역 변수로 넘긴다.
+       scMentorOn 이 전역으로 보는 _mentorPeriods 만 잠깐 바꿨다 되돌린다.
+     하원 저장은 이미 끝난 뒤라, 여기서 실패해도 하원은 그대로다. */
+  function scReqHM(min){
+    var h = Math.floor(min / 60), m = min % 60;
+    return h ? (m ? (h + "시간 " + m + "분") : (h + "시간")) : (m + "분");
+  }
+
+  async function scLeaveRemain(){
+    var el = document.getElementById("ac-req");
+    var stu = _scKioskStudent;
+    if(!el || !stu) return;
+    var mpSave = _mentorPeriods;
+    try{
+      var monday = scWkMonday(scRrToday());   // 영업일 기준(00:00~01:09 는 전날)
+      var week = scWkBuildWeek(monday);
+      var lo = week[0], hi = week[6];
+
+      var q = await Promise.all([
+        db.from("reading_room_attendance").select("*")
+          .eq("student_id", stu.id).gte("attend_date", lo).lte("attend_date", hi),
+        db.from("reading_room_required_history")
+          .select("effective_week_start,required_minutes").eq("student_id", stu.id),
+        db.from("reading_room_mentoring_periods").select("*")
+      ]);
+      if(q[0].error) throw q[0].error;
+      if(q[1].error) throw q[1].error;
+      if(!q[2].error) _mentorPeriods = q[2].data || [];
+
+      var rowsByDate = {};
+      (q[0].data || []).forEach(function(r){ rowsByDate[r.attend_date] = r; });
+
+      // scWkEffectiveReq 와 같은 규칙 — 그 주 이전의 가장 늦은 이력이 이긴다
+      var best = null;
+      (q[1].data || []).forEach(function(h){
+        if(h.effective_week_start <= monday &&
+           (!best || h.effective_week_start > best.effective_week_start)) best = h;
+      });
+      var base = best ? best.required_minutes : stu.required_study_minutes;
+      if(base == null) return;   // 의무시간 미설정 — 아무것도 안 띄운다
+
+      // 지각 가산은 멘토링 기간에만 붙는다 → 그 주에 멘토링이 없으면 면제도 안 읽는다
+      var extra = 0;
+      if(week.some(function(d){ return scMentorOn(d); })){
+        var wv = {};
+        var wr = await db.from("reading_room_late_waiver")
+          .select("student_id,attend_date,kind,reason")
+          .eq("student_id", stu.id).gte("attend_date", lo).lte("attend_date", hi);
+        (wr.data || []).forEach(function(w){
+          wv[scLateKey(w.student_id, w.attend_date, w.kind)] = { reason: w.reason || "" };
+        });
+        extra = scLateWeekOf(stu.id, week, rowsByDate, wv).extraMin;
+      }
+
+      var total = base + extra;
+      var done = 0;
+      week.forEach(function(d){ done += (scWkCalcDaily(rowsByDate[d]) || 0); });
+      var left = Math.max(0, total - done);
+
+      el.innerHTML = (left === 0)
+        ? '<div class="req-ok">✅ 이번 주 의무시간을 다 채웠습니다</div>'
+        : '<div class="req-lab">이번 주 남은 의무시간</div>'
+          + '<div class="req-big">' + scReqHM(left) + '</div>'
+          + '<div class="req-sub">' + scReqHM(done) + ' / ' + scReqHM(total) + ' 완료</div>';
+    }catch(e){
+      console.warn("남은 의무시간 계산 실패:", e);
+    }finally{
+      _mentorPeriods = mpSave;
+    }
+  }
+
+  function scActDone(label, time, holdMs){
     var hhmm = String(time).slice(0,5);
     var msg = document.getElementById("ac-msg");
     var name = _scKioskStudent ? _scKioskStudent.name : "";
     if(msg) msg.textContent = "✅ " + name + "님 " + label + " 처리됨 (" + hhmm + ")";
     var area = document.getElementById("ac-btn-area"); if(area) area.innerHTML = "";
+    var reqEl = document.getElementById("ac-req"); if(reqEl) reqEl.innerHTML = "";
     var statusEl = document.getElementById("ac-status"); if(statusEl) statusEl.textContent = label + " 완료!";
-    setTimeout(function(){ scKioskReset(); }, 2000);
+    setTimeout(function(){ scKioskReset(); }, holdMs || 2000);
   }
 
   function scActError(e){
