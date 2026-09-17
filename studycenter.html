@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v1.02-patrol]</title>
+<title>BMAPS · 독서실 출결 [v1.03-patrolplan]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -857,7 +857,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v1.02-patrol</span>
+    <span class="tb-ver" id="sc-ver">v1.03-patrolplan</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1218,7 +1218,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v1.02-patrol';
+  window.STUDYCENTER_VERSION = 'v1.03-patrolplan';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1640,7 +1640,11 @@
     var t=document.getElementById('admin-tab-timeplan');
     return (!!w && w.offsetParent!==null) || (!!t && t.offsetParent!==null);
   }
-  function scRemindTick(){ if(scRemindPlanTabVisible()) scRemindShow(); }
+  function scRemindTick(){
+    // 순찰 팝업이 시간계획 안내까지 같이 내는 회차면 비킨다 — 확인을 두 번 누르지 않게
+    if(typeof scPatrolHandlesPlan === 'function' && scPatrolHandlesPlan()) return;
+    if(scRemindPlanTabVisible()) scRemindShow();
+  }
   var _scRemindStarted=false;
   function scRemindStart(){
     if(_scRemindStarted) return; _scRemindStarted=true;
@@ -1696,9 +1700,27 @@
       if(box) box.focus();
     }
   }
-  function scPatrolShow(){
+  /* withPlan=true 면 정각·30분 회차 — 시간계획 안내까지 한 상자에 담는다 */
+  function scPatrolText(withPlan){
+    var ic = document.getElementById('sc-patrol-icon');
+    var ti = document.getElementById('sc-patrol-title');
+    var tx = document.getElementById('sc-patrol-text');
+    if(!ic || !ti || !tx) return;
+    if(withPlan){
+      ic.textContent = '⏰🚶';
+      ti.textContent = '열람실 순찰 + 시간 계획 확인';
+      tx.innerHTML = '학생들의 학습 및 재실 상태를 체크하고,<br>등원·외출·하원 시간 계획도 확인해주세요.';
+    } else {
+      ic.textContent = '🚶';
+      ti.textContent = '열람실 순찰 시간입니다';
+      tx.innerHTML = '학생들의 학습 및 재실 상태를<br>체크해주세요.';
+    }
+  }
+
+  function scPatrolShow(withPlan){
     var o = document.getElementById('sc-patrol-overlay');
     if(!o || o.style.display === 'flex') return;   // 이미 떠 있으면 그대로 둔다
+    scPatrolText(withPlan);
     _scPatrolPrevFocus = document.activeElement;
     o.style.display = 'flex';
     scPatrolInert(true);
@@ -1722,10 +1744,20 @@
     if(!scPatrolAdminVisible()) return;          // 학생 키오스크엔 절대 안 뜬다
     if(!scPatrolInHours()) return;               // 운영시간 밖
     var m = new Date().getMinutes();
-    if(m === 0 || m === 30) return;              // 기존 30분 알람 차례
-    var r = document.getElementById('sc-remind-overlay');
-    if(r && r.style.display === 'flex') return;  // 시간계획 알람이 떠 있으면 미룬다
-    scPatrolShow();
+    var withPlan = (m === 0 || m === 30);        // 이 회차엔 시간계획 안내도 같이
+    // 혹시 기존 알람이 떠 있으면 닫고 합쳐서 하나로 보여준다 (확인은 한 번만)
+    if(withPlan) scRemindClose();
+    else {
+      var r = document.getElementById('sc-remind-overlay');
+      if(r && r.style.display === 'flex') return;   // 아직 안 닫았으면 이번 회차는 미룬다
+    }
+    scPatrolShow(withPlan);
+  }
+  /* 시간계획 안내를 순찰 팝업이 대신 내는 상황인가.
+     두 타이머가 같은 초에 돌아 순서를 보장할 수 없으므로,
+     겹치는 회차는 기존 알람 쪽에서 비키게 한다. */
+  function scPatrolHandlesPlan(){
+    return scPatrolAdminVisible() && scPatrolInHours();
   }
   // 매번 다음 10분 경계를 다시 계산한다 — setInterval 로 두면 하루 종일 돌며 밀린다
   function scPatrolSchedule(){
@@ -6723,9 +6755,9 @@
   <!-- [PATROL] 10분 열람실 순찰 알람 — 확인 전에는 뒤를 쓰지 못한다 -->
   <div id="sc-patrol-overlay" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,.72); z-index:100000; align-items:center; justify-content:center;">
     <div id="sc-patrol-box" tabindex="-1" style="background:#fff; padding:32px 36px; border-radius:16px; text-align:center; box-shadow:0 14px 50px rgba(0,0,0,.4); max-width:400px; margin:16px; outline:none;">
-      <div style="font-size:46px; line-height:1;">🚶</div>
-      <div style="font-size:20px; font-weight:800; margin:12px 0 8px; color:#0f172a;">열람실 순찰 시간입니다</div>
-      <div style="color:#475569; font-size:14px; margin-bottom:22px; line-height:1.65;">학생들의 학습 및 재실 상태를<br>체크해주세요.</div>
+      <div id="sc-patrol-icon" style="font-size:46px; line-height:1;">🚶</div>
+      <div id="sc-patrol-title" style="font-size:20px; font-weight:800; margin:12px 0 8px; color:#0f172a;">열람실 순찰 시간입니다</div>
+      <div id="sc-patrol-text" style="color:#475569; font-size:14px; margin-bottom:22px; line-height:1.65;">학생들의 학습 및 재실 상태를<br>체크해주세요.</div>
       <button id="sc-patrol-ok" onclick="scPatrolClose()" style="background:#b45309; color:#fff; border:none; padding:12px 34px; border-radius:9px; font-weight:800; font-size:15px; cursor:pointer;">확인했습니다</button>
     </div>
   </div>
