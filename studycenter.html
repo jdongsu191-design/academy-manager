@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v1.01-leavereq]</title>
+<title>BMAPS · 독서실 출결 [v1.02-patrol]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -857,7 +857,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v1.01-leavereq</span>
+    <span class="tb-ver" id="sc-ver">v1.02-patrol</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1218,7 +1218,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v1.01-leavereq';
+  window.STUDYCENTER_VERSION = 'v1.02-patrol';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1651,6 +1651,92 @@
       scRemindTick();
       setInterval(scRemindTick, 30*60*1000);
     }, sToNext*1000);
+  }
+
+  /* ============================================================
+     [PATROL] 10분마다 열람실 순찰 알람
+     · 정시 기준 10분마다. 단 00분·30분은 건너뛴다 — 기존 30분
+       시간계획 알람과 겹쳐 확인을 두 번 누르게 된다 (실제 10·20·40·50분)
+     · 운영시간(08:00~다음날 01:30) 안에서만
+     · ⚠ 학생 키오스크에는 절대 안 뜬다. 뜨면 학생이 하원을 못 하고 갇힌다
+     · 확인 전에는 키보드 입력도 막는다 — 포커스를 팝업 안에 가둔다.
+       전역 keydown 은 막지 않는다(막았다가 못 닫히면 근무가 마비된다).
+       포커스는 글자가 안 들어가는 상자에 두므로 그것으로 충분하다
+     · 기록은 남기지 않는다 — 알람만
+  ============================================================ */
+  var _scPatrolStarted = false, _scPatrolPrevFocus = null;
+
+  function scPatrolAdminVisible(){
+    var a = document.getElementById('sc-admin');
+    return !!a && a.classList.contains('active') && a.offsetParent !== null;
+  }
+  // 08:00 ~ 다음날 01:30 (02:00 이전은 전날 영업의 연장으로 본다)
+  function scPatrolInHours(){
+    var d = new Date(), v = d.getHours() * 60 + d.getMinutes();
+    if(v < 120) v += 1440;
+    return v >= TP_START && v <= TP_END;
+  }
+
+  /* 팝업 말고 전부 못 쓰게 한다. inert 는 클릭·포커스·탭이동을 한꺼번에 막는다.
+     (focusin 가두기는 문서가 시스템 포커스를 가질 때만 도니 이쪽이 1차 방어다) */
+  function scPatrolInert(on){
+    var o = document.getElementById('sc-patrol-overlay');
+    var kids = document.body ? document.body.children : [];
+    for(var i = 0; i < kids.length; i++){
+      if(kids[i] === o) continue;
+      if(on) kids[i].setAttribute('inert', '');
+      else kids[i].removeAttribute('inert');
+    }
+  }
+  function scPatrolKeepFocus(e){
+    var o = document.getElementById('sc-patrol-overlay');
+    if(!o || o.style.display !== 'flex') return;
+    if(!o.contains(e.target)){
+      var box = document.getElementById('sc-patrol-box');
+      if(box) box.focus();
+    }
+  }
+  function scPatrolShow(){
+    var o = document.getElementById('sc-patrol-overlay');
+    if(!o || o.style.display === 'flex') return;   // 이미 떠 있으면 그대로 둔다
+    _scPatrolPrevFocus = document.activeElement;
+    o.style.display = 'flex';
+    scPatrolInert(true);
+    document.addEventListener('focusin', scPatrolKeepFocus, true);
+    // 버튼이 아니라 상자에 포커스를 준다 → 스페이스·엔터로 실수로 닫히지 않는다
+    var box = document.getElementById('sc-patrol-box'); if(box) box.focus();
+  }
+  function scPatrolClose(){
+    scPatrolInert(false);   // ⚠ 제일 먼저. 아래에서 오류가 나도 화면은 살아 있어야 한다
+    var o = document.getElementById('sc-patrol-overlay');
+    if(o) o.style.display = 'none';
+    document.removeEventListener('focusin', scPatrolKeepFocus, true);
+    // 쓰던 칸으로 커서를 돌려준다 (입력 중이던 값은 그대로 남아 있다)
+    var p = _scPatrolPrevFocus; _scPatrolPrevFocus = null;
+    if(p && p !== document.body && document.contains(p) && typeof p.focus === 'function'){
+      try{ p.focus(); }catch(e){}
+    }
+  }
+
+  function scPatrolTick(){
+    if(!scPatrolAdminVisible()) return;          // 학생 키오스크엔 절대 안 뜬다
+    if(!scPatrolInHours()) return;               // 운영시간 밖
+    var m = new Date().getMinutes();
+    if(m === 0 || m === 30) return;              // 기존 30분 알람 차례
+    var r = document.getElementById('sc-remind-overlay');
+    if(r && r.style.display === 'flex') return;  // 시간계획 알람이 떠 있으면 미룬다
+    scPatrolShow();
+  }
+  // 매번 다음 10분 경계를 다시 계산한다 — setInterval 로 두면 하루 종일 돌며 밀린다
+  function scPatrolSchedule(){
+    var now = new Date();
+    var sec = ((10 - (now.getMinutes() % 10)) * 60) - now.getSeconds();
+    if(sec <= 0) sec += 600;
+    setTimeout(function(){ scPatrolTick(); scPatrolSchedule(); }, sec * 1000);
+  }
+  function scPatrolStart(){
+    if(_scPatrolStarted) return; _scPatrolStarted = true;
+    scPatrolSchedule();
   }
 
   /* ============================================================
@@ -6233,6 +6319,7 @@
     document.getElementById('sc-mode-admin').style.display = 'none';
     scAdminTab('weekly');   // 관리자 진입 시 주간출결 우선 표시
     scRemindStart();        // 30분 시간계획 확인 알람 시작
+    scPatrolStart();        // 10분 열람실 순찰 알람 시작 (관리자 화면에서만)
     scOverdueStart();       // 예상 복귀시간 초과 미복귀 알림 시작
     scLiveStart();          // 키오스크 입력 실시간 현황 시작
     scWkRtStart();          // [REALTIME 주간출결] 실시간 반영 시작
@@ -6631,6 +6718,15 @@
       <div style="font-size:19px; font-weight:800; margin:12px 0 8px; color:#0f172a;">시간 계획 확인</div>
       <div style="color:#475569; font-size:14px; margin-bottom:20px; line-height:1.6;">30분이 지났습니다.<br>학생들의 등원·외출·하원 시간 계획을<br>확인해주세요.</div>
       <button onclick="scRemindClose()" style="background:#0369a1; color:#fff; border:none; padding:11px 32px; border-radius:9px; font-weight:800; font-size:14px; cursor:pointer;">확인했습니다</button>
+    </div>
+  </div>
+  <!-- [PATROL] 10분 열람실 순찰 알람 — 확인 전에는 뒤를 쓰지 못한다 -->
+  <div id="sc-patrol-overlay" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,.72); z-index:100000; align-items:center; justify-content:center;">
+    <div id="sc-patrol-box" tabindex="-1" style="background:#fff; padding:32px 36px; border-radius:16px; text-align:center; box-shadow:0 14px 50px rgba(0,0,0,.4); max-width:400px; margin:16px; outline:none;">
+      <div style="font-size:46px; line-height:1;">🚶</div>
+      <div style="font-size:20px; font-weight:800; margin:12px 0 8px; color:#0f172a;">열람실 순찰 시간입니다</div>
+      <div style="color:#475569; font-size:14px; margin-bottom:22px; line-height:1.65;">학생들의 학습 및 재실 상태를<br>체크해주세요.</div>
+      <button id="sc-patrol-ok" onclick="scPatrolClose()" style="background:#b45309; color:#fff; border:none; padding:12px 34px; border-radius:9px; font-weight:800; font-size:15px; cursor:pointer;">확인했습니다</button>
     </div>
   </div>
 </body>
