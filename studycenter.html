@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v1.03-patrolplan]</title>
+<title>BMAPS · 독서실 출결 [v1.04-consult]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -857,7 +857,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v1.03-patrolplan</span>
+    <span class="tb-ver" id="sc-ver">v1.04-consult</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1218,7 +1218,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v1.03-patrolplan';
+  window.STUDYCENTER_VERSION = 'v1.04-consult';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -1770,6 +1770,165 @@
     if(_scPatrolStarted) return; _scPatrolStarted = true;
     scPatrolSchedule();
   }
+
+  /* ============================================================
+     [CONSULT] 독서실 상담 알람 — 매일 16:00
+       · 신입생·재입학(입학 7일 이내)  · 누적벌점 25점 이상
+       · [상담 완료]를 누르면 reading_room_consults 에 남고 명단에서 빠진다
+     ⚠ 관리자 화면에서만 돈다. 키오스크에는 절대 뜨지 않는다.
+     ⚠ 뜨는 사람은 '독서실 관리' 권한을 켠 부원장 뿐이다.
+       관리자·데스크까지 매일 16시에 남의 상담 팝업을 볼 이유가 없다.
+  ============================================================ */
+  var SC_CS_HOUR  = 16;     // 알람 시각
+  var SC_CS_POINT = 25;     // 벌점 상담 기준 — 화면의 '누적벌점'(벌점-상점)과 같은 값
+  var _scCsStarted = false, _scCsList = [];
+
+  function scCsTarget(){
+    var u = scCurrentUser;
+    return !!(u && u.role === 'vice_director' && u.permissions && u.permissions.reading_room === true);
+  }
+  function scCsSeenToday(){
+    try{ return localStorage.getItem('sc_consult_seen') === scRrToday(); }catch(e){ return false; }
+  }
+  function scCsMarkSeen(){
+    try{ localStorage.setItem('sc_consult_seen', scRrToday()); }catch(e){}
+  }
+
+  /* 오늘 상담해야 할 학생 목록. 이미 완료한 건은 뺀다. */
+  async function scCsLoad(){
+    var done = {};
+    var dr = await db.from('reading_room_consults').select('student_id,kind');
+    if(dr.error) throw dr.error;
+    (dr.data||[]).forEach(function(r){ done[r.student_id + '|' + r.kind] = true; });
+
+    var us = await db.from('users').select('id,name,school,grade,enrolled_at,created_at')
+      .eq('reading_room_yn', true);
+    if(us.error) throw us.error;
+    var stu = {}; (us.data||[]).forEach(function(s){ stu[s.id] = s; });
+
+    var rows = [];
+    // ① 신입생·재입학 — 뱃지와 같은 판정을 그대로 쓴다 (입학일 기준 7일)
+    scNewReset();
+    var map = await scNewEnsure();
+    Object.keys(map).forEach(function(sid){
+      if(!stu[sid] || done[sid + '|new']) return;
+      var isNew = (map[sid] === 'new');
+      rows.push({ sid:sid, kind:'new', name:stu[sid].name,
+                  tag:(isNew ? '🌱 신입생' : '🔁 재입학'), warn:false,
+                  sub:'입학 ' + (scNewDate(stu[sid]) || '-') + scCsWho(stu[sid]) });
+    });
+
+    // ② 누적벌점 (1000행 상한 대응 페이지네이션)
+    var all = [], pg = 0, SZ = 1000;
+    while(true){
+      var r = await db.from('reading_room_points').select('student_id,points')
+        .neq('points', 0).range(pg*SZ, pg*SZ+SZ-1);
+      if(r.error) throw r.error;
+      all = all.concat(r.data||[]);
+      if((r.data||[]).length < SZ) break;
+      pg++; if(pg > 49) break;
+    }
+    var agg = {};
+    all.forEach(function(p){
+      var g = agg[p.student_id] || (agg[p.student_id] = {m:0, d:0});
+      if(p.points > 0) g.m += p.points; else g.d += (-p.points);
+    });
+    Object.keys(agg).forEach(function(sid){
+      var net = agg[sid].d - agg[sid].m;
+      if(net < SC_CS_POINT || !stu[sid] || done[sid + '|point']) return;
+      rows.push({ sid:sid, kind:'point', name:stu[sid].name,
+                  tag:'⚠ 누적벌점 ' + net + '점', warn:true,
+                  sub:'벌점 ' + agg[sid].d + ' · 상점 ' + agg[sid].m + scCsWho(stu[sid]) });
+    });
+    return rows;
+  }
+  function scCsWho(s){
+    var t = [s.school, s.grade].filter(function(x){ return x; }).join(' ');
+    return t ? '  ·  ' + t : '';
+  }
+
+  function scCsClose(){
+    var el = document.getElementById('sc-consult-wrap');
+    if(el && el.parentNode) el.parentNode.removeChild(el);
+  }
+  function scCsRowHtml(r){
+    return '<div id="sc-cs-' + r.kind + '-' + r.sid + '" style="display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:7px;background:' + (r.warn ? '#fff7ed' : '#f8fafc') + '">'
+      + '<div style="flex:1;min-width:0">'
+      +   '<div style="font-size:14.5px;font-weight:800;color:#0f172a">' + scWkEsc(r.name)
+      +     ' <span style="font-size:11.5px;font-weight:700;color:' + (r.warn ? '#c2410c' : '#15803d') + '">' + r.tag + '</span></div>'
+      +   '<div style="font-size:12px;color:#64748b;margin-top:2px">' + scWkEsc(r.sub) + '</div>'
+      + '</div>'
+      + '<button onclick="scCsDone(\'' + r.sid + '\',\'' + r.kind + '\',this)" style="flex:0 0 auto;padding:7px 13px;border:1.5px solid #0369a1;border-radius:8px;background:#fff;color:#0369a1;font-size:12.5px;font-weight:700;cursor:pointer">상담 완료</button>'
+      + '</div>';
+  }
+  function scCsRender(rows){
+    scCsClose();
+    // ⚠ 그리는 목록과 _scCsList 가 어긋나면 [상담 완료] 한 번에 팝업이 통째로 닫힌다
+    _scCsList = rows || [];
+    if(!_scCsList.length) return;
+    var nw = rows.filter(function(r){ return r.kind === 'new'; });
+    var pt = rows.filter(function(r){ return r.kind === 'point'; });
+    var sec = function(title, list){
+      if(!list.length) return '';
+      return '<div style="font-size:12px;font-weight:800;color:#475569;margin:8px 2px 6px">' + title + ' ' + list.length + '명</div>'
+           + list.map(scCsRowHtml).join('');
+    };
+    var wrap = document.createElement('div');
+    wrap.id = 'sc-consult-wrap';
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:20px';
+    wrap.innerHTML = '<div style="background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
+      + '<div style="padding:18px 22px 13px;border-bottom:1px solid #e2e8f0;flex:0 0 auto">'
+      +   '<div style="font-size:17px;font-weight:800;color:#0f172a">📋 독서실 상담 대상</div>'
+      +   '<div style="font-size:12.5px;color:#64748b;margin-top:4px">상담을 마친 학생은 [상담 완료]를 눌러주세요. 다음부터 명단에서 빠집니다.</div>'
+      + '</div>'
+      + '<div style="padding:8px 18px 4px;overflow:auto;flex:1 1 auto">' + sec('🌱 신입생 상담', nw) + sec('⚠ 벌점 상담', pt) + '</div>'
+      + '<div style="padding:13px 22px 18px;text-align:right;flex:0 0 auto">'
+      +   '<button onclick="scCsClose()" style="padding:9px 22px;border:1.5px solid #cbd5e1;border-radius:9px;background:#fff;color:#475569;font-size:13.5px;font-weight:700;cursor:pointer">닫기</button>'
+      + '</div></div>';
+    document.body.appendChild(wrap);
+  }
+
+  async function scCsDone(sid, kind, btn){
+    btn.disabled = true; btn.textContent = '저장 중…';
+    try{
+      var r = await db.from('reading_room_consults').insert({
+        student_id: sid, kind: kind,
+        done_by: (scCurrentUser && scCurrentUser.id) || null
+      });
+      // 23505 = 이미 완료된 건(unique 충돌). 실패로 보지 않는다
+      if(r.error && r.error.code !== '23505') throw r.error;
+      var row = document.getElementById('sc-cs-' + kind + '-' + sid);
+      if(row && row.parentNode) row.parentNode.removeChild(row);
+      _scCsList = _scCsList.filter(function(x){ return !(x.sid === sid && x.kind === kind); });
+      if(!_scCsList.length) scCsClose();
+    }catch(e){
+      btn.disabled = false; btn.textContent = '상담 완료';
+      alert('저장 실패: ' + (e.message || e));
+    }
+  }
+
+  async function scCsShow(){
+    if(!scCsTarget()) return;
+    try{ _scCsList = await scCsLoad(); }
+    catch(e){ console.warn('상담 대상 로드 실패:', e); return; }   // 실패해도 화면은 그대로
+    scCsMarkSeen();
+    if(!_scCsList.length) return;   // 대상이 없으면 팝업을 띄우지 않는다
+    scCsRender(_scCsList);
+  }
+  function scCsSchedule(){
+    var now  = new Date();
+    var next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), SC_CS_HOUR, 0, 0, 0);
+    if(next <= now) next = new Date(next.getTime() + 86400000);
+    setTimeout(function(){ scCsShow(); scCsSchedule(); }, next - now);
+  }
+  function scCsStart(){
+    if(!scCsTarget()) return;
+    if(_scCsStarted) return; _scCsStarted = true;
+    // 16시가 지나서 켰는데 오늘 아직 못 봤으면 바로 한 번 띄운다
+    if(new Date().getHours() >= SC_CS_HOUR && !scCsSeenToday()) setTimeout(scCsShow, 1500);
+    scCsSchedule();
+  }
+
 
   /* ============================================================
      [TIMEPLAN] 시간 계획 — 표 A(외출·복귀) / 표 B(등원·하원 점검)
@@ -6355,6 +6514,7 @@
     scOverdueStart();       // 예상 복귀시간 초과 미복귀 알림 시작
     scLiveStart();          // 키오스크 입력 실시간 현황 시작
     scWkRtStart();          // [REALTIME 주간출결] 실시간 반영 시작
+    scCsStart();            // 매일 16시 상담 알람 (독서실 권한 부원장 한정)
   }
 
   // 관리 버튼 클릭 → 인증 차단 오버레이 표시
@@ -6372,6 +6532,15 @@
      [AUTH] 관리자 인증 — localStorage savedUserId → users → role
      키오스크는 인증 불필요. 관리 모드 진입 시에만 검사.
   ============================================================ */
+  /* 독서실 관리 화면에 들어올 수 있는 계정인가.
+     ⚠ 부원장은 계정관리에서 '독서실 관리' 권한을 켠 사람만이다.
+       role 만 보면 모든 부원장에게 열린다. */
+  function scCanAdmin(u){
+    if(!u) return false;
+    if(u.role === 'admin' || u.role === 'desk') return true;
+    return u.role === 'vice_director' && !!(u.permissions && u.permissions.reading_room === true);
+  }
+
   async function scCheckAdminAuth(){
     var errEl = document.getElementById('sc-auth-err');
     if(errEl) errEl.textContent = '확인 중...';
@@ -6381,13 +6550,13 @@
         if(errEl) errEl.textContent = 'BMAPS에 먼저 로그인해주세요.';
         return;
       }
-      var res = await db.from('users').select('id, name, role').eq('id', savedId).maybeSingle();
+      var res = await db.from('users').select('id, name, role, permissions').eq('id', savedId).maybeSingle();
       if(res.error || !res.data){
         if(errEl) errEl.textContent = '사용자 정보를 찾을 수 없습니다.';
         return;
       }
-      if(res.data.role !== 'admin' && res.data.role !== 'desk'){
-        if(errEl) errEl.textContent = '관리자 또는 데스크 권한이 없는 계정입니다.';
+      if(!scCanAdmin(res.data)){
+        if(errEl) errEl.textContent = '독서실 관리 권한이 없는 계정입니다.';
         return;
       }
       // 인증 성공
@@ -6462,9 +6631,9 @@
     try{
       var savedId = localStorage.getItem('savedUserId');
       if(!savedId) return;
-      var res = await db.from('users').select('id, name, role').eq('id', savedId).maybeSingle();
+      var res = await db.from('users').select('id, name, role, permissions').eq('id', savedId).maybeSingle();
       if(res.error || !res.data) return;
-      if(res.data.role !== 'admin' && res.data.role !== 'desk') return;
+      if(!scCanAdmin(res.data)) return;
       scCurrentUser = res.data;
       scShowAdmin();
       scAdminTab(tab);
