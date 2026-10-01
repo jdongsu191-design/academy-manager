@@ -39,6 +39,8 @@
   .bp-tag.a { background: #dbeafe; color: #1d4ed8; font-weight: 700; }
   .bp-tag.x { background: #fee2e2; color: #b91c1c; }
   .bp-opt + span { margin-right: 10px; }
+  .bp-card.cut { border-color: #dc2626; box-shadow: 0 0 0 2px #fee2e2; }
+  .bp-card.miss { border-style: dashed; background: #fafafa; }
   body { font-family: 'Pretendard', 'Noto Sans KR', -apple-system, sans-serif;
          background: #f1f5f9; color: #1e293b; -webkit-text-size-adjust: 100%; }
   button { font-family: inherit; touch-action: manipulation; cursor: pointer; }
@@ -288,6 +290,14 @@
 
     <!-- PDF 가져오기 탭 -->
     <div id="ba-pane-p" style="display:none">
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn btn-sm" onclick="bpShowSaved()">🖼 저장된 문항 이미지 보기</button>
+        <button class="btn btn-sm" id="bp-saved-hide" onclick="bpHideSaved()" style="display:none">닫기</button>
+        <span class="hint" id="bp-saved-sum"></span>
+      </div>
+      <div class="bp-chk" id="bp-saved-chk"></div>
+      <div class="bp-grid" id="bp-saved" style="display:none"></div>
+
       <div class="hint" style="margin-bottom:10px">
         <b>문제 PDF</b> 에서 문항 이미지 · 배점 · 객관식/주관식 · 해설 QR 을,
         <b>정답 PDF</b> 에서 정답을 읽습니다 ·
@@ -2376,6 +2386,92 @@ async function bpApply(){
     _bp.busy = false; btn.disabled = false; btn.textContent = '💾 시험지에 적용';
     setTimeout(function(){ bpProg(null); }, 800);
   }
+}
+
+
+/* ── 저장된 문항 이미지 다시 보기 ──────────────────────────
+   적용한 뒤에 무엇이 들어갔는지 확인할 길이 없었다. 잘려 들어간 시험지를
+   찾아내려면 눈으로 봐야 하는데 30장을 일일이 열 수는 없다.
+   경로는 우리가 정해 두었으므로(bety-exam/{시험지}/{번호}.jpg) 바로 불러온다. */
+function bpSavedUrl(examId, no, bust){
+  return SUPABASE_URL + '/storage/v1/object/public/' + BP.BUCKET
+       + '/' + examId + '/' + no + '.jpg' + (bust ? ('?t=' + bust) : '');
+}
+
+/* 가장자리에 글자가 닿아 있으면 잘린 것이다.
+   읽을 수 없으면(교차 출처 차단 등) null 을 돌려 '모름' 으로 둔다. */
+function bpEdgeCut(img){
+  try {
+    var c = document.createElement('canvas');
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    var x = c.getContext('2d', { willReadFrequently:true });
+    x.drawImage(img, 0, 0);
+    var d = x.getImageData(0, 0, c.width, c.height).data;
+    var dark = function(p){ return d[p*4] < 160; };
+    var right = 0, bottom = 0;
+    for(var y = 0; y < c.height; y++) if(dark(y*c.width + c.width - 1)) right++;
+    for(var xx = 0; xx < c.width; xx++) if(dark((c.height-1)*c.width + xx)) bottom++;
+    return (right > 4 || bottom > 4);
+  } catch(e){ return null; }
+}
+
+function bpHideSaved(){
+  document.getElementById('bp-saved').style.display = 'none';
+  document.getElementById('bp-saved-chk').innerHTML = '';
+  document.getElementById('bp-saved-sum').textContent = '';
+  document.getElementById('bp-saved-hide').style.display = 'none';
+}
+
+async function bpShowSaved(){
+  if(!_ba.exam){ bpMsg('시험지를 먼저 고르세요', true); return; }
+  var ex = _ba.exam, n = ex.question_count || 0;
+  var wrap = document.getElementById('bp-saved');
+  var sum  = document.getElementById('bp-saved-sum');
+  document.getElementById('bp-saved-hide').style.display = '';
+  wrap.style.display = ''; wrap.innerHTML = '';
+  document.getElementById('bp-saved-chk').innerHTML = '';
+  sum.textContent = '불러오는 중...';
+
+  var bust = Date.now();          /* 다시 가져온 뒤에도 옛 그림이 보이지 않게 */
+  var ok = 0, miss = [], cut = [], unknown = 0;
+
+  for(var i = 1; i <= n; i++){
+    var url = bpSavedUrl(ex.id, i, bust);
+    var card = document.createElement('div');
+    card.className = 'bp-card';
+    card.innerHTML = '<h5><b>' + i + '번</b><span class="bp-tag" data-s="' + i + '">…</span></h5>';
+    wrap.appendChild(card);
+
+    var img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = url;
+    var tag = card.querySelector('[data-s]');
+    try {
+      await img.decode();
+      card.appendChild(img);
+      ok++;
+      var isCut = bpEdgeCut(img);
+      if(isCut === true){ card.classList.add('cut'); tag.className = 'bp-tag x'; tag.textContent = '잘림 의심'; cut.push(i); }
+      else if(isCut === null){ tag.textContent = '검사 불가'; unknown++; }
+      else { tag.className = 'bp-tag'; tag.textContent = '정상'; }
+    } catch(e){
+      card.classList.add('miss');
+      tag.className = 'bp-tag x'; tag.textContent = '이미지 없음';
+      miss.push(i);
+    }
+  }
+
+  sum.textContent = n + '문항 중 ' + ok + '장 저장됨';
+  var chk = [];
+  function li(cls, t){ chk.push('<div class="bp-li ' + cls + '">' + baEsc(t) + '</div>'); }
+  if(miss.length) li('bp-warn', '⚠ 이미지가 없는 문항: ' + miss.join(', ')
+                    + ' — PDF 를 가져오지 않았거나 적용이 중간에 끊겼습니다');
+  if(cut.length)  li('bp-bad',  '✘ 가장자리에 글자가 닿은 문항: ' + cut.join(', ')
+                    + ' — 잘려 들어간 것입니다. PDF 를 다시 가져오세요 ([문항 이미지]만 체크하면 됩니다)');
+  if(unknown)     li('bp-warn', '⚠ ' + unknown + '장은 잘림 검사를 못 했습니다 (그림만 보고 판단해 주세요)');
+  if(!miss.length && !cut.length && !unknown && ok)
+    li('bp-ok', '✔ ' + ok + '장 모두 온전합니다');
+  document.getElementById('bp-saved-chk').innerHTML = chk.join('');
 }
 
 /* 드래그 앤 드롭 */
