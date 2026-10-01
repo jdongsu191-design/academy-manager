@@ -3,11 +3,42 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 베티 OMR 관리 [v0.7-report]</title>
+<title>BMAPS · 베티 OMR 관리 [v0.8-pdf]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ===== PDF 가져오기 ===== */
+  .bp-drops { display: flex; gap: 12px; flex-wrap: wrap; }
+  .bp-drop { flex: 1 1 240px; border: 2px dashed #cbd5e1; border-radius: 10px; background: #f8fafc;
+             padding: 18px 12px; text-align: center; cursor: pointer; transition: .12s; display: block; }
+  .bp-drop:hover, .bp-drop.over { border-color: #0369a1; background: #eff6ff; }
+  .bp-drop.set { border-style: solid; border-color: #16a34a; background: #f0fdf4; }
+  .bp-ic { font-size: 26px; }
+  .bp-t  { font-weight: 800; font-size: 14px; margin-top: 4px; }
+  .bp-f  { font-size: 12px; color: #64748b; margin-top: 3px; word-break: break-all; }
+  .bp-prog { height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin-top: 10px; }
+  .bp-prog > div { height: 100%; width: 0; background: linear-gradient(90deg,#0369a1,#38bdf8); transition: width .2s; }
+  .bp-sum { margin-top: 12px; padding: 10px 12px; background: #f1f5f9; border-radius: 8px;
+            font-size: 13px; font-weight: 700; }
+  .bp-chk { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .bp-li  { font-size: 13px; padding: 6px 10px; border-radius: 6px; }
+  .bp-ok  { background: #f0fdf4; color: #15803d; }
+  .bp-warn{ background: #fffbeb; color: #b45309; }
+  .bp-bad { background: #fef2f2; color: #b91c1c; font-weight: 700; }
+  .bp-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px;
+             max-height: 560px; overflow: auto; padding: 2px; }
+  .bp-card { width: 224px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; padding: 6px; }
+  .bp-card h5 { font-size: 12px; margin-bottom: 4px; display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .bp-card img { width: 100%; border: 1px solid #f1f5f9; border-radius: 4px; display: block; }
+  .bp-tag { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #e2e8f0; color: #475569; }
+  .bp-tag.s { background: #fef3c7; color: #92400e; }
+  .bp-tag.a { background: #dbeafe; color: #1d4ed8; font-weight: 700; }
+  .bp-tag.x { background: #fee2e2; color: #b91c1c; }
+  .bp-opt + span { margin-right: 10px; }
   body { font-family: 'Pretendard', 'Noto Sans KR', -apple-system, sans-serif;
          background: #f1f5f9; color: #1e293b; -webkit-text-size-adjust: 100%; }
   button { font-family: inherit; touch-action: manipulation; cursor: pointer; }
@@ -186,7 +217,7 @@
 
 <div class="ba-top">
   <span class="ba-title">📝 베티 OMR 관리</span>
-  <span class="ba-ver" id="ba-ver">v0.7-report</span>
+  <span class="ba-ver" id="ba-ver">v0.8-pdf</span>
   <span class="ba-who" id="ba-who"></span>
   <button class="ba-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -224,6 +255,7 @@
 
     <div class="tabs">
       <button id="ba-tab-q" class="on" onclick="baTab('q')">문항 · 정답 · 배점</button>
+      <button id="ba-tab-p" onclick="baTab('p')">📄 PDF 가져오기</button>
       <button id="ba-tab-y" onclick="baTab('y')">해설 링크</button>
       <button id="ba-tab-s" onclick="baTab('s')">응시 현황</button>
     </div>
@@ -251,6 +283,49 @@
           <button class="btn btn-primary" onclick="baSaveQuestions()">💾 문항 저장</button>
           <span class="msg" id="ba-msg-q"></span>
         </div>
+      </div>
+    </div>
+
+    <!-- PDF 가져오기 탭 -->
+    <div id="ba-pane-p" style="display:none">
+      <div class="hint" style="margin-bottom:10px">
+        <b>문제 PDF</b> 에서 문항 이미지 · 배점 · 객관식/주관식 · 해설 QR 을,
+        <b>정답 PDF</b> 에서 정답을 읽습니다 ·
+        읽은 내용은 <b>[적용]을 누르기 전까지 저장되지 않습니다</b>
+      </div>
+      <div class="bp-drops">
+        <label class="bp-drop" id="bp-drop-q">
+          <input type="file" accept="application/pdf" onchange="bpPick(event,'q')" hidden>
+          <div class="bp-ic">&#128196;</div><div class="bp-t">문제 PDF</div>
+          <div class="bp-f" id="bp-name-q">클릭하거나 끌어다 놓으세요</div>
+        </label>
+        <label class="bp-drop" id="bp-drop-a">
+          <input type="file" accept="application/pdf" onchange="bpPick(event,'a')" hidden>
+          <div class="bp-ic">&#128273;</div><div class="bp-t">정답 PDF</div>
+          <div class="bp-f" id="bp-name-a">실전은 &#39;정답&#39;, 준킬러는 &#39;해설&#39; 파일</div>
+        </label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-primary" id="bp-run" onclick="bpRun()">&#128269; 분석</button>
+        <button class="btn" onclick="bpReset()">초기화</button>
+        <span class="msg" id="bp-msg"></span>
+      </div>
+      <div class="bp-prog" id="bp-prog" style="display:none"><div id="bp-prog-bar"></div></div>
+
+      <div id="bp-result" style="display:none">
+        <div class="bp-sum" id="bp-sum"></div>
+        <div class="bp-chk" id="bp-chk"></div>
+        <div class="row" style="margin:10px 0; align-items:center">
+          <b style="font-size:13px">적용할 항목</b>
+          <label><input type="checkbox" class="bp-opt" id="bp-o-ans" checked><span>정답</span></label>
+          <label><input type="checkbox" class="bp-opt" id="bp-o-pts" checked><span>배점</span></label>
+          <label><input type="checkbox" class="bp-opt" id="bp-o-typ" checked><span>객/주관식</span></label>
+          <label><input type="checkbox" class="bp-opt" id="bp-o-yt"  checked><span>해설 QR</span></label>
+          <label><input type="checkbox" class="bp-opt" id="bp-o-img" checked><span>문항 이미지</span></label>
+          <button class="btn btn-primary" id="bp-apply" onclick="bpApply()">&#128190; 시험지에 적용</button>
+          <span class="hint">내용영역 · 행동영역은 PDF 에 없으므로 건드리지 않습니다</span>
+        </div>
+        <div class="bp-grid" id="bp-grid"></div>
       </div>
     </div>
 
@@ -329,6 +404,7 @@
     <div class="frow"><label>문항 수</label><input type="number" class="inp" id="ba-ex-qcnt" min="1" max="100"></div>
     <div class="frow"><label>만점</label><input type="number" class="inp" id="ba-ex-total" min="1"></div>
     <div class="frow"><label>가산점</label><input type="number" class="inp" id="ba-ex-bonus" min="0"></div>
+    <div class="frow"><label>제한시간(분)</label><input type="number" class="inp" id="ba-ex-tmin" min="1" max="300"></div>
     <div class="frow"><label>발행</label>
       <select class="inp" id="ba-ex-pub">
         <option value="false">미발행 (학생 응시 불가)</option>
@@ -494,14 +570,14 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_ADMIN_VERSION = 'v0.7-report';
+window.BETY_ADMIN_VERSION = 'v0.8-pdf';
 console.log('BETY-ADMIN build:', window.BETY_ADMIN_VERSION);
 
 /* 레벨별 기본값 */
 const LV_DEFAULTS = {
-  '실전모고': { qcnt:30, total:100, bonus:0,  slevel:'high',   excluded:[] },
-  '준킬러':   { qcnt:18, total:100, bonus:28, slevel:'high',   excluded:[] },
-  '80점':     { qcnt:30, total:80,  bonus:0,  slevel:'middle', excluded:[20,21,28,29,30] }
+  '실전모고': { qcnt:30, total:100, bonus:0,  slevel:'high',   excluded:[],               tmin:100 },
+  '준킬러':   { qcnt:18, total:100, bonus:28, slevel:'high',   excluded:[],               tmin:60  },
+  '80점':     { qcnt:30, total:80,  bonus:0,  slevel:'middle', excluded:[20,21,28,29,30], tmin:100 }
 };
 
 var _ba = { user:null, date:'', exams:[], exam:null, questions:[], tab:'q',
@@ -611,6 +687,7 @@ function baLevelDefaults(){
   document.getElementById('ba-ex-qcnt').value  = d.qcnt;
   document.getElementById('ba-ex-total').value = d.total;
   document.getElementById('ba-ex-bonus').value = d.bonus;
+  document.getElementById('ba-ex-tmin').value  = d.tmin || 100;
   document.getElementById('ba-ex-slevel').value = d.slevel;
   if(lv === '80점') document.getElementById('ba-ex-grade').value = '';
   baToggleElective();
@@ -623,7 +700,7 @@ function baToggleElective(){
   row.style.display = on ? 'flex' : 'none';
   if(!on) document.getElementById('ba-ex-elective').value = '';
 }
-function baOpenExamModal(exam){
+async function baOpenExamModal(exam){
   if(!_ba.date){ alert('회차를 먼저 선택해주세요'); return; }
   baMsg('ba-ex-msg','');
   document.getElementById('ba-ex-title').textContent = exam ? '시험지 정보 수정' : '시험지 추가';
@@ -636,6 +713,15 @@ function baOpenExamModal(exam){
     document.getElementById('ba-ex-qcnt').value   = exam.question_count;
     document.getElementById('ba-ex-total').value  = exam.total_score;
     document.getElementById('ba-ex-bonus').value  = exam.bonus_points;
+    /* ⚠ 제한시간은 bety_omr_list_exams 가 모르는 새 컬럼이라 따로 읽어 온다.
+       안 읽고 열면 100 이 보이고, 저장하는 순간 실제 값(준킬러 60분)이 덮인다. */
+    document.getElementById('ba-ex-tmin').value   = exam.time_limit_min || 100;
+    try {
+      var mr = await db.rpc('bety_omr_get_exam_meta',
+        { p_actor_id:_ba.user.id, p_exam_id:exam.id });
+      if(!mr.error && mr.data && mr.data.ok && mr.data.time_limit_min)
+        document.getElementById('ba-ex-tmin').value = mr.data.time_limit_min;
+    } catch(e){ console.error('[get_exam_meta]', e); }
     document.getElementById('ba-ex-pub').value    = exam.is_published ? 'true' : 'false';
   } else {
     document.getElementById('ba-ex-level').value = '실전모고';
@@ -655,11 +741,13 @@ async function baSaveExam(){
   var total = parseInt(document.getElementById('ba-ex-total').value, 10);
   var bonus = parseInt(document.getElementById('ba-ex-bonus').value, 10);
   var pub   = document.getElementById('ba-ex-pub').value === 'true';
+  var tmin  = parseInt(document.getElementById('ba-ex-tmin').value, 10);
   var elec  = (gRaw === '3') ? document.getElementById('ba-ex-elective').value : '';
   if(!qcnt || qcnt < 1){ baMsg('ba-ex-msg','문항 수를 입력하세요', true); return; }
   if(!total || total < 1){ baMsg('ba-ex-msg','만점을 입력하세요', true); return; }
   if(gRaw === '3' && !elec){ baMsg('ba-ex-msg','고3은 선택과목을 골라주세요 (미적분·확률과통계·기하)', true); return; }
   if(isNaN(bonus) || bonus < 0) bonus = 0;
+  if(isNaN(tmin) || tmin < 1) tmin = 100;
 
   var btn = document.getElementById('ba-ex-save');
   btn.disabled = true; btn.textContent = '저장중...';
@@ -673,6 +761,10 @@ async function baSaveExam(){
       p_bonus_points: bonus, p_is_published: pub
     });
     if(r.error) throw r.error;
+    /* 제한시간은 upsert_exam 이 모르는 값이라 따로 넣는다 (기존 RPC 를 건드리지 않으려고) */
+    var m = await db.rpc('bety_omr_set_exam_meta',
+      { p_actor_id:_ba.user.id, p_exam_id:r.data, p_patch:{ time_limit_min: tmin } });
+    if(m.error) throw m.error;
     baCloseExamModal();
     await baLoadExams();
     await baOpenExam(r.data);
@@ -1712,7 +1804,7 @@ async function rpCopyPng(){
 /* ── 탭 ─────────────────────────────────────────────────── */
 function baTab(t){
   _ba.tab = t;
-  ['q','y','s'].forEach(function(k){
+  ['q','p','y','s'].forEach(function(k){
     document.getElementById('ba-tab-'+k).classList.toggle('on', k===t);
     document.getElementById('ba-pane-'+k).style.display = (k===t) ? '' : 'none';
   });
@@ -1737,6 +1829,523 @@ document.getElementById('ba-yt').addEventListener('keydown', function(e){
   e.preventDefault();
   var nx = document.querySelector('#ba-yt [data-yr="'+(r+dir)+'"]');
   if(nx){ nx.focus(); try{ nx.select(); }catch(err){} }
+});
+
+if(typeof pdfjsLib !== 'undefined'){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+/* ══ PDF 가져오기 ═══════════════════════════════════════════════════════
+   시험지 PDF 에서 문항을 잘라 내고 배점·유형·해설 QR 을, 정답 PDF 에서 정답을 읽는다.
+   글자와 좌표를 읽는 것이지 이미지 인식이 아니라서 회차마다 흔들리지 않는다.
+
+   ⚠ 2026-10-01 실측(고2 23회 실전 · 22회 준킬러)에서 걸린 함정 — 전부 여기 반영돼 있다
+     · 실전은 A4(595x841) · 준킬러는 A3(841x1190) → 길이 기준을 용지 폭 비율 U 로 환산
+     · 단 경계가 시험지마다 다르다(288 / 411) → 문항 머리표 x 로 계산
+     · 홀수 쪽에 /Rotate 180 이 박혀 있다 → rotation:0 으로 고정하지 않으면 거꾸로 잘린다
+     · jsQR 은 배율에 민감하다 → 2·4·6… 로 다시 그려 읽어야 27/27 (한 배율이면 23/27)
+     · 문항 이미지에 QR 이 들어가면 시험 중에 해설 영상을 본다 → QR '위'에서 자른다
+     · 배점 숫자가 수식 글자인 문항이 있다 → 섹션 머리말('기출4점')에서 가져온다
+     · 닫는 ']' 가 글자로 안 나오는 줄이 있다 → 여는 괄호와 '점' 까지만 본다
+*/
+var BP = { SCALE:3, BOTTOM:772, BUCKET:'bety-exam', CH:'①②③④⑤' };
+var _bp = { fq:null, fa:null, rows:[], answers:{}, mid:290, u:1, busy:false };
+
+/* ⚠ 학생은 객관식 답을 '1'~'5' 로 보내고 채점은 문자열 비교다(bety_omr_finalize).
+   정답지에서 읽은 '①' 을 그대로 저장하면 객관식이 전부 오답이 된다. */
+function bpAnsNorm(a){
+  var i = BP.CH.indexOf(a);
+  return i >= 0 ? String(i+1) : String(a == null ? '' : a).trim();
+}
+function bpMsg(t, err){ baMsg('bp-msg', t, err); }
+function bpProg(p){
+  var w = document.getElementById('bp-prog');
+  w.style.display = (p == null) ? 'none' : '';
+  if(p != null) document.getElementById('bp-prog-bar').style.width = Math.round(p*100) + '%';
+}
+function bpPick(e, which){
+  var f = e.target.files && e.target.files[0];
+  if(f) bpSetFile(f, which);
+  e.target.value = '';
+}
+function bpSetFile(f, which){
+  if(!f || !/\.pdf$/i.test(f.name)){ bpMsg('PDF 파일만 넣어주세요', true); return; }
+  if(which === 'q') _bp.fq = f; else _bp.fa = f;
+  var d = document.getElementById(which === 'q' ? 'bp-drop-q' : 'bp-drop-a');
+  d.classList.add('set');
+  document.getElementById(which === 'q' ? 'bp-name-q' : 'bp-name-a').textContent =
+    f.name + ' · ' + (f.size/1024/1024).toFixed(1) + 'MB';
+  bpMsg('');
+}
+function bpReset(){
+  _bp.fq = _bp.fa = null; _bp.rows = []; _bp.answers = {};
+  ['q','a'].forEach(function(k){
+    document.getElementById('bp-drop-' + k).classList.remove('set');
+  });
+  document.getElementById('bp-name-q').textContent = '클릭하거나 끌어다 놓으세요';
+  document.getElementById('bp-name-a').textContent = "실전은 '정답', 준킬러는 '해설' 파일";
+  document.getElementById('bp-result').style.display = 'none';
+  document.getElementById('bp-grid').innerHTML = '';
+  bpProg(null); bpMsg('');
+}
+
+/* 같은 단 안에서 y 가 비슷한 글자들을 한 줄로 묶는다.
+   허용 오차가 좁으면 수식 옆의 '[4점]' 이 떨어져 나간다(실측). */
+function bpLines(tc, vp, mid){
+  var out = [];
+  tc.items.forEach(function(it){
+    var t = pdfjsLib.Util.transform(vp.transform, it.transform);
+    var x = t[4], y = t[5], c = (x < mid*BP.SCALE ? 0 : 1);
+    var L = null;
+    for(var i=0;i<out.length;i++){
+      if(out[i].c === c && Math.abs(out[i].y - y) < 8){ L = out[i]; break; }
+    }
+    if(!L){ L = {y:y, x:x, c:c, parts:[]}; out.push(L); }
+    if(x < L.x) L.x = x;
+    L.parts.push({x:x, s:it.str});
+  });
+  out.forEach(function(L){
+    L.parts.sort(function(a,b){ return a.x - b.x; });
+    L.s = L.parts.map(function(p){ return p.s; }).join('');
+  });
+  return out;
+}
+
+/* 쪽에 그려진 이미지의 위치를 연산자 목록에서 그대로 읽는다.
+   화면을 훑어 QR 을 찾는 것보다 정확하다 — QR 은 50pt(용지 비율) 정사각이다. */
+async function bpImageBoxes(page, vp, u){
+  var ops = await page.getOperatorList(), OPS = pdfjsLib.OPS;
+  var ctm = [1,0,0,1,0,0], stack = [], out = [];
+  for(var i=0;i<ops.fnArray.length;i++){
+    var fn = ops.fnArray[i], a = ops.argsArray[i];
+    if(fn === OPS.save) stack.push(ctm.slice());
+    else if(fn === OPS.restore) ctm = stack.pop() || ctm;
+    else if(fn === OPS.transform) ctm = pdfjsLib.Util.transform(ctm, a);
+    else if(fn === OPS.paintImageXObject || fn === OPS.paintJpegXObject
+            || fn === OPS.paintImageMaskXObject){
+      var t  = pdfjsLib.Util.transform(vp.transform, ctm);
+      var p0 = pdfjsLib.Util.applyTransform([0,0], t);
+      var p1 = pdfjsLib.Util.applyTransform([1,1], t);
+      out.push({ x0:Math.min(p0[0],p1[0]), x1:Math.max(p0[0],p1[0]),
+                 y0:Math.min(p0[1],p1[1]), y1:Math.max(p0[1],p1[1]) });
+    }
+  }
+  out.qr = out.filter(function(b){
+    var w = b.x1-b.x0, h = b.y1-b.y0;
+    return Math.abs(w-h) < 5*u*BP.SCALE && w > 40*u*BP.SCALE && w < 60*u*BP.SCALE;
+  });
+  return out;
+}
+
+/* QR 한 칸만 여러 배율로 다시 그려 읽는다.
+   같은 QR 이 2·4배에선 읽히고 3·10배에선 실패한다(가운데 로고가 데이터를 가려서
+   이진화 결과가 배율마다 달라진다). */
+async function bpReadQR(page, box, u){
+  var SC = [2,4,6,1.5,3,5];
+  for(var si=0; si<SC.length; si++){
+    var S2 = SC[si], k = S2/BP.SCALE, pad = Math.round(6*S2);
+    var vp2 = page.getViewport({ scale:S2, rotation:0 });
+    var w = Math.round((box.x1-box.x0)*k) + pad*2;
+    var h = Math.round((box.y1-box.y0)*k) + pad*2;
+    if(w < 10 || h < 10) continue;
+    var c = document.createElement('canvas'); c.width = w; c.height = h;
+    var cx = c.getContext('2d', { willReadFrequently:true });
+    cx.fillStyle = '#fff'; cx.fillRect(0,0,w,h);
+    await page.render({ canvasContext:cx, viewport:vp2,
+      transform:[1,0,0,1, -box.x0*k + pad, -box.y0*k + pad] }).promise;
+    var d = cx.getImageData(0,0,w,h);
+    var q = jsQR(d.data, w, h, { inversionAttempts:'dontInvert' })
+         || jsQR(d.data, w, h, { inversionAttempts:'attemptBoth' });
+    if(q) return q.data;
+  }
+  return null;
+}
+
+/* 단 경계는 시험지마다 다르다. 문항 머리표의 x 를 모아 가장 큰 틈으로 가르고,
+   오른쪽 무리의 왼쪽 끝 바로 앞을 경계로 삼는다.
+   머리표는 '7' '｜' '[2023…' 처럼 조각나 있어 조각 하나로는 못 알아본다 → 줄로 묶어서 본다. */
+async function bpFindMid(pdf){
+  var xs = [];
+  for(var p=1; p<=pdf.numPages; p++){
+    var pg = await pdf.getPage(p);
+    var vp = pg.getViewport({ scale:BP.SCALE, rotation:0 });
+    var tc = await pg.getTextContent(), rows = [];
+    tc.items.forEach(function(it){
+      var t = pdfjsLib.Util.transform(vp.transform, it.transform);
+      var x = t[4], y = t[5], L = null;
+      for(var i=0;i<rows.length;i++){ if(Math.abs(rows[i].y - y) < 8){ L = rows[i]; break; } }
+      if(!L){ L = {y:y, parts:[]}; rows.push(L); }
+      L.parts.push({x:x, s:it.str});
+    });
+    rows.forEach(function(L){
+      L.parts.sort(function(a,b){ return a.x - b.x; });
+      for(var i=0;i<L.parts.length;i++){
+        var join = L.parts.slice(i, i+4).map(function(q){ return q.s; }).join('');
+        if(/^\s*\d+\s*[｜|]\s*\[/.test(join)) xs.push(L.parts[i].x / BP.SCALE);
+      }
+    });
+  }
+  if(xs.length < 4) return 290;
+  xs.sort(function(a,b){ return a-b; });
+  var gap = 0, gi = 0;
+  for(var i=1;i<xs.length;i++){ if(xs[i]-xs[i-1] > gap){ gap = xs[i]-xs[i-1]; gi = i; } }
+  if(gap < 80) return 290;               /* 한 단짜리 시험지 */
+  return Math.round(xs[gi] - 8);
+}
+
+/* 문제 PDF → 문항 목록 (번호·쪽·배점·유형·QR·잘린 이미지) */
+async function bpParseExam(file, onProg){
+  var pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  var u   = (await pdf.getPage(1)).getViewport({ scale:1, rotation:0 }).width / 595;
+  var mid = await bpFindMid(pdf);
+  _bp.mid = mid; _bp.u = u;
+  var rows = [], secPts = null, rotated = [];
+
+  for(var p=1; p<=pdf.numPages; p++){
+    if(onProg) onProg((p-1)/pdf.numPages);
+    var page = await pdf.getPage(p);
+    if(page.rotate) rotated.push(p);
+    var vp = page.getViewport({ scale:BP.SCALE, rotation:0 });
+    var LS = bpLines(await page.getTextContent(), vp, mid);
+
+    var marks = [];
+    LS.forEach(function(L){
+      var m = L.s.match(/^\s*(\d+)\s*[｜|]\s*\[(.*)$/);
+      if(m) marks.push({ no:+m[1], x:L.x, y:L.y, c:L.c,
+                         src:(m[2]||'').replace(/\].*$/, '').trim() });
+      var sm = L.s.match(/\[[^\]]*?(\d)\s*점/);
+      if(sm && /문제|기출|주관식|객관식/.test(L.s)) secPts = +sm[1];
+    });
+    if(!marks.length) continue;
+
+    var cvs = document.createElement('canvas');
+    cvs.width = vp.width; cvs.height = vp.height;
+    var ctx = cvs.getContext('2d', { willReadFrequently:true });
+    await page.render({ canvasContext:ctx, viewport:vp }).promise;
+    var boxes = await bpImageBoxes(page, vp, u);
+
+    marks.sort(function(a,b){ return (a.c - b.c) || (a.y - b.y); });
+    for(var mi=0; mi<marks.length; mi++){
+      var mk = marks[mi], col = mk.c, nx = null;
+      for(var j=mi+1; j<marks.length; j++){ if(marks[j].c === col){ nx = marks[j]; break; } }
+      var yEnd = nx ? nx.y - 10*u*BP.SCALE : BP.BOTTOM*u*BP.SCALE;
+      var cx0  = col ? mid*BP.SCALE + 4 : 16*u*BP.SCALE;
+      var cw   = (col ? vp.width - 10*u*BP.SCALE : mid*BP.SCALE) - cx0;
+      var yTop = Math.max(0, mk.y - 14*u*BP.SCALE);
+
+      var box = boxes.qr.filter(function(b){
+        return (b.x0 < mid*BP.SCALE ? 0 : 1) === col
+            && b.y0 >= mk.y - 4*u*BP.SCALE && b.y0 < yEnd;
+      }).sort(function(a,b){ return a.y0 - b.y0; })[0];
+
+      var qr = null, cutBottom = yEnd;
+      if(box){
+        qr = await bpReadQR(page, box, u);
+        cutBottom = box.y0 - 6*u*BP.SCALE;    /* QR 위에서 자른다 */
+      } else {
+        var lastY = mk.y;
+        LS.forEach(function(L){
+          if(L.c === col && L.y >= mk.y && L.y < yEnd && L.y > lastY) lastY = L.y;
+        });
+        boxes.forEach(function(b){
+          if((b.x0 < mid*BP.SCALE ? 0 : 1) === col && b.y0 >= mk.y
+             && b.y1 <= BP.BOTTOM*u*BP.SCALE && b.y1 < yEnd
+             && b.y1 - 14*u*BP.SCALE > lastY) lastY = b.y1 - 14*u*BP.SCALE;
+        });
+        cutBottom = Math.min(cutBottom, lastY + 16*u*BP.SCALE);
+      }
+
+      var body = LS.filter(function(L){ return L.c === col && L.y >= mk.y - 2 && L.y < yEnd; })
+                   .sort(function(a,b){ return a.y - b.y; })
+                   .map(function(L){ return L.s; }).join(' ');
+      var pm = body.match(/\[\s*(\d)\s*점/);
+      var nCh = 0;
+      for(var ci=0; ci<5; ci++) if(body.indexOf(BP.CH[ci]) >= 0) nCh++;
+
+      var c2 = document.createElement('canvas');
+      c2.width  = Math.max(1, Math.round(cw));
+      c2.height = Math.max(1, Math.round(cutBottom - yTop));
+      c2.getContext('2d').drawImage(cvs, Math.round(cx0), Math.round(yTop),
+                                    c2.width, c2.height, 0, 0, c2.width, c2.height);
+
+      rows.push({ no:mk.no, page:p, col:col ? '우' : '좌',
+                  points: pm ? +pm[1] : secPts,
+                  ptFrom: pm ? '본문' : (secPts ? '섹션' : null),
+                  q_type: nCh >= 4 ? 'choice' : 'short',
+                  youtube_url: qr, source_label: mk.src,
+                  dataUrl: c2.toDataURL('image/jpeg', 0.9) });
+    }
+  }
+  if(onProg) onProg(1);
+  rows.sort(function(a,b){ return a.no - b.no; });
+  return { rows: rows, rotated: rotated, mid: mid, u: u };
+}
+
+/* 정답 PDF → { 번호: 정답 }.
+   ⚠ 한 쪽에 정답표(왼쪽)와 해설(오른쪽)이 같이 그려져 있어, 쪽 전체 글자를 이어 붙이면
+      '빠른정답' 이 해설 글자 사이에 끼어 안 잡힌다 → 왼쪽 절반만 줄로 모아 찾는다.
+   ⚠ 글자에 제어문자가 섞여 들어온다 → 떼고 비교한다. */
+function bpClean(s){ return String(s == null ? '' : s).replace(/[\u0000-\u001f]/g, '').trim(); }
+
+async function bpParseAnswers(file){
+  var pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  var best = {}, bestPage = 0, bestQuick = false;
+  for(var p=1; p<=pdf.numPages; p++){
+    var page = await pdf.getPage(p);
+    var vp = page.getViewport({ scale:1, rotation:0 });
+    var tc = await page.getTextContent();
+    var W = vp.width, u = W/595, rows = {};
+    tc.items.forEach(function(it){
+      var s = bpClean(it.str); if(!s) return;
+      var t = pdfjsLib.Util.transform(vp.transform, it.transform);
+      if(t[4] > W*0.5) return;                        /* 오른쪽 절반은 해설 */
+      var y = Math.round(t[5]*10)/10;
+      (rows[y] = rows[y] || []).push({ x:t[4], s:s, fs:Math.abs(it.transform[3]) });
+    });
+
+    var quick = false, ans = {}, n = 0;
+    Object.keys(rows).forEach(function(y){
+      var line = rows[y].sort(function(a,b){ return a.x - b.x; });
+      if(line.map(function(o){ return o.s; }).join('').indexOf('\ube60\ub978\uc815\ub2f5') >= 0) quick = true;
+      var seq = line.filter(function(o){ return o.fs <= 9*u; })   /* 제목·수식은 글자가 크다 */
+                    .map(function(o){ return o.s; });
+      for(var i=0; i+1 < seq.length; ){
+        var a = seq[i], b = seq[i+1];
+        if(/^\d{1,2}$/.test(a) && (BP.CH.indexOf(b) >= 0 || /^\d{1,3}$/.test(b))){
+          if(ans[+a] == null){ ans[+a] = b; n++; }
+          i += 2;
+        } else i++;
+      }
+    });
+
+    /* '빠른정답' 이 찍힌 쪽을 우선하고, 그 안에서 많이 잡힌 쪽을 쓴다 */
+    var better = (quick && !bestQuick) || (quick === bestQuick && n > Object.keys(best).length);
+    if(n && better){ best = ans; bestPage = p; bestQuick = quick; }
+  }
+  return { map: best, page: bestPage, quick: bestQuick };
+}
+
+/* ── 분석 ──────────────────────────────────────────────── */
+async function bpRun(){
+  if(_bp.busy) return;
+  if(!_ba.exam){ bpMsg('시험지를 먼저 고르세요', true); return; }
+  if(!_bp.fq){ bpMsg('문제 PDF 를 넣어주세요', true); return; }
+  _bp.busy = true;
+  var btn = document.getElementById('bp-run');
+  btn.disabled = true; btn.textContent = '분석 중...';
+  bpMsg(''); bpProg(0);
+  try {
+    var r = await bpParseExam(_bp.fq, function(p){ bpProg(p*0.9); });
+    _bp.rows = r.rows; _bp.rotated = r.rotated;
+    bpProg(0.95);
+    if(_bp.fa){
+      var a = await bpParseAnswers(_bp.fa);
+      _bp.answers = a.map; _bp.ansPage = a.page;
+    } else { _bp.answers = {}; _bp.ansPage = 0; }
+    bpProg(1);
+    bpRender();
+    document.getElementById('bp-result').style.display = '';
+    bpMsg('분석 완료 — 아래를 확인하고 [적용]을 누르세요');
+  } catch(e){
+    console.error(e);
+    bpMsg('분석 실패: ' + (e.message || e), true);
+  } finally {
+    _bp.busy = false; btn.disabled = false; btn.textContent = '🔍 분석';
+    setTimeout(function(){ bpProg(null); }, 600);
+  }
+}
+
+function bpRender(){
+  var ex = _ba.exam, rows = _bp.rows, ans = _bp.answers;
+  /* 제외 문항(80점 시험지의 20·21·28~30 등)은 배점에 들어가지 않는다 */
+  var cur = {};
+  (_ba.questions || []).forEach(function(q){ cur[q.q_no] = q; });
+  var excl = rows.filter(function(r){ return cur[r.no] && cur[r.no].is_excluded; })
+                 .map(function(r){ return r.no; });
+  var sum = rows.filter(function(r){ return excl.indexOf(r.no) < 0; })
+                .reduce(function(a,r){ return a + (r.points || 0); }, 0);
+  var want = ex.total_score - (ex.bonus_points || 0);
+
+  document.getElementById('bp-sum').textContent =
+    '문항 ' + rows.length + '개 · 배점 합계 ' + sum + '점 · 정답 ' + Object.keys(ans).length + '개 · '
+    + '해설 QR ' + rows.filter(function(r){ return r.youtube_url; }).length + '개 · '
+    + '용지배율 ' + Math.round(_bp.u*100)/100 + ' · 단 경계 ' + _bp.mid + 'pt';
+
+  var chk = [];
+  function li(cls, t){ chk.push('<div class="bp-li ' + cls + '">' + baEsc(t) + '</div>'); }
+
+  if(rows.length === ex.question_count) li('bp-ok', '✔ 문항 수 ' + rows.length + '개 — 시험지 설정과 같습니다');
+  else li('bp-bad', '✘ 문항 수가 다릅니다 — PDF ' + rows.length + '개 / 시험지 설정 ' + ex.question_count + '개');
+
+  if(sum === want) li('bp-ok', '✔ 배점 합계 ' + sum + ' + 가산 ' + (ex.bonus_points||0) + ' = 만점 ' + ex.total_score);
+  else li('bp-bad', '✘ 배점이 맞지 않습니다 — 합계 ' + sum + ' + 가산 ' + (ex.bonus_points||0)
+                    + ' = ' + (sum + (ex.bonus_points||0)) + ' (만점 ' + ex.total_score + ')');
+
+  var noPt = rows.filter(function(r){ return !r.points; }).map(function(r){ return r.no; });
+  if(noPt.length) li('bp-bad', '✘ 배점을 못 읽은 문항: ' + noPt.join(', '));
+
+  if(!_bp.fa) li('bp-warn', '⚠ 정답 PDF 를 넣지 않았습니다 — 정답은 적용되지 않습니다');
+  else {
+    var noAns = rows.filter(function(r){ return !ans[r.no]; }).map(function(r){ return r.no; });
+    if(noAns.length) li('bp-bad', '✘ 정답을 못 읽은 문항: ' + noAns.join(', '));
+    else li('bp-ok', '✔ 정답 ' + rows.length + '개 모두 읽었습니다');
+
+    /* 시험지에서 읽은 유형과 정답 모양(①~⑤ / 정수)이 어긋나면 어느 한쪽이 틀린 것이다 */
+    var bad = rows.filter(function(r){
+      var a = ans[r.no]; if(!a) return false;
+      var isCh = BP.CH.indexOf(a) >= 0;
+      return isCh !== (r.q_type === 'choice');
+    }).map(function(r){ return r.no; });
+    if(bad.length) li('bp-bad', '✘ 객/주관식이 정답 모양과 어긋납니다: ' + bad.join(', '));
+    else li('bp-ok', '✔ 객/주관식이 정답 모양과 모두 일치합니다');
+    li('bp-ok', '✔ 객관식 정답은 ①~⑤ 를 1~5 숫자로 바꿔 저장합니다 (학생이 보내는 형식과 같게)');
+  }
+
+  var noQR = rows.filter(function(r){ return !r.youtube_url; }).map(function(r){ return r.no; });
+  if(excl.length) li('bp-warn', '⚠ 제외 문항 ' + excl.join(', ') + ' 은 배점 합계에서 뺐습니다');
+  if(noQR.length) li('bp-warn', '⚠ 해설 QR 이 없는 문항: ' + noQR.join(', ') + ' (시험지에 QR 이 없으면 정상입니다)');
+
+  if((_bp.rotated||[]).length)
+    li('bp-ok', '✔ 거꾸로 박힌 쪽 ' + _bp.rotated.length + '개를 바로 세워 읽었습니다 (p' + _bp.rotated.join(',p') + ')');
+
+  var dup = {}, dups = [];
+  rows.forEach(function(r){ if(dup[r.no]) dups.push(r.no); dup[r.no] = 1; });
+  if(dups.length) li('bp-bad', '✘ 번호가 겹칩니다: ' + dups.join(', '));
+
+  document.getElementById('bp-chk').innerHTML = chk.join('');
+
+  document.getElementById('bp-grid').innerHTML = rows.map(function(r){
+    var a = ans[r.no];
+    return '<div class="bp-card"><h5><b>' + r.no + '번</b>'
+      + '<span class="bp-tag">p' + r.page + ' ' + r.col + '</span>'
+      + '<span class="bp-tag ' + (r.q_type === 'short' ? 's' : '') + '">'
+      + (r.q_type === 'short' ? '주관식' : '객관식') + '</span>'
+      + '<span class="bp-tag">' + (r.points || '?') + '점</span>'
+      + (a ? '<span class="bp-tag a">' + baEsc(a)
+             + (bpAnsNorm(a) !== a ? ' \u2192 ' + baEsc(bpAnsNorm(a)) : '') + '</span>'
+           : '<span class="bp-tag x">정답?</span>')
+      + (r.youtube_url ? '<span class="bp-tag">QR</span>' : '')
+      + '</h5><img src="' + r.dataUrl + '" alt="' + r.no + '번"></div>';
+  }).join('');
+}
+
+/* ── 적용 ──────────────────────────────────────────────── */
+function bpDataUrlToBlob(du){
+  var i = du.indexOf(','), bin = atob(du.slice(i+1));
+  var arr = new Uint8Array(bin.length);
+  for(var k=0;k<bin.length;k++) arr[k] = bin.charCodeAt(k);
+  return new Blob([arr], { type:'image/jpeg' });
+}
+
+async function bpApply(){
+  if(_bp.busy) return;
+  if(!_ba.exam || !_bp.rows.length){ bpMsg('먼저 분석하세요', true); return; }
+  var ex = _ba.exam;
+  var oAns = document.getElementById('bp-o-ans').checked;
+  var oPts = document.getElementById('bp-o-pts').checked;
+  var oTyp = document.getElementById('bp-o-typ').checked;
+  var oYt  = document.getElementById('bp-o-yt').checked;
+  var oImg = document.getElementById('bp-o-img').checked;
+  if(!(oAns||oPts||oTyp||oYt||oImg)){ bpMsg('적용할 항목을 하나 이상 고르세요', true); return; }
+
+  if(!confirm(baExamName(ex) + ' 시험지에 적용합니다.\n\n'
+      + '문항 ' + _bp.rows.length + '개 · 선택한 항목을 덮어씁니다.\n계속할까요?')) return;
+
+  _bp.busy = true;
+  var btn = document.getElementById('bp-apply');
+  btn.disabled = true; btn.textContent = '적용 중...';
+  bpProg(0);
+  try {
+    /* ① 문항 이미지 업로드 — 경로는 시험지별로 갈라 둔다 */
+    var paths = {};
+    if(oImg){
+      for(var i=0;i<_bp.rows.length;i++){
+        var r = _bp.rows[i];
+        var path = ex.id + '/' + r.no + '.jpg';
+        var up = await db.storage.from(BP.BUCKET)
+          .upload(path, bpDataUrlToBlob(r.dataUrl), { contentType:'image/jpeg', upsert:true });
+        if(up.error) throw new Error('이미지 업로드 실패(' + r.no + '번): ' + up.error.message);
+        paths[r.no] = path;
+        bpProg(0.6 * (i+1) / _bp.rows.length);
+      }
+    }
+    bpProg(0.65);
+
+    /* ② 문항·정답·배점 — 내용영역·행동영역은 화면에 있는 기존 값을 그대로 지킨다 */
+    var cur = {};
+    (_ba.questions || []).forEach(function(q){ cur[q.q_no] = q; });
+    var qrows = _bp.rows.map(function(r){
+      var c = cur[r.no] || {};
+      return {
+        q_no: r.no,
+        q_type: oTyp ? r.q_type : (c.q_type || 'choice'),
+        answer: oAns ? (bpAnsNorm(_bp.answers[r.no]) || String(c.answer || ''))
+                     : String(c.answer || ''),
+        points: oPts ? (r.points || 0) : (c.points || 0),
+        is_excluded: !!c.is_excluded,
+        content_area:  String(c.content_area  || ''),
+        behavior_area: String(c.behavior_area || '')
+      };
+    });
+    var sq = await db.rpc('bety_omr_save_questions',
+      { p_actor_id:_ba.user.id, p_exam_id:ex.id, p_rows:qrows });
+    if(sq.error) throw sq.error;
+    bpProg(0.8);
+
+    /* ③ 해설 링크 — QR 을 읽은 문항만 건드린다 */
+    if(oYt){
+      var yrows = _bp.rows.filter(function(r){ return r.youtube_url; })
+                          .map(function(r){ return { q_no:r.no, youtube_url:r.youtube_url }; });
+      if(yrows.length){
+        var sy = await db.rpc('bety_omr_save_youtube',
+          { p_actor_id:_ba.user.id, p_exam_id:ex.id, p_rows:yrows });
+        if(sy.error) throw sy.error;
+      }
+    }
+    bpProg(0.9);
+
+    /* ④ 이미지 경로·출처 */
+    var irows = _bp.rows.map(function(r){
+      var o = { q_no:r.no };
+      if(oImg) o.image_path = paths[r.no] || '';
+      if(r.source_label) o.source_label = r.source_label;
+      return o;
+    });
+    var si = await db.rpc('bety_omr_save_images',
+      { p_actor_id:_ba.user.id, p_exam_id:ex.id, p_rows:irows });
+    if(si.error) throw si.error;
+
+    /* ⑤ 어느 PDF 에서 왔는지 남긴다 */
+    await db.rpc('bety_omr_set_exam_meta',
+      { p_actor_id:_ba.user.id, p_exam_id:ex.id, p_patch:{ pdf_name:_bp.fq.name } });
+
+    bpProg(1);
+    var d = sq.data || {};
+    bpMsg('✓ 적용 완료 — 문항 ' + qrows.length + '개'
+      + (oImg ? ' · 이미지 ' + Object.keys(paths).length + '장' : '')
+      + ' · 배점 ' + d.computed + '/' + d.expected, !d.valid);
+    await baLoadQuestions();
+    await baLoadExams();
+  } catch(e){
+    console.error(e);
+    bpMsg('적용 실패: ' + (e.message || e), true);
+  } finally {
+    _bp.busy = false; btn.disabled = false; btn.textContent = '💾 시험지에 적용';
+    setTimeout(function(){ bpProg(null); }, 800);
+  }
+}
+
+/* 드래그 앤 드롭 */
+['q','a'].forEach(function(k){
+  var el = document.getElementById('bp-drop-' + (k === 'q' ? 'q' : 'a'));
+  if(!el) return;
+  el.addEventListener('dragover', function(e){ e.preventDefault(); el.classList.add('over'); });
+  el.addEventListener('dragleave', function(){ el.classList.remove('over'); });
+  el.addEventListener('drop', function(e){
+    e.preventDefault(); el.classList.remove('over');
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if(f) bpSetFile(f, k);
+  });
 });
 
 baBoot();
