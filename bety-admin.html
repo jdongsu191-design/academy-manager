@@ -1848,7 +1848,7 @@ if(typeof pdfjsLib !== 'undefined'){
      · 배점 숫자가 수식 글자인 문항이 있다 → 섹션 머리말('기출4점')에서 가져온다
      · 닫는 ']' 가 글자로 안 나오는 줄이 있다 → 여는 괄호와 '점' 까지만 본다
 */
-var BP = { SCALE:3, BOTTOM:772, BUCKET:'bety-exam', CH:'①②③④⑤' };
+var BP = { SCALE:3, BOTTOM:762, BUCKET:'bety-exam', CH:'①②③④⑤' };
 var _bp = { fq:null, fa:null, rows:[], answers:{}, mid:290, u:1, busy:false };
 
 /* ⚠ 학생은 객관식 답을 '1'~'5' 로 보내고 채점은 문자열 비교다(bety_omr_finalize).
@@ -1909,6 +1909,38 @@ function bpLines(tc, vp, mid){
     L.s = L.parts.map(function(p){ return p.s; }).join('');
   });
   return out;
+}
+
+/* 칸 안에서 글자·그림이 실제로 끝나는 y 를 찾는다 (QR 자리는 건너뛴다).
+   ⚠ 줄 좌표만 보면 안 된다 — 수식은 줄 높이가 제각각이고, QR 이 마지막 줄 옆에
+      놓인 문항이 있어 'QR 위에서 자르기' 로는 그 줄이 반쪽 난다. */
+function bpContentBottom(ctx, x0, w, yTop, yEnd, qr, u){
+  x0 = Math.round(x0); w = Math.round(w);
+  yTop = Math.round(yTop); yEnd = Math.round(yEnd);
+  var h = yEnd - yTop;
+  if(w < 2 || h < 2) return yTop;
+  var d = ctx.getImageData(x0, yTop, w, h).data;
+  /* 문항 안의 빈칸은 몇 줄뿐이다. 그보다 크게 비어 있으면 그 아래는 다른 것이다
+     (마지막 쪽의 '※ 확인 사항' 안내 상자가 30번에 딸려 왔다). */
+  var gapLimit = Math.round(55 * (u || 1) * BP.SCALE);
+  var last = yTop, blank = 0, seen = false;
+  for(var y = 0; y < h; y++){
+    var ay = yTop + y;
+    var inQrY = qr && ay >= qr.y0 - 2 && ay <= qr.y1 + 2;
+    /* 단 구분선(세로줄) 하나를 내용으로 보면 칸 바닥까지 내려간다.
+       글자가 있는 줄은 어두운 점이 수십 개이므로 3개 이상일 때만 내용으로 본다. */
+    var hits = 0;
+    for(var x = 0; x < w; x += 2){
+      if(inQrY){
+        var ax = x0 + x;
+        if(ax >= qr.x0 - 2 && ax <= qr.x1 + 2) continue;
+      }
+      if(d[(y*w + x) * 4] < 160 && ++hits >= 3) break;
+    }
+    if(hits >= 3){ last = ay; blank = 0; seen = true; }
+    else if(seen && ++blank > gapLimit) break;
+  }
+  return last;
 }
 
 /* 쪽에 그려진 이미지의 위치를 연산자 목록에서 그대로 읽는다.
@@ -2021,39 +2053,39 @@ async function bpParseExam(file, onProg){
     var cvs = document.createElement('canvas');
     cvs.width = vp.width; cvs.height = vp.height;
     var ctx = cvs.getContext('2d', { willReadFrequently:true });
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cvs.width, cvs.height);
     await page.render({ canvasContext:ctx, viewport:vp }).promise;
     var boxes = await bpImageBoxes(page, vp, u);
+
+    /* ⚠ 제본 여백 때문에 홀수 쪽은 두 단이 통째로 20pt 오른쪽으로 밀려 있다.
+       문서 하나로 경계를 고정하면 밀린 쪽의 좌단 문항 오른쪽이 잘린다.
+       → 그 쪽 문항 머리표의 x 로 쪽마다 다시 잡는다. */
+    var lxs = [], rxs = [];
+    marks.forEach(function(m){ (m.c ? rxs : lxs).push(m.x / BP.SCALE); });
+    var pLeft  = lxs.length ? Math.min.apply(null, lxs) : 16*u;
+    var pRight = rxs.length ? Math.min.apply(null, rxs) : mid + 8*u;
+    var cutMid = pRight - 8*u;        /* 좌단은 여기까지 */
 
     marks.sort(function(a,b){ return (a.c - b.c) || (a.y - b.y); });
     for(var mi=0; mi<marks.length; mi++){
       var mk = marks[mi], col = mk.c, nx = null;
       for(var j=mi+1; j<marks.length; j++){ if(marks[j].c === col){ nx = marks[j]; break; } }
       var yEnd = nx ? nx.y - 10*u*BP.SCALE : BP.BOTTOM*u*BP.SCALE;
-      var cx0  = col ? mid*BP.SCALE + 4 : 16*u*BP.SCALE;
-      var cw   = (col ? vp.width - 10*u*BP.SCALE : mid*BP.SCALE) - cx0;
+      var cx0  = (col ? (pRight - 14*u) : Math.max(0, pLeft - 14*u)) * BP.SCALE;
+      var cw   = (col ? vp.width - 10*u*BP.SCALE : cutMid*BP.SCALE) - cx0;
       var yTop = Math.max(0, mk.y - 14*u*BP.SCALE);
 
       var box = boxes.qr.filter(function(b){
-        return (b.x0 < mid*BP.SCALE ? 0 : 1) === col
+        return (b.x0 < cutMid*BP.SCALE ? 0 : 1) === col
             && b.y0 >= mk.y - 4*u*BP.SCALE && b.y0 < yEnd;
       }).sort(function(a,b){ return a.y0 - b.y0; })[0];
 
-      var qr = null, cutBottom = yEnd;
-      if(box){
-        qr = await bpReadQR(page, box, u);
-        cutBottom = box.y0 - 6*u*BP.SCALE;    /* QR 위에서 자른다 */
-      } else {
-        var lastY = mk.y;
-        LS.forEach(function(L){
-          if(L.c === col && L.y >= mk.y && L.y < yEnd && L.y > lastY) lastY = L.y;
-        });
-        boxes.forEach(function(b){
-          if((b.x0 < mid*BP.SCALE ? 0 : 1) === col && b.y0 >= mk.y
-             && b.y1 <= BP.BOTTOM*u*BP.SCALE && b.y1 < yEnd
-             && b.y1 - 14*u*BP.SCALE > lastY) lastY = b.y1 - 14*u*BP.SCALE;
-        });
-        cutBottom = Math.min(cutBottom, lastY + 16*u*BP.SCALE);
-      }
+      var qr = box ? await bpReadQR(page, box, u) : null;
+      /* 내용이 실제로 끝나는 곳까지 자른다. QR 은 아래에서 흰색으로 덮으므로
+         QR 위에서 끊을 필요가 없다 — 끊으면 QR 옆에 놓인 마지막 줄이 반쪽 난다. */
+      var scanEnd = Math.min(yEnd, BP.BOTTOM*u*BP.SCALE);
+      var yBot = bpContentBottom(ctx, cx0, cw, yTop, scanEnd, box, u);
+      var cutBottom = Math.min(scanEnd, yBot + 10*u*BP.SCALE);
 
       var body = LS.filter(function(L){ return L.c === col && L.y >= mk.y - 2 && L.y < yEnd; })
                    .sort(function(a,b){ return a.y - b.y; })
@@ -2065,8 +2097,13 @@ async function bpParseExam(file, onProg){
       var c2 = document.createElement('canvas');
       c2.width  = Math.max(1, Math.round(cw));
       c2.height = Math.max(1, Math.round(cutBottom - yTop));
-      c2.getContext('2d').drawImage(cvs, Math.round(cx0), Math.round(yTop),
-                                    c2.width, c2.height, 0, 0, c2.width, c2.height);
+      var g2 = c2.getContext('2d');
+      g2.fillStyle = '#fff'; g2.fillRect(0, 0, c2.width, c2.height);
+      g2.drawImage(cvs, Math.round(cx0), Math.round(yTop),
+                   c2.width, c2.height, 0, 0, c2.width, c2.height);
+      /* ⚠ 시험 중에 QR 을 찍어 해설 영상을 보지 못하게 덮는다 */
+      if(box) g2.fillRect(box.x0 - cx0 - 3, box.y0 - yTop - 3,
+                          (box.x1 - box.x0) + 6, (box.y1 - box.y0) + 6);
 
       rows.push({ no:mk.no, page:p, col:col ? '우' : '좌',
                   points: pm ? +pm[1] : secPts,
