@@ -3507,8 +3507,10 @@
   .pt-grid td.info { color:#475569; }
   .pt-c-miss { color:#dc2626; font-weight:800; text-align:center; background:#fef2f2 !important; }
   .pt-c-abs  { color:#94a3b8; font-weight:600; text-align:center; }
+  .pt-c-late { color:#c2410c; font-weight:700; text-align:center; background:#fff7ed !important; }
   .pt-c-sc   { text-align:center; color:#0f172a; }
   .pt-c-out  { color:#dbe3ea; text-align:center; }
+  .pt-c-soon { color:#94a3b8; text-align:center; background:#f8fafc !important; }
   .pt-c-tot  { text-align:right; font-weight:800; }
   .pt-rk     { text-align:center; font-weight:800; color:#065f46; }
 </style>
@@ -3554,7 +3556,7 @@
       <select id="pt-grid-grade" onchange="ptGridRender()" style="padding:6px 10px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:12.5px;background:#fff;cursor:pointer"></select>
       <select id="pt-grid-level" onchange="ptGridRender()" style="padding:6px 10px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:12.5px;background:#fff;cursor:pointer"></select>
       <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;font-weight:700;color:#b91c1c;cursor:pointer;padding:6px 10px;border:1.5px solid #fecaca;border-radius:8px;background:#fff;white-space:nowrap;flex:0 0 auto">
-        <input type="checkbox" id="pt-grid-missonly" onchange="ptGridRender()" style="accent-color:#dc2626;width:14px;height:14px"> 누락만 보기</label>
+        <input type="checkbox" id="pt-grid-missonly" onchange="ptGridRender()" style="accent-color:#dc2626;width:14px;height:14px"> 누락·지각만</label>
       <span style="flex:1;min-width:8px"></span>
       <select id="pt-grid-sort" onchange="ptGridRender()" style="padding:6px 10px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:12.5px;background:#fff;cursor:pointer">
         <option value="miss">누락 많은 순</option>
@@ -8512,6 +8514,7 @@ async function ptRankReload(){
       if (!r.level) return;
       var k = r.student_id + '|' + r.level;
       if (!agg[k]) agg[k] = { sid: r.student_id, level: r.level, total: 0, cnt: 0 };
+      if (ptScoreLate(r)) return;   // ⚠ 입력 기간을 넘긴 점수는 시상 집계에서 뺀다
       var sc = parseFloat(r.score);
       if (!isNaN(sc)) { agg[k].total += sc; agg[k].cnt++; }
     });
@@ -8523,8 +8526,8 @@ async function ptRankReload(){
     var umap = P.umap;
     var _stuBranch = P.branchOf;
     // 학생별 누락 건수 — 상위 10명에 ⚠ 를 달기 위해
-    var _missBy = {};
-    (_ptGridData.rows || []).forEach(function(r){ _missBy[r.sid] = r.miss; });
+    var _missBy = {}, _lateBy = {};
+    (_ptGridData.rows || []).forEach(function(r){ _missBy[r.sid] = r.miss; _lateBy[r.sid] = r.late; });
 
     // 학년 × 레벨 그룹
     var groups = {};
@@ -8535,7 +8538,8 @@ async function ptRankReload(){
       var gk = g + '|' + a.level;
       if (!groups[gk]) groups[gk] = { grade: g, level: a.level, items: [] };
       groups[gk].items.push({ name: u.name || '-', school: u.school || '', branch: _stuBranch(u),
-                              total: a.total, cnt: a.cnt, miss: _missBy[a.sid] || 0 });
+                              total: a.total, cnt: a.cnt, miss: _missBy[a.sid] || 0,
+                              late: _lateBy[a.sid] || 0 });
     });
     Object.keys(groups).forEach(function(gk){
       var it = groups[gk].items;
@@ -8554,7 +8558,7 @@ async function ptRankReload(){
     });
 
     _ptRankData = { quarter: q, dates: dates, groups: groups, students: ids.length,
-                    missTotal: _ptGridData.missTotal };
+                    missTotal: _ptGridData.missTotal, lateTotal: _ptGridData.lateTotal };
     body.innerHTML = ptRankBuildHTML(false);
     if (meta) meta.textContent = '회차 ' + dates.length + '개 · 응시 학생 ' + ids.length + '명';
   } catch(e) {
@@ -8586,7 +8590,8 @@ function _ptRankCard(g, forImage){
       + '<td style="padding:6px 8px"><span style="font-weight:700">' + _esc(x.name) + '</span>'
       + (x.branch ? ' <span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:5px;padding:1px 5px;font-size:10.5px;font-weight:700;vertical-align:1px">' + _esc(x.branch) + '</span>' : '')
       + (x.school ? ' <span style="color:#9ca3af;font-size:11px">' + _esc(x.school) + '</span>' : '')
-      + (x.miss ? ' <span style="color:#dc2626;font-weight:800" title="점수 누락 ' + x.miss + '회차 — 총점이 덜 찼습니다">⚠</span>' : '') + '</td>'
+      + (x.miss ? ' <span style="color:#dc2626;font-weight:800" title="점수 누락 ' + x.miss + '회차 — 총점이 덜 찼습니다">⚠</span>' : '')
+      + (x.late ? ' <span style="color:#c2410c;font-weight:800" title="입력 기간을 넘긴 점수 ' + x.late + '회차 — 집계에서 빠졌습니다">⏱</span>' : '') + '</td>'
       + '<td style="padding:6px 8px;text-align:center;color:#6b7280">' + x.cnt + '회</td>'
       + '<td style="padding:6px 8px;text-align:right;font-weight:800">' + _ptFmtScore(x.total) + '</td>'
       + '</tr>';
@@ -8619,9 +8624,13 @@ function ptRankBuildHTML(forImage){
          +  '</div>';
   }
   // ⚠ 시상 근거라서, 누락이 있으면 순위를 그대로 믿으면 안 된다 (미입력이 0점으로 더해진다)
-  if (d.missTotal) {
+  if (d.missTotal || d.lateTotal) {
     html += '<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:10px;padding:11px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
-         +  '<div style="font-size:13.5px;font-weight:800;color:#b91c1c">⚠ 이 분기 점수 누락 ' + d.missTotal + '건 — 순위가 바뀔 수 있습니다</div>'
+         +  '<div style="font-size:13.5px;font-weight:800;color:#b91c1c">'
+         +  (d.missTotal ? '⚠ 이 분기 점수 누락 ' + d.missTotal + '건' : '')
+         +  (d.missTotal && d.lateTotal ? ' · ' : '')
+         +  (d.lateTotal ? '⏱ 입력 기간 초과 ' + d.lateTotal + '건(집계 제외)' : '')
+         +  ' — 순위가 바뀔 수 있습니다</div>'
          +  (forImage ? '' : '<button onclick="ptGridOpen()" style="font-size:12px;font-weight:700;padding:6px 12px;border:1.5px solid #fca5a5;border-radius:8px;background:#fff;color:#b91c1c;cursor:pointer">점수표에서 확인</button>')
          +  '</div>';
   } else {
@@ -8653,11 +8662,39 @@ function ptRankBuildHTML(forImage){
    ⚠ 분기마다 한 번만 받는다. 회차마다 쿼리를 돌리면 9배가 된다.
    ══════════════════════════════════════════════════════════ */
 var _ptQCache = {};     // { 'YYYY-Qn': payload }
+
+/* ══ 점수 입력 기간 ══════════════════════════════════════════
+   회차일 00:00 ~ 7일 뒤 23:59:59 (예: 10/10 회차 → 10/17 23:59).
+   이 기간을 넘겨 넣거나 **넘겨서 고친 점수**는 시상 집계에 넣지 않는다.
+   ⚠ 판정은 score_at 으로만 한다. created_at 은 '행을 만든 시각'이라 회차일보다
+     최대 7일 빠르고, updated_at 은 메모만 고쳐도 움직인다 — 둘 다 못 쓴다.
+   ⚠ score_at 이 비어 있으면(트리거 이전의 옛 데이터) 기간 내로 본다. */
+var PT_INPUT_DAYS = 7;
+function ptWindowEnd(sessionDate){
+  var p = String(sessionDate || '').split('-');
+  if (p.length !== 3) return null;
+  var d = new Date(+p[0], +p[1] - 1, +p[2]);
+  d.setDate(d.getDate() + PT_INPUT_DAYS);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+function ptWindowLabel(sessionDate){
+  var e = ptWindowEnd(sessionDate);
+  return e ? (String(sessionDate).slice(5).replace('-', '/') + ' ~ '
+            + (e.getMonth() + 1) + '/' + e.getDate() + ' 23:59') : '';
+}
+/* 이 기록의 점수가 '기간을 넘겨 입력된' 것인가 */
+function ptScoreLate(r){
+  if (!r || r.score === null || r.score === undefined) return false;
+  if (!r.score_at) return false;
+  var end = ptWindowEnd(r.session_date);
+  return !!(end && new Date(r.score_at) > end);
+}
 var _ptGridData = null;
 
 function _ptGridCanView(){
-  /* ⚠ 1차 적용은 관리자·부원장만. 선생님 개방은 다음 단계에서 이 배열에 'teacher' 추가 */
-  return !!(currentUser && ['admin','vice_director'].indexOf(currentUser.role) !== -1);
+  /* 2026-10-01 선생님까지 개방 (분기별 성적 현황 · 분기 점수표 둘 다) */
+  return !!(currentUser && ['admin','vice_director','teacher'].indexOf(currentUser.role) !== -1);
 }
 
 async function ptQuarterFetch(q, dates){
@@ -8665,7 +8702,7 @@ async function ptQuarterFetch(q, dates){
   var last = dates[dates.length - 1];
 
   var rr = await db.from('weekend_potential')
-    .select('student_id,session_date,level,score,attendance').in('session_date', dates);
+    .select('student_id,session_date,level,score,attendance,score_at').in('session_date', dates);
   if (rr.error) throw rr.error;
   var rows = rr.data || [];
 
@@ -8762,20 +8799,31 @@ async function ptQuarterFetch(q, dates){
 
 /* 분기 전체를 학생 × 회차 격자로 편다. 순위는 학년×레벨 안에서 매긴다(시트와 같다) */
 function ptGridCompute(P){
-  var out = [], miss = { noRow: 0, noScore: 0 }, absent = 0;
+  var out = [], miss = { noRow: 0, noScore: 0 }, absent = 0, lateAll = 0;
+  // ⚠ 아직 치르지 않은 회차를 누락으로 세면 안 된다(분기 시작 직후엔 전부 미입력이다)
+  var _today = _localYMD(new Date());
   Object.keys(P.umap).forEach(function(sid){
-    var u = P.umap[sid], cells = [], total = 0, m = 0, taken = 0, lv = {};
+    var u = P.umap[sid], cells = [], total = 0, m = 0, taken = 0, late = 0, lateSum = 0, lv = {};
     var any = false;
     P.dates.forEach(function(d){
       if (!P.inRoster(sid, d)) { cells.push({ st: 'out' }); return; }
       any = true;
       var r = (P.recBy[sid] || {})[d];
-      if (!r) { cells.push({ st: 'miss' }); m++; miss.noRow++; return; }
+      if (!r) {
+        if (d > _today) { cells.push({ st: 'soon' }); return; }   // 아직 안 치른 회차
+        cells.push({ st: 'miss' }); m++; miss.noRow++; return;
+      }
       if (r.level) lv[r.level] = (lv[r.level] || 0) + 1;
       var sc = (r.score === null || r.score === undefined) ? null : parseFloat(r.score);
       if (sc === null || isNaN(sc)) {
         if (r.attendance === 'absent') { cells.push({ st: 'abs' }); absent++; }
         else { cells.push({ st: 'miss' }); m++; miss.noScore++; }
+        return;
+      }
+      // ⚠ 기간을 넘겨 입력된 점수는 보여는 주되 총점에 더하지 않는다
+      if (ptScoreLate(r)) {
+        late++; lateAll++; lateSum += sc;
+        cells.push({ st: 'late', v: sc, at: r.score_at });
         return;
       }
       total += sc; taken++;
@@ -8787,7 +8835,8 @@ function ptGridCompute(P){
     out.push({
       sid: sid, name: u.name || '-', school: u.school || '', grade: u.grade || '미지정',
       branch: P.branchOf(u), teacher: P.tname[u.teacher_id] || '', tid: u.teacher_id || '',
-      level: best || '-', cells: cells, total: total, miss: m, taken: taken, rank: 0
+      level: best || '-', cells: cells, total: total, miss: m, taken: taken,
+      late: late, lateSum: lateSum, rank: 0
     });
   });
 
@@ -8805,7 +8854,8 @@ function ptGridCompute(P){
   });
 
   return { quarter: P.quarter, dates: P.dates, rounds: P.rounds, rows: out, miss: miss, absent: absent,
-           missTotal: miss.noRow + miss.noScore };
+           lateTotal: lateAll, missTotal: miss.noRow + miss.noScore,
+           dueDates: P.dates.filter(function(d){ return d <= _today; }).length };
 }
 
 function ptGridFillFilters(){
@@ -8841,7 +8891,7 @@ function ptGridRender(){
     if (fT && r.teacher !== fT) return false;
     if (fG && r.grade   !== fG) return false;
     if (fL && r.level   !== fL) return false;
-    if (only && !r.miss) return false;
+    if (only && !r.miss && !r.late) return false;
     if (fQ && String(r.name).toLowerCase().indexOf(fQ) === -1
            && String(r.school).toLowerCase().indexOf(fQ) === -1) return false;
     return true;
@@ -8856,12 +8906,21 @@ function ptGridRender(){
   });
 
   var shownMiss = list.reduce(function(s, r){ return s + r.miss; }, 0);
-  var head = d.missTotal
+  var shownLate = list.reduce(function(s, r){ return s + (r.late || 0); }, 0);
+  var lateLine = d.lateTotal
+    ? '<div style="font-size:12px;color:#9a3412;margin-top:3px">⏱ 입력 기간을 넘겨 넣은 점수 ' + d.lateTotal
+      + '건 — 표에는 보이지만 <b>시상 집계와 총점에서는 빠집니다</b></div>' : '';
+  var head = !d.dueDates
+    ? '<div style="background:#f1f5f9;border:1.5px solid #cbd5e1;border-radius:10px;padding:11px 14px;margin-bottom:12px;font-size:13.5px;font-weight:800;color:#475569">🗓 아직 치른 회차가 없는 분기입니다 — 회차 ' + d.dates.length + '개 예정</div>'
+    : d.missTotal
     ? '<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:10px;padding:11px 14px;margin-bottom:12px">'
       + '<div style="font-size:13.5px;font-weight:800;color:#b91c1c">⚠ 점수 누락 ' + d.missTotal + '건 — 시상 전 입력이 필요합니다</div>'
       + '<div style="font-size:12px;color:#9f1239;margin-top:3px">행 자체가 없음 ' + d.miss.noRow + '건 · 행은 있는데 점수 없음 ' + d.miss.noScore + '건'
-      + (d.absent ? ' <span style="color:#94a3b8">(결시 ' + d.absent + '건은 정상)</span>' : '') + '</div></div>'
-    : '<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;padding:11px 14px;margin-bottom:12px;font-size:13.5px;font-weight:800;color:#15803d">✅ 전 회차 입력 완료 — 시상 가능</div>';
+      + (d.absent ? ' <span style="color:#94a3b8">(결시 ' + d.absent + '건은 정상)</span>' : '') + '</div>' + lateLine + '</div>'
+    : (d.lateTotal
+        ? '<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:10px;padding:11px 14px;margin-bottom:12px">'
+          + '<div style="font-size:13.5px;font-weight:800;color:#9a3412">⏱ 입력 기간 초과 ' + d.lateTotal + '건</div>' + lateLine + '</div>'
+        : '<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;padding:11px 14px;margin-bottom:12px;font-size:13.5px;font-weight:800;color:#15803d">✅ 전 회차 입력 완료 — 시상 가능</div>');
 
   if (!list.length) {
     box.innerHTML = head + '<div style="text-align:center;padding:34px;color:#9ca3af;font-size:13px">조건에 맞는 학생이 없습니다.</div>';
@@ -8880,7 +8939,8 @@ function ptGridRender(){
 
   var h = head
     + '<div style="font-size:11.5px;color:#6b7280;margin-bottom:7px">학생 ' + list.length + '명 · 표시된 누락 ' + shownMiss + '건'
-    + ' <span style="color:#cbd5e1">|</span> <span style="color:#dc2626;font-weight:700">―</span> 미입력 · <span style="color:#94a3b8;font-weight:700">결시</span> 정상'
+    + (shownLate ? ' · 기간 초과 ' + shownLate + '건' : '')
+    + ' <span style="color:#cbd5e1">|</span> <span style="color:#dc2626;font-weight:700">―</span> 미입력 · <span style="color:#c2410c;font-weight:700">주황 ⏱</span> 기간 초과(집계 제외) · <span style="color:#94a3b8;font-weight:700">결시</span> 정상'
     + ' <span style="color:#cbd5e1">|</span> 순위는 <b>학년 × 레벨</b> 안에서의 등수입니다</div>'
     + '<div class="pt-gridwrap"><table class="pt-grid"><thead><tr>'
     + '<th class="stick s1" rowspan="2">순위</th>'
@@ -8889,10 +8949,12 @@ function ptGridRender(){
   groups.forEach(function(g, gi){
     h += '<th class="mon" colspan="' + g.cols.length + '" style="text-align:center;background:' + MONC[gi % MONC.length] + '">' + _esc(g.mon) + '</th>';
   });
-  h += '<th rowspan="2" style="text-align:right;min-width:72px">총점</th><th rowspan="2" style="min-width:48px">누락</th></tr><tr>';
+  h += '<th rowspan="2" style="text-align:right;min-width:72px">총점</th>'
+     + '<th rowspan="2" style="min-width:46px">누락</th>'
+     + '<th rowspan="2" style="min-width:46px" title="입력 기간을 넘겨 넣은 점수 — 집계 제외">지각</th></tr><tr>';
   groups.forEach(function(g){
     g.cols.forEach(function(c){
-      h += '<th style="text-align:center;min-width:54px" title="' + _esc(c.date) + '">' + _esc(c.label) + '</th>';
+      h += '<th style="text-align:center;min-width:54px" title="' + _esc(c.date) + ' · 입력 기간 ' + _esc(ptWindowLabel(c.date)) + '">' + _esc(c.label) + '</th>';
     });
   });
   h += '</tr></thead><tbody>';
@@ -8908,12 +8970,17 @@ function ptGridRender(){
       + '<td class="info">' + _esc(r.branch || '-') + '</td>';
     r.cells.forEach(function(c){
       if (c.st === 'sc')  h += '<td class="pt-c-sc">' + _ptFmtScore(c.v) + '</td>';
+      else if (c.st === 'late') h += '<td class="pt-c-late" title="입력 기간을 넘겨 입력 — 시상 집계 제외">' + _ptFmtScore(c.v) + '⏱</td>';
       else if (c.st === 'abs') h += '<td class="pt-c-abs">결시</td>';
-      else if (c.st === 'out') h += '<td class="pt-c-out">·</td>';
+      else if (c.st === 'out')  h += '<td class="pt-c-out">·</td>';
+      else if (c.st === 'soon') h += '<td class="pt-c-soon" title="아직 치르지 않은 회차">–</td>';
       else h += '<td class="pt-c-miss" title="점수 미입력">―</td>';
     });
-    h += '<td class="pt-c-tot">' + _ptFmtScore(r.total) + (r.miss ? ' <span style="color:#dc2626" title="누락이 있어 확정 총점이 아닙니다">⚠</span>' : '') + '</td>'
-      + '<td style="text-align:center;font-weight:800;color:' + (r.miss ? '#dc2626' : '#cbd5e1') + '">' + (r.miss || '-') + '</td></tr>';
+    h += '<td class="pt-c-tot">' + _ptFmtScore(r.total)
+      + (r.miss ? ' <span style="color:#dc2626" title="누락이 있어 확정 총점이 아닙니다">⚠</span>' : '')
+      + (r.late ? ' <span style="color:#c2410c" title="기간 초과 ' + _ptFmtScore(r.lateSum) + '점이 빠져 있습니다">⏱</span>' : '') + '</td>'
+      + '<td style="text-align:center;font-weight:800;color:' + (r.miss ? '#dc2626' : '#cbd5e1') + '">' + (r.miss || '-') + '</td>'
+      + '<td style="text-align:center;font-weight:800;color:' + (r.late ? '#c2410c' : '#cbd5e1') + '">' + (r.late || '-') + '</td></tr>';
   });
   box.innerHTML = h + '</tbody></table></div>';
 }
