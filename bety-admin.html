@@ -2012,7 +2012,7 @@ async function bpParseExam(file, onProg){
     LS.forEach(function(L){
       var m = L.s.match(/^\s*(\d+)\s*[｜|]\s*\[(.*)$/);
       if(m) marks.push({ no:+m[1], x:L.x, y:L.y, c:L.c,
-                         src:(m[2]||'').replace(/\].*$/, '').trim() });
+                         src: bpClean((m[2]||'').replace(/\].*$/, '')) });
       var sm = L.s.match(/\[[^\]]*?(\d)\s*점/);
       if(sm && /문제|기출|주관식|객관식/.test(L.s)) secPts = +sm[1];
     });
@@ -2085,7 +2085,13 @@ async function bpParseExam(file, onProg){
    ⚠ 한 쪽에 정답표(왼쪽)와 해설(오른쪽)이 같이 그려져 있어, 쪽 전체 글자를 이어 붙이면
       '빠른정답' 이 해설 글자 사이에 끼어 안 잡힌다 → 왼쪽 절반만 줄로 모아 찾는다.
    ⚠ 글자에 제어문자가 섞여 들어온다 → 떼고 비교한다. */
-function bpClean(s){ return String(s == null ? '' : s).replace(/[\u0000-\u001f]/g, '').trim(); }
+/* ⚠ PDF 글자에는 \u0000 \u0001 이 섞여 있다. 그대로 보내면 Postgres 가
+   'unsupported Unicode escape sequence' 로 거부한다 (NUL 은 text/jsonb 에 못 들어간다). */
+function bpClean(s){
+  return String(s == null ? '' : s)
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
 
 async function bpParseAnswers(file){
   var pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
@@ -2279,8 +2285,8 @@ async function bpApply(){
       return {
         q_no: r.no,
         q_type: oTyp ? r.q_type : (c.q_type || 'choice'),
-        answer: oAns ? (bpAnsNorm(_bp.answers[r.no]) || String(c.answer || ''))
-                     : String(c.answer || ''),
+        answer: bpClean(oAns ? (bpAnsNorm(_bp.answers[r.no]) || String(c.answer || ''))
+                             : String(c.answer || '')),
         points: oPts ? (r.points || 0) : (c.points || 0),
         is_excluded: !!c.is_excluded,
         content_area:  String(c.content_area  || ''),
@@ -2295,7 +2301,7 @@ async function bpApply(){
     /* ③ 해설 링크 — QR 을 읽은 문항만 건드린다 */
     if(oYt){
       var yrows = _bp.rows.filter(function(r){ return r.youtube_url; })
-                          .map(function(r){ return { q_no:r.no, youtube_url:r.youtube_url }; });
+                          .map(function(r){ return { q_no:r.no, youtube_url:bpClean(r.youtube_url) }; });
       if(yrows.length){
         var sy = await db.rpc('bety_omr_save_youtube',
           { p_actor_id:_ba.user.id, p_exam_id:ex.id, p_rows:yrows });
@@ -2308,7 +2314,7 @@ async function bpApply(){
     var irows = _bp.rows.map(function(r){
       var o = { q_no:r.no };
       if(oImg) o.image_path = paths[r.no] || '';
-      if(r.source_label) o.source_label = r.source_label;
+      if(r.source_label) o.source_label = bpClean(r.source_label);
       return o;
     });
     var si = await db.rpc('bety_omr_save_images',
