@@ -2056,56 +2056,96 @@ async function bpParseGradeTable(pdf){
     var W = vp.width, u = W/595;
     var ops = await page.getOperatorList(), OPS = pdfjsLib.OPS;
 
-    /* 표의 선을 모은다. 선은 가늘고 긴 사각형(또는 선분)으로 그려져 있다 */
-    var ctm = [1,0,0,1,0,0], stack = [], segs = [], cur = null;
+    /* 표의 선을 모은다. 선은 가늘고 긴 사각형(또는 선분)으로 그려져 있다.
+       ⚠ pdf.js 는 선 하나(moveTo+lineTo)를 constructPath 두 개로 쪼개 보낼 때가 있다.
+          22회 3쪽에서 11/12번 사이 줄이 그랬다. path 를 통째로 bbox 로 묶으면
+          그 선이 폭 0 짜리 점 두 개가 되어 사라지고, 두 행이 한 칸으로 합쳐진 끝에
+          번호가 '1112' 가 되어 11·12번이 통째로 빠진다.
+          그러니 path 가 아니라 subpath(moveTo 로 시작하는 한 토막) 단위로 모은다.
+          토막을 끊는 것은 moveTo · 사각형 · 좌표계 변경뿐이고, constructPath 의
+          경계는 끊지 않는다 — 그래야 쪼개진 선이 다시 붙는다. */
+    var ctm = [1,0,0,1,0,0], stack = [], segs = [], seg = null;
     function pt(x, y){
       var t = pdfjsLib.Util.transform(vp.transform, ctm);
       return pdfjsLib.Util.applyTransform([x,y], t);
     }
+    function segEnd(){ if(seg) segs.push(seg); seg = null; }
+    function segAdd(q, start){
+      if(start) segEnd();
+      if(!seg) seg = { x0:q[0], x1:q[0], y0:q[1], y1:q[1] };
+      else {
+        seg.x0 = Math.min(seg.x0, q[0]); seg.x1 = Math.max(seg.x1, q[0]);
+        seg.y0 = Math.min(seg.y0, q[1]); seg.y1 = Math.max(seg.y1, q[1]);
+      }
+    }
     for(var i=0; i<ops.fnArray.length; i++){
       var fn = ops.fnArray[i], a = ops.argsArray[i];
-      if(fn === OPS.save) stack.push(ctm.slice());
-      else if(fn === OPS.restore) ctm = stack.pop() || ctm;
-      else if(fn === OPS.transform) ctm = pdfjsLib.Util.transform(ctm, a);
+      if(fn === OPS.save){ segEnd(); stack.push(ctm.slice()); }
+      else if(fn === OPS.restore){ segEnd(); ctm = stack.pop() || ctm; }
+      else if(fn === OPS.transform){ segEnd(); ctm = pdfjsLib.Util.transform(ctm, a); }
       else if(fn === OPS.constructPath){
         var ops2 = a[0], args = a[1], k = 0;
-        var x0=0, y0=0, minX=1e9, minY=1e9, maxX=-1e9, maxY=-1e9, any=false;
         for(var j=0; j<ops2.length; j++){
           var o = ops2[j];
           if(o === OPS.moveTo || o === OPS.lineTo){
-            var q = pt(args[k], args[k+1]); k += 2; any = true;
-            minX=Math.min(minX,q[0]); maxX=Math.max(maxX,q[0]);
-            minY=Math.min(minY,q[1]); maxY=Math.max(maxY,q[1]);
+            segAdd(pt(args[k], args[k+1]), o === OPS.moveTo); k += 2;
           } else if(o === OPS.curveTo){ k += 6; }
           else if(o === OPS.curveTo2 || o === OPS.curveTo3){ k += 4; }
           else if(o === OPS.rectangle){
-            var r0 = pt(args[k], args[k+1]);
-            var r1 = pt(args[k]+args[k+2], args[k+1]+args[k+3]); k += 4; any = true;
-            minX=Math.min(minX,r0[0],r1[0]); maxX=Math.max(maxX,r0[0],r1[0]);
-            minY=Math.min(minY,r0[1],r1[1]); maxY=Math.max(maxY,r0[1],r1[1]);
+            segAdd(pt(args[k], args[k+1]), true);
+            segAdd(pt(args[k]+args[k+2], args[k+1]+args[k+3]), false);
+            segEnd(); k += 4;
           } else if(o === OPS.closePath){ /* 없음 */ }
         }
-        if(any) segs.push({x0:minX, x1:maxX, y0:minY, y1:maxY});
       }
     }
+    segEnd();
     if(!segs.length) continue;
 
-    var vxs = [], hys = [];
+    /* 위아래가 같은 세로선끼리 묶어 '표' 를 만들고, 그 중 가로줄이 가장 많이
+       가로지르는 묶음을 채점표로 본다.
+       ⚠ '쪽에서 맨 오른쪽 세로선 7개' 로 고르면 안 된다. 쪽 아래에 안내 상자가
+          하나 더 있는 회차(7회 고1·고2, 예비고1 2·5회)에서는 그 상자의 세로선이
+          섞여 번호 칸의 왼쪽 경계를 잃고 채점표를 통째로 놓친다. */
+    var vsegs = [], hys = [];
     segs.forEach(function(s){
       var w = s.x1-s.x0, h = s.y1-s.y0;
-      if(w < 3*u && h > 30*u && s.x0 > W*0.3) vxs.push(Math.round(s.x0*10)/10);
+      if(w < 3*u && h > 30*u) vsegs.push(s);
       if(h < 3*u && w > 60*u) hys.push(s);
     });
-    vxs = vxs.filter(function(v,i,a){ return a.indexOf(v)===i; }).sort(function(a,b){return a-b;});
-    if(vxs.length < 7) continue;
-    var b = vxs.slice(-7);                 /* 채점표는 맨 오른쪽 표 */
-
-    var ys = hys.filter(function(s){ return s.x0 <= b[0]+3*u && s.x1 >= b[6]-3*u; })
+    /* ⚠ '구간이 겹치면 한 표' 로 묶으면 쪽 전체를 내려오는 단 구분선이 채점표에
+          끌려들어가 표의 왼쪽 경계를 망친다. 한 표의 세로선은 위아래가 거의 같다. */
+    var tabs = [];
+    vsegs.forEach(function(s){
+      for(var gi=0; gi<tabs.length; gi++){
+        var g = tabs[gi];
+        if(Math.abs(g.y0 - s.y0) <= 6*u && Math.abs(g.y1 - s.y1) <= 6*u){
+          g.xs.push(s.x0);
+          g.y0 = Math.min(g.y0, s.y0); g.y1 = Math.max(g.y1, s.y1);
+          return;
+        }
+      }
+      tabs.push({ y0:s.y0, y1:s.y1, xs:[s.x0] });
+    });
+    var best = null;
+    tabs.forEach(function(g){
+      g.xs = g.xs.map(function(x){ return Math.round(x*10)/10; })
+                 .filter(function(v,i,a){ return a.indexOf(v)===i; })
+                 .sort(function(a,b2){ return a-b2; });
+      if(g.xs.length < 6) return;            /* 번호·대단원·유형·영역·배점 = 칸 5개 이상 */
+      var gx0 = g.xs[0], gx1 = g.xs[g.xs.length-1];
+      g.ys = hys.filter(function(s){ return s.x0 <= gx0+3*u && s.x1 >= gx1-3*u
+                                         && s.y0 >= g.y0-3*u && s.y1 <= g.y1+3*u; })
                 .map(function(s){ return Math.round(s.y0*10)/10; });
-    ys = ys.filter(function(v,i,a){ return a.indexOf(v)===i; }).sort(function(a,b){return a-b;});
-    if(ys.length < 3) continue;
+      g.ys = g.ys.filter(function(v,i,a){ return a.indexOf(v)===i; })
+                 .sort(function(a,b2){ return a-b2; });
+      if(g.ys.length < 6) return;            /* 머리줄 + 문항 여러 줄 */
+      if(!best || g.ys.length > best.ys.length) best = g;
+    });
+    if(!best) continue;
+    var b = best.xs, ys = best.ys, NC = b.length - 1;
 
-    function col(x){ for(var i=0;i<6;i++) if(b[i] <= x && x < b[i+1]) return i; return -1; }
+    function col(x){ for(var i=0;i<NC;i++) if(b[i] <= x && x < b[i+1]) return i; return -1; }
     function band(y){ for(var i=0;i<ys.length-1;i++) if(ys[i]-1 <= y && y < ys[i+1]) return i; return -1; }
 
     var cells = {};
@@ -2127,11 +2167,27 @@ async function bpParseGradeTable(pdf){
       return v.map(function(o){ return o.s; }).join('').trim();
     }
 
+    /* 번호 칸이 몇 번째인지는 값으로 찾는다 — 숫자가 여럿이고 1 이 있는 첫 칸.
+       ⚠ 0 번째 칸으로 못 박으면 칸이 하나 더 있는 표에서 전부 한 칸씩 밀린다 */
+    var c0 = -1;
+    for(var c=0; c + 4 < NC && c0 < 0; c++){
+      var hit = 0, hasOne = false;
+      for(var r1=0; r1<ys.length-1; r1++){
+        var v1 = val(r1, c);
+        if(/^\d{1,2}$/.test(v1)){ hit++; if(+v1 === 1) hasOne = true; }
+      }
+      /* ⚠ '1 부터 차례로 커질 것' 을 요구하면 안 된다. 고3 채점표는 번호가 두 번
+         돌아간다(공통 1~22 · 확통 23~30 · 미적분 23~30). */
+      if(hit >= 5 && hasOne) c0 = c;
+    }
+    if(c0 < 0) continue;
+
     var out = {};
     for(var r2=0; r2<ys.length-1; r2++){
-      var no = val(r2, 0);
+      var no = val(r2, c0);
       if(!/^\d{1,2}$/.test(no)) continue;
-      out[+no] = { unit: val(r2,1), type: val(r2,2), behav: val(r2,3), pts: val(r2,4) };
+      out[+no] = { unit: val(r2,c0+1), type: val(r2,c0+2),
+                   behav: val(r2,c0+3), pts: val(r2,c0+4) };
     }
     if(Object.keys(out).length) return { page:p, map:out };
   }
