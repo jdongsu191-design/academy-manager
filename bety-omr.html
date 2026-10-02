@@ -5,7 +5,7 @@
 <!-- ⚠ 페이지 전체가 커지면 바·버튼까지 같이 커져 읽기 불편하다.
      그래서 페이지 핀치는 막고, 문항 확대는 확대 창 안에서 직접 다룬다(boZoom*). -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 베티 OMR [v0.8.3-screen]</title>
+<title>BMAPS · 베티 OMR [v0.8.4-screen]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -175,9 +175,15 @@
 .pg-no{font-size:16px;font-weight:900;color:#1e293b}
 .pg-pts{font-size:12px;font-weight:700;color:#64748b;background:#e2e8f0;border-radius:5px;padding:2px 8px}
 .pg-tag{font-size:11px;font-weight:700;color:#7c3aed;background:#ede9fe;border-radius:5px;padding:2px 8px}
-.pg-img{position:relative;background:#fff;padding:6px;min-height:120px}
-.pg-img img{width:100%;display:block;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
-  pointer-events:none}
+.pg-img{position:relative;background:#fff;overflow:hidden;min-height:120px;
+  touch-action:pan-y}                      /* 한 손가락은 쪽 넘김(세로 스크롤), 두 손가락은 확대 */
+.pg-inner{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+.pg-inner img{display:block;width:100%;height:100%;-webkit-user-select:none;user-select:none;
+  -webkit-touch-callout:none;pointer-events:none}
+.pg-lv{position:absolute;right:8px;top:8px;background:rgba(15,23,42,.55);color:#fff;
+  border-radius:100px;padding:3px 9px;font-size:10px;font-weight:800;pointer-events:none;
+  opacity:0;transition:opacity .3s;font-variant-numeric:tabular-nums}
+.pg-lv.on{opacity:1}
 /* 워터마크 — 화면을 찍어 돌려도 누구 것인지 남는다 */
 .wm{position:absolute;inset:0;pointer-events:none;overflow:hidden;
   display:flex;flex-wrap:wrap;align-content:flex-start;gap:34px 26px;padding:18px;
@@ -216,7 +222,7 @@
 
 <div class="bo-top">
   <span class="bo-title">📝 베티 OMR</span>
-  <span class="bo-ver">v0.8.3-screen</span>
+  <span class="bo-ver">v0.8.4-screen</span>
   <span class="bo-who" id="bo-who"></span>
   <button class="bo-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -274,9 +280,12 @@
           <span class="pg-tag" id="pg-tag" style="display:none"></span>
           <button class="pg-zoom" id="pg-zoom" onclick="boZoomOpen()">🔍 확대</button>
         </div>
-        <div class="pg-img" id="pg-img" onclick="boZoomOpen()">
-          <img id="pg-image" alt="" draggable="false">
-          <div class="wm" id="pg-wm"></div>
+        <div class="pg-img" id="pg-img">
+          <div class="pg-inner" id="pg-inner">
+            <img id="pg-image" alt="" draggable="false">
+            <div class="wm" id="pg-wm"></div>
+          </div>
+          <div class="pg-lv" id="pg-lv">100%</div>
         </div>
         <div class="pg-ans" id="pg-ans"></div>
       </div>
@@ -410,14 +419,14 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v0.8.3-screen';
+window.BETY_OMR_VERSION = 'v0.8.4-screen';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
             kpQ:null, kpVal:'', submitting:false,
             guest:false, guestCode:'', guestName:'',
             /* 화면 응시 */
-            paged:false, cur:0, zoom:1, skew:0, expires:0, timer:null,
+            paged:false, cur:0, zCard:null, zFull:null, skew:0, expires:0, timer:null,
             away:0, dirty:false, saveT:null, lastSave:0, hooked:false, listStatus:'' };
 
 /* 문항 이미지는 공개 버킷에 있다 (3단계에서 서명 URL 로 바꾼다) */
@@ -896,18 +905,11 @@ function boPagedStart(){
   if(!_bo.hooked){
     _bo.hooked = true;
     document.addEventListener('visibilitychange', boAway);
-    var zb = document.getElementById('zm-body');
-    ['touchstart','touchmove','touchend','touchcancel'].forEach(function(ev){
-      zb.addEventListener(ev, boZoomTouch, { passive:false });
-    });
-    zb.addEventListener('wheel', boZoomWheel, { passive:false });
+    boCardZoom(); boFullZoom();
     window.addEventListener('resize', function(){
       if(document.getElementById('bo-zoom').classList.contains('open')) boZoomFit();
+      else boCardFit();
     });
-    /* 기본 화면에서 문항을 두 손가락으로 벌리면 확대 창으로 넘어간다 */
-    document.getElementById('pg-img').addEventListener('touchstart', function(e){
-      if(e.touches.length === 2){ e.preventDefault(); boZoomOpen(); }
-    }, { passive:false });
   }
 }
 
@@ -937,8 +939,16 @@ function boPagedRender(){
   else tag.style.display = 'none';
 
   var img = document.getElementById('pg-image');
-  if(q.image_path){ img.src = BO_IMG + q.image_path; img.style.display = ''; }
-  else { img.removeAttribute('src'); img.style.display = 'none'; }
+  var box = document.getElementById('pg-img');
+  if(q.image_path){
+    img.style.display = '';
+    box.style.display = '';
+    img.onload = boCardFit;
+    img.src = BO_IMG + q.image_path;
+    if(img.complete && img.naturalWidth) boCardFit();
+  } else {
+    img.removeAttribute('src'); img.style.display = 'none'; box.style.display = 'none';
+  }
   document.getElementById('pg-zoom').style.display = q.image_path ? '' : 'none';
 
   var ans = document.getElementById('pg-ans');
@@ -963,113 +973,156 @@ function boPagedRender(){
 }
 function boGo(step){ _bo.cur += step; boPagedRender(); }
 
-/* ── 문항 확대 ──────────────────────────────────────────
+/* ── 확대 다루개 ────────────────────────────────────────
+   상자(body)가 넘침을 자르고, 그 안(inner)에 변형을 걸어 이미지만 키운다.
    ⚠ 페이지 전체를 키우면 바·버튼까지 커져 읽기 불편하다. 그래서 페이지 핀치는
-      막아 두고 여기서 이미지에만 변형을 걸어 키운다.
-   ⚠ 열 때는 '화면에 딱 맞은 상태(맞춤)' 로 연다. 거기서부터 손가락으로 키운다.
-      배율 표시는 맞춤을 100% 로 본다. */
-var _zm = { k:1, fit:1, tx:0, ty:0, iw:1, ih:1, cw:1, ch:1,
-            p0:0, k0:1, sx:0, sy:0, drag:false, lastTap:0 };
+      막아 두고(뷰포트 메타) 여기서 직접 다룬다.
+   ⚠ '맞춤'(화면에 딱 맞은 상태)을 100% 로 본다. 그 아래로는 안 줄어든다.
+   문항 상자와 확대 창이 같은 것을 쓴다 — 고칠 곳이 하나가 되도록. */
+function boMakeZoom(body, inner, img, lv, maxMul){
+  var z = { body:body, inner:inner, img:img, lv:lv, maxMul:maxMul || 8,
+            k:1, fit:1, tx:0, ty:0, iw:0, ih:0, cw:1, ch:1,
+            p0:0, k0:1, sx:0, sy:0, drag:false, lastTap:0, onLv:null };
+  function pt(x, y){ var r = body.getBoundingClientRect(); return { x:x-r.left, y:y-r.top }; }
+  function dist(t){
+    var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+    return Math.sqrt(dx*dx + dy*dy) || 1;
+  }
+  z.apply = function(){
+    inner.style.width  = z.iw + 'px';
+    inner.style.height = z.ih + 'px';
+    inner.style.transform = 'translate(' + z.tx + 'px,' + z.ty + 'px) scale(' + z.k + ')';
+    var pct = Math.round(z.k / (z.fit || 1) * 100);
+    if(lv) lv.textContent = pct + '%';
+    if(z.onLv) z.onLv(pct);
+  };
+  z.measure = function(){
+    z.iw = img.naturalWidth || 1; z.ih = img.naturalHeight || 1;
+    z.cw = body.clientWidth || 1; z.ch = body.clientHeight || 1;
+  };
+  z.fitNow = function(){
+    z.measure();
+    z.fit = Math.min(z.cw / z.iw, z.ch / z.ih);
+    z.k = z.fit;
+    z.tx = (z.cw - z.iw * z.k) / 2;
+    z.ty = (z.ch - z.ih * z.k) / 2;
+    z.apply();
+  };
+  z.zoomed = function(){ return z.k > z.fit * 1.02; };
+  z.clampK = function(){ z.k = Math.min(z.fit * z.maxMul, Math.max(z.fit, z.k)); };
+  z.clampT = function(){
+    var w = z.iw * z.k, h = z.ih * z.k;
+    z.tx = (w <= z.cw) ? (z.cw - w)/2 : Math.min(0, Math.max(z.cw - w, z.tx));
+    z.ty = (h <= z.ch) ? (z.ch - h)/2 : Math.min(0, Math.max(z.ch - h, z.ty));
+  };
+  /* (cx,cy) 를 손가락 아래 그대로 두고 배율만 바꾼다 */
+  z.at = function(nk, cx, cy){
+    var k1 = z.k || 1;
+    z.k = nk; z.clampK();
+    var r = z.k / k1;
+    z.tx = cx - (cx - z.tx) * r;
+    z.ty = cy - (cy - z.ty) * r;
+    z.clampT(); z.apply();
+  };
+  z.step = function(d){ z.at(z.k * (d > 0 ? 1.5 : 1/1.5), z.cw/2, z.ch/2); };
 
+  z.touch = function(e){
+    var t = e.touches;
+    if(!z.iw) return;
+    if(e.type === 'touchstart'){
+      if(t.length === 2){
+        z.p0 = dist(t); z.k0 = z.k; z.drag = false; e.preventDefault();
+      } else if(t.length === 1){
+        var p = pt(t[0].clientX, t[0].clientY), now = Date.now();
+        if(now - z.lastTap < 300){               /* 두 번 두드리기 */
+          if(z.zoomed()) z.fitNow(); else z.at(z.fit * 3, p.x, p.y);
+          z.drag = false; z.lastTap = 0; e.preventDefault();
+        } else {
+          z.sx = p.x - z.tx; z.sy = p.y - z.ty;
+          /* ⚠ 키우지 않았을 때는 끌기를 가로채면 안 된다. 쪽이 안 넘어간다. */
+          z.drag = z.zoomed();
+          z.lastTap = now;
+          if(z.drag) e.preventDefault();
+        }
+      }
+    } else if(e.type === 'touchmove'){
+      if(t.length === 2 && z.p0){
+        var m = pt((t[0].clientX + t[1].clientX)/2, (t[0].clientY + t[1].clientY)/2);
+        z.at(z.k0 * (dist(t) / z.p0), m.x, m.y); e.preventDefault();
+      } else if(t.length === 1 && z.drag){
+        var q = pt(t[0].clientX, t[0].clientY);
+        z.tx = q.x - z.sx; z.ty = q.y - z.sy;
+        z.clampT(); z.apply(); e.preventDefault();
+      }
+    } else {
+      if(t.length < 2) z.p0 = 0;
+      if(t.length === 0) z.drag = false;
+    }
+  };
+  z.wheel = function(e){
+    if(!z.iw) return;
+    e.preventDefault();
+    var p = pt(e.clientX, e.clientY);
+    z.at(z.k * (e.deltaY < 0 ? 1.2 : 1/1.2), p.x, p.y);
+  };
+  ['touchstart','touchmove','touchend','touchcancel'].forEach(function(ev){
+    body.addEventListener(ev, z.touch, { passive:false });
+  });
+  body.addEventListener('wheel', z.wheel, { passive:false });
+  return z;
+}
+
+/* ── 문항 상자 (답 고르는 자리를 그대로 두고 그 자리에서 키운다) ── */
+function boCardZoom(){
+  if(_bo.zCard) return _bo.zCard;
+  _bo.zCard = boMakeZoom(document.getElementById('pg-img'),
+                         document.getElementById('pg-inner'),
+                         document.getElementById('pg-image'),
+                         document.getElementById('pg-lv'), 8);
+  var tag = document.getElementById('pg-lv');
+  _bo.zCard.onLv = function(pct){            /* 키웠을 때만 배율을 띄운다 */
+    tag.classList.toggle('on', pct > 102);
+  };
+  return _bo.zCard;
+}
+/* 상자 높이 — 짧은 문항은 딱 맞게, 긴 문항은 화면 절반까지만 쓰고 안에서 민다 */
+function boCardFit(){
+  var z = boCardZoom(), box = document.getElementById('pg-img');
+  z.iw = z.img.naturalWidth || 0; z.ih = z.img.naturalHeight || 0;
+  if(!z.iw){ box.style.height = ''; return; }
+  var cw = box.clientWidth || 1;
+  var natH = Math.round(z.ih * (cw / z.iw));
+  var maxH = Math.max(200, Math.min(Math.round(window.innerHeight * 0.52), 560));
+  box.style.height = Math.min(natH, maxH) + 'px';
+  z.fitNow();
+}
+
+/* ── 확대 창 (더 넓게 보고 싶을 때) ─────────────────────── */
+function boFullZoom(){
+  if(_bo.zFull) return _bo.zFull;
+  _bo.zFull = boMakeZoom(document.getElementById('zm-body'),
+                         document.getElementById('zm-inner'),
+                         document.getElementById('zm-img'),
+                         document.getElementById('zm-lv'), 8);
+  return _bo.zFull;
+}
 function boZoomOpen(){
   var q = _bo.questions[_bo.cur];
   if(!q || !q.image_path) return;
+  var z = boFullZoom();
   document.getElementById('zm-wm').innerHTML = document.getElementById('pg-wm').innerHTML;
   document.getElementById('zm-no').textContent = q.q_no + '번';
   document.getElementById('bo-zoom').classList.add('open');
   var hint = document.getElementById('zm-hint');
   hint.style.opacity = '1';
   setTimeout(function(){ hint.style.opacity = '0'; }, 2600);
-  var img = document.getElementById('zm-img');
-  img.onload = boZoomFit;
-  img.src = BO_IMG + q.image_path;
-  if(img.complete && img.naturalWidth) boZoomFit();
+  z.img.onload = function(){ z.fitNow(); };
+  z.img.src = BO_IMG + q.image_path;
+  if(z.img.complete && z.img.naturalWidth) z.fitNow();
 }
 function boZoomClose(){ document.getElementById('bo-zoom').classList.remove('open'); }
-
-/* 화면에 꽉 맞춘다 */
-function boZoomFit(){
-  var img = document.getElementById('zm-img'), body = document.getElementById('zm-body');
-  _zm.iw = img.naturalWidth || 1; _zm.ih = img.naturalHeight || 1;
-  _zm.cw = body.clientWidth || 1; _zm.ch = body.clientHeight || 1;
-  _zm.fit = Math.min(_zm.cw / _zm.iw, _zm.ch / _zm.ih);
-  _zm.k = _zm.fit;
-  _zm.tx = (_zm.cw - _zm.iw * _zm.k) / 2;
-  _zm.ty = (_zm.ch - _zm.ih * _zm.k) / 2;
-  boZoomApply();
-}
-function boZoomApply(){
-  var st = document.getElementById('zm-inner').style;
-  st.width  = _zm.iw + 'px';
-  st.height = _zm.ih + 'px';
-  st.transform = 'translate(' + _zm.tx + 'px,' + _zm.ty + 'px) scale(' + _zm.k + ')';
-  document.getElementById('zm-lv').textContent =
-    Math.round(_zm.k / (_zm.fit || 1) * 100) + '%';
-}
-function boZoomClampK(){ _zm.k = Math.min(_zm.fit * 8, Math.max(_zm.fit, _zm.k)); }
-function boZoomClampT(){
-  var w = _zm.iw * _zm.k, h = _zm.ih * _zm.k;
-  _zm.tx = (w <= _zm.cw) ? (_zm.cw - w) / 2 : Math.min(0, Math.max(_zm.cw - w, _zm.tx));
-  _zm.ty = (h <= _zm.ch) ? (_zm.ch - h) / 2 : Math.min(0, Math.max(_zm.ch - h, _zm.ty));
-}
-/* (cx,cy) 를 손가락 아래 그대로 두고 배율만 바꾼다 */
-function boZoomAt(nk, cx, cy){
-  var k1 = _zm.k || 1;
-  _zm.k = nk; boZoomClampK();
-  var r = _zm.k / k1;
-  _zm.tx = cx - (cx - _zm.tx) * r;
-  _zm.ty = cy - (cy - _zm.ty) * r;
-  boZoomClampT(); boZoomApply();
-}
-function boZoomStep(d){ boZoomAt(_zm.k * (d > 0 ? 1.5 : 1/1.5), _zm.cw/2, _zm.ch/2); }
-
-function boZmDist(t){
-  var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
-  return Math.sqrt(dx*dx + dy*dy) || 1;
-}
-function boZmPt(x, y, el){
-  var r = el.getBoundingClientRect();
-  return { x: x - r.left, y: y - r.top };
-}
-function boZoomTouch(e){
-  var t = e.touches, el = e.currentTarget;
-  if(e.type === 'touchstart'){
-    if(t.length === 2){
-      _zm.p0 = boZmDist(t); _zm.k0 = _zm.k; _zm.drag = false;
-    } else if(t.length === 1){
-      var p = boZmPt(t[0].clientX, t[0].clientY, el);
-      var now = Date.now();
-      if(now - _zm.lastTap < 300){            /* 두 번 두드리기 */
-        if(_zm.k > _zm.fit * 1.05) boZoomFit();
-        else boZoomAt(_zm.fit * 3, p.x, p.y);
-        _zm.drag = false; _zm.lastTap = 0;
-      } else {
-        _zm.sx = p.x - _zm.tx; _zm.sy = p.y - _zm.ty; _zm.drag = true;
-        _zm.lastTap = now;
-      }
-    }
-    e.preventDefault();
-  } else if(e.type === 'touchmove'){
-    if(t.length === 2 && _zm.p0){
-      var m = boZmPt((t[0].clientX + t[1].clientX)/2, (t[0].clientY + t[1].clientY)/2, el);
-      boZoomAt(_zm.k0 * (boZmDist(t) / _zm.p0), m.x, m.y);
-    } else if(t.length === 1 && _zm.drag){
-      var q2 = boZmPt(t[0].clientX, t[0].clientY, el);
-      _zm.tx = q2.x - _zm.sx; _zm.ty = q2.y - _zm.sy;
-      boZoomClampT(); boZoomApply();
-    }
-    e.preventDefault();
-  } else {
-    if(t.length < 2) _zm.p0 = 0;
-    if(t.length === 0) _zm.drag = false;
-  }
-}
-/* PC: 휠로 확대 */
-function boZoomWheel(e){
-  e.preventDefault();
-  var p = boZmPt(e.clientX, e.clientY, e.currentTarget);
-  boZoomAt(_zm.k * (e.deltaY < 0 ? 1.2 : 1/1.2), p.x, p.y);
-}
+function boZoomFit(){ boFullZoom().fitNow(); }
+function boZoomStep(d){ boFullZoom().step(d); }
 function boJump(i){ _bo.cur = i; boPadClose(); boPagedRender(); }
 
 function boPadOpen(){
