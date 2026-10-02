@@ -17175,6 +17175,58 @@ function _mrStartOwner(d, studentId){
   });
   return (first && first.from_teacher) ? first.from_teacher.id : null;
 }
+/* 취소(cancelled) 학생은 재적으로 세지 않는다.
+   학생 목록 조회는 cancelled 를 걸러내지만, 전반 기록(transfer_requests)에 박혀
+   오는 student 객체는 그 필터를 거치지 않는다.
+   ⚠ 철산관 2026-07: 권수현(cancelled)이 7/30 전반 기록을 타고 총원(시작) 에만
+      들어가 말일보다 1명 많아졌다. */
+function _mrCountable(s){
+  return !!s && s.status !== 'cancelled';
+}
+
+/* 조회월 '이후' 에 전반이 여러 번 일어난 학생의 그 달 소속.
+   '나중에 내보냈으니 그 달엔 내 학생' 으로 복원할 때, 되돌아간 경우에는 양쪽이
+   다 복원되어 총원이 부푼다.
+   ⚠ 청라관 2026-06: 7/7 김희라→이대준, 9/30 이대준→김희라 로 되돌아간 7명이
+      6월 총원(시작)·말일 양쪽에서 두 번 세어졌다(시작 52 · 실제 45명).
+   조회월 이후 전반 중 '가장 이른 것의 전출 선생님' 한 명만 그 달 소속이다. */
+function _mrOwnerAfter(d, studentId){
+  var first = null;
+  (d.transfers || []).forEach(function(t){
+    if(!t.student || t.student.id !== studentId) return;
+    if(!(t.transfer_date > d.monthEnd)) return;
+    if(!first || t.transfer_date < first.transfer_date) first = t;
+  });
+  return (first && first.from_teacher) ? first.from_teacher.id : null;
+}
+
+/* ── [분원 간 이동] ──────────────────────────────────────
+   학원 전체로는 총원이 안 바뀌지만 분원별로는 나간 쪽이 퇴원, 받은 쪽이 입원이다.
+   사용자 결정(2026-10-02): 각각 분원별 입원·퇴원으로 넣고, 학생별로 메모를 남겨
+   '내부 이동으로 생긴 입·퇴원' 임을 알 수 있게 한다. */
+function _mrBranchName(bid){
+  if(!bid || typeof _allBranches === 'undefined' || !_allBranches) return '';
+  var b = _allBranches.find(function(x){ return x.id === bid; });
+  return b ? b.name : '';
+}
+/* 전반 기록의 상대 선생님은 (id,name) 만 실려 오므로 분원은 따로 찾아야 한다.
+   조회 범위(d.teachers) 밖이면 allUsers 로 넘어간다 — 분원 필터를 걸고 보면
+   상대 분원 선생님이 d.teachers 에 없다. */
+function _mrTeacherBranch(d, tid){
+  if(!tid) return null;
+  var t = (d.teachers || []).find(function(x){ return x.id === tid; });
+  if(t) return t.branch_id || null;
+  var u = (typeof allUsers !== 'undefined' && allUsers)
+        ? allUsers.find(function(x){ return x.id === tid; }) : null;
+  return u ? (u.branch_id || null) : null;
+}
+function _mrIsCrossBranch(d, t){
+  if(!t || !t.from_teacher || !t.to_teacher) return false;
+  var a = _mrTeacherBranch(d, t.from_teacher.id);
+  var b = _mrTeacherBranch(d, t.to_teacher.id);
+  return !!(a && b && a !== b);
+}
+
 /* 같은 학생이 명단에 두 번 들어가지 않게 (전출 기록이 여러 건일 때의 안전망) */
 function _mrUniqById(list){
   var seen = {};
@@ -17325,7 +17377,7 @@ function mrGetTeacherReportFromData(tid, d) {
     return ea < d.monthStart && wa >= d.monthStart && !inIds.has(s.id);
   });
   var startFromOut = myOut.filter(function(t) {
-    var s = t.student; if (!s) return false;
+    var s = t.student; if (!_mrCountable(s)) return false;
     if (_mrStartOwner(d, s.id) !== tid) return false;   // 월초엔 내 학생이 아니었다
     var ea = s.enrolled_at || '1900-01-01';
     var wa = _mrDepDate(s);
@@ -17361,7 +17413,9 @@ function mrGetTeacherReportFromData(tid, d) {
     return recs.length ? recs[0].from_class_name : '';
   };
   afterOut.forEach(function(t){
-    var s = t.student; if(!s) return;
+    var s = t.student; if(!_mrCountable(s)) return;
+    /* 조회월 이후 전반이 여러 번이면 가장 이른 전반의 전출 선생님만 그 달 소속이다 */
+    if(_mrOwnerAfter(d, s.id) !== tid) return;
     var sc = Object.assign({}, s, { class_id: null, _pastClassName: pastClassOf(s.id) });
     /* ⚠ 이 달에도 전반이 있었다면 월초 소속은 '그 첫 전반의 전출 선생님' 이다.
        안 보면, 조회월에 전입만 받았던 선생님까지 월초 명단에 복원되어 두 번 세어진다.
@@ -17666,7 +17720,7 @@ function mrGetTeacherReport(tid) {
     return ea < d.monthStart && wa >= d.monthStart && !inIds.has(s.id);
   });
   var startFromOut = myOut.filter(function(t){
-    var s = t.student; if (!s) return false;
+    var s = t.student; if (!_mrCountable(s)) return false;
     if (_mrStartOwner(d, s.id) !== tid) return false;   // 월초엔 내 학생이 아니었다
     var ea = s.enrolled_at || '1900-01-01';
     var wa = _mrDepDate(s);
@@ -17700,7 +17754,9 @@ function mrGetTeacherReport(tid) {
     return recs.length ? recs[0].from_class_name : '';
   };
   afterOut.forEach(function(t){
-    var s = t.student; if(!s) return;
+    var s = t.student; if(!_mrCountable(s)) return;
+    /* 조회월 이후 전반이 여러 번이면 가장 이른 전반의 전출 선생님만 그 달 소속이다 */
+    if(_mrOwnerAfter(d, s.id) !== tid) return;
     var sc = Object.assign({}, s, { class_id: null, _pastClassName: _pastClassOf(s.id) });
     /* ⚠ 위 startFromOut 과 같은 이유 — 조회월에 전입만 받았던 선생님은 월초 소속이 아니다 */
     var _own = _mrStartOwner(d, s.id);
@@ -17743,15 +17799,22 @@ function mrBuildReportHTML(r, d, branchName, forImage) {
     evMap[s.id]  = '퇴원 (마지막수업: ' + displayDate + ')' + (s.withdraw_reason ? ' · ' + s.withdraw_reason : '');
     evType[s.id] = { label: '퇴원', color: '#dc2626', bg: '#fee2e2' };
   });
+  /* 분원 간 이동이면 '어느 관에서 / 어느 관으로' 를 메모에 남긴다 */
   r.myIn.forEach(function(t){
     if (!t.student) return;
-    evMap[t.student.id]  = '전반IN ← ' + (t.from_teacher ? t.from_teacher.name + ' T' : '-') + ' (' + (t.transfer_date || '-') + ')';
-    evType[t.student.id] = { label: '전반IN', color: '#1d4ed8', bg: '#dbeafe' };
+    var xb = _mrIsCrossBranch(d, t)
+      ? _mrBranchName(_mrTeacherBranch(d, t.from_teacher && t.from_teacher.id)) : '';
+    evMap[t.student.id]  = (xb ? '분원이동 IN ← ' + xb + ' ' : '전반IN ← ')
+                         + (t.from_teacher ? t.from_teacher.name + ' T' : '-') + ' (' + (t.transfer_date || '-') + ')';
+    evType[t.student.id] = { label: xb ? '분원이동' : '전반IN', color: '#1d4ed8', bg: '#dbeafe' };
   });
   r.myOut.forEach(function(t){
     if (!t.student) return;
-    evMap[t.student.id]  = '전반OUT → ' + (t.to_teacher ? t.to_teacher.name + ' T' : '-') + ' (' + (t.transfer_date || '-') + ')';
-    evType[t.student.id] = { label: '전반OUT', color: '#7e22ce', bg: '#ede9fe' };
+    var xb = _mrIsCrossBranch(d, t)
+      ? _mrBranchName(_mrTeacherBranch(d, t.to_teacher && t.to_teacher.id)) : '';
+    evMap[t.student.id]  = (xb ? '분원이동 OUT → ' + xb + ' ' : '전반OUT → ')
+                         + (t.to_teacher ? t.to_teacher.name + ' T' : '-') + ' (' + (t.transfer_date || '-') + ')';
+    evType[t.student.id] = { label: xb ? '분원이동' : '전반OUT', color: '#7e22ce', bg: '#ede9fe' };
   });
 
   /* 반별 그룹 */
@@ -18061,13 +18124,24 @@ function mrBuildBranchSummaryTable(results, d, bName) {
     return 'high';
   }
   var as = [], ae = [], an = [], aw = [];
+  var xIn = [], xOut = [];          /* 분원 간 이동 */
   results.forEach(function(r) {
     var nf = (d.newStudents || []).filter(function(s){ return s.teacher_id === r.teacher.id; });
     r.startStudents.forEach(function(s){ as.push(s); });
     r.endStudents.forEach(function(s){ ae.push(s); });
     nf.forEach(function(s){ an.push(s); });
     r.myWithdrawn.forEach(function(s){ aw.push(s); });
+    (r.myIn  || []).forEach(function(t){ if(_mrCountable(t.student) && _mrIsCrossBranch(d, t)) xIn.push({ t:t, s:t.student, me:r.teacher }); });
+    (r.myOut || []).forEach(function(t){ if(_mrCountable(t.student) && _mrIsCrossBranch(d, t)) xOut.push({ t:t, s:t.student, me:r.teacher }); });
   });
+  /* 분원 간 이동을 입원·퇴원에 올린다. 신입이면서 같은 달에 분원을 옮긴 학생이
+     두 번 세어지지 않게 id 로 막는다. */
+  var _xs = {};
+  an.forEach(function(s){ _xs[s.id] = true; });
+  xIn.forEach(function(x){ if(!_xs[x.s.id]){ _xs[x.s.id] = true; an.push(x.s); } });
+  _xs = {};
+  aw.forEach(function(s){ _xs[s.id] = true; });
+  xOut.forEach(function(x){ if(!_xs[x.s.id]){ _xs[x.s.id] = true; aw.push(x.s); } });
   function cnt(arr, lv) { return arr.filter(function(s){ return slv(s) === lv; }).length; }
   var ms=cnt(as,'middle'), hs=cnt(as,'high'), ts=as.length;
   var me=cnt(ae,'middle'), he=cnt(ae,'high'), te=ae.length;
@@ -18115,8 +18189,29 @@ function mrBuildBranchSummaryTable(results, d, bName) {
       + rowNormal('퇴　원',     ew, mw, hw, tw, false, '#dc2626')
       + rowEnd(   '말일(종료)', ee, me, he, te)
     + '</tbody></table>'
+    + _xMemoHTML()
   + '</div>'
   + _gradeDistTable();
+
+  /* 분원 간 이동 학생별 메모 — 숫자가 왜 움직였는지 표 바로 아래에서 보이게 */
+  function _xMemoHTML(){
+    if(!xIn.length && !xOut.length) return '';
+    var rows = xIn.map(function(x){
+      return '· <b>' + x.s.name + '</b> (' + [x.s.school, x.s.grade].filter(Boolean).join(' ') + ') '
+        + '입원 ' + (x.t.transfer_date || '-') + ' — '
+        + _mrBranchName(_mrTeacherBranch(d, x.t.from_teacher && x.t.from_teacher.id))
+        + ' ' + ((x.t.from_teacher || {}).name || '-') + ' T → ' + x.me.name + ' T';
+    }).concat(xOut.map(function(x){
+      return '· <b>' + x.s.name + '</b> (' + [x.s.school, x.s.grade].filter(Boolean).join(' ') + ') '
+        + '퇴원 ' + (x.t.transfer_date || '-') + ' — ' + x.me.name + ' T → '
+        + _mrBranchName(_mrTeacherBranch(d, x.t.to_teacher && x.t.to_teacher.id))
+        + ' ' + ((x.t.to_teacher || {}).name || '-') + ' T';
+    }));
+    return '<div style="padding:10px 14px;background:#FFFBEB;border-top:1.5px solid #FDE68A;font-size:11px;color:#92400E;line-height:1.7">'
+      + '<b>\u203B 분원 간 이동 ' + rows.length + '건</b> — 학원 전체 총원은 그대로이고, 분원별로만 입원·퇴원으로 집계됩니다.<br>'
+      + rows.join('<br>')
+    + '</div>';
+  }
 
   function _glv(s){
     var sc=(s.school||'').trim();
@@ -18207,8 +18302,15 @@ function mrBuildTeacherDetailTable(results, d, bName) {
       }).join('');
     }
     var nb = badges(nf, '#15803d', '#dcfce7');
-    var ib = badges(r.myIn.map(function(t){ return t.student || {name:'-'}; }), '#1d4ed8', '#dbeafe');
-    var ob = badges(r.myOut.map(function(t){ return t.student || {name:'-'}; }), '#6d28d9', '#ede9fe');
+    /* 분원 간 이동은 상대 관 이름을 붙여 둔다 */
+    var xlab = function(t, side){
+      if(!_mrIsCrossBranch(d, t)) return '';
+      var other = side === 'in' ? (t.from_teacher || {}).id : (t.to_teacher || {}).id;
+      var nm = _mrBranchName(_mrTeacherBranch(d, other));
+      return nm ? (side === 'in' ? ' \u2190' : ' \u2192') + nm : '';
+    };
+    var ib = badges(r.myIn.map(function(t){ return { name: ((t.student || {}).name || '-') + xlab(t, 'in') }; }), '#1d4ed8', '#dbeafe');
+    var ob = badges(r.myOut.map(function(t){ return { name: ((t.student || {}).name || '-') + xlab(t, 'out') }; }), '#6d28d9', '#ede9fe');
     var wb = badges(r.myWithdrawn, '#dc2626', '#fee2e2');
 
     /* 인원 카드 */
