@@ -17363,10 +17363,17 @@ function mrGetTeacherReportFromData(tid, d) {
   afterOut.forEach(function(t){
     var s = t.student; if(!s) return;
     var sc = Object.assign({}, s, { class_id: null, _pastClassName: pastClassOf(s.id) });
-    if(activeAtStart(s)) startStudents.push(sc);
+    /* ⚠ 이 달에도 전반이 있었다면 월초 소속은 '그 첫 전반의 전출 선생님' 이다.
+       안 보면, 조회월에 전입만 받았던 선생님까지 월초 명단에 복원되어 두 번 세어진다.
+       (청라관 2026-07: 7/7 김희라→이대준, 9/30 이대준→김희라 로 되돌아간 6명이
+        김희라·이대준 양쪽 7월 총원(시작) 에 들어가 50명으로 찍혔다. 실제 44명) */
+    var _own = _mrStartOwner(d, s.id);
+    if(activeAtStart(s) && (!_own || _own === tid)) startStudents.push(sc);
     if(activeAtEnd(s)) endStudents.push(sc);
     if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) (mrIsReturning(s) ? myReturn : myNew).push(sc);
   });
+  startStudents = _mrUniqById(startStudents);
+  endStudents   = _mrUniqById(endStudents);
 
   return { teacher, sg, najeLabel, getBranch, groupByClass, startStudents, myNew, myReturn, myWithdrawn, myIn, myOut, endStudents };
 }
@@ -17489,8 +17496,13 @@ async function generateMonthlyReport() {
     var _viceBr = (typeof getViceAllowedBranchIds === 'function') ? getViceAllowedBranchIds() : [];
     var _isVice = _viceBr.length > 0;
 
+    /* ⚠ 활성 선생님만 조회하면, 비활성(퇴직)으로 바뀐 선생님이 재직하던 달의
+       분원 총원이 통째로 빠진다. 개봉 중등 2026-04 말일이 141 명으로 나왔지만
+       박석영 T 의 34명이 빠진 값이고 실제로는 175 명이었다.
+       그래서 비활성까지 조회하고, 그 달에 아무 움직임도 없는 선생님만 아래에서 숨긴다. */
     var tQuery = db.from('users')
-      .select('id,name,branch_id').in('role',['teacher','vice_director']).eq('status','active').order('name');
+      .select('id,name,branch_id,status').in('role',['teacher','vice_director'])
+      .in('status',['active','inactive']).order('name');
     if (branchId)  tQuery = tQuery.eq('branch_id', branchId);
     if (teacherId) tQuery = tQuery.eq('id', teacherId);
     if (_isVice && !branchId) tQuery = tQuery.in('branch_id', _viceBr);   // [VICE] E: 담당 분원 선생님만
@@ -17536,6 +17548,16 @@ async function generateMonthlyReport() {
       transfers:   transferRes.data  || [],
       history:     histRes.data      || []
     };
+    /* 비활성 선생님은 그 달에 움직임이 있을 때만 탭·상세에 남긴다
+       (현재 달 보고서는 지금까지와 똑같이 보이고, 과거 달에만 줄이 늘어난다) */
+    teachers = teachers.filter(function(t){
+      if (t.status !== 'inactive') return true;
+      var r = mrGetTeacherReport(t.id);
+      return !!(r && (r.startStudents.length || r.endStudents.length || r.myWithdrawn.length
+                      || r.myNew.length || r.myReturn.length || r.myIn.length || r.myOut.length));
+    });
+    if (!teachers.length) { alert('선생님이 없습니다'); return; }
+    _mrData.teachers = teachers;
     _mrCurrentTeacherId = teachers[0].id;
 
     // 선생님 탭 렌더링
@@ -17680,10 +17702,14 @@ function mrGetTeacherReport(tid) {
   afterOut.forEach(function(t){
     var s = t.student; if(!s) return;
     var sc = Object.assign({}, s, { class_id: null, _pastClassName: _pastClassOf(s.id) });
-    if(_activeAtStart(s)) startStudents.push(sc);
+    /* ⚠ 위 startFromOut 과 같은 이유 — 조회월에 전입만 받았던 선생님은 월초 소속이 아니다 */
+    var _own = _mrStartOwner(d, s.id);
+    if(_activeAtStart(s) && (!_own || _own === tid)) startStudents.push(sc);
     if(_activeAtEnd(s)) endStudents.push(sc);
     if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) (mrIsReturning(s) ? myReturn : myNew).push(sc);
   });
+  startStudents = _mrUniqById(startStudents);
+  endStudents   = _mrUniqById(endStudents);
 
   return { teacher, getBranch: _getBranch, sg: _sg, najeLabel: _najeLabel, groupByClass: _groupByClass, startStudents, myNew, myReturn, myWithdrawn, myIn, myOut, endStudents };
 }
