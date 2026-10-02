@@ -17158,6 +17158,31 @@ function _mrDepDate(s){
   if(s && s.status === 'inactive') return (s.last_class_date || s.withdrawn_at) || '9999-12-31';
   return '9999-12-31';
 }
+
+/* ── [월초 소속] 이 달에 전반이 두 번 이상 일어난 학생 ─────────
+   '이 달에 전출했으니 월초엔 내 학생' 으로 되살릴 때(startFromOut), 그 학생이
+   이 달에 전입해 온 것인지도 봐야 한다. 안 보면 월초에 실제로 데리고 있던
+   선생님과 중간에 잠깐 받았던 선생님 양쪽에서 세어져 총원(시작) 이 부푼다.
+   ⚠ 철산관 2026-09 사고: 김정현이 9/15 정미라→박수빈, 9/29 박수빈→정미라 로
+      되돌아가 총원(시작) 이 실제 160명인데 161명으로 찍혔다.
+   이 달 첫 전반의 '전출 선생님' 한 명만 월초 소속으로 인정한다. */
+function _mrStartOwner(d, studentId){
+  var first = null;
+  (d.transfers || []).forEach(function(t){
+    if(!t.student || t.student.id !== studentId) return;
+    if(!(t.transfer_date >= d.monthStart && t.transfer_date <= d.monthEnd)) return;
+    if(!first || t.transfer_date < first.transfer_date) first = t;
+  });
+  return (first && first.from_teacher) ? first.from_teacher.id : null;
+}
+/* 같은 학생이 명단에 두 번 들어가지 않게 (전출 기록이 여러 건일 때의 안전망) */
+function _mrUniqById(list){
+  var seen = {};
+  return list.filter(function(s){
+    if(!s || seen[s.id]) return false;
+    seen[s.id] = true; return true;
+  });
+}
 async function generateTeacherMonthlyReport() {
   if (!currentUser) return;
   var year  = parseInt(document.getElementById('tmr-year').value);
@@ -17301,11 +17326,12 @@ function mrGetTeacherReportFromData(tid, d) {
   });
   var startFromOut = myOut.filter(function(t) {
     var s = t.student; if (!s) return false;
+    if (_mrStartOwner(d, s.id) !== tid) return false;   // 월초엔 내 학생이 아니었다
     var ea = s.enrolled_at || '1900-01-01';
     var wa = _mrDepDate(s);
     return ea < d.monthStart && wa >= d.monthStart;
   });
-  var startStudents = startBase.concat(startFromOut.map(function(t){ return t.student; }));
+  var startStudents = _mrUniqById(startBase.concat(startFromOut.map(function(t){ return t.student; })));
 
   var endStudents = (d.allStudents || []).filter(function(s) {
     if (s.teacher_id !== tid) return false;
@@ -17619,11 +17645,12 @@ function mrGetTeacherReport(tid) {
   });
   var startFromOut = myOut.filter(function(t){
     var s = t.student; if (!s) return false;
+    if (_mrStartOwner(d, s.id) !== tid) return false;   // 월초엔 내 학생이 아니었다
     var ea = s.enrolled_at || '1900-01-01';
     var wa = _mrDepDate(s);
     return ea < d.monthStart && wa >= d.monthStart;
   });
-  var startStudents = startBase.concat(startFromOut.map(function(t){ return t.student; }));
+  var startStudents = _mrUniqById(startBase.concat(startFromOut.map(function(t){ return t.student; })));
 
   var _newAll  = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid && !afterInIds.has(s.id); });
   var myNew    = _newAll.filter(function(s){ return !mrIsReturning(s); });   // 순수 신입
