@@ -2133,8 +2133,18 @@
 
       <div class="panel" id="panel-teacher-exam-score">
         <div style="font-size:18px;font-weight:700;color:#7c3aed;margin-bottom:4px">📊 내신 점수</div>
-        <div style="font-size:12px;color:#8b5cf6;margin-bottom:16px">담당 학생들의 내신 원점수를 기록합니다</div>
+        <div style="font-size:12px;color:#8b5cf6;margin-bottom:16px">담당 학생들의 내신 원점수를 기록합니다 · 다른 선생님 결과는 보기만 됩니다</div>
         <div class="card" style="margin-bottom:12px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <div>
+              <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">분원</div>
+              <select id="tes-filter-branch" onchange="tesOnBranchChange()" style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none"></select>
+            </div>
+            <div>
+              <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">선생님</div>
+              <select id="tes-filter-teacher" style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none"></select>
+            </div>
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
             <div>
               <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">연도</div>
@@ -18478,7 +18488,65 @@ function examInitYearSelect(selId) {
 ══════════════════════════════════════════════════════════ */
 async function initTeacherExamScore() {
   examInitYearSelect('tes-filter-year');
+  await tesInitFilters();
   await tesLoadScores();
+}
+
+/* ── 분원·선생님 필터 ───────────────────────────────────────
+   선생님도 다른 분원·다른 선생님의 입력 결과를 볼 수 있게 한다.
+   ⚠ 남의 학생은 보기 전용이다(tesSaveScores 가 teacher_id 를 덮어쓴다). */
+var _tesTeachers = [];      // [{id,name,branch_id}] — 조회에 쓸 선생님 목록
+var _tesReadonly = false;   // 본인 담당이 아니면 true
+var _tesClassMap = {};      // 조회한 선생님들의 반 (전역 classes 는 내 반만 갖고 있다)
+var _tesTeacherNames = {};  // 여러 선생님을 한꺼번에 볼 때 반 이름 앞에 붙인다
+
+async function tesInitFilters() {
+  var bSel = document.getElementById('tes-filter-branch');
+  if (!bSel || bSel.options.length) return;
+  try {
+    var { data: brs } = await db.from('branches')
+      .select('id,name').eq('active', true).order('name');
+    bSel.innerHTML = '<option value="">전체 분원</option>';
+    (brs || []).forEach(function(b) {
+      var o = document.createElement('option');
+      o.value = b.id; o.textContent = b.name;
+      bSel.appendChild(o);
+    });
+    /* 처음엔 내 분원 · 나 */
+    if (currentUser && currentUser.branch_id) bSel.value = currentUser.branch_id;
+  } catch(e) { console.error('[내신점수] 분원 로드 실패:', e); }
+  await tesLoadTeacherOptions(currentUser ? currentUser.id : '');
+}
+
+async function tesLoadTeacherOptions(selectId) {
+  var bSel = document.getElementById('tes-filter-branch');
+  var tSel = document.getElementById('tes-filter-teacher');
+  if (!tSel) return;
+  var branchId = bSel ? bSel.value : '';
+  var label = '전체 선생님';
+  if (branchId && bSel.selectedIndex > 0) label = bSel.options[bSel.selectedIndex].text + ' 전체';
+  tSel.innerHTML = '<option value="__all__">' + label + '</option>';
+  try {
+    var q = db.from('users').select('id,name,branch_id')
+      .in('role', ['teacher','vice_director']).eq('status', 'active').order('name');
+    if (branchId) q = q.eq('branch_id', branchId);
+    var { data: ts } = await q;
+    (ts || []).forEach(function(t) {
+      var o = document.createElement('option');
+      o.value = t.id;
+      o.textContent = t.name + ' T' + (t.id === (currentUser||{}).id ? ' (나)' : '');
+      tSel.appendChild(o);
+    });
+    if (selectId && (ts || []).some(function(t){ return t.id === selectId; })) tSel.value = selectId;
+  } catch(e) { console.error('[내신점수] 선생님 로드 실패:', e); }
+}
+
+async function tesOnBranchChange() {
+  var mine = currentUser ? currentUser.id : '';
+  var bSel = document.getElementById('tes-filter-branch');
+  /* 내 분원으로 돌아오면 나를 다시 고른다 */
+  var keep = (bSel && bSel.value && currentUser && bSel.value === currentUser.branch_id) ? mine : '';
+  await tesLoadTeacherOptions(keep);
 }
 
 async function tesLoadScores() {
@@ -18490,15 +18558,43 @@ async function tesLoadScores() {
   wrap.innerHTML = '<div style="text-align:center;padding:30px;color:#9ca3af">불러오는 중...</div>';
 
   try {
+    /* 어느 선생님 것을 볼지 — 고른 게 없으면 나 */
+    var tSel = document.getElementById('tes-filter-teacher');
+    var pick = tSel ? tSel.value : currentUser.id;
+    var tids;
+    if (!tSel || (!pick && pick !== '__all__')) { tids = [currentUser.id]; }
+    else if (pick === '__all__') {
+      var opts = Array.from(tSel.options).map(function(o){ return o.value; })
+                      .filter(function(v){ return v && v !== '__all__'; });
+      tids = opts;
+    } else { tids = [pick]; }
+    if (!tids.length) tids = [currentUser.id];
+    _tesReadonly = !(tids.length === 1 && tids[0] === currentUser.id);
+
     var { data: stus } = await db.from('users')
-      .select('id,name,school,grade,class_id')
-      .eq('teacher_id', currentUser.id).eq('status', 'active')
+      .select('id,name,school,grade,class_id,teacher_id')
+      .in('teacher_id', tids).eq('status', 'active')
       .order('school').order('grade').order('name');
     _tesStudents = stus || [];
 
     if (!_tesStudents.length) {
-      wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">👤</div><p>담당 학생이 없습니다</p></div>';
+      wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">👤</div><p>'
+        + (_tesReadonly ? '해당 선생님의 학생이 없습니다' : '담당 학생이 없습니다') + '</p></div>';
       return;
+    }
+
+    /* ⚠ 전역 classes 에는 '내 반' 만 있다. 남의 반 이름은 따로 받아야 반 묶음이 선다. */
+    _tesClassMap = {};
+    try {
+      var { data: cls } = await db.from('classes').select('id,name,teacher_id').in('teacher_id', tids);
+      (cls || []).forEach(function(c){ _tesClassMap[c.id] = c; });
+    } catch(e) { console.warn('[내신점수] 반 로드 실패', e); }
+    _tesTeacherNames = {};
+    if (tids.length > 1) {
+      var tSel2 = document.getElementById('tes-filter-teacher');
+      Array.from(tSel2 ? tSel2.options : []).forEach(function(o) {
+        if (o.value && o.value !== '__all__') _tesTeacherNames[o.value] = o.textContent.replace(' (나)','');
+      });
     }
 
     var sids = _tesStudents.map(function(s){ return s.id; });
@@ -18536,11 +18632,23 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
     { hd:'#831843', lite:'#FFF1F2', border:'#FECDD3', sub:'#FFE4E6' },
   ];
 
-  // 반별 그룹화
+  function tesEsc(v){ return String(v==null?'':v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  // 반별 그룹화 — 남의 반 이름은 _tesClassMap 에 따로 받아 둔다
   var classMap = {};
   if (typeof classes !== 'undefined' && classes)
     classes.forEach(function(c){ classMap[c.id] = c; });
-  var getClassName = function(stu) { var c = classMap[stu.class_id]; return c ? c.name : '반 미지정'; };
+  Object.keys(_tesClassMap || {}).forEach(function(k){ classMap[k] = _tesClassMap[k]; });
+  var multiT = Object.keys(_tesTeacherNames || {}).length > 0;
+  var getClassName = function(stu) {
+    var c = classMap[stu.class_id];
+    var nm = c ? c.name : '반 미지정';
+    /* 여러 선생님을 한꺼번에 보면 누구 반인지 적어 준다 */
+    if (multiT && stu.teacher_id && _tesTeacherNames[stu.teacher_id])
+      nm = _tesTeacherNames[stu.teacher_id] + ' · ' + nm;
+    return nm;
+  };
   var groups = {}, keys = [];
   _tesStudents.forEach(function(stu) {
     var k = getClassName(stu);
@@ -18589,8 +18697,34 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
     + '</tr>';
   }
 
+  /* 보기 전용 — 입력칸 대신 글자로. 남의 점수를 건드릴 길 자체를 안 만든다. */
+  function buildRowRO(stu, col, si) {
+    var stuScores = scoresByStudent[stu.id] || [];
+    var stuNote   = noteByStudent[stu.id]   || '';
+    var gradeRaw  = stu.grade ? String(stu.grade) : '';
+    var grade     = gradeRaw ? (gradeRaw.indexOf('학년') >= 0 ? gradeRaw : gradeRaw + '학년') : '-';
+    var chips = stuScores.length
+      ? stuScores.map(function(rec) {
+          var sc = (rec.score !== undefined && rec.score !== null && rec.score !== '') ? rec.score : '-';
+          return '<span style="display:inline-flex;align-items:baseline;gap:5px;background:#fff;border:1px solid '
+            + col.border + ';border-radius:7px;padding:3px 9px;font-size:12px;color:#7c3aed;font-weight:600">'
+            + tesEsc(rec.subject || '수학')
+            + '<b style="font-size:14px;color:#1e293b">' + tesEsc(sc) + '</b></span>';
+        }).join('')
+      : '<span style="font-size:12px;color:#cbd5e1">입력 없음</span>';
+    return '<tr style="background:' + (si % 2 === 0 ? '#fff' : col.lite) + ';border-bottom:1px solid ' + col.border + '">'
+      + '<td style="padding:7px 10px;font-size:12px;color:#64748b;white-space:nowrap;vertical-align:middle">' + tesEsc(stu.school || '-') + ' ' + grade + '</td>'
+      + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + tesEsc(stu.name) + '</td>'
+      + '<td style="padding:6px 8px;vertical-align:middle">'
+        + '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">' + chips
+        + (stuNote ? '<span style="font-size:12px;color:#6b7280;margin-left:4px">' + tesEsc(stuNote) + '</span>' : '')
+        + '</div></td></tr>';
+  }
+
   function buildCard(className, students, col) {
-    var rowsHtml = students.map(function(stu, si){ return buildRow(stu, col, si); }).join('');
+    var rowsHtml = students.map(function(stu, si){
+      return _tesReadonly ? buildRowRO(stu, col, si) : buildRow(stu, col, si);
+    }).join('');
     return '<div style="border:1.5px solid ' + col.border + ';border-radius:10px;overflow:hidden;margin-bottom:14px">'
       + '<div style="background:' + col.hd + ';padding:9px 14px;display:flex;align-items:center;justify-content:space-between">'
         + '<span style="font-size:13px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:8px">' + className + '</span>'
@@ -18613,9 +18747,13 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
   keys.forEach(function(k, i){ cardsHtml += buildCard(k, groups[k], COLORS[i % COLORS.length]); });
   cardsHtml += '</div>';
 
-  wrap.innerHTML = '<div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">'
+  var rightBtn = _tesReadonly
+    ? '<span style="padding:7px 14px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;'
+      + 'font-size:12px;font-weight:700;color:#475569;white-space:nowrap">👁 보기 전용 · 본인 담당만 입력됩니다</span>'
+    : '<button onclick="tesSaveScores(\'' + year + '\',\'' + semester + '\',\'' + examType + '\')" style="padding:8px 20px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button>';
+  wrap.innerHTML = '<div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'
     + '<div style="font-size:13px;font-weight:700;color:#7c3aed">' + year + '년 ' + semLabel + ' ' + examLabel + ' · 총 ' + _tesStudents.length + '명 / ' + keys.length + '반</div>'
-    + '<button onclick="tesSaveScores(\'' + year + '\',\'' + semester + '\',\'' + examType + '\')" style="padding:8px 20px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button>'
+    + rightBtn
     + '</div>' + cardsHtml;
 
   // 엔터 → 다음 점수칸
@@ -18629,6 +18767,9 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
 }
 
 async function tesSaveScores(year, semester, examType) {
+  /* ⚠ 아래 upsert 가 teacher_id 를 본인으로 덮어쓴다. 남의 학생을 저장하면
+     담당 선생님이 바뀌어 버리므로 길목에서 막는다. */
+  if (_tesReadonly) { alert('다른 선생님의 입력 결과는 저장할 수 없습니다.\n본인 담당 학생만 입력됩니다.'); return; }
   year = parseInt(year); semester = parseInt(semester);
   var upsertData = [], uiKeys = {};   // uiKeys[sid][subject]=1 (현재 UI에 있는 과목)
   _tesStudents.forEach(function(stu) {
