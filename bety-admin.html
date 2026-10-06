@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BMAPS · 베티 OMR 관리 [v0.8-pdf]</title>
+<title>BMAPS · 베티 OMR 관리 [v0.9-report]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -205,6 +205,28 @@
   .rp-o { background: #16a34a; }
   .rp-x { background: #dc2626; }
   .rp-flex { display: flex; gap: 12px; align-items: stretch; }
+  /* 문항 결과 — 가로 격자. 실전 30문항이면 6×5, 준킬러 18문항이면 6×3 이 된다.
+     세로로 길게 늘어놓던 표를 펴서 글자를 키울 자리를 벌었다. */
+  .rp-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 9px; }
+  .rp-q { border: 1.5px solid #cbd5e1; border-radius: 10px; overflow: hidden; background: #fff; }
+  .rp-q.bad { border-color: #fca5a5; }
+  .rp-q-t { display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+            background: #f1f5f9; border-bottom: 1px solid #e2e8f0; }
+  .rp-q.bad .rp-q-t { background: #fef2f2; border-bottom-color: #fecaca; }
+  .rp-q-no { font-size: 19px; font-weight: 900; }
+  .rp-q-pt { margin-left: auto; font-size: 14px; font-weight: 800; color: #475569;
+             background: #e2e8f0; border-radius: 6px; padding: 2px 9px; }
+  .rp-q-b { padding: 9px 10px 10px; }
+  .rp-q-a { font-size: 16px; font-weight: 800; color: #1e293b; line-height: 1.4; }
+  .rp-q-a b { color: #0369a1; font-weight: 900; }
+  .rp-q-ty { font-size: 13.5px; font-weight: 700; color: #64748b; line-height: 1.4; margin-top: 3px; }
+  .rp-q-r { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+  .rp-q-bar { flex: 1; height: 9px; background: #e2e8f0; border-radius: 100px; overflow: hidden; }
+  .rp-q-bar i { display: block; height: 100%; background: linear-gradient(90deg, #7dd3fc, #0369a1); }
+  .rp-q-pc { font-size: 14px; font-weight: 900; color: #0369a1; min-width: 42px; text-align: right; }
+  /* 아래 네 묶음을 가로로 나열 — 차트는 좁게, 표는 넓게 */
+  .rp-row4 { display: grid; grid-template-columns: 330px 1fr 330px 1fr; gap: 18px; align-items: start; }
+  .rp-row4 > div > .rp-st { margin-top: 0; }
   .rp-chart-box { border: 1.5px solid #cbd5e1; border-radius: 12px; padding: 8px 10px;
                   background: linear-gradient(#ffffff, #f8fafc); }
   .rp-leg { font-size: 14.5px; font-weight: 800; color: #1e293b; display: flex; gap: 15px;
@@ -222,7 +244,7 @@
 
 <div class="ba-top">
   <span class="ba-title">📝 베티 OMR 관리</span>
-  <span class="ba-ver" id="ba-ver">v0.8-pdf</span>
+  <span class="ba-ver" id="ba-ver">v0.9-report</span>
   <span class="ba-who" id="ba-who"></span>
   <button class="ba-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -584,7 +606,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_ADMIN_VERSION = 'v0.8-pdf';
+window.BETY_ADMIN_VERSION = 'v0.9-report';
 console.log('BETY-ADMIN build:', window.BETY_ADMIN_VERSION);
 
 /* 레벨별 기본값 */
@@ -1509,18 +1531,26 @@ function rpRender(d){
   var ss = (_ba.sessions||[]).find(function(x){ return x.session_date === ex.session_date; });
   var roundLb = (ss && ss.round_no ? (ss.round_no + '회차 · ') : '') + (ex.session_date||'');
 
-  // 좌: 문항 결과 표 (정오는 원형 배지, 정답률은 미니 게이지)
-  var qRows = qs.map(function(q){
+  /* 문항 결과 — 한 문항이 한 칸. 6칸씩 가로로 간다.
+     ⚠ type_analysis(유형분석)는 bety_omr_report 가 아직 안 돌려준다.
+        RPC 에 한 줄 추가되면 여기 자동으로 나온다. */
+  var qCells = qs.map(function(q){
     var rn = q.taker_cnt ? rpPct(q.correct_cnt, q.taker_cnt) : null;
-    var rateCell = (rn == null) ? '<td>—</td>'
-      : '<td style="background:linear-gradient(90deg,#dbeafe '+rpFix(rn,1)+'%,transparent '+rpFix(rn,1)+'%)">'
-        + rpFix(rn,1) + '%</td>';
-    return '<tr><td style="font-weight:700">'+q.q_no+'</td>'
-      + '<td><span class="rp-ox '+(q.is_correct?'rp-o':'rp-x')+'">'+(q.is_correct?'O':'X')+'</span></td>'
-      + '<td>'+q.points+'</td>'
-      + '<td>'+baEsc(q.content_area||'미분류')+'</td>'
-      + '<td>'+baEsc(q.behavior_area||'미분류')+'</td>'
-      + rateCell + '</tr>';
+    return '<div class="rp-q' + (q.is_correct ? '' : ' bad') + '">'
+      + '<div class="rp-q-t">'
+        + '<span class="rp-ox '+(q.is_correct?'rp-o':'rp-x')+'">'+(q.is_correct?'O':'X')+'</span>'
+        + '<span class="rp-q-no">'+q.q_no+'</span>'
+        + '<span class="rp-q-pt">'+q.points+'점</span>'
+      + '</div>'
+      + '<div class="rp-q-b">'
+        + '<div class="rp-q-a"><b>'+baEsc(q.content_area||'미분류')+'</b> · '
+          + baEsc(q.behavior_area||'미분류')+'</div>'
+        + (q.type_analysis ? '<div class="rp-q-ty">'+baEsc(q.type_analysis)+'</div>' : '')
+        + '<div class="rp-q-r">'
+          + '<div class="rp-q-bar"><i style="width:'+(rn==null?0:rpFix(rn,1))+'%"></i></div>'
+          + '<span class="rp-q-pc">'+(rn==null?'—':(rpFix(rn,0)+'%'))+'</span>'
+        + '</div>'
+      + '</div></div>';
   }).join('');
 
   // 좌: 누적 점수 표 (최신이 위)
@@ -1533,14 +1563,14 @@ function rpRender(d){
 
   // 우: 영역 결과 표 (라벨은 기존 종이 리포트와 동일하게 백분위로 표기)
   function areaTable(groups, ac){
+    /* ⚠ '반평균(점수)' 칸은 뺐다. 바로 옆 '평균' 백분율과 같은 값이라 자리만 먹었다. */
     return '<div class="rp-tw"><table class="rp"><thead><tr><th>영 역</th><th>배점</th><th>득점</th>'
-      + '<th>반평균</th><th>개인백분위</th><th>평균백분위</th></tr></thead><tbody>'
+      + '<th>개인</th><th>평균</th></tr></thead><tbody>'
       + groups.map(function(g){
-          return '<tr><td style="font-weight:700">'+baEsc(g.name)+'</td>'
+          return '<tr><td style="font-weight:700;text-align:left;padding-left:12px">'+baEsc(g.name)+'</td>'
             + '<td>'+g.pts+'</td><td>'+g.earned+'</td>'
-            + '<td>'+rpFix(g.avg,2)+'</td>'
-            + '<td style="font-weight:800;color:'+ac+'">'+rpFix(rpPct(g.earned,g.pts),0)+'%</td>'
-            + '<td>'+rpFix(rpPct(g.avg,g.pts),1)+'%</td></tr>';
+            + '<td style="font-weight:900;color:'+ac+'">'+rpFix(rpPct(g.earned,g.pts),0)+'%</td>'
+            + '<td>'+rpFix(rpPct(g.avg,g.pts),0)+'%</td></tr>';
         }).join('') + '</tbody></table></div>';
   }
   function leg(c1, c2){
@@ -1569,16 +1599,25 @@ function rpRender(d){
     + '<span>/ '+(ex.total_score||'')+'점</span></div>'
     + '</div>'
 
-    + '<div class="rp-body"><div class="rp-cols">'
-    // ── 좌측
-    + '<div class="rp-col">'
+    + '<div class="rp-body">'
+    // ── 문항 결과 — 가로 6칸 격자 (실전 6×5 · 준킬러 6×3)
     + rpSt('#0369a1','평가 내용 및 문항 결과')
-    + '<div class="rp-tw"><table class="rp"><thead><tr><th>문항</th><th>정답</th><th>배점</th>'
-    + '<th>단원</th><th>내용영역</th><th>정답률</th></tr></thead>'
-    + '<tbody>'+qRows+'</tbody></table></div>'
+    + '<div class="rp-grid">'+qCells+'</div>'
+    // ── 단원 분석 · 단원 결과 · 내용영역 분석 · 내용영역 결과를 가로로
+    + '<div class="rp-row4" style="margin-top:22px">'
+    + '<div>' + rpSt('#f97316','단원 분석')
+      + '<div class="rp-chart-box">'+leg('#f97316','#38bdf8')
+      + '<canvas id="rp-cv-unit-radar"></canvas></div></div>'
+    + '<div>' + rpSt('#f97316','단원 결과') + areaTable(byUnit, '#ea580c') + '</div>'
+    + '<div>' + rpSt('#84cc16','내용영역 분석')
+      + '<div class="rp-chart-box">'+leg('#84cc16','#60a5fa')
+      + '<canvas id="rp-cv-diff-radar"></canvas></div></div>'
+    + '<div>' + rpSt('#84cc16','내용영역 결과') + areaTable(byDiff, '#65a30d') + '</div>'
+    + '</div>'
+    // ── 누적 점수
     + rpSt('#2563eb','누적 점수')
     + '<div class="rp-flex">'
-    + '<div class="rp-tw" style="width:270px;flex-shrink:0;align-self:flex-start">'
+    + '<div class="rp-tw" style="width:300px;flex-shrink:0;align-self:flex-start">'
     + '<table class="rp"><thead><tr><th>날짜</th><th>점수</th>'
     + '<th>전체평균</th></tr></thead><tbody>'
     + (hRows || '<tr><td colspan="3" style="color:#64748b">기록 없음</td></tr>')
@@ -1587,26 +1626,6 @@ function rpRender(d){
     + '<canvas id="rp-cv-hist"></canvas></div>'
     + '</div>'
     + '</div>'
-    // ── 우측
-    + '<div class="rp-col">'
-    + rpSt('#f97316','단원 분석')
-    + '<div class="rp-flex">'
-    + '<div class="rp-chart-box" style="flex:1">'+leg('#f97316','#38bdf8')
-    + '<canvas id="rp-cv-unit-bar"></canvas></div>'
-    + '<div class="rp-chart-box">'+leg('#f97316','#38bdf8')
-    + '<canvas id="rp-cv-unit-radar"></canvas></div>'
-    + '</div>'
-    + rpSt('#f97316','단원 결과') + areaTable(byUnit, '#ea580c')
-    + rpSt('#84cc16','내용영역 분석')
-    + '<div class="rp-flex">'
-    + '<div class="rp-chart-box" style="flex:1">'+leg('#84cc16','#60a5fa')
-    + '<canvas id="rp-cv-diff-bar"></canvas></div>'
-    + '<div class="rp-chart-box">'+leg('#84cc16','#60a5fa')
-    + '<canvas id="rp-cv-diff-radar"></canvas></div>'
-    + '</div>'
-    + rpSt('#84cc16','내용영역 결과') + areaTable(byDiff, '#65a30d')
-    + '</div>'
-    + '</div></div>'
     + '<div class="rp-foot"><span>BESTIAN MATH ACADEMY · 베티모의고사 성적 리포트</span>'
     + '<span>발행일 '+issued+'</span></div>';
 
@@ -1619,11 +1638,10 @@ function rpRender(d){
     };
   }
   var u = pcts(byUnit), f = pcts(byDiff);
-  rpHBar('rp-cv-unit-bar', 370, Math.max(u.labels.length,4)*35+36, u.labels, u.mine, u.avg, '#f97316', '#38bdf8');
-  rpRadar('rp-cv-unit-radar', 285, Math.max(u.labels.length,4)*35+36, u.labels, u.mine, u.avg, '#f97316', '#38bdf8');
-  rpHBar('rp-cv-diff-bar', 370, Math.max(f.labels.length,4)*35+36, f.labels, f.mine, f.avg, '#84cc16', '#60a5fa');
-  rpRadar('rp-cv-diff-radar', 285, Math.max(f.labels.length,4)*35+36, f.labels, f.mine, f.avg, '#84cc16', '#60a5fa');
-  rpVBar('rp-cv-hist', 380, 225,
+  var RW = 300, RH = 290;            /* 가로로 나열하면서 차트는 레이더 하나만 남겼다 */
+  rpRadar('rp-cv-unit-radar', RW, RH, u.labels, u.mine, u.avg, '#f97316', '#38bdf8');
+  rpRadar('rp-cv-diff-radar', RW, RH, f.labels, f.mine, f.avg, '#84cc16', '#60a5fa');
+  rpVBar('rp-cv-hist', 900, 240,
     hist.map(function(h){ return String(h.session_date||'').slice(5).replace('-','/'); }),
     hist.map(function(h){ return h.score||0; }),
     hist.map(function(h){ return h.avg_score==null?0:h.avg_score; }),
