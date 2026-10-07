@@ -2165,7 +2165,9 @@
               <option value="final">기말고사</option>
             </select>
           </div>
+          <label style="display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer"><input type="checkbox" id="tes-inc-left" style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer">퇴원생 포함 <span style="color:#9ca3af;font-weight:500">(퇴원 후에도 그 학기 점수를 보려면)</span></label>
           <button onclick="tesLoadScores()" style="width:100%;padding:9px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">🔍 조회</button>
+          <input type="search" id="tes-search" placeholder="🔍 학생 이름 · 학교로 찾기" autocomplete="off" oninput="examSearch('tes-search','tes-table-wrap')" style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none;margin-top:10px">
         </div>
         <div id="tes-table-wrap"></div>
       </div>
@@ -3091,7 +3093,9 @@
               </select>
             </div>
           </div>
+          <label style="display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer"><input type="checkbox" id="es-inc-left" style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer">퇴원생 포함 <span style="color:#9ca3af;font-weight:500">(퇴원 후에도 그 학기 점수를 보려면)</span></label>
           <button onclick="esLoadScores()" style="width:100%;padding:9px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">🔍 조회</button>
+          <input type="search" id="es-search" placeholder="🔍 학생 이름 · 학교로 찾기" autocomplete="off" oninput="examSearch('es-search','es-table-wrap')" style="width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none;margin-top:10px">
         </div>
         <div id="es-table-wrap"></div>
       </div>
@@ -18449,6 +18453,56 @@ async function mrBranchExportImage(copy) {
    - DB: exam_scores (student_id,year,semester,exam_type,subject) onConflict
 ============================================================ */
 
+/* ── [퇴원생 포함] ───────────────────────────────────────
+   학생을 재원으로만 불러오면, 점수를 넣은 뒤 퇴원한 학생의 그 학기 기록이
+   화면에서 통째로 사라진다(실측 2026-10-07: 571행 중 48행 · 34명).
+   체크하면 퇴원(inactive)까지 더해 부르고, 재원생과 똑같이 고칠 수 있다.
+   ⚠ cancelled(등록취소)는 켜도 부르지 않는다. 등록된 적 없는 학생이다. */
+function examStatusFilter(q, chkId) {
+  var c = document.getElementById(chkId);
+  return (c && c.checked) ? q.in('status', ['active','inactive'])
+                          : q.eq('status', 'active');
+}
+/* ── [학생 검색] ─────────────────────────────────────────
+   이미 불러온 명단 안에서 거른다. 다시 조회하지 않으니 입력하는 대로 즉시 걸린다.
+   줄마다 붙여 둔 data-find(이름+학교+학년)로 맞춰 보고, 남는 줄이 없는 반 카드는 접는다. */
+function examFindAttr(stu) {
+  var g = stu && stu.grade ? String(stu.grade) : '';
+  return ' data-find="' + String((stu && stu.name || '') + ' ' + (stu && stu.school || '') + ' ' + g)
+    .toLowerCase().replace(/"/g, '') + '"';
+}
+function examSearch(inputId, wrapId) {
+  var inp  = document.getElementById(inputId);
+  var wrap = document.getElementById(wrapId);
+  if (!wrap) return;
+  var q = ((inp && inp.value) || '').trim().toLowerCase();
+  var shown = 0, cards = 0;
+  wrap.querySelectorAll('tr[data-find]').forEach(function(tr) {
+    var hit = !q || tr.getAttribute('data-find').indexOf(q) >= 0;
+    tr.style.display = hit ? '' : 'none';
+    if (hit) shown++;
+  });
+  /* 반 카드: 보이는 줄이 하나도 없으면 접는다 */
+  wrap.querySelectorAll('[data-card]').forEach(function(card) {
+    var any = Array.from(card.querySelectorAll('tr[data-find]'))
+                   .some(function(tr){ return tr.style.display !== 'none'; });
+    card.style.display = any ? '' : 'none';
+    if (any) cards++;
+    var badge = card.querySelector('[data-cardcount]');   /* 카드 머리 숫자도 걸러진 수로 */
+    if (badge) badge.textContent = card.querySelectorAll('tr[data-find]:not([style*="none"])').length + '명';
+  });
+  var cnt = wrap.querySelector('[data-count]');
+  if (cnt) cnt.textContent = (q ? '찾은 학생 ' : '총 ') + shown + '명 / ' + cards + '반';
+}
+
+/* 명단에서 퇴원생임을 알아보게 */
+function examLeftBadge(stu) {
+  return (stu && stu.status === 'inactive')
+    ? ' <span style="display:inline-block;margin-left:5px;padding:1px 6px;border-radius:5px;'
+      + 'background:#fee2e2;color:#b91c1c;font-size:10px;font-weight:800;vertical-align:1px">퇴원</span>'
+    : '';
+}
+
 /* ── 공통: 연도 셀렉트 초기화 ─────────────────────────────── */
 function examInitYearSelect(selId) {
   var sel = document.getElementById(selId);
@@ -18506,14 +18560,18 @@ async function tesLoadTeacherOptions(selectId) {
   if (branchId && bSel.selectedIndex > 0) label = bSel.options[bSel.selectedIndex].text + ' 전체';
   tSel.innerHTML = '<option value="__all__">' + label + '</option>';
   try {
-    var q = db.from('users').select('id,name,branch_id')
-      .in('role', ['teacher','vice_director']).eq('status', 'active').order('name');
+    /* ⚠ 퇴사한 선생님도 넣는다. 빼면 그 담당으로 남은 학생의 지난 점수를
+       부를 길이 자체가 없다(실측: 이대준 T 담당 2명 · 4행). */
+    var q = db.from('users').select('id,name,branch_id,status')
+      .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+      .is('deleted_at', null).order('name');
     if (branchId) q = q.eq('branch_id', branchId);
     var { data: ts } = await q;
     (ts || []).forEach(function(t) {
       var o = document.createElement('option');
       o.value = t.id;
-      o.textContent = t.name + ' T' + (t.id === (currentUser||{}).id ? ' (나)' : '');
+      o.textContent = t.name + ' T'
+        + (t.id === (currentUser||{}).id ? ' (나)' : (t.status === 'inactive' ? ' (퇴사)' : ''));
       tSel.appendChild(o);
     });
     if (selectId && (ts || []).some(function(t){ return t.id === selectId; })) tSel.value = selectId;
@@ -18550,10 +18608,11 @@ async function tesLoadScores() {
     if (!tids.length) tids = [currentUser.id];
     _tesReadonly = !(tids.length === 1 && tids[0] === currentUser.id);
 
-    var { data: stus } = await db.from('users')
-      .select('id,name,school,grade,class_id,teacher_id')
-      .in('teacher_id', tids).eq('status', 'active')
-      .order('school').order('grade').order('name');
+    var stuQ = db.from('users')
+      .select('id,name,school,grade,class_id,teacher_id,status')
+      .in('teacher_id', tids);
+    stuQ = examStatusFilter(stuQ, 'tes-inc-left');
+    var { data: stus } = await stuQ.order('school').order('grade').order('name');
     _tesStudents = stus || [];
 
     if (!_tesStudents.length) {
@@ -18590,7 +18649,8 @@ async function tesLoadScores() {
       if (!noteByStudent[sc.student_id] && sc.note) noteByStudent[sc.student_id] = sc.note;
     });
 
-    tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent);
+  tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent);
+    examSearch('tes-search', 'tes-table-wrap');
   } catch(e) {
     wrap.innerHTML = '<div style="color:#dc2626;padding:20px">로드 실패: ' + (e.message || e) + '</div>';
     console.error('[tesLoadScores]', e);
@@ -18661,9 +18721,9 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
 
     var addBtn = '<div onclick="tesAddSubjItem(this,\'' + sid + '\')" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:52px;border:1.5px dashed ' + col.border + ';border-radius:7px;background:' + col.lite + ';color:' + col.hd + ';font-size:14px;cursor:pointer;flex-shrink:0;opacity:0.7">+</div>';
 
-    return '<tr style="background:' + rowBg + ';border-bottom:1px solid ' + col.border + '">'
+    return '<tr' + examFindAttr(stu) + ' style="background:' + rowBg + ';border-bottom:1px solid ' + col.border + '">'
       + '<td style="padding:7px 10px;font-size:12px;color:#64748b;white-space:nowrap;vertical-align:middle">' + school + ' ' + grade + '</td>'
-      + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + stu.name + '</td>'
+      + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + stu.name + examLeftBadge(stu) + '</td>'
       + '<td style="padding:6px 8px;vertical-align:middle">'
         + '<div style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">'
           + '<div class="tes-subj-wrap" data-sid="' + sid + '" style="display:flex;align-items:center;gap:4px">' + subjItems + '</div>'
@@ -18691,9 +18751,9 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
             + '<b style="font-size:14px;color:#1e293b">' + tesEsc(sc) + '</b></span>';
         }).join('')
       : '<span style="font-size:12px;color:#cbd5e1">입력 없음</span>';
-    return '<tr style="background:' + (si % 2 === 0 ? '#fff' : col.lite) + ';border-bottom:1px solid ' + col.border + '">'
+    return '<tr' + examFindAttr(stu) + ' style="background:' + (si % 2 === 0 ? '#fff' : col.lite) + ';border-bottom:1px solid ' + col.border + '">'
       + '<td style="padding:7px 10px;font-size:12px;color:#64748b;white-space:nowrap;vertical-align:middle">' + tesEsc(stu.school || '-') + ' ' + grade + '</td>'
-      + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + tesEsc(stu.name) + '</td>'
+      + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + tesEsc(stu.name) + examLeftBadge(stu) + '</td>'
       + '<td style="padding:6px 8px;vertical-align:middle">'
         + '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">' + chips
         + (stuNote ? '<span style="font-size:12px;color:#6b7280;margin-left:4px">' + tesEsc(stuNote) + '</span>' : '')
@@ -18704,14 +18764,14 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
     var rowsHtml = students.map(function(stu, si){
       return _tesReadonly ? buildRowRO(stu, col, si) : buildRow(stu, col, si);
     }).join('');
-    return '<div style="border:1.5px solid ' + col.border + ';border-radius:10px;overflow:hidden;margin-bottom:14px">'
+    return '<div data-card style="border:1.5px solid ' + col.border + ';border-radius:10px;overflow:hidden;margin-bottom:14px">'
       + '<div style="background:' + col.hd + ';padding:9px 14px;display:flex;align-items:center;justify-content:space-between">'
         + '<span style="font-size:13px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:8px">' + className + '</span>'
-        + '<span style="background:rgba(255,255,255,0.2);color:#fff;font-size:11px;font-weight:700;padding:2px 10px;border-radius:100px;flex-shrink:0">' + students.length + '명</span>'
+        + '<span data-cardcount style="background:rgba(255,255,255,0.2);color:#fff;font-size:11px;font-weight:700;padding:2px 10px;border-radius:100px;flex-shrink:0">' + students.length + '명</span>'
       + '</div>'
       + '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
       + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;min-width:380px">'
-        + '<colgroup><col style="width:110px"><col style="width:70px"><col></colgroup>'
+        + '<colgroup><col style="width:110px"><col style="width:104px"><col></colgroup>'
         + '<thead><tr style="background:' + col.sub + '">'
           + '<th style="padding:5px 10px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">학교 / 학년</th>'
           + '<th style="padding:5px 10px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">이름</th>'
@@ -18731,7 +18791,8 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
       + 'font-size:12px;font-weight:700;color:#475569;white-space:nowrap">👁 보기 전용 · 본인 담당만 입력됩니다</span>'
     : '<button onclick="tesSaveScores(\'' + year + '\',\'' + semester + '\',\'' + examType + '\')" style="padding:8px 20px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button>';
   wrap.innerHTML = '<div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'
-    + '<div style="font-size:13px;font-weight:700;color:#7c3aed">' + year + '년 ' + semLabel + ' ' + examLabel + ' · 총 ' + _tesStudents.length + '명 / ' + keys.length + '반</div>'
+    + '<div style="font-size:13px;font-weight:700;color:#7c3aed">' + year + '년 ' + semLabel + ' ' + examLabel
+      + ' · <span data-count>총 ' + _tesStudents.length + '명 / ' + keys.length + '반</span></div>'
     + rightBtn
     + '</div>' + cardsHtml;
 
@@ -18911,13 +18972,16 @@ async function esOnBranchChange() {
   _esStudents = []; _esScoreMap = {};
   document.getElementById('es-table-wrap').innerHTML = '';
   try {
-    var q = db.from('users').select('id,name')
-      .in('role', ['teacher','vice_director']).eq('status', 'active').is('deleted_at', null);
+    /* ⚠ 퇴사한 선생님도 넣는다 — 빼면 그 담당 학생의 지난 점수에 닿을 수 없다 */
+    var q = db.from('users').select('id,name,status')
+      .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+      .is('deleted_at', null);
     if (branchId) q = q.eq('branch_id', branchId);
     var { data: teachers } = await q.order('name');
     (teachers || []).forEach(function(t) {
       var opt = document.createElement('option');
-      opt.value = t.id; opt.textContent = t.name;
+      opt.value = t.id;
+      opt.textContent = t.name + (t.status === 'inactive' ? ' (퇴사)' : '');
       sel.appendChild(opt);
     });
   } catch(e) { console.error('[내신점수] 선생님 로드 실패:', e); }
@@ -18942,8 +19006,9 @@ async function esDeskLoadTeachers(branchId) {
   var branchIds = _esDeskBranchIds || [];
   tSel.innerHTML = '<option value="__all__">전체 선생님</option>';
   try {
-    var q = db.from('users').select('id,name')
-      .in('role', ['teacher','vice_director']).eq('status', 'active').is('deleted_at', null);
+    var q = db.from('users').select('id,name,status')
+      .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+      .is('deleted_at', null);
     if (branchId && branchId !== '__all__') {
       q = q.eq('branch_id', branchId);
     } else if (branchIds.length) {
@@ -18976,21 +19041,24 @@ async function esLoadScores() {
 
   try {
     var stuQ = db.from('users')
-      .select('id,name,school,grade,class_id,teacher_id')
-      .eq('status', 'active').order('school').order('grade').order('name');
+      .select('id,name,school,grade,class_id,teacher_id,status');
+    stuQ = examStatusFilter(stuQ, 'es-inc-left');
+    stuQ = stuQ.order('school').order('grade').order('name');
 
     if (teacherId === '__all__') {
       if (isDesk) {
         var deskBids = _esDeskBranchIds || [];
         if (deskBids.length) {
           var { data: deskTeachers } = await db.from('users').select('id')
-            .in('role', ['teacher','vice_director']).eq('status', 'active').in('branch_id', deskBids);
+            .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+            .is('deleted_at', null).in('branch_id', deskBids);
           var dtids = (deskTeachers || []).map(function(t){ return t.id; });
           stuQ = dtids.length ? stuQ.in('teacher_id', dtids) : stuQ.eq('teacher_id', 'no-match');
         }
       } else if (branchId) {
         var { data: branchTeachers } = await db.from('users').select('id')
-          .in('role', ['teacher','vice_director']).eq('status', 'active').eq('branch_id', branchId);
+          .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+          .is('deleted_at', null).eq('branch_id', branchId);
         var tids = (branchTeachers || []).map(function(t){ return t.id; });
         stuQ = tids.length ? stuQ.in('teacher_id', tids) : stuQ.eq('teacher_id', 'no-match');
       }
@@ -19021,6 +19089,7 @@ async function esLoadScores() {
     });
 
     esRenderTable(year, semester, examType, teacherId, 1, scoresByStudent, noteByStudent);
+    examSearch('es-search', 'es-table-wrap');
   } catch(e) {
     wrap.innerHTML = '<div style="color:#dc2626;padding:20px">로드 실패: ' + (e.message || e) + '</div>';
     console.error('[esLoadScores]', e);
@@ -19084,9 +19153,9 @@ function esRenderTable(year, semester, examType, teacherId, numCols, scoresByStu
 
       var addBtn = '<div onclick="esAddSubjItem(this,\'' + sid + '\')" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:52px;border:1.5px dashed ' + col.border + ';border-radius:7px;background:' + col.lite + ';color:' + col.hd + ';font-size:14px;cursor:pointer;flex-shrink:0;opacity:0.7" title="과목 추가">+</div>';
 
-      return '<tr style="background:' + rowBg + ';border-bottom:1px solid ' + col.border + '">'
+      return '<tr' + examFindAttr(stu) + ' style="background:' + rowBg + ';border-bottom:1px solid ' + col.border + '">'
         + '<td style="padding:7px 10px;font-size:12px;color:#64748b;white-space:nowrap;vertical-align:middle">' + school + ' ' + grade + '</td>'
-        + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + stu.name + '</td>'
+        + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + stu.name + examLeftBadge(stu) + '</td>'
         + '<td style="padding:6px 8px;vertical-align:middle;width:100%">'
           + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;width:100%">'
             + '<div class="es-subj-wrap" data-sid="' + sid + '" style="display:flex;align-items:center;gap:4px;flex-shrink:0">' + subjItems + '</div>'
@@ -19099,14 +19168,14 @@ function esRenderTable(year, semester, examType, teacherId, numCols, scoresByStu
       + '</tr>';
     }).join('');
 
-    return '<div style="border:1.5px solid ' + col.border + ';border-radius:10px;overflow:hidden;margin-bottom:14px">'
+    return '<div data-card style="border:1.5px solid ' + col.border + ';border-radius:10px;overflow:hidden;margin-bottom:14px">'
       + '<div style="background:' + col.hd + ';padding:9px 14px;display:flex;align-items:center;justify-content:space-between">'
         + '<span style="font-size:13px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:8px">' + className + '</span>'
-        + '<span style="background:rgba(255,255,255,0.2);color:#fff;font-size:11px;font-weight:700;padding:2px 10px;border-radius:100px;flex-shrink:0">' + students.length + '명</span>'
+        + '<span data-cardcount style="background:rgba(255,255,255,0.2);color:#fff;font-size:11px;font-weight:700;padding:2px 10px;border-radius:100px;flex-shrink:0">' + students.length + '명</span>'
       + '</div>'
       + '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
       + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;min-width:420px">'
-        + '<colgroup><col style="width:110px"><col style="width:70px"><col></colgroup>'
+        + '<colgroup><col style="width:110px"><col style="width:104px"><col></colgroup>'
         + '<thead><tr style="background:' + col.sub + '">'
           + '<th style="padding:5px 10px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">학교 / 학년</th>'
           + '<th style="padding:5px 10px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">이름</th>'
@@ -19126,7 +19195,8 @@ function esRenderTable(year, semester, examType, teacherId, numCols, scoresByStu
   cardsHtml += '</div>';
 
   wrap.innerHTML = '<div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">'
-    + '<div style="font-size:13px;font-weight:700;color:#7c3aed">' + year + '년 ' + semLabel + ' ' + examLabel + ' · 총 ' + _esStudents.length + '명 / ' + keys.length + '반</div>'
+    + '<div style="font-size:13px;font-weight:700;color:#7c3aed">' + year + '년 ' + semLabel + ' ' + examLabel
+      + ' · <span data-count>총 ' + _esStudents.length + '명 / ' + keys.length + '반</span></div>'
     + '<button onclick="esSaveScores(\'' + teacherId + '\',' + year + ',' + semester + ',\'' + examType + '\')"'
       + ' style="padding:8px 20px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button>'
     + '</div>' + cardsHtml;
