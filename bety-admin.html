@@ -291,6 +291,13 @@
   .ko-ch { font-size: 13px; line-height: 1.75; color: #334155; margin: 4px 0;
            padding-left: 1.3em; text-indent: -1.3em; word-break: keep-all; }
   .ko-jw { background: #fef08a; border-radius: 2px; }
+  /* 표·활동지형 문항 — 서버가 그려 준 원본 영역 */
+  .ko-tbl { margin: 8px 0; }
+  .ko-tbl img { max-width: 100%; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; }
+  .ko-tbl .cap { font-size: 11px; color: #94a3b8; margin-top: 3px; }
+  /* 단독 문항 — 본문 칸 없이 문항만 */
+  .ko-set.solo .ko-cols { grid-template-columns: 1fr; }
+  .ko-set.solo .ko-body { display: none; }
   /* 운문 — 행이 곧 내용이다. 들여쓰지 않고 그대로 늘어놓는다 */
   .ko-verse { margin: 6px 0 10px; }
   .ko-verse .st + .st { margin-top: 11px; }
@@ -489,7 +496,7 @@
 <div id="sub-ko" style="display:none">
   <div class="card">
     <div class="card-t">📖 국어 — PDF 에서 문항 읽기
-      <span class="hint">1단계 · 읽은 결과를 화면에 펼쳐 보기만 합니다 · <b>아직 저장하지 않습니다</b></span>
+      <span class="hint">PDF 는 서버(pymupdf)가 읽습니다 · 읽은 결과를 화면에 펼쳐 보기만 합니다 · <b>아직 저장하지 않습니다</b></span>
     </div>
     <div class="bp-drops">
       <label class="bp-drop" id="ko-drop" style="grid-column:1/-1">
@@ -510,8 +517,6 @@
       <input class="inp" id="ko-to"   type="number" value="17" style="width:66px" disabled>
       <button class="btn btn-primary" id="ko-run" onclick="koRun()">🔍 분석</button>
       <button class="btn" onclick="koReset()">초기화</button>
-      <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer">
-        <input type="checkbox" id="ko-raw" onchange="koRender()">원문 줄바꿈 그대로</label>
       <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer">
         <input type="checkbox" id="ko-jw" onchange="koRender()">띄어쓰기 추정 자리 표시</label>
       <span class="msg" id="ko-msg"></span>
@@ -2845,19 +2850,21 @@ async function bpShowSaved(){
 });
 
 
-/* ══════════════════════════════
-   국어 — 시험지 등록  (1단계: PDF 에서 구조를 읽어 화면에 펼치기까지)
+/* ═══════════════════════════════════════════════════════════════════════
+   국어 — 시험지 등록  (2단계: 읽기는 서버 pymupdf, 화면은 여기)
 
-   ⚠ 아직 아무것도 저장하지 않는다. DB 를 확정하기 전에 '무엇이 뽑히는가' 부터 본다.
+   ⚠ 아직 아무것도 저장하지 않는다. 읽은 결과를 화면에 펼쳐 보는 데까지다.
 
-   베티와 결정적으로 다른 두 가지
-     ① 지문 하나에 문항이 여럿이다 — '세트' 라는 층이 베티엔 없다
-     ② 본문이 글자다 — 문단 · (가)(나) · <보 기> · [A] · 그림을 구조로 담는다
-
-   PDF 읽기는 베티 것(bpLines · bpImageBoxes)을 그대로 쓴다 — 고칠 곳을 하나로 두려고.
-   ═══════════════════════════ */
-var KO = { SCALE:3, CH:'①②③④⑤' };
-var _ko = { file:null, sets:[], imgs:[], busy:false, skipped:0, orphan:0 };
+   왜 브라우저(pdf.js)에서 서버(pymupdf, api/ko-parse.py)로 옮겼나 — 실측
+     · pdf.js 는 줄 끝 공백을 45줄 중 2줄만 준다 → 띄어쓰기 971곳이 추정이었다. pymupdf 는 63% 를 준다
+     · pdf.js 는 글꼴 이름을 안 주고, 이 PDF 는 그릴 수도 없다(한 쪽 75초+). pymupdf 는 1초
+       → 표·활동지형 문항은 그 영역을 그대로 그려 넣는다
+     · '머리글은 쪽 높이의 12.5% 위' 같은 문턱값이 다른 시험지에서 바로 깨졌다('국어 영역' 띠가
+       본문에 박힘). 서버는 문턱값 대신 '쪽마다 반복되는 것 = 장식' 으로 가른다
+   브라우저에 남은 일: PDF 를 Storage 에 올리고, 서버가 못 실은 큰 그림만 pdf.js 로 꺼내 꽂고, 그린다.
+   ═══════════════════════════════════════════════════════════════════ */
+var KO = { CH:'①②③④⑤', API:'/api/ko-parse', BUCKET:'bety-exam', DIR:'ko-src' };
+var _ko = { file:null, sets:[], imgs:[], busy:false, skipped:0, orphan:0, pdf:null, url:null, stats:null };
 
 function koSubj(w){
   document.getElementById('sub-bety').style.display = (w === 'b') ? '' : 'none';
@@ -2873,7 +2880,6 @@ function koScope(){
   if(v === 'read'){ lo.value = 4; hi.value = 17; }
   lo.disabled = hi.disabled = (v !== 'custom');
 }
-
 function koMsg(t, bad){
   var e = document.getElementById('ko-msg');
   e.textContent = t || ''; e.style.color = bad ? '#dc2626' : '#16a34a';
@@ -2885,627 +2891,46 @@ function koProg(v){
 }
 function koPick(ev){ var f = ev.target.files && ev.target.files[0]; if(f) koSetFile(f); }
 function koSetFile(f){
-  _ko.file = f;
+  _ko.file = f; _ko.pdf = null; _ko.url = null;
   document.getElementById('ko-name').textContent = f.name;
   document.getElementById('ko-drop').classList.add('set');
   koMsg('');
 }
 function koReset(){
   _ko.file = null; _ko.sets = []; _ko.imgs = []; _ko.skipped = 0; _ko.orphan = 0;
+  _ko.pdf = null; _ko.url = null; _ko.stats = null;
   document.getElementById('ko-name').textContent = '클릭하거나 끌어다 놓으세요';
   document.getElementById('ko-drop').classList.remove('set');
   document.getElementById('ko-result').innerHTML = '';
   koProg(null); koMsg('');
 }
 
-/* ── PDF → 줄 ─────────────────────────
-   베티의 bpLines 가 '같은 단에서 y 가 비슷한 글자' 를 한 줄로 묶어 준다.
-   국어에 더 필요한 것은 두 가지다.
-     · 머리글 · 쪽번호 버리기
-     · 들여쓰기 판정 — 문단의 시작을 이것으로 안다
-       (실측: 이어지는 줄 대비 문단 첫 줄만 10pt 더 들어가 있다)
-   ⚠ 기준선을 '단에서 가장 왼쪽' 으로 잡으면 안 된다. [1~3] 같은 머리줄이 더 왼쪽에 있어
-      이어지는 줄까지 전부 '들여씀' 으로 잡힌다. 가장 흔한 x 를 기준으로 삼는다. */
-/* 줄 묶기 — 베티의 bpLines 와 같되 **줄의 오른쪽 끝(x1)** 까지 잰다.
-   그 값이 있어야 '이 줄이 꽉 찼는가(= 다음 줄과 이어지는가)' 를 알 수 있다.
-   ⚠ item.width 는 쪽 좌표(배율 1) 기준이라 배율을 곱해야 화면 좌표가 된다. */
-function koLines(tc, vp, mid, scale){
-  var out = [];
-  tc.items.forEach(function(it){
-    if(!it.str) return;
-    var t = pdfjsLib.Util.transform(vp.transform, it.transform);
-    var x = t[4], y = t[5], c = (x < mid * scale ? 0 : 1), L = null;
-    for(var i = 0; i < out.length; i++){
-      if(out[i].c === c && Math.abs(out[i].y - y) < 8){ L = out[i]; break; }
-    }
-    if(!L){ L = { y:y, x:x, x1:x, c:c, parts:[] }; out.push(L); }
-    if(x < L.x) L.x = x;
-    var xe = x + (it.width || 0) * scale;
-    if(xe > L.x1) L.x1 = xe;
-    L.parts.push({ x:x, s:it.str });
-  });
-  out.forEach(function(L){
-    L.parts.sort(function(a, b){ return a.x - b.x; });
-    L.s = L.parts.map(function(q){ return q.s; }).join('');
-  });
-  return out;
+/* ── ① PDF 를 Storage 에 올린다 ─────────────────────────────────────
+   파일이 4~5MB 라 함수 본문 제한(4.5MB)을 넘길 수 있다. variant-parse 와 같은 길 —
+   올려 두고 주소만 보낸다. 베티 이미지와 같은 공개 버킷(bety-exam)이다. */
+async function koUpload(file){
+  var safe = String(file.name || 'exam.pdf').replace(/[^\w.\-가-힣]+/g, '_');
+  var path = KO.DIR + '/' + Date.now() + '-' + safe;
+  var up = await db.storage.from(KO.BUCKET)
+    .upload(path, file, { contentType:'application/pdf', upsert:true });
+  if(up.error) throw new Error('PDF 올리기 실패: ' + (up.error.message || up.error));
+  return SUPABASE_URL + '/storage/v1/object/public/' + KO.BUCKET + '/' + path;
 }
 
-async function koReadLines(file, onProg){
-  var pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-  _ko.pdf = pdf;
-  var out = [], elect = {};
-  for(var p = 1; p <= pdf.numPages; p++){
-    if(onProg) onProg((p-1) / pdf.numPages * 0.8);
-    var page = await pdf.getPage(p);
-    var vp1 = page.getViewport({ scale:1, rotation:0 });
-    var u   = vp1.width / 595;
-    var vp  = page.getViewport({ scale:KO.SCALE, rotation:0 });
-    var LS  = koLines(await page.getTextContent(), vp, vp1.width / 2, KO.SCALE);
-    var SG  = await koSegs(page, vp);
-    var MK  = koMarksFromSegs(SG, vp, u);
-
-    /* ⚠ 글이 그림을 감싸 흐르면 그 줄들은 그림 때문에 짧다. 운문으로 오해하면 안 된다. */
-    LS.forEach(function(L){
-      L.wrap = (SG.imgs || []).some(function(b){
-        return b.x0 > L.x1 - 2 * u * KO.SCALE
-            && b.y0 <= L.y + 4 * u * KO.SCALE
-            && b.y1 >= L.y - 12 * u * KO.SCALE;
-      });
-    });
-
-    /* ⚠ 밑줄 친 말은 pdf.js 가 통째로 한 조각으로 준다(실측: 밑줄 왼쪽 끝 x 가
-       조각의 x 와 일치). 그래서 글자 위치를 재지 않고 조각째로 표시한다. */
-    LS.forEach(function(L){
-      L.runs = L.parts.map(function(q){
-        /* ⚠ 글자가 없는 조각(공백)은 밑줄 대상이 아니다. pdf.js 가 밑줄 친 말 바로
-           앞의 공백을 폭 0 에 가까운 조각으로 주어 x 가 겹친다(빈 밑줄 7곳). */
-        var on = !!(q.s || '').trim() && MK.under.some(function(h){
-          return Math.abs(h.x0 - q.x) < 2 * u * KO.SCALE
-              && h.y > L.y && (h.y - L.y) < 14 * u * KO.SCALE;
-        });
-        return { s:q.s, u:on };
-      });
-    });
-
-    /* 쪽 머리글에 적힌 선택과목을 걸러 버리기 전에 적어 둔다 */
-    /* ⚠ y 로 가리면 안 된다. 선택과목 첫 쪽은 0.158, 그 다음 쪽들은 0.113 에 있다(실측).
-       대신 '글이 곧 라벨' 인 줄만 잡는다 — 쪽번호가 붙어 있기도 하다('2 (화법과 작문)'). */
-    LS.forEach(function(L){
-      var e = (L.s || '').replace(/\s/g, '').match(KO_ELECT);
-      if(e) elect[p] = (e[1] === '화법과작문') ? '화법과 작문' : '언어와 매체';
-    });
-
-    LS = LS.filter(function(L){
-      /* ⚠ 0.085 로 자르면 쪽 머리글이 샌다 — '131'(쪽번호+교시) 처럼 글자 거르개에
-         안 걸리는 것이 본문으로 들어간다. 본문은 0.126 부터 시작한다(실측). */
-      if(L.y < vp.height * 0.125) return false;          /* 머리글 */
-      if(L.y > vp.height * 0.965) return false;          /* 꼬리말 */
-      var t = (L.s || '').replace(/\s/g, '');
-      if(!t) return false;
-      if(/저작권은한국교육과정평가원/.test(t)) return false;
-      if(/^(홀수형|짝수형)$/.test(t)) return false;
-      if(/^\d{1,2}$/.test(t)) return false;
-      if(/^제\d교시$/.test(t)) return false;
-      if(KO_ELECT.test(t)) return false;
-      if(t.length < 40 && /(대학수학능력시험|모의평가|학력평가)/.test(t)) return false;
-      return true;
-    });
-
-    /* ⚠ 기준선을 '단에서 가장 흔한 x' 하나로 잡으면 안 된다. [A] 처럼 통째로
-       들여쓴 블록은 자기만의 기준선을 갖는다. 실측한 층(쪽 5 왼쪽 단):
-         본문 6pt · 본문 첫줄 13.3pt · [A] 블록 20pt · [A] 첫줄 27.3pt
-       그래서 '문단 첫 줄 = 다음 줄보다 한 칸(≈1em) 더 들어갔고, 앞 줄과는 층이
-       다르다' 로 본다. 뒤 조건이 없으면 블록의 마지막 줄이 첫 줄로 오인된다
-       ('뜻하지는 않기 때문이다.' 20pt → 다음 13.3pt). */
-    [0, 1].forEach(function(c){
-      var col = LS.filter(function(L){ return L.c === c; })
-                  .sort(function(a, b){ return a.y - b.y; });
-      if(!col.length) return;
-      var pt = u * KO.SCALE, i, gaps = [];
-
-      /* ⚠ 줄 맞춤된 본문의 오른쪽 경계는 '가장 긴 줄' 이 아니라 **x1 의 최빈값** 이다.
-         가장 긴 줄로 잡으면 본문이 17pt 씩 모자란 것처럼 보인다(실측 2쪽 오른단).
-         최빈값에 몰린 줄이 1/4 도 안 되면 그 단에는 줄 맞춤이 없다 — 시·운문이다. */
-      var rc = {}, rBest = null, rN = -1;
-      col.forEach(function(L){
-        var k = Math.round(L.x1 / (2 * pt));
-        rc[k] = (rc[k] || 0) + 1;
-      });
-      Object.keys(rc).forEach(function(k){
-        if(rc[k] > rN){ rN = rc[k]; rBest = +k; }
-      });
-      var edge = rBest * 2 * pt;
-      var justified = (rN / col.length) >= 0.25;
-      col.forEach(function(L){
-        L.full = justified && Math.abs(L.x1 - edge) < 11 * pt;
-      });
-      for(i = 0; i < col.length - 1; i++){
-        var g = (col[i].x - col[i+1].x) / pt;
-        if(g >= 4 && g <= 11) gaps.push(g);
-      }
-      gaps.sort(function(a, b){ return a - b; });
-      var unit = gaps.length ? gaps[gaps.length >> 1] : 7;    /* 한 칸의 너비 */
-      for(i = 0; i < col.length; i++){
-        var nx = col[i+1], px = col[i-1];
-        var d  = nx ? (col[i].x - nx.x) / pt : 0;
-        var same = px ? Math.abs(col[i].x - px.x) < 2 * pt : false;
-        /* ⚠ 단의 첫 줄을 무조건 시작으로 보면 안 된다. 문단이 단을 넘어 이어질 때
-           거기서 잘린다. 다음 줄과의 관계만 보면 저절로 맞는다. */
-        col[i].indent = (Math.abs(d - unit) < 2.5 && !same);
-      }
-    });
-
-    LS.sort(function(a, b){ return (a.c - b.c) || (a.y - b.y); });
-    LS.forEach(function(L){
-      /* 토막을 이어 붙이며 밑줄 자리를 적어 둔다 */
-      var runs = L.runs || [{ s:L.s || '', u:false }];
-      var t = '', mk = [];
-      runs.forEach(function(r){
-        var rs = r.s || '';
-        if(r.u && rs.trim()) mk.push({ s:t.length, e:t.length + rs.length });
-        t += rs;
-      });
-
-      /* ⚠ pdf.js 가 없는 공백을 끼워 넣는다 — 동그라미 글자(ⓐ~ⓔ·㉠~㉭) 뒤(실측 5/5,
-         원문은 'ⓐ구성하는'), 그리고 「네모 강조」 낱말 뒤('단순 관점 은').
-         ⚠ 토막 단위로 지우려 하면 안 된다. 'ⓐ' 와 '구성하는' 사이에 공백만 든
-            토막이 끼어 있어 규칙이 비껴간다(실측). 이어 붙인 글에서 지우되,
-            지운 만큼 밑줄 자리를 당긴다.
-         ⚠ 조사 목록에서 와·과·로·도·만 은 일부러 뺐다 — 조사는 홀로 설 수 없지만
-            '앞에 와 팔려'(동사 '와') 같은 오탐이 실제로 있었다. */
-      var hit, cut;
-      var RE_CIRC = /([\u24D0-\u24E9\u3260-\u327E])(\s+)(?=[\uAC00-\uD7A3])/;
-      while((hit = t.match(RE_CIRC))){
-        cut = koDel(t, mk, hit.index + hit[1].length, hit[2].length);
-        t = cut.t; mk = cut.mk;
-      }
-      /* ⚠ 뒤가 쉼표일 때를 놓치면 '연대 보증인 은,' 이 그대로 남는다(실측) */
-      var RE_JOSA = /\s(에서|에게|에|을|를|은|는|의)(?=[\s,.?!;:)\]}\u201D\u2019\u2026\u00B7]|$)/;
-      while((hit = t.match(RE_JOSA))){
-        cut = koDel(t, mk, hit.index, 1);
-        t = cut.t; mk = cut.mk;
-      }
-      var tail = t.length - t.replace(/\s+$/, '').length;
-      if(tail){
-        mk = mk.map(function(m){ return { s:m.s, e:Math.min(m.e, t.length - tail) }; })
-               .filter(function(m){ return m.e > m.s; });
-      }
-      /* 이 줄이 묶음 괄호 안에 드는가 — 괄호의 단과 y 구간으로 본다.
-         ⚠ x 로 가리면 안 된다. 라벨([A])이 괄호보다 왼쪽에 있어 줄의 x 가 더 작다. */
-      var gid = null;
-      MK.groups.forEach(function(G, gk){
-        var gc = (G.x0 >= vp.width / 2) ? 1 : 0;
-        if(L.c === gc && L.y >= G.y - 4 * u * KO.SCALE && L.y <= G.y1 + 4 * u * KO.SCALE)
-          gid = p + '-' + gk;
-      });
-      out.push({ p:p, c:L.c, y:L.y, x:L.x, u:u, marks:mk, g:gid,
-                 full:(!!L.full || !!L.wrap), wrap:!!L.wrap,
-                 s:t.replace(/\s+$/, ''), sp:/\s$/.test(t), indent:!!L.indent });
-    });
-  }
-  _ko.elect = elect;
-  return out;
+/* ── ② 서버가 읽는다 ───────────────────────────────────────────────── */
+async function koCallServer(url, lo, hi){
+  var r = await fetch(KO.API, { method:'POST', headers:{ 'Content-Type':'application/json' },
+                                body: JSON.stringify({ url:url, from:lo, to:hi }) });
+  var j;
+  try { j = await r.json(); }
+  catch(e){ throw new Error('서버 응답을 읽지 못했습니다 (HTTP ' + r.status + ')'); }
+  if(!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
 }
 
-/* ── 줄 잇기 ──────────────────────────
-   ⚠ 줄 끝의 띄어쓰기는 PDF 가 흘린다. 실측(1쪽): 63% 는 공백이 남아 있지만
-      나머지는 없다. 그런데 그 이음매가 '중심 내용'+'파악하기'(띄움) 인지
-      '파악'+'하지'(붙임) 인지는 글자만 봐서 알 수 없다.
-      → 띄우는 쪽으로 잇고, 그 자리를 표시해 사람이 보게 한다. */
-/* 글에서 [at, at+len) 을 덜어 내고 밑줄 자리도 함께 당긴다. */
-function koDel(t, mk, at, len){
-  var out = t.slice(0, at) + t.slice(at + len);
-  var m2 = (mk || []).map(function(m){
-    return { s:(m.s > at ? Math.max(at, m.s - len) : m.s),
-             e:(m.e > at ? Math.max(at, m.e - len) : m.e),
-             u:m.u };
-  }).filter(function(m){ return m.e > m.s; });
-  return { t:out, mk:m2 };
-}
-
-function koJoin(lines){
-  var txt = '', guess = [], marks = [];
-  lines.forEach(function(L, i){
-    var t = (L.s || '').replace(/\s+$/, ''), base;
-    if(i === 0){ txt = t; base = 0; }
-    else {
-      if(lines[i-1].sp) txt += ' ';
-      else { guess.push(txt.length); txt += ' '; }
-      base = txt.length;
-      txt += t;
-    }
-    (L.marks || []).forEach(function(m){
-      var a = base + m.s, b = base + Math.min(m.e, t.length);
-      if(b > a) marks.push({ s:a, e:b });
-    });
-  });
-  return { text:txt, guess:guess, marks:marks };
-}
-
-/* 글 한 덩이에서 글자를 덜어 낼 때, 밑줄·띄어쓰기 표시 자리도 함께 당긴다. */
-function koCut(it, at, len){
-  it.text  = it.text.slice(0, at) + it.text.slice(at + len);
-  it.guess = (it.guess || []).map(function(x){ return x > at ? x - len : x; })
-                             .filter(function(x){ return x >= 0 && x < it.text.length; });
-  it.marks = (it.marks || []).map(function(m){
-    return { s:(m.s > at ? m.s - len : m.s), e:(m.e > at ? m.e - len : m.e) };
-  }).filter(function(m){ return m.e > m.s; });
-}
-
-/* ── 구조 가르기 ──────────────────────
-   ⚠ 머리줄을 '[' 로 시작한다고 보면 안 된다. pdf.js 는 대괄호를 따로 떼어 주기도 한다.
-      '숫자~숫자 ... 다음 글을 읽고' 라는 생김새로 잡는다. */
-/* ⚠ '다음 글을 읽고' 를 요구하면 안 된다. 화법과작문·언어와매체의 머리줄은
-   '다음은 학생의 발표이다' · '(가)는 방송 대담의 일부이고…' 처럼 생겼다.
-   실측: 머리줄 생김새는 여섯 가지지만 **전부 [N~M] 로 줄이 시작한다**. */
-var KO_SET = /^\s*[\[\uFF3B\]\uFF3D]{0,2}\s*(\d+)\s*[\uFF5E~\u301C\u2053]\s*(\d+)\s*[\]\uFF3D]/;
-/* 작품 출처 — 문학을 가리는 표(실측: 문학 4/4, 독서·선택과목 0/10) */
-var KO_SRC = /^[-\u2013\u2014\u2212]\s*[^,\uFF0C]{1,40}[,\uFF0C]\s*.{1,40}$/;
-var KO_QNO = /^\s*(\d{1,2})\s*\.\s*/;
-/* 쪽 머리글의 선택과목 라벨 — 쪽번호가 앞뒤로 붙어 있을 수 있다('2 (화법과 작문)') */
-var KO_ELECT = /^\d{0,2}[(\uFF08](화법과작문|언어와매체)[)\uFF09]\d{0,2}$/;
-
-/* ⚠ 한 파일에 홀수형과 짝수형이 다 들어 있다(실측: 지문 3세트가 6세트로 잡혔다).
-   지문 글자가 같으면 같은 지문이다 — 먼저 나온 것만 남긴다. */
-function koDedupe(sets){
-  var seen = {}, out = [];
-  sets.forEach(function(S){
-    var key = S.area + '|' + S.range + '|'
-      + S.body.filter(function(x){ return x.t === 'p'; })
-      .map(function(x){ return x.text; }).join('').replace(/\s/g, '').slice(0, 400);
-    if(seen[key]){ seen[key].dup = (seen[key].dup || 1) + 1; return; }
-    seen[key] = S; out.push(S);
-  });
-  return out;
-}
-
-function koParse(lines){
-  var heads = [];
-  lines.forEach(function(L, i){
-    var m = (L.s || '').match(KO_SET);
-    if(m) heads.push({ i:i, a:+m[1], b:+m[2] });
-  });
-  var sets = [];
-  heads.forEach(function(h, k){
-    var end = (k + 1 < heads.length) ? heads[k+1].i : lines.length;
-    var seg = lines.slice(h.i, end), i, m;
-
-    /* ⚠ 머리줄이 한 줄이라고 보면 안 된다. 실측: 38~42 · 43~45 · 44~45 는 2~3줄이고,
-       한 줄만 떼면 나머지가 본문 첫 문단에 섞인다. '물음에 답하시오' 까지가 머리줄. */
-    var hEnd = 1;
-    for(i = 0; i < Math.min(seg.length, 4); i++){
-      if(/물음에\s*답하시오/.test(seg[i].s || '')){ hEnd = i + 1; break; }
-    }
-
-    var qAt = -1;
-    for(i = hEnd; i < seg.length; i++){
-      m = seg[i].s.match(KO_QNO);
-      if(m && +m[1] === h.a){ qAt = i; break; }
-    }
-    if(qAt < 0) qAt = seg.length;
-
-    var lead = seg.slice(0, hEnd).map(function(L){ return (L.s || '').trim(); })
-                  .join(' ').replace(KO_SET, '').trim();
-    var bodyLines = seg.slice(hEnd, qAt);
-
-    /* 영역 — 선택과목은 쪽 머리글에, 문학은 작품 출처로 가린다.
-       ⚠ 세트가 놓인 쪽만 본다. 다음 쪽까지 넓히면 선택과목 바로 앞 지문(31~34 고전시가)이
-          선택과목으로 끌려간다(실측). 선택과목 첫 쪽에도 라벨은 찍혀 있다. */
-    var pgs = seg.map(function(L){ return L.p; }).filter(Boolean);
-    var p0 = pgs.length ? Math.min.apply(null, pgs) : 0;
-    var p1 = pgs.length ? Math.max.apply(null, pgs) : 0;
-    var area = null;
-    for(i = p0; i <= p1 && !area; i++) area = (_ko.elect || {})[i] || null;
-    if(!area) area = bodyLines.some(function(L){ return KO_SRC.test((L.s || '').trim()); })
-                   ? '문학' : '독서';
-
-    sets.push({ from:h.a, to:h.b, range:h.a + '~' + h.b, area:area, lead:lead,
-                body: koBody(bodyLines),
-                qs:   koQuestions(seg.slice(qAt), h.a, h.b) });
-  });
-  return sets;
-}
-
-/* 본문 → 문단 배열. 문단의 시작은 들여쓰기로 안다. */
-/* 묶음 괄호([A]) 안의 줄들을 통째로 싸고, 본문 가운데 박힌 라벨을 떼어 낸다.
-   ⚠ 라벨은 문단 '첫머리' 에 있지 않다. 실측: "…그 전제들로부터 '영혼이 [A]인격이다.'…"
-      처럼 글 한가운데 끼어 있다. 그래서 자리를 찾아 덜어 내고 표시 자리도 당긴다. */
-function koBody(ls){
-  var out = [], run = [], curG = null;
-  var LAB = /[\[\uFF3B]\s*([A-Z])\s*[\]\uFF3D]/;
-  function flushRun(){
-    if(!run.length){ return; }
-    var items = koBodyPlain(run);
-    run = [];
-    if(curG == null){ out = out.concat(items); return; }
-    var lab = null;
-    items.forEach(function(it){
-      if(lab || it.t !== 'p') return;
-      var m = it.text.match(LAB);
-      if(!m) return;
-      lab = m[1];
-      koCut(it, m.index, m[0].length);
-    });
-    out.push({ t:'group', label:lab, items:items,
-               p:items.length ? items[0].p : null,
-               c:items.length ? items[0].c : null });
-  }
-  ls.forEach(function(L){
-    var g = L.g || null;
-    if(g !== curG){ flushRun(); curG = g; }
-    run.push(L);
-  });
-  flushRun();
-  return out;
-}
-
-/* 판소리 장단·지시 표시 — [중모리] [아니리] [자진모리] … 는 언제나 새 줄에서 시작한다 */
-var KO_CUE = /^\s*[\[\uFF3B][\uAC00-\uD7A3]{1,6}[\]\uFF3D]/;
-/* 그림 캡션 — 본문 줄과 같은 높이에 있어 글에 들러붙는다 */
-var KO_CAP = /\s*[<\uFF1C]\s*그\s*림\s*\d*\s*[>\uFF1E]\s*/;
-
-function koBodyPlain(ls){
-  var out = [], buf = null;
-  function flush(){
-    if(!buf || !buf.length){ buf = null; return; }
-    var j = koJoin(buf);
-    /* ⚠ 그림 캡션이 글에 들러붙는다(실측: '…온도를<그림>'). 그림은 따로 꽂으니 떼어 낸다. */
-    var cap = { text:j.text, guess:j.guess, marks:j.marks }, cm;
-    while((cm = cap.text.match(KO_CAP))) koCut(cap, cm.index, cm[0].length);
-    j = { text:cap.text, guess:cap.guess, marks:cap.marks };
-    out.push({ t:'p', text:j.text, guess:j.guess, marks:j.marks, n:buf.length,
-               ind:!!buf[0].indent, lines:buf.map(function(L){ return L.s; }),
-               p:buf[0].p, c:buf[0].c, y:buf[0].y, y1:buf[buf.length-1].y });
-    buf = null;
-  }
-  ls.forEach(function(L, i){
-    var t = (L.s || '').trim();
-    if(!t) return;
-    if(/^[(\uFF08]\s*[\uAC00-\uD7A3]\s*[)\uFF09]$/.test(t)){            /* (가) (나) */
-      flush(); out.push({ t:'head', text:t, p:L.p, c:L.c, y:L.y }); return;
-    }
-    if(/^[*\u273B\u203B]/.test(t)){                                      /* 각주 */
-      flush(); out.push({ t:'note', text:t, p:L.p, c:L.c, y:L.y }); return;
-    }
-    if(/^[\[\uFF3B]\s*[A-Z]\s*[\]\uFF3D]$/.test(t)){                     /* [A] 묶음 */
-      flush(); out.push({ t:'mark', text:t, p:L.p, c:L.c, y:L.y }); return;
-    }
-    if(/^[<\uFF1C]\s*그\s*림\s*[>\uFF1E]$/.test(t)){                      /* <그림> 자리 */
-      flush(); out.push({ t:'fig', text:t, p:L.p, c:L.c, y:L.y }); return;
-    }
-    /* ⚠ 앞 줄이 꽉 차지 않았으면 그 줄에서 글이 끝난 것이다. 이어 붙이면 시가 뭉개진다. */
-    var prev = buf && buf.length ? buf[buf.length - 1] : null;
-    if(L.indent || KO_CUE.test(t) || (prev && !prev.full)) flush();
-    (buf = buf || []).push(L);
-  });
-  flush();
-  return koVerse(out);
-}
-
-/* 한 줄짜리 덩이가 잇따르면 운문이다 — 행을 그대로 살린다.
-   ⚠ 행 사이가 벌어지면 연(聯)이 바뀐 것이다(원본의 빈 줄). */
-function koVerse(items){
-  var res = [], run = [];
-  function flushRun(){
-    if(run.length >= 2){
-      var gaps = [];
-      for(var i = 1; i < run.length; i++) gaps.push(run[i].y - run[i-1].y);
-      gaps.slice().sort(function(a, b){ return a - b; });
-      var step = gaps.length ? gaps[gaps.length >> 1] : 0;
-      var rows = [], cur = [];
-      run.forEach(function(it, i){
-        if(i && step && (it.y - run[i-1].y) > step * 1.6 && cur.length){ rows.push(cur); cur = []; }
-        cur.push(it);
-      });
-      if(cur.length) rows.push(cur);
-      res.push({ t:'verse', rows:rows, p:run[0].p, c:run[0].c,
-                 y:run[0].y, y1:run[run.length-1].y });
-    } else if(run.length === 1){ res.push(run[0]); }
-    run = [];
-  }
-  items.forEach(function(it){
-    if(it.t === 'p' && it.n === 1 && !it.ind) run.push(it);
-    else { flushRun(); res.push(it); }
-  });
-  flushRun();
-  return res;
-}
-
-/* 문항 → 발문 · <보 기> · 선지 */
-function koQuestions(ls, from, to){
-  var at = [];
-  ls.forEach(function(L, i){
-    var m = (L.s || '').match(KO_QNO);
-    if(m && +m[1] >= from && +m[1] <= to) at.push({ i:i, no:+m[1] });
-  });
-  var out = [];
-  at.forEach(function(a, k){
-    var end = (k + 1 < at.length) ? at[k+1].i : ls.length;
-    out.push(koOneQ(ls.slice(a.i, end), a.no));
-  });
-  return out;
-}
-function koOneQ(seg, no){
-  var q = { no:no, pts:2, stem:'', stemGuess:[], box:null, choices:[],
-            p:seg[0].p, c:seg[0].c, y:seg[0].y };
-  var i, cAt = -1, bAt = -1;
-  for(i = 0; i < seg.length; i++){
-    if(seg[i].s.indexOf(KO.CH[0]) >= 0){ cAt = i; break; }
-  }
-  var bEnd = (cAt < 0 ? seg.length : cAt);
-  for(i = 0; i < bEnd; i++){
-    /* ⚠ 발문에도 '<보기>' 가 들어간다("…<보기>를 이해한"). 그 줄을 상자 머리로
-       잡으면 발문이 통째로 비어 버린다(실측: 8·12·17번). 상자 표시는 홀로 있다. */
-    if(/^[<\uFF1C]\s*보\s*기\s*[>\uFF1E]$/.test((seg[i].s || '').trim())){ bAt = i; break; }
-  }
-  var head = seg.slice(0, bAt >= 0 ? bAt : bEnd);
-  if(head.length){
-    var hj = koJoin(head);
-    q.stem = hj.text.replace(KO_QNO, '').trim();
-    q.stemGuess = hj.guess;
-    var off = hj.text.length - hj.text.replace(KO_QNO, '').length;
-    q.stemMarks = hj.marks.map(function(m){ return { s:m.s - off, e:m.e - off }; })
-                          .filter(function(m){ return m.e > 0; });
-  }
-  if(/\[\s*3\s*점\s*\]/.test(q.stem)) q.pts = 3;
-  q.stem = q.stem.replace(/\s*\[\s*3\s*점\s*\]\s*/, ' ').trim();
-
-  if(bAt >= 0){
-    var bl = seg.slice(bAt + 1, bEnd);
-    var bj = koJoin(bl);
-    q.box = { text:bj.text, guess:bj.guess, marks:bj.marks,
-              lines:bl.map(function(L){ return L.s; }),
-              p:bl.length ? bl[0].p  : q.p, c:bl.length ? bl[0].c : q.c,
-              y:bl.length ? bl[0].y  : q.y,
-              y1:bl.length ? bl[bl.length-1].y : q.y };
-  }
-
-  if(cAt >= 0){
-    var cur = null;
-    seg.slice(cAt).forEach(function(L){
-      var t = L.s || '', starts = [];
-      KO.CH.split('').forEach(function(ch, j){
-        var v = t.indexOf(ch);
-        if(v >= 0) starts.push({ at:v, n:j + 1 });
-      });
-      starts.sort(function(a, b){ return a.at - b.at; });
-      if(starts.length && starts[0].at <= 2){
-        if(cur) q.choices.push(cur);
-        /* ⚠ 한 줄에 선지가 여럿 붙어 있을 수 있다. 자르는 자리는 '바로 앞 선지' 기준이다. */
-        for(var j = 0; j < starts.length; j++){
-          var from = starts[j].at + 1;
-          var to   = (j + 1 < starts.length) ? starts[j+1].at : t.length;
-          var one  = { n:starts[j].n, p:L.p, c:L.c, y:L.y,
-                       lines:[{ s:t.slice(from, to), sp:(j + 1 < starts.length) ? false : L.sp }] };
-          if(j + 1 < starts.length) q.choices.push(one);
-          else cur = one;
-        }
-      } else if(cur){
-        cur.lines.push({ s:t, sp:L.sp });
-      }
-    });
-    if(cur) q.choices.push(cur);
-    q.choices.forEach(function(ch){
-      var j = koJoin(ch.lines);
-      var lead = j.text.length - j.text.replace(/^\s+/, '').length;
-      ch.text = j.text.trim();
-      ch.guess = j.guess.map(function(x){ return x - lead; })
-                        .filter(function(x){ return x >= 0; });
-      ch.marks = j.marks.map(function(m){ return { s:m.s - lead, e:m.e - lead }; })
-                        .filter(function(m){ return m.e > 0; });
-    });
-  }
-  return q;
-}
-
-/* ── 선 모으기 ───────────────────────────────────────────────────
-   ⚠ 베티와 같은 함정 — pdf.js 는 선 하나(moveTo+lineTo)를 constructPath 두 개로
-      쪼개 보낼 때가 있다. 그래서 path 가 아니라 subpath(moveTo 로 시작하는 한 토막)
-      단위로 모은다. 토막을 끊는 것은 moveTo · 사각형 · 좌표계 변경뿐이다. */
-async function koSegs(page, vp){
-  var ops = await page.getOperatorList(), OPS = pdfjsLib.OPS;
-  var ctm = [1,0,0,1,0,0], stack = [], segs = [], seg = null;
-  segs.imgs = [];
-  function pt(x, y){
-    var t = pdfjsLib.Util.transform(vp.transform, ctm);
-    return pdfjsLib.Util.applyTransform([x, y], t);
-  }
-  function segEnd(){ if(seg) segs.push(seg); seg = null; }
-  function segAdd(q, start){
-    if(start) segEnd();
-    if(!seg) seg = { x0:q[0], x1:q[0], y0:q[1], y1:q[1] };
-    else {
-      seg.x0 = Math.min(seg.x0, q[0]); seg.x1 = Math.max(seg.x1, q[0]);
-      seg.y0 = Math.min(seg.y0, q[1]); seg.y1 = Math.max(seg.y1, q[1]);
-    }
-  }
-  for(var i = 0; i < ops.fnArray.length; i++){
-    var fn = ops.fnArray[i], a = ops.argsArray[i];
-    if(fn === OPS.save){ segEnd(); stack.push(ctm.slice()); }
-    else if(fn === OPS.restore){ segEnd(); ctm = stack.pop() || ctm; }
-    else if(fn === OPS.transform){ segEnd(); ctm = pdfjsLib.Util.transform(ctm, a); }
-    else if(fn === OPS.paintImageXObject || fn === OPS.paintJpegXObject
-            || fn === OPS.paintImageMaskXObject){
-      /* 그림이 놓인 자리 — 글이 그림을 감싸 흐르는지 가리는 데 쓴다 */
-      var q0 = pt(0, 0), q1 = pt(1, 1);
-      segs.imgs.push({ x0:Math.min(q0[0],q1[0]), x1:Math.max(q0[0],q1[0]),
-                       y0:Math.min(q0[1],q1[1]), y1:Math.max(q0[1],q1[1]) });
-    }
-    else if(fn === OPS.constructPath){
-      var o2 = a[0], ar = a[1], k = 0;
-      for(var j = 0; j < o2.length; j++){
-        var o = o2[j];
-        if(o === OPS.moveTo || o === OPS.lineTo){
-          segAdd(pt(ar[k], ar[k+1]), o === OPS.moveTo); k += 2;
-        } else if(o === OPS.curveTo){ k += 6; }
-        else if(o === OPS.curveTo2 || o === OPS.curveTo3){ k += 4; }
-        else if(o === OPS.rectangle){
-          segAdd(pt(ar[k], ar[k+1]), true);
-          segAdd(pt(ar[k] + ar[k+2], ar[k+1] + ar[k+3]), false);
-          segEnd(); k += 4;
-        }
-      }
-    }
-  }
-  segEnd();
-  return segs;
-}
-
-/* 밑줄 자리와 묶음 괄호를 가려낸다. 길이는 전부 pt(595 기준) 로 따진다. */
-function koMarksFromSegs(segs, vp, u){
-  var pt = u * KO.SCALE;
-  var hor = [], ver = [], arms = [];
-  segs.forEach(function(s){
-    var w = (s.x1 - s.x0) / pt, h = (s.y1 - s.y0) / pt;
-    var o = { x0:s.x0, x1:s.x1, y:s.y0, y1:s.y1, w:w, h:h };
-    if(h < 1.5 && w >= 3  && w <= 20) arms.push(o);
-    if(h < 1.5 && w >= 8  && w <= 95) hor.push(o);
-    if(w < 1.5 && h >  25) ver.push(o);
-  });
-  /* 묶음 괄호: 세로선을 먼저 잇는다 — 가운데 라벨([A]) 자리에서 두 토막으로 끊긴다 */
-  ver.sort(function(a, b){ return (a.x0 - b.x0) || (a.y - b.y); });
-  var merged = [];
-  ver.forEach(function(v){
-    var last = merged[merged.length - 1];
-    if(last && Math.abs(last.x0 - v.x0) < 2 * pt && (v.y - last.y1) < 30 * pt){
-      last.y1 = Math.max(last.y1, v.y1); return;
-    }
-    merged.push({ x0:v.x0, y:v.y, y1:v.y1 });
-  });
-  var groups = merged.filter(function(v){
-    if((v.y1 - v.y) / pt > vp.height / pt * 0.6) return false;      /* 단 구분선 */
-    var hit = function(yy){
-      return arms.some(function(a){
-        return Math.abs(a.y - yy) < 2 * pt && Math.abs(a.x0 - v.x0) < 2.5 * pt;
-      });
-    };
-    if(!hit(v.y) || !hit(v.y1)) return false;                       /* 꺾쇠가 없다 */
-    /* 오른쪽에 짝이 되는 세로선이 있으면 상자·표다 */
-    var pair = merged.some(function(o){
-      return o.x0 > v.x0 + 8 * pt && Math.abs(o.y - v.y) < 6 * pt
-          && Math.abs(o.y1 - v.y1) < 6 * pt;
-    });
-    return !pair;
-  });
-  /* ⚠ 「네모 강조」는 가로선이 위·아래 둘이다(실측: 13.1pt 간격, x 동일).
-     아랫선은 그 말의 밑줄이 맞지만 윗선은 **윗줄** 글자에 밑줄을 그어 버린다
-     (실측: '특약' 이 엉뚱하게 밑줄 쳐졌다). 짝이 바로 아래 있는 선은 버린다. */
-  var under = hor.filter(function(h){
-    return !hor.some(function(o){
-      return Math.abs(o.x0 - h.x0) < 2 * pt && Math.abs(o.x1 - h.x1) < 2 * pt
-          && (o.y - h.y) > 6 * pt && (o.y - h.y) < 22 * pt;
-    });
-  });
-  return { under:under, groups:groups };
-}
-
-/* ── 그림 꺼내기 ─────────────────────────────────────────────────
-   ⚠ 쪽을 통째로 그린 뒤 잘라내려 하면 안 된다. 수능 국어 PDF 는 글꼴이 무거워
-      한 쪽(2526×3573)을 그리는 데 75초가 지나도 끝나지 않았다(실측).
-      그림은 어차피 PDF 안에 비트맵으로 박혀 있으니 그것을 바로 꺼낸다.
-      같은 쪽 그림 3개를 꺼내는 데 59ms 이고, 해상도도 원본 그대로다.
-   ⚠ 쪽 머리의 띠그림('국어 영역')이 모든 쪽에 똑같이 들어 있다. 위쪽 14% 는 버린다. */
+/* ── ③ 서버가 못 실은 큰 그림만 pdf.js 로 꺼낸다 ────────────────────────
+   ⚠ 쪽을 그리지 않는다 — 이 PDF 는 한 쪽에 75초가 넘게 걸린다(실측). 박힌 비트맵을
+      page.objs 에서 바로 꺼낸다(3개에 59ms). 어느 자리인지는 서버가 준다(쪽 좌표, pt). */
 function koGetObj(page, name){
   return new Promise(function(res){
     var done = false;
@@ -3544,17 +2969,20 @@ function koImgCanvas(o){
   cx.putImageData(id, 0, 0);
   return cv;
 }
-async function koExtractImages(pages, onProg){
-  var pdf = _ko.pdf, OPS = pdfjsLib.OPS, out = [];
+async function koFillBigFigs(figs, onProg){
+  var need = figs.filter(function(f){ return !f.url; });
+  if(!need.length || typeof pdfjsLib === 'undefined') return;
+  if(!_ko.pdf) _ko.pdf = await pdfjsLib.getDocument({ data: await _ko.file.arrayBuffer() }).promise;
+  var byPage = {};
+  need.forEach(function(f){ (byPage[f.p] = byPage[f.p] || []).push(f); });
+  var pages = Object.keys(byPage).map(Number).sort(function(a, b){ return a - b; });
+  var OPS = pdfjsLib.OPS;
   for(var pi = 0; pi < pages.length; pi++){
-    var p = pages[pi];
-    if(onProg) onProg(0.8 + pi / Math.max(pages.length, 1) * 0.2);
-    var page = await pdf.getPage(p);
-    var vp1  = page.getViewport({ scale:1, rotation:0 });
-    var u    = vp1.width / 595;
-    var vp   = page.getViewport({ scale:KO.SCALE, rotation:0 });
-    var ops  = await page.getOperatorList();
-    var ctm = [1,0,0,1,0,0], stack = [], hits = [];
+    if(onProg) onProg(0.8 + pi / pages.length * 0.2);
+    var page = await _ko.pdf.getPage(pages[pi]);
+    var vp = page.getViewport({ scale:1, rotation:0 });          /* 쪽 좌표 = 서버와 같은 pt */
+    var ops = await page.getOperatorList();
+    var ctm = [1,0,0,1,0,0], stack = [];
     for(var i = 0; i < ops.fnArray.length; i++){
       var fn = ops.fnArray[i], a = ops.argsArray[i];
       if(fn === OPS.save) stack.push(ctm.slice());
@@ -3563,32 +2991,43 @@ async function koExtractImages(pages, onProg){
       else if(fn === OPS.paintImageXObject || fn === OPS.paintJpegXObject
               || fn === OPS.paintImageMaskXObject){
         var t  = pdfjsLib.Util.transform(vp.transform, ctm);
-        var q0 = pdfjsLib.Util.applyTransform([0,0], t);
-        var q1 = pdfjsLib.Util.applyTransform([1,1], t);
-        var bx = { name:a[0],
-                   x0:Math.min(q0[0],q1[0]), x1:Math.max(q0[0],q1[0]),
-                   y0:Math.min(q0[1],q1[1]), y1:Math.max(q0[1],q1[1]) };
-        if(bx.y1 < vp.height * 0.14) continue;                    /* 쪽 머리 띠 */
-        if((bx.x1-bx.x0) < 18*u*KO.SCALE || (bx.y1-bx.y0) < 18*u*KO.SCALE) continue;
-        hits.push(bx);
+        var q0 = pdfjsLib.Util.applyTransform([0,0], t), q1 = pdfjsLib.Util.applyTransform([1,1], t);
+        var bx0 = Math.min(q0[0], q1[0]), by0 = Math.min(q0[1], q1[1]);
+        var hit = byPage[pages[pi]].filter(function(f){
+          return !f.url && Math.abs(f.x0 - bx0) < 3 && Math.abs(f.y - by0) < 3; });
+        if(!hit.length) continue;
+        var cv = koImgCanvas(await koGetObj(page, a[0]));
+        if(!cv) continue;
+        var url = cv.toDataURL('image/png');
+        hit.forEach(function(f){ f.url = url; f.w = cv.width; f.h = cv.height; });
       }
     }
-    for(var k = 0; k < hits.length; k++){
-      var cv = koImgCanvas(await koGetObj(page, hits[k].name));
-      if(!cv) continue;
-      out.push({ p:p, c:(hits[k].x0 >= vp.width/2 ? 1 : 0),
-                 y:hits[k].y0, y1:hits[k].y1,
-                 w:cv.width, h:cv.height, url:cv.toDataURL('image/png') });
-    }
   }
-  return out;
 }
 
-/* 그림을 '바로 앞 글덩이' 뒤에 꽂는다 — 같은 쪽 · 같은 단에서 y 가 가장 가까운 것. */
+/* 서버가 준 그림 → 화면용. 작은 것은 이미 실려 온다, 큰 것은 url 이 비어 있다(위에서 채운다). */
+function koFigFromServer(f){
+  var ext = (f.ext === 'jpg' || f.ext === 'jpeg') ? 'jpeg' : (f.ext || 'png');
+  return { p:f.p, c:f.c, y:f.y, y1:f.y1, x0:f.x0, x1:f.x1,
+           w:Math.round(f.w), h:Math.round(f.h),
+           url: f.b64 ? ('data:image/' + ext + ';base64,' + f.b64) : null };
+}
+
+/* 그림을 '바로 앞 글덩이' 뒤에 꽂는다 — 같은 쪽 · 같은 단에서 가장 가까운 것.
+   ⚠ 묶음([A]) 과 운문의 행도 글덩이다. 겉만 훑으면 그 안의 그림은 자리를 못 잡는다.
+   ⚠ 그림이 문단 '안' 에 놓여 글이 그림을 감싸는 경우가 있다(띠 그림). 앞뒤 거리로만 보면
+      그 문단을 놓친다. 문단이 걸친 구간과의 거리로 고른다. 좌표는 서버가 준 쪽 좌표(pt). */
 function koPlaceImages(sets, imgs){
   var slots = [];
+  function walk(items){
+    (items || []).forEach(function(it){
+      if(it.t === 'group'){ walk(it.items); return; }
+      if(it.t === 'verse'){ (it.rows || []).forEach(function(r){ r.forEach(function(l){ slots.push(l); }); }); return; }
+      slots.push(it);
+    });
+  }
   sets.forEach(function(S){
-    S.body.forEach(function(it){ slots.push(it); });
+    walk(S.body);
     S.qs.forEach(function(q){
       slots.push(q);
       if(q.box) slots.push(q.box);
@@ -3596,15 +3035,12 @@ function koPlaceImages(sets, imgs){
     });
   });
   _ko.orphan = 0;
-  /* ⚠ 그림이 문단 '안' 에 놓여 글이 그림을 감싸는 경우가 있다(띠 그림).
-     앞뒤 거리로만 보면 그 문단을 놓친다. 문단이 걸친 구간과의 거리로 고른다. */
   imgs.forEach(function(im){
     var best = null, bd = 1e9;
     slots.forEach(function(it){
       if(it.p !== im.p || it.c !== im.c) return;
       var top = it.y, bot = (it.y1 != null ? it.y1 : it.y);
-      var d = (im.y >= top && im.y <= bot) ? 0
-            : (im.y > bot ? im.y - bot : top - im.y);
+      var d = (im.y >= top && im.y <= bot) ? 0 : (im.y > bot ? im.y - bot : top - im.y);
       if(d < bd){ bd = d; best = it; }
     });
     if(!best){ _ko.orphan++; return; }
@@ -3612,7 +3048,6 @@ function koPlaceImages(sets, imgs){
   });
 }
 
-/* ── 그리기 ──────────────────────── */
 function koEsc(t){
   return String(t == null ? '' : t)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -3682,7 +3117,7 @@ function koBodyHtml(items, raw){
 }
 
 function koRender(){
-  var raw = document.getElementById('ko-raw').checked;
+  var raw = false;      /* 서버 결과에는 원문 줄이 없다 — 이어 붙인 글만 그린다 */
   _ko.showJW = !!(document.getElementById('ko-jw') || {}).checked;
   var box = document.getElementById('ko-result');
   if(!_ko.sets.length){ box.innerHTML = ''; return; }
@@ -3726,8 +3161,7 @@ function koRender(){
     + ' · 밑줄 <b>' + nU + '곳</b> · 묶음 <b>' + nG + '개</b>'
     + (nV ? ' · 운문 <b>' + nV + '덩이</b>' : '')
     + (_ko.skipped ? '<br>· 번호 범위 밖이라 건너뛴 지문 <b>' + _ko.skipped + '세트</b>' : '')
-    + (bad.length ? '<br>· ⚠ 선지가 5개가 아닌 문항: <b>' + bad.join(', ') + '</b>'
-                    + ' — 표 · 활동지형 문항은 손봐야 합니다' : '')
+    + (bad.length ? '<br>· 표 · 활동지형 문항 <b>' + bad.join(', ') + '</b> 은 그 영역을 원본 그대로 그려 넣었습니다' : '')
     + '<br>· 줄을 이으며 띄어쓰기를 <b>' + nJ + '곳</b> 넣었습니다. 대부분 맞지만 '
     + '붙여야 할 자리가 섞여 있습니다 — 「띄어쓰기 추정 자리 표시」 를 켜면 '
     + '<span class="ko-jw">노랗게</span> 보입니다.'
@@ -3746,17 +3180,24 @@ function koRender(){
                   : koMarkJoins(q.box.text, q.box.guess, q.box.marks))
            + koFigs(q.box) + '</div>';
       }
-      q.choices.forEach(function(ch){
-        h += '<div class="ko-ch">' + (KO.CH[ch.n-1] || ch.n) + ' '
-           + koMarkJoins(ch.text, ch.guess, ch.marks) + koFigs(ch) + '</div>';
-      });
+      if(q.table_png){
+        /* 표·활동지형 — 글자로 못 푸는 문항은 서버가 그 영역을 그대로 그려 준다 */
+        h += '<div class="ko-tbl"><img src="data:image/png;base64,' + q.table_png + '" alt="' + q.no + '번">'
+           + '<div class="cap">표·활동지형 — 원본 그대로</div></div>';
+      } else {
+        q.choices.forEach(function(ch){
+          h += '<div class="ko-ch">' + (KO.CH[ch.n-1] || ch.n) + ' '
+             + koMarkJoins(ch.text, ch.guess, ch.marks) + koFigs(ch) + '</div>';
+        });
+      }
       return h + '</div>';
     }).join('');
 
     var nP = S.body.filter(function(x){ return x.t === 'p'; }).length;
     var nC = S.body.reduce(function(a, x){ return a + (x.t === 'p' ? x.text.length : 0); }, 0);
-    return '<div class="ko-set"><div class="ko-set-h">'
-         + '<span class="tag">' + S.range + '</span>'
+    var solo = !(S.body && S.body.length);          /* 단독 문항(언매 37~39) — 본문 칸이 없다 */
+    return '<div class="ko-set' + (solo ? ' solo' : '') + '"><div class="ko-set-h">'
+         + '<span class="tag">' + S.range + (S.from === S.to ? '번' : '') + '</span>'
          + '<span class="area">' + koEsc(S.area || '') + '</span>'
          + '<span>문항 ' + S.qs.length + '개</span>'
          + '<span class="sub">본문 ' + nP + '문단 · ' + nC + '자</span>'
@@ -3771,46 +3212,38 @@ function koRender(){
 async function koRun(){
   if(_ko.busy) return;
   if(!_ko.file){ koMsg('국어 문제지 PDF 를 올려주세요', true); return; }
-  if(typeof pdfjsLib === 'undefined'){ koMsg('PDF 도구를 불러오지 못했습니다', true); return; }
   _ko.busy = true;
   var btn = document.getElementById('ko-run');
   btn.disabled = true; btn.textContent = '읽는 중...';
   try {
-    koMsg(''); koProg(0);
+    koMsg(''); koProg(0.05);
     var lo = parseInt(document.getElementById('ko-from').value, 10) || 1;
     var hi = parseInt(document.getElementById('ko-to').value, 10) || 99;
-    var lines = await koReadLines(_ko.file, koProg);
-    _ko.lines = lines;
-    var all = koDedupe(koParse(lines));
-    _ko.sets = all.filter(function(S){ return S.from >= lo && S.to <= hi; });
-    _ko.skipped = all.length - _ko.sets.length;
+
+    if(!_ko.url) _ko.url = await koUpload(_ko.file);          /* 같은 파일이면 다시 올리지 않는다 */
+    koProg(0.3);
+    var j = await koCallServer(_ko.url, lo, hi);
+    koProg(0.8);
+
+    _ko.sets = j.sets || [];
+    _ko.stats = j.stats || {};
+    _ko.skipped = _ko.stats.skipped || 0;
     if(!_ko.sets.length){
-      koMsg(all.length ? ('지문 ' + all.length + '세트를 찾았지만 ' + lo + '~' + hi
-                          + '번 안에 드는 것이 없습니다')
-                       : '지문을 찾지 못했습니다 — [4~9] 같은 머리줄이 있는 PDF 인지 확인해주세요', true);
+      koMsg(_ko.skipped ? ('지문 ' + _ko.skipped + '세트를 찾았지만 ' + lo + '~' + hi + '번 안에 드는 것이 없습니다')
+                        : '지문을 찾지 못했습니다 — [4~9] 같은 머리줄이 있는 PDF 인지 확인해주세요', true);
       koProg(null); document.getElementById('ko-result').innerHTML = ''; return;
     }
-    /* ⚠ 40쪽을 전부 훑으면 안 된다. 73초가 걸리고, 화법과작문·언어와매체의
-       매체 자료 사진까지 38개가 딸려 온다(실측). 고른 지문이 놓인 쪽만 본다. */
-    var pg = {};
-    _ko.sets.forEach(function(S){
-      S.body.forEach(function(b){ pg[b.p] = 1; });
-      S.qs.forEach(function(q){
-        pg[q.p] = 1;
-        if(q.box) pg[q.box.p] = 1;
-        q.choices.forEach(function(ch){ if(ch.p) pg[ch.p] = 1; });
-      });
-    });
-    var pgs = Object.keys(pg).map(Number).sort(function(a, b){ return a - b; });
-    _ko.imgs = await koExtractImages(pgs, koProg);
+    _ko.imgs = (j.figs || []).map(koFigFromServer);
+    await koFillBigFigs(_ko.imgs, koProg);
+    _ko.imgs = _ko.imgs.filter(function(f){ return f.url; });
     koPlaceImages(_ko.sets, _ko.imgs);
     koProg(1); koRender();
-    koMsg('✓ ' + _ko.sets.length + '세트 읽음 (저장하지 않았습니다)');
+    koMsg('✓ ' + _ko.sets.length + '세트 읽음 · 서버 ' + (_ko.stats.pages || '?') + '쪽 (저장하지 않았습니다)');
     setTimeout(function(){ koProg(null); }, 600);
   } catch(e){
     koMsg('실패: ' + (e.message || e), true); koProg(null);
   } finally {
-    _ko.busy = false; btn.disabled = false; btn.textContent = '\U0001F50D 분석';
+    _ko.busy = false; btn.disabled = false; btn.textContent = '🔍 분석';
   }
 }
 
