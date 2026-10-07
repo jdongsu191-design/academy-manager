@@ -2165,6 +2165,7 @@
               <option value="final">기말고사</option>
             </select>
           </div>
+          <label style="display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer"><input type="checkbox" id="tes-inc-left" style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer">퇴원생 포함 <span style="color:#9ca3af;font-weight:500">(퇴원 후에도 그 학기 점수를 보려면)</span></label>
           <button onclick="tesLoadScores()" style="width:100%;padding:9px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">🔍 조회</button>
         </div>
         <div id="tes-table-wrap"></div>
@@ -3091,6 +3092,7 @@
               </select>
             </div>
           </div>
+          <label style="display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer"><input type="checkbox" id="es-inc-left" style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer">퇴원생 포함 <span style="color:#9ca3af;font-weight:500">(퇴원 후에도 그 학기 점수를 보려면)</span></label>
           <button onclick="esLoadScores()" style="width:100%;padding:9px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">🔍 조회</button>
         </div>
         <div id="es-table-wrap"></div>
@@ -18470,6 +18472,24 @@ async function mrBranchExportImage(copy) {
    - DB: exam_scores (student_id,year,semester,exam_type,subject) onConflict
 ============================================================ */
 
+/* ── [퇴원생 포함] ───────────────────────────────────────
+   학생을 재원으로만 불러오면, 점수를 넣은 뒤 퇴원한 학생의 그 학기 기록이
+   화면에서 통째로 사라진다(실측 2026-10-07: 571행 중 48행 · 34명).
+   체크하면 퇴원(inactive)까지 더해 부르고, 재원생과 똑같이 고칠 수 있다.
+   ⚠ cancelled(등록취소)는 켜도 부르지 않는다. 등록된 적 없는 학생이다. */
+function examStatusFilter(q, chkId) {
+  var c = document.getElementById(chkId);
+  return (c && c.checked) ? q.in('status', ['active','inactive'])
+                          : q.eq('status', 'active');
+}
+/* 명단에서 퇴원생임을 알아보게 */
+function examLeftBadge(stu) {
+  return (stu && stu.status === 'inactive')
+    ? ' <span style="display:inline-block;margin-left:5px;padding:1px 6px;border-radius:5px;'
+      + 'background:#fee2e2;color:#b91c1c;font-size:10px;font-weight:800;vertical-align:1px">퇴원</span>'
+    : '';
+}
+
 /* ── 공통: 연도 셀렉트 초기화 ─────────────────────────────── */
 function examInitYearSelect(selId) {
   var sel = document.getElementById(selId);
@@ -18571,10 +18591,11 @@ async function tesLoadScores() {
     if (!tids.length) tids = [currentUser.id];
     _tesReadonly = !(tids.length === 1 && tids[0] === currentUser.id);
 
-    var { data: stus } = await db.from('users')
-      .select('id,name,school,grade,class_id,teacher_id')
-      .in('teacher_id', tids).eq('status', 'active')
-      .order('school').order('grade').order('name');
+    var stuQ = db.from('users')
+      .select('id,name,school,grade,class_id,teacher_id,status')
+      .in('teacher_id', tids);
+    stuQ = examStatusFilter(stuQ, 'tes-inc-left');
+    var { data: stus } = await stuQ.order('school').order('grade').order('name');
     _tesStudents = stus || [];
 
     if (!_tesStudents.length) {
@@ -18684,7 +18705,7 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
 
     return '<tr style="background:' + rowBg + ';border-bottom:1px solid ' + col.border + '">'
       + '<td style="padding:7px 10px;font-size:12px;color:#64748b;white-space:nowrap;vertical-align:middle">' + school + ' ' + grade + '</td>'
-      + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + stu.name + '</td>'
+      + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + stu.name + examLeftBadge(stu) + '</td>'
       + '<td style="padding:6px 8px;vertical-align:middle">'
         + '<div style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">'
           + '<div class="tes-subj-wrap" data-sid="' + sid + '" style="display:flex;align-items:center;gap:4px">' + subjItems + '</div>'
@@ -18714,7 +18735,7 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
       : '<span style="font-size:12px;color:#cbd5e1">입력 없음</span>';
     return '<tr style="background:' + (si % 2 === 0 ? '#fff' : col.lite) + ';border-bottom:1px solid ' + col.border + '">'
       + '<td style="padding:7px 10px;font-size:12px;color:#64748b;white-space:nowrap;vertical-align:middle">' + tesEsc(stu.school || '-') + ' ' + grade + '</td>'
-      + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + tesEsc(stu.name) + '</td>'
+      + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + tesEsc(stu.name) + examLeftBadge(stu) + '</td>'
       + '<td style="padding:6px 8px;vertical-align:middle">'
         + '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">' + chips
         + (stuNote ? '<span style="font-size:12px;color:#6b7280;margin-left:4px">' + tesEsc(stuNote) + '</span>' : '')
@@ -18732,7 +18753,7 @@ function tesRenderTable(year, semester, examType, scoresByStudent, noteByStudent
       + '</div>'
       + '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
       + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;min-width:380px">'
-        + '<colgroup><col style="width:110px"><col style="width:70px"><col></colgroup>'
+        + '<colgroup><col style="width:110px"><col style="width:104px"><col></colgroup>'
         + '<thead><tr style="background:' + col.sub + '">'
           + '<th style="padding:5px 10px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">학교 / 학년</th>'
           + '<th style="padding:5px 10px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">이름</th>'
@@ -18997,8 +19018,9 @@ async function esLoadScores() {
 
   try {
     var stuQ = db.from('users')
-      .select('id,name,school,grade,class_id,teacher_id')
-      .eq('status', 'active').order('school').order('grade').order('name');
+      .select('id,name,school,grade,class_id,teacher_id,status');
+    stuQ = examStatusFilter(stuQ, 'es-inc-left');
+    stuQ = stuQ.order('school').order('grade').order('name');
 
     if (teacherId === '__all__') {
       if (isDesk) {
@@ -19107,7 +19129,7 @@ function esRenderTable(year, semester, examType, teacherId, numCols, scoresByStu
 
       return '<tr style="background:' + rowBg + ';border-bottom:1px solid ' + col.border + '">'
         + '<td style="padding:7px 10px;font-size:12px;color:#64748b;white-space:nowrap;vertical-align:middle">' + school + ' ' + grade + '</td>'
-        + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + stu.name + '</td>'
+        + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;vertical-align:middle">' + stu.name + examLeftBadge(stu) + '</td>'
         + '<td style="padding:6px 8px;vertical-align:middle;width:100%">'
           + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;width:100%">'
             + '<div class="es-subj-wrap" data-sid="' + sid + '" style="display:flex;align-items:center;gap:4px;flex-shrink:0">' + subjItems + '</div>'
@@ -19127,7 +19149,7 @@ function esRenderTable(year, semester, examType, teacherId, numCols, scoresByStu
       + '</div>'
       + '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
       + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;min-width:420px">'
-        + '<colgroup><col style="width:110px"><col style="width:70px"><col></colgroup>'
+        + '<colgroup><col style="width:110px"><col style="width:104px"><col></colgroup>'
         + '<thead><tr style="background:' + col.sub + '">'
           + '<th style="padding:5px 10px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">학교 / 학년</th>'
           + '<th style="padding:5px 10px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">이름</th>'
