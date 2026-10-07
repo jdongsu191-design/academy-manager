@@ -18547,14 +18547,18 @@ async function tesLoadTeacherOptions(selectId) {
   if (branchId && bSel.selectedIndex > 0) label = bSel.options[bSel.selectedIndex].text + ' 전체';
   tSel.innerHTML = '<option value="__all__">' + label + '</option>';
   try {
-    var q = db.from('users').select('id,name,branch_id')
-      .in('role', ['teacher','vice_director']).eq('status', 'active').order('name');
+    /* ⚠ 퇴사한 선생님도 넣는다. 빼면 그 담당으로 남은 학생의 지난 점수를
+       부를 길이 자체가 없다(실측: 이대준 T 담당 2명 · 4행). */
+    var q = db.from('users').select('id,name,branch_id,status')
+      .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+      .is('deleted_at', null).order('name');
     if (branchId) q = q.eq('branch_id', branchId);
     var { data: ts } = await q;
     (ts || []).forEach(function(t) {
       var o = document.createElement('option');
       o.value = t.id;
-      o.textContent = t.name + ' T' + (t.id === (currentUser||{}).id ? ' (나)' : '');
+      o.textContent = t.name + ' T'
+        + (t.id === (currentUser||{}).id ? ' (나)' : (t.status === 'inactive' ? ' (퇴사)' : ''));
       tSel.appendChild(o);
     });
     if (selectId && (ts || []).some(function(t){ return t.id === selectId; })) tSel.value = selectId;
@@ -18953,13 +18957,16 @@ async function esOnBranchChange() {
   _esStudents = []; _esScoreMap = {};
   document.getElementById('es-table-wrap').innerHTML = '';
   try {
-    var q = db.from('users').select('id,name')
-      .in('role', ['teacher','vice_director']).eq('status', 'active').is('deleted_at', null);
+    /* ⚠ 퇴사한 선생님도 넣는다 — 빼면 그 담당 학생의 지난 점수에 닿을 수 없다 */
+    var q = db.from('users').select('id,name,status')
+      .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+      .is('deleted_at', null);
     if (branchId) q = q.eq('branch_id', branchId);
     var { data: teachers } = await q.order('name');
     (teachers || []).forEach(function(t) {
       var opt = document.createElement('option');
-      opt.value = t.id; opt.textContent = t.name;
+      opt.value = t.id;
+      opt.textContent = t.name + (t.status === 'inactive' ? ' (퇴사)' : '');
       sel.appendChild(opt);
     });
   } catch(e) { console.error('[내신점수] 선생님 로드 실패:', e); }
@@ -18984,8 +18991,9 @@ async function esDeskLoadTeachers(branchId) {
   var branchIds = _esDeskBranchIds || [];
   tSel.innerHTML = '<option value="__all__">전체 선생님</option>';
   try {
-    var q = db.from('users').select('id,name')
-      .in('role', ['teacher','vice_director']).eq('status', 'active').is('deleted_at', null);
+    var q = db.from('users').select('id,name,status')
+      .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+      .is('deleted_at', null);
     if (branchId && branchId !== '__all__') {
       q = q.eq('branch_id', branchId);
     } else if (branchIds.length) {
@@ -19027,13 +19035,15 @@ async function esLoadScores() {
         var deskBids = _esDeskBranchIds || [];
         if (deskBids.length) {
           var { data: deskTeachers } = await db.from('users').select('id')
-            .in('role', ['teacher','vice_director']).eq('status', 'active').in('branch_id', deskBids);
+            .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+            .is('deleted_at', null).in('branch_id', deskBids);
           var dtids = (deskTeachers || []).map(function(t){ return t.id; });
           stuQ = dtids.length ? stuQ.in('teacher_id', dtids) : stuQ.eq('teacher_id', 'no-match');
         }
       } else if (branchId) {
         var { data: branchTeachers } = await db.from('users').select('id')
-          .in('role', ['teacher','vice_director']).eq('status', 'active').eq('branch_id', branchId);
+          .in('role', ['teacher','vice_director']).in('status', ['active','inactive'])
+          .is('deleted_at', null).eq('branch_id', branchId);
         var tids = (branchTeachers || []).map(function(t){ return t.id; });
         stuQ = tids.length ? stuQ.in('teacher_id', tids) : stuQ.eq('teacher_id', 'no-match');
       }
