@@ -257,6 +257,9 @@
   .ko-set-h .tag { background: #7c3aed; color: #fff; border-radius: 6px; padding: 2px 9px;
                    font-size: 11.5px; }
   .ko-set-h .sub { font-weight: 600; color: #64748b; font-size: 12px; }
+  .ko-set-h .lead { flex: 1 1 100%; color: #94a3b8; }
+  .ko-set-h .area { background: #e0e7ff; color: #3730a3; border-radius: 6px;
+                    padding: 2px 9px; font-size: 11.5px; }
   .ko-cols { display: grid; grid-template-columns: 1fr 1fr; }
   .ko-body { padding: 16px 18px; border-right: 1.5px solid #e2e8f0; }
   .ko-qs { padding: 16px 18px; background: #fcfcfd; }
@@ -491,10 +494,15 @@
       </label>
     </div>
     <div class="row" style="margin-top:10px">
-      <span class="hint">비문학 번호</span>
-      <input class="inp" id="ko-from" type="number" value="4"  style="width:70px">
+      <span class="hint">범위</span>
+      <select class="inp" id="ko-scope" onchange="koScope()" style="min-width:150px">
+        <option value="read">비문학(독서)만</option>
+        <option value="all">전체 영역</option>
+        <option value="custom">번호로 지정</option>
+      </select>
+      <input class="inp" id="ko-from" type="number" value="4"  style="width:66px" disabled>
       <span class="hint">~</span>
-      <input class="inp" id="ko-to"   type="number" value="17" style="width:70px">
+      <input class="inp" id="ko-to"   type="number" value="17" style="width:66px" disabled>
       <button class="btn btn-primary" id="ko-run" onclick="koRun()">🔍 분석</button>
       <button class="btn" onclick="koReset()">초기화</button>
       <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer">
@@ -2850,6 +2858,15 @@ function koSubj(w){
   document.getElementById('subj-b').className = (w === 'b') ? 'on' : '';
   document.getElementById('subj-k').className = (w === 'k') ? 'on' : '';
 }
+/* 전체 / 비문학 / 번호 지정 */
+function koScope(){
+  var v  = document.getElementById('ko-scope').value;
+  var lo = document.getElementById('ko-from'), hi = document.getElementById('ko-to');
+  if(v === 'all'){  lo.value = 1; hi.value = 99; }
+  if(v === 'read'){ lo.value = 4; hi.value = 17; }
+  lo.disabled = hi.disabled = (v !== 'custom');
+}
+
 function koMsg(t, bad){
   var e = document.getElementById('ko-msg');
   e.textContent = t || ''; e.style.color = bad ? '#dc2626' : '#16a34a';
@@ -2885,7 +2902,7 @@ function koReset(){
 async function koReadLines(file, onProg){
   var pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   _ko.pdf = pdf;
-  var out = [];
+  var out = [], elect = {};
   for(var p = 1; p <= pdf.numPages; p++){
     if(onProg) onProg((p-1) / pdf.numPages * 0.8);
     var page = await pdf.getPage(p);
@@ -2909,8 +2926,18 @@ async function koReadLines(file, onProg){
       });
     });
 
+    /* 쪽 머리글에 적힌 선택과목을 걸러 버리기 전에 적어 둔다 */
+    /* ⚠ y 로 가리면 안 된다. 선택과목 첫 쪽은 0.158, 그 다음 쪽들은 0.113 에 있다(실측).
+       대신 '글이 곧 라벨' 인 줄만 잡는다 — 쪽번호가 붙어 있기도 하다('2 (화법과 작문)'). */
+    LS.forEach(function(L){
+      var e = (L.s || '').replace(/\s/g, '').match(KO_ELECT);
+      if(e) elect[p] = (e[1] === '화법과작문') ? '화법과 작문' : '언어와 매체';
+    });
+
     LS = LS.filter(function(L){
-      if(L.y < vp.height * 0.085) return false;          /* 머리글 */
+      /* ⚠ 0.085 로 자르면 쪽 머리글이 샌다 — '131'(쪽번호+교시) 처럼 글자 거르개에
+         안 걸리는 것이 본문으로 들어간다. 본문은 0.126 부터 시작한다(실측). */
+      if(L.y < vp.height * 0.125) return false;          /* 머리글 */
       if(L.y > vp.height * 0.965) return false;          /* 꼬리말 */
       var t = (L.s || '').replace(/\s/g, '');
       if(!t) return false;
@@ -2918,7 +2945,7 @@ async function koReadLines(file, onProg){
       if(/^(홀수형|짝수형)$/.test(t)) return false;
       if(/^\d{1,2}$/.test(t)) return false;
       if(/^제\d교시$/.test(t)) return false;
-      if(/^[(\uFF08]?(화법과작문|언어와매체)[)\uFF09]?$/.test(t)) return false;
+      if(KO_ELECT.test(t)) return false;
       if(t.length < 40 && /(대학수학능력시험|모의평가|학력평가)/.test(t)) return false;
       return true;
     });
@@ -2997,6 +3024,7 @@ async function koReadLines(file, onProg){
                  s:t.replace(/\s+$/, ''), sp:/\s$/.test(t), indent:!!L.indent });
     });
   }
+  _ko.elect = elect;
   return out;
 }
 
@@ -3048,15 +3076,23 @@ function koCut(it, at, len){
 /* ── 구조 가르기 ──────────────────────
    ⚠ 머리줄을 '[' 로 시작한다고 보면 안 된다. pdf.js 는 대괄호를 따로 떼어 주기도 한다.
       '숫자~숫자 ... 다음 글을 읽고' 라는 생김새로 잡는다. */
-var KO_SET = /(\d+)\s*[\uFF5E~\u301C\u2053\-]\s*(\d+)[^0-9]{0,6}다음\s*글을\s*읽고/;
+/* ⚠ '다음 글을 읽고' 를 요구하면 안 된다. 화법과작문·언어와매체의 머리줄은
+   '다음은 학생의 발표이다' · '(가)는 방송 대담의 일부이고…' 처럼 생겼다.
+   실측: 머리줄 생김새는 여섯 가지지만 **전부 [N~M] 로 줄이 시작한다**. */
+var KO_SET = /^\s*[\[\uFF3B\]\uFF3D]{0,2}\s*(\d+)\s*[\uFF5E~\u301C\u2053]\s*(\d+)\s*[\]\uFF3D]/;
+/* 작품 출처 — 문학을 가리는 표(실측: 문학 4/4, 독서·선택과목 0/10) */
+var KO_SRC = /^[-\u2013\u2014\u2212]\s*[^,\uFF0C]{1,40}[,\uFF0C]\s*.{1,40}$/;
 var KO_QNO = /^\s*(\d{1,2})\s*\.\s*/;
+/* 쪽 머리글의 선택과목 라벨 — 쪽번호가 앞뒤로 붙어 있을 수 있다('2 (화법과 작문)') */
+var KO_ELECT = /^\d{0,2}[(\uFF08](화법과작문|언어와매체)[)\uFF09]\d{0,2}$/;
 
 /* ⚠ 한 파일에 홀수형과 짝수형이 다 들어 있다(실측: 지문 3세트가 6세트로 잡혔다).
    지문 글자가 같으면 같은 지문이다 — 먼저 나온 것만 남긴다. */
 function koDedupe(sets){
   var seen = {}, out = [];
   sets.forEach(function(S){
-    var key = S.range + '|' + S.body.filter(function(x){ return x.t === 'p'; })
+    var key = S.area + '|' + S.range + '|'
+      + S.body.filter(function(x){ return x.t === 'p'; })
       .map(function(x){ return x.text; }).join('').replace(/\s/g, '').slice(0, 400);
     if(seen[key]){ seen[key].dup = (seen[key].dup || 1) + 1; return; }
     seen[key] = S; out.push(S);
@@ -3073,15 +3109,39 @@ function koParse(lines){
   var sets = [];
   heads.forEach(function(h, k){
     var end = (k + 1 < heads.length) ? heads[k+1].i : lines.length;
-    var seg = lines.slice(h.i, end);
+    var seg = lines.slice(h.i, end), i, m;
+
+    /* ⚠ 머리줄이 한 줄이라고 보면 안 된다. 실측: 38~42 · 43~45 · 44~45 는 2~3줄이고,
+       한 줄만 떼면 나머지가 본문 첫 문단에 섞인다. '물음에 답하시오' 까지가 머리줄. */
+    var hEnd = 1;
+    for(i = 0; i < Math.min(seg.length, 4); i++){
+      if(/물음에\s*답하시오/.test(seg[i].s || '')){ hEnd = i + 1; break; }
+    }
+
     var qAt = -1;
-    for(var i = 1; i < seg.length; i++){
-      var m = seg[i].s.match(KO_QNO);
+    for(i = hEnd; i < seg.length; i++){
+      m = seg[i].s.match(KO_QNO);
       if(m && +m[1] === h.a){ qAt = i; break; }
     }
     if(qAt < 0) qAt = seg.length;
-    sets.push({ from:h.a, to:h.b, range:h.a + '~' + h.b,
-                body: koBody(seg.slice(1, qAt)),
+
+    var lead = seg.slice(0, hEnd).map(function(L){ return (L.s || '').trim(); })
+                  .join(' ').replace(KO_SET, '').trim();
+    var bodyLines = seg.slice(hEnd, qAt);
+
+    /* 영역 — 선택과목은 쪽 머리글에, 문학은 작품 출처로 가린다.
+       ⚠ 세트가 놓인 쪽만 본다. 다음 쪽까지 넓히면 선택과목 바로 앞 지문(31~34 고전시가)이
+          선택과목으로 끌려간다(실측). 선택과목 첫 쪽에도 라벨은 찍혀 있다. */
+    var pgs = seg.map(function(L){ return L.p; }).filter(Boolean);
+    var p0 = pgs.length ? Math.min.apply(null, pgs) : 0;
+    var p1 = pgs.length ? Math.max.apply(null, pgs) : 0;
+    var area = null;
+    for(i = p0; i <= p1 && !area; i++) area = (_ko.elect || {})[i] || null;
+    if(!area) area = bodyLines.some(function(L){ return KO_SRC.test((L.s || '').trim()); })
+                   ? '문학' : '독서';
+
+    sets.push({ from:h.a, to:h.b, range:h.a + '~' + h.b, area:area, lead:lead,
+                body: koBody(bodyLines),
                 qs:   koQuestions(seg.slice(qAt), h.a, h.b) });
   });
   return sets;
@@ -3477,6 +3537,16 @@ function koFigs(it){
          + '<div class="cap">' + f.w + '×' + f.h + ' · ' + f.p + '쪽</div></div>';
   }).join('');
 }
+function koAreaSum(){
+  var by = {}, out = [];
+  _ko.sets.forEach(function(S){ by[S.area] = (by[S.area] || 0) + 1; });
+  ['독서', '문학', '화법과 작문', '언어와 매체'].forEach(function(k){
+    if(by[k]){ out.push(k + ' ' + by[k]); delete by[k]; }
+  });
+  Object.keys(by).forEach(function(k){ out.push(k + ' ' + by[k]); });
+  return out.join(' · ');
+}
+
 function koBodyHtml(items, raw){
   return (items || []).map(function(it){
     if(it.t === 'group'){
@@ -3527,7 +3597,8 @@ function koRender(){
 
   var warn = '<div class="ko-warn">'
     + '<b>자동으로 읽은 결과입니다 · 저장되지 않았습니다.</b><br>'
-    + '· 지문 <b>' + _ko.sets.length + '세트</b> · 문항 <b>' + nQ + '개</b> · 선지 <b>'
+    + '· 지문 <b>' + _ko.sets.length + '세트</b>'
+    + ' (' + koAreaSum() + ') · 문항 <b>' + nQ + '개</b> · 선지 <b>'
     + nCh + '개</b> · 그림 <b>' + placed + '/' + _ko.imgs.length + '개</b> 자리 잡음'
     + ' · 밑줄 <b>' + nU + '곳</b> · 묶음 <b>' + nG + '개</b>'
     + (_ko.skipped ? '<br>· 번호 범위 밖이라 건너뛴 지문 <b>' + _ko.skipped + '세트</b>' : '')
@@ -3561,8 +3632,10 @@ function koRender(){
     var nC = S.body.reduce(function(a, x){ return a + (x.t === 'p' ? x.text.length : 0); }, 0);
     return '<div class="ko-set"><div class="ko-set-h">'
          + '<span class="tag">' + S.range + '</span>'
+         + '<span class="area">' + koEsc(S.area || '') + '</span>'
          + '<span>문항 ' + S.qs.length + '개</span>'
          + '<span class="sub">본문 ' + nP + '문단 · ' + nC + '자</span>'
+         + (S.lead ? '<span class="sub lead">' + koEsc(S.lead) + '</span>' : '')
          + '</div><div class="ko-cols"><div class="ko-body">' + body + '</div>'
          + '<div class="ko-qs">' + qs + '</div></div></div>';
   }).join('');
