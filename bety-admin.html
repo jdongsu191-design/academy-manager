@@ -291,6 +291,11 @@
   .ko-ch { font-size: 13px; line-height: 1.75; color: #334155; margin: 4px 0;
            padding-left: 1.3em; text-indent: -1.3em; word-break: keep-all; }
   .ko-jw { background: #fef08a; border-radius: 2px; }
+  /* 운문 — 행이 곧 내용이다. 들여쓰지 않고 그대로 늘어놓는다 */
+  .ko-verse { margin: 6px 0 10px; }
+  .ko-verse .st + .st { margin-top: 11px; }
+  .ko-verse .v { font-size: 13.5px; line-height: 1.8; color: #1e293b;
+                 word-break: keep-all; text-indent: 0; }
   .ko-u  { text-decoration: underline; text-underline-offset: 3px;
            text-decoration-thickness: 1.2px; }
   /* 묶음 괄호 — 시험지의 세로 꺾쇠를 그대로 */
@@ -507,6 +512,8 @@
       <button class="btn" onclick="koReset()">초기화</button>
       <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer">
         <input type="checkbox" id="ko-raw" onchange="koRender()">원문 줄바꿈 그대로</label>
+      <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer">
+        <input type="checkbox" id="ko-jw" onchange="koRender()">띄어쓰기 추정 자리 표시</label>
       <span class="msg" id="ko-msg"></span>
     </div>
     <div class="bp-prog" id="ko-prog" style="display:none"><div id="ko-prog-bar"></div></div>
@@ -2899,6 +2906,31 @@ function koReset(){
        (실측: 이어지는 줄 대비 문단 첫 줄만 10pt 더 들어가 있다)
    ⚠ 기준선을 '단에서 가장 왼쪽' 으로 잡으면 안 된다. [1~3] 같은 머리줄이 더 왼쪽에 있어
       이어지는 줄까지 전부 '들여씀' 으로 잡힌다. 가장 흔한 x 를 기준으로 삼는다. */
+/* 줄 묶기 — 베티의 bpLines 와 같되 **줄의 오른쪽 끝(x1)** 까지 잰다.
+   그 값이 있어야 '이 줄이 꽉 찼는가(= 다음 줄과 이어지는가)' 를 알 수 있다.
+   ⚠ item.width 는 쪽 좌표(배율 1) 기준이라 배율을 곱해야 화면 좌표가 된다. */
+function koLines(tc, vp, mid, scale){
+  var out = [];
+  tc.items.forEach(function(it){
+    if(!it.str) return;
+    var t = pdfjsLib.Util.transform(vp.transform, it.transform);
+    var x = t[4], y = t[5], c = (x < mid * scale ? 0 : 1), L = null;
+    for(var i = 0; i < out.length; i++){
+      if(out[i].c === c && Math.abs(out[i].y - y) < 8){ L = out[i]; break; }
+    }
+    if(!L){ L = { y:y, x:x, x1:x, c:c, parts:[] }; out.push(L); }
+    if(x < L.x) L.x = x;
+    var xe = x + (it.width || 0) * scale;
+    if(xe > L.x1) L.x1 = xe;
+    L.parts.push({ x:x, s:it.str });
+  });
+  out.forEach(function(L){
+    L.parts.sort(function(a, b){ return a.x - b.x; });
+    L.s = L.parts.map(function(q){ return q.s; }).join('');
+  });
+  return out;
+}
+
 async function koReadLines(file, onProg){
   var pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   _ko.pdf = pdf;
@@ -2909,8 +2941,18 @@ async function koReadLines(file, onProg){
     var vp1 = page.getViewport({ scale:1, rotation:0 });
     var u   = vp1.width / 595;
     var vp  = page.getViewport({ scale:KO.SCALE, rotation:0 });
-    var LS  = bpLines(await page.getTextContent(), vp, vp1.width / 2);
-    var MK  = koMarksFromSegs(await koSegs(page, vp), vp, u);
+    var LS  = koLines(await page.getTextContent(), vp, vp1.width / 2, KO.SCALE);
+    var SG  = await koSegs(page, vp);
+    var MK  = koMarksFromSegs(SG, vp, u);
+
+    /* ⚠ 글이 그림을 감싸 흐르면 그 줄들은 그림 때문에 짧다. 운문으로 오해하면 안 된다. */
+    LS.forEach(function(L){
+      L.wrap = (SG.imgs || []).some(function(b){
+        return b.x0 > L.x1 - 2 * u * KO.SCALE
+            && b.y0 <= L.y + 4 * u * KO.SCALE
+            && b.y1 >= L.y - 12 * u * KO.SCALE;
+      });
+    });
 
     /* ⚠ 밑줄 친 말은 pdf.js 가 통째로 한 조각으로 준다(실측: 밑줄 왼쪽 끝 x 가
        조각의 x 와 일치). 그래서 글자 위치를 재지 않고 조각째로 표시한다. */
@@ -2961,6 +3003,23 @@ async function koReadLines(file, onProg){
                   .sort(function(a, b){ return a.y - b.y; });
       if(!col.length) return;
       var pt = u * KO.SCALE, i, gaps = [];
+
+      /* ⚠ 줄 맞춤된 본문의 오른쪽 경계는 '가장 긴 줄' 이 아니라 **x1 의 최빈값** 이다.
+         가장 긴 줄로 잡으면 본문이 17pt 씩 모자란 것처럼 보인다(실측 2쪽 오른단).
+         최빈값에 몰린 줄이 1/4 도 안 되면 그 단에는 줄 맞춤이 없다 — 시·운문이다. */
+      var rc = {}, rBest = null, rN = -1;
+      col.forEach(function(L){
+        var k = Math.round(L.x1 / (2 * pt));
+        rc[k] = (rc[k] || 0) + 1;
+      });
+      Object.keys(rc).forEach(function(k){
+        if(rc[k] > rN){ rN = rc[k]; rBest = +k; }
+      });
+      var edge = rBest * 2 * pt;
+      var justified = (rN / col.length) >= 0.25;
+      col.forEach(function(L){
+        L.full = justified && Math.abs(L.x1 - edge) < 11 * pt;
+      });
       for(i = 0; i < col.length - 1; i++){
         var g = (col[i].x - col[i+1].x) / pt;
         if(g >= 4 && g <= 11) gaps.push(g);
@@ -3021,6 +3080,7 @@ async function koReadLines(file, onProg){
           gid = p + '-' + gk;
       });
       out.push({ p:p, c:L.c, y:L.y, x:L.x, u:u, marks:mk, g:gid,
+                 full:(!!L.full || !!L.wrap), wrap:!!L.wrap,
                  s:t.replace(/\s+$/, ''), sp:/\s$/.test(t), indent:!!L.indent });
     });
   }
@@ -3180,17 +3240,26 @@ function koBody(ls){
   return out;
 }
 
+/* 판소리 장단·지시 표시 — [중모리] [아니리] [자진모리] … 는 언제나 새 줄에서 시작한다 */
+var KO_CUE = /^\s*[\[\uFF3B][\uAC00-\uD7A3]{1,6}[\]\uFF3D]/;
+/* 그림 캡션 — 본문 줄과 같은 높이에 있어 글에 들러붙는다 */
+var KO_CAP = /\s*[<\uFF1C]\s*그\s*림\s*\d*\s*[>\uFF1E]\s*/;
+
 function koBodyPlain(ls){
   var out = [], buf = null;
   function flush(){
     if(!buf || !buf.length){ buf = null; return; }
     var j = koJoin(buf);
-    out.push({ t:'p', text:j.text, guess:j.guess, marks:j.marks,
-               lines:buf.map(function(L){ return L.s; }),
+    /* ⚠ 그림 캡션이 글에 들러붙는다(실측: '…온도를<그림>'). 그림은 따로 꽂으니 떼어 낸다. */
+    var cap = { text:j.text, guess:j.guess, marks:j.marks }, cm;
+    while((cm = cap.text.match(KO_CAP))) koCut(cap, cm.index, cm[0].length);
+    j = { text:cap.text, guess:cap.guess, marks:cap.marks };
+    out.push({ t:'p', text:j.text, guess:j.guess, marks:j.marks, n:buf.length,
+               ind:!!buf[0].indent, lines:buf.map(function(L){ return L.s; }),
                p:buf[0].p, c:buf[0].c, y:buf[0].y, y1:buf[buf.length-1].y });
     buf = null;
   }
-  ls.forEach(function(L){
+  ls.forEach(function(L, i){
     var t = (L.s || '').trim();
     if(!t) return;
     if(/^[(\uFF08]\s*[\uAC00-\uD7A3]\s*[)\uFF09]$/.test(t)){            /* (가) (나) */
@@ -3205,11 +3274,42 @@ function koBodyPlain(ls){
     if(/^[<\uFF1C]\s*그\s*림\s*[>\uFF1E]$/.test(t)){                      /* <그림> 자리 */
       flush(); out.push({ t:'fig', text:t, p:L.p, c:L.c, y:L.y }); return;
     }
-    if(L.indent && buf && buf.length) flush();
+    /* ⚠ 앞 줄이 꽉 차지 않았으면 그 줄에서 글이 끝난 것이다. 이어 붙이면 시가 뭉개진다. */
+    var prev = buf && buf.length ? buf[buf.length - 1] : null;
+    if(L.indent || KO_CUE.test(t) || (prev && !prev.full)) flush();
     (buf = buf || []).push(L);
   });
   flush();
-  return out;
+  return koVerse(out);
+}
+
+/* 한 줄짜리 덩이가 잇따르면 운문이다 — 행을 그대로 살린다.
+   ⚠ 행 사이가 벌어지면 연(聯)이 바뀐 것이다(원본의 빈 줄). */
+function koVerse(items){
+  var res = [], run = [];
+  function flushRun(){
+    if(run.length >= 2){
+      var gaps = [];
+      for(var i = 1; i < run.length; i++) gaps.push(run[i].y - run[i-1].y);
+      gaps.slice().sort(function(a, b){ return a - b; });
+      var step = gaps.length ? gaps[gaps.length >> 1] : 0;
+      var rows = [], cur = [];
+      run.forEach(function(it, i){
+        if(i && step && (it.y - run[i-1].y) > step * 1.6 && cur.length){ rows.push(cur); cur = []; }
+        cur.push(it);
+      });
+      if(cur.length) rows.push(cur);
+      res.push({ t:'verse', rows:rows, p:run[0].p, c:run[0].c,
+                 y:run[0].y, y1:run[run.length-1].y });
+    } else if(run.length === 1){ res.push(run[0]); }
+    run = [];
+  }
+  items.forEach(function(it){
+    if(it.t === 'p' && it.n === 1 && !it.ind) run.push(it);
+    else { flushRun(); res.push(it); }
+  });
+  flushRun();
+  return res;
 }
 
 /* 문항 → 발문 · <보 기> · 선지 */
@@ -3306,6 +3406,7 @@ function koOneQ(seg, no){
 async function koSegs(page, vp){
   var ops = await page.getOperatorList(), OPS = pdfjsLib.OPS;
   var ctm = [1,0,0,1,0,0], stack = [], segs = [], seg = null;
+  segs.imgs = [];
   function pt(x, y){
     var t = pdfjsLib.Util.transform(vp.transform, ctm);
     return pdfjsLib.Util.applyTransform([x, y], t);
@@ -3324,6 +3425,13 @@ async function koSegs(page, vp){
     if(fn === OPS.save){ segEnd(); stack.push(ctm.slice()); }
     else if(fn === OPS.restore){ segEnd(); ctm = stack.pop() || ctm; }
     else if(fn === OPS.transform){ segEnd(); ctm = pdfjsLib.Util.transform(ctm, a); }
+    else if(fn === OPS.paintImageXObject || fn === OPS.paintJpegXObject
+            || fn === OPS.paintImageMaskXObject){
+      /* 그림이 놓인 자리 — 글이 그림을 감싸 흐르는지 가리는 데 쓴다 */
+      var q0 = pt(0, 0), q1 = pt(1, 1);
+      segs.imgs.push({ x0:Math.min(q0[0],q1[0]), x1:Math.max(q0[0],q1[0]),
+                       y0:Math.min(q0[1],q1[1]), y1:Math.max(q0[1],q1[1]) });
+    }
     else if(fn === OPS.constructPath){
       var o2 = a[0], ar = a[1], k = 0;
       for(var j = 0; j < o2.length; j++){
@@ -3513,11 +3621,13 @@ function koEsc(t){
 function koMarkJoins(text, guess, marks){
   text = String(text == null ? '' : text);
   var g = {}, u = [], i;
-  (guess || []).forEach(function(at){ g[at] = 1; });
+  /* ⚠ 이음매의 대부분은 맞다(실측). 전부 칠하면 멀쩡한 글까지 어지러워 보인다.
+     기본은 깨끗하게 두고, 교정할 때만 켠다. */
+  if(_ko.showJW) (guess || []).forEach(function(at){ g[at] = 1; });
   (marks || []).forEach(function(m){
     for(i = Math.max(0, m.s); i < Math.min(m.e, text.length); i++) u[i] = 1;
   });
-  if(!(guess || []).length && !(marks || []).length) return koEsc(text);
+  if(!_ko.showJW && !(marks || []).length) return koEsc(text);
   var out = '';
   i = 0;
   while(i < text.length){
@@ -3554,6 +3664,13 @@ function koBodyHtml(items, raw){
            + (it.label ? '<span class="lab">[' + koEsc(it.label) + ']</span>' : '')
            + koBodyHtml(it.items, raw) + '</div>';
     }
+    if(it.t === 'verse'){
+      return '<div class="ko-verse">' + it.rows.map(function(rw){
+        return '<div class="st">' + rw.map(function(l){
+          return '<div class="v">' + koMarkJoins(l.text, l.guess, l.marks) + koFigs(l) + '</div>';
+        }).join('') + '</div>';
+      }).join('') + '</div>';
+    }
     if(it.t === 'head') return '<div class="ko-head">' + koEsc(it.text) + '</div>' + koFigs(it);
     if(it.t === 'note') return '<div class="ko-note">' + koEsc(it.text) + '</div>' + koFigs(it);
     if(it.t === 'mark') return '<div><span class="ko-mark">' + koEsc(it.text) + '</span></div>' + koFigs(it);
@@ -3566,6 +3683,7 @@ function koBodyHtml(items, raw){
 
 function koRender(){
   var raw = document.getElementById('ko-raw').checked;
+  _ko.showJW = !!(document.getElementById('ko-jw') || {}).checked;
   var box = document.getElementById('ko-result');
   if(!_ko.sets.length){ box.innerHTML = ''; return; }
 
@@ -3576,19 +3694,24 @@ function koRender(){
       if(q.choices.length !== 5) bad.push(q.no + '번(선지 ' + q.choices.length + '개)');
     });
   });
-  var nU = 0, nG = 0;
+  var nU = 0, nG = 0, nV = 0, nJ = 0;
   function walk(items){
     (items || []).forEach(function(it){
       if(it.t === 'group'){ nG++; walk(it.items); return; }
+      if(it.t === 'verse'){ nV++; walk(it.rows ? [].concat.apply([], it.rows) : []); return; }
       nU += (it.marks || []).length;
+      nJ += (it.guess || []).length;
     });
   }
   _ko.sets.forEach(function(S){
     walk(S.body);
     S.qs.forEach(function(q){
       nU += (q.stemMarks || []).length;
-      if(q.box) nU += (q.box.marks || []).length;
-      q.choices.forEach(function(c){ nU += (c.marks || []).length; });
+      nJ += (q.stemGuess || []).length;
+      if(q.box){ nU += (q.box.marks || []).length; nJ += (q.box.guess || []).length; }
+      q.choices.forEach(function(c){
+        nU += (c.marks || []).length; nJ += (c.guess || []).length;
+      });
     });
   });
   var placed = 0;
@@ -3601,11 +3724,13 @@ function koRender(){
     + ' (' + koAreaSum() + ') · 문항 <b>' + nQ + '개</b> · 선지 <b>'
     + nCh + '개</b> · 그림 <b>' + placed + '/' + _ko.imgs.length + '개</b> 자리 잡음'
     + ' · 밑줄 <b>' + nU + '곳</b> · 묶음 <b>' + nG + '개</b>'
+    + (nV ? ' · 운문 <b>' + nV + '덩이</b>' : '')
     + (_ko.skipped ? '<br>· 번호 범위 밖이라 건너뛴 지문 <b>' + _ko.skipped + '세트</b>' : '')
     + (bad.length ? '<br>· ⚠ 선지가 5개가 아닌 문항: <b>' + bad.join(', ') + '</b>'
                     + ' — 표 · 활동지형 문항은 손봐야 합니다' : '')
-    + '<br>· <span class="ko-jw">노란 칸</span> 은 줄을 이으며 <b>자동으로 넣은 띄어쓰기</b>입니다. '
-    + '붙여야 할 자리가 섞여 있을 수 있습니다.'
+    + '<br>· 줄을 이으며 띄어쓰기를 <b>' + nJ + '곳</b> 넣었습니다. 대부분 맞지만 '
+    + '붙여야 할 자리가 섞여 있습니다 — 「띄어쓰기 추정 자리 표시」 를 켜면 '
+    + '<span class="ko-jw">노랗게</span> 보입니다.'
     + '</div>';
 
   var html = _ko.sets.map(function(S){
