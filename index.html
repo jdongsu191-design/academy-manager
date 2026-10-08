@@ -29597,6 +29597,20 @@ async function reEnrollStudent(studentId, studentName) {
 입학일이 이 날짜로 바뀌고 퇴원일은 지워집니다.
 ※ 실수로 퇴원을 누른 경우라면 [퇴원 취소]를 쓰세요 (입학일이 보존됩니다).`)) return;
   try {
+    /* [담당 점검] 이전 담당이 퇴사(비활성·삭제)했거나 비어 있으면 그대로 되살리지 않는다.
+       담당이 퇴사 계정으로 남으면 새 선생님 화면엔 '타 담당' 조회 전용으로만 뜨고(편집·전반 불가),
+       월별 수강인원의 재입학은 퇴사한 선생님 줄에 잡힌다. 퇴사 계정은 로그인이 안 되니 전반으로도 못 푼다.
+       (2026-10 정예인: 이대준T 퇴사 후 재입학 → 담당이 퇴사 계정으로 남음) */
+    const { data: stu } = await db.from('users').select('id,name,teacher_id,class_id').eq('id', studentId).single();
+    let tch = null;
+    if (stu && stu.teacher_id) {
+      const r = await db.from('users').select('id,name,status,deleted_at').eq('id', stu.teacher_id).maybeSingle();
+      tch = r.data || null;
+    }
+    if (!tch || tch.status !== 'active' || tch.deleted_at) {
+      openReEnrollAssignModal(studentId, studentName, dateVal, stu || { id: studentId }, tch);
+      return;
+    }
     const { error } = await db.from('users').update({
       status: 'active', enrolled_at: dateVal, withdrawn_at: null
     }).eq('id', studentId);
@@ -29606,6 +29620,127 @@ async function reEnrollStudent(studentId, studentName) {
     if (currentUser.role === 'admin' || currentUser.role === 'desk') await loadAdminData();
     alert(`✅ 재입학 처리 완료! (입학일: ${dateVal})`);
   } catch(e) { alert('오류: ' + (e.message || e)); }
+}
+
+/* ── [재입학 · 담당 배정] 이전 담당이 퇴사한 학생의 재입학 ──────────────
+   새 담당 선생님과 반을 받아 재입학과 함께 저장한다. 전반이 아니므로 transfer_requests 는 남기지 않고
+   (월별 수강인원이 전반IN 으로 세지 않게), 이력(student_class_history)에만 남긴다.
+   담당·반·분원을 함께 바꾸는 방식은 관리자 '반 변경'(admClassChangeSave) 과 같다. */
+async function openReEnrollAssignModal(studentId, studentName, dateVal, stu, oldTeacher) {
+  const ex = document.getElementById('reenroll-assign-modal');
+  if (ex) ex.remove();
+
+  let teachers = (allUsers || []).filter(u => (u.role === 'teacher' || u.role === 'vice_director')
+                                               && u.status === 'active' && !u.deleted_at);
+  if (!teachers.length) {
+    const { data } = await db.from('users').select('id,name,role,status,deleted_at,branch_id')
+      .in('role', ['teacher','vice_director']).eq('status','active').is('deleted_at', null).order('name');
+    teachers = data || [];
+  }
+  teachers.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
+  window._reEnrollTeachers = teachers;
+  const preId = (currentUser && (currentUser.role === 'teacher' || currentUser.role === 'vice_director')) ? currentUser.id : '';
+  const teacherOpts = '<option value="">선생님 선택</option>'
+    + teachers.map(t => `<option value="${t.id}"${t.id === preId ? ' selected' : ''}>${_esc(t.name)}T</option>`).join('');
+  const oldName = oldTeacher ? (oldTeacher.name || '') : '';
+  const why = !stu.teacher_id ? '담당 선생님이 비어 있습니다'
+            : !oldTeacher     ? '이전 담당 선생님 계정을 찾을 수 없습니다'
+            : `이전 담당 <b>${_esc(oldName)}</b> 선생님은 퇴사(비활성) 상태입니다`;
+
+  const modal = document.createElement('div');
+  modal.id = 'reenroll-assign-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3100;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:400px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden">
+      <div style="background:#0e7490;padding:18px 20px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:15px;font-weight:800;color:#fff">🔄 재입학 · 담당 배정</div>
+          <div style="font-size:11px;color:#cffafe;margin-top:2px">${_esc(studentName || stu.name || '')} · 재입학일 ${_esc(dateVal)}</div>
+        </div>
+        <button onclick="document.getElementById('reenroll-assign-modal').remove()"
+          style="background:rgba(255,255,255,0.2);border:none;color:#fff;width:28px;height:28px;border-radius:50%;font-size:18px;cursor:pointer">✕</button>
+      </div>
+      <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
+        <div style="padding:10px 14px;background:#ecfeff;border:1px solid #67e8f9;border-radius:8px;font-size:12px;color:#155e75;line-height:1.6">
+          ⚠️ ${why}.<br>새 담당 선생님과 반을 정해야 재입학 처리가 됩니다.
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--text-sub);margin-bottom:6px">새 담당 선생님</div>
+          <select id="rea-teacher-sel" onchange="reEnrollAssignLoadClasses()"
+            style="width:100%;padding:9px 12px;border:1.5px solid #cffafe;border-radius:8px;font-size:13px;outline:none">${teacherOpts}</select>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--text-sub);margin-bottom:6px">반</div>
+          <select id="rea-class-sel"
+            style="width:100%;padding:9px 12px;border:1.5px solid #cffafe;border-radius:8px;font-size:13px;outline:none">
+            <option value="">선생님을 먼저 선택하세요</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onclick="document.getElementById('reenroll-assign-modal').remove()"
+            style="flex:1;padding:10px;border:1.5px solid var(--border);border-radius:8px;background:#f9fafb;color:var(--text-sub);font-size:13px;font-weight:600;cursor:pointer">취소</button>
+          <button id="rea-save-btn" onclick="reEnrollAssignSave('${studentId}','${_esc(dateVal)}','${(oldName || '').replace(/'/g,"\\'")}','${stu.class_id || ''}')"
+            style="flex:2;padding:10px;border:none;border-radius:8px;background:#0e7490;color:#fff;font-size:13px;font-weight:700;cursor:pointer">✅ 재입학 처리</button>
+        </div>
+      </div>
+    </div>`;
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+  if (preId) await reEnrollAssignLoadClasses(stu.class_id || '');
+}
+
+async function reEnrollAssignLoadClasses(preSelectClassId) {
+  const teacherId = document.getElementById('rea-teacher-sel')?.value || '';
+  const sel = document.getElementById('rea-class-sel');
+  if (!sel) return;
+  if (!teacherId) { sel.innerHTML = '<option value="">선생님을 먼저 선택하세요</option>'; return; }
+  sel.innerHTML = '<option value="">불러오는 중...</option>';
+  try {
+    const { data } = await db.from('classes').select('id,name').eq('teacher_id', teacherId).eq('active', true).order('name');
+    if (!(data || []).length) { sel.innerHTML = '<option value="">이 선생님의 반이 없습니다</option>'; return; }
+    sel.innerHTML = '<option value="">반 선택</option>'
+      + data.map(c => `<option value="${c.id}"${c.id === preSelectClassId ? ' selected' : ''}>${_esc(c.name)}</option>`).join('');
+  } catch(e) { sel.innerHTML = '<option value="">오류</option>'; }
+}
+
+async function reEnrollAssignSave(studentId, dateVal, oldTeacherName, fromClassId) {
+  const teacherId = document.getElementById('rea-teacher-sel')?.value || '';
+  const classId   = document.getElementById('rea-class-sel')?.value   || '';
+  if (!teacherId) { alert('새 담당 선생님을 선택하세요'); return; }
+  if (!classId)   { alert('반을 선택하세요'); return; }
+  const btn = document.getElementById('rea-save-btn');
+  if (btn) { btn.textContent = '처리 중...'; btn.disabled = true; }
+  try {
+    const newT = (window._reEnrollTeachers || []).find(t => t.id === teacherId)
+              || (allUsers || []).find(u => u.id === teacherId) || {};
+    const { data: cls } = await db.from('classes').select('id,name').eq('id', classId).single();
+    const { error } = await db.from('users').update(Object.assign({
+      status: 'active', enrolled_at: dateVal, withdrawn_at: null,
+      teacher_id: teacherId, class_id: classId, branch_id: newT.branch_id || null
+    }, stuClearSubSlots())).eq('id', studentId);
+    if (error) throw error;
+    try {   // 이력은 실패해도 재입학 자체는 끝난 것 — 막지 않는다
+      const { data: su } = await db.from('users').select('name').eq('id', studentId).single();
+      const fromCls = fromClassId ? (allClasses || []).concat(classes || []).find(c => c.id === fromClassId) : null;
+      await db.from('student_class_history').insert({
+        student_id: studentId, student_name: (su && su.name) || '',
+        from_teacher_id: null, from_teacher_name: oldTeacherName || '',
+        to_teacher_id: teacherId, to_teacher_name: newT.name || '',
+        from_class_id: fromClassId || null, from_class_name: fromCls ? (fromCls.name || '') : '',
+        to_class_id: classId, to_class_name: (cls && cls.name) || '',
+        changed_date: dateVal,
+        reason: '재입학 — 이전 담당' + (oldTeacherName ? '(' + oldTeacherName + ')' : '') + ' 퇴사로 담당 변경'
+      });
+    } catch(e2) { console.warn('[재입학 이력 기록 실패]', e2); }
+    document.getElementById('reenroll-assign-modal')?.remove();
+    closeModal('editStudent');
+    await loadTeacherData();
+    if (currentUser.role === 'admin' || currentUser.role === 'desk') await loadAdminData();
+    alert(`✅ 재입학 처리 완료! (입학일: ${dateVal} · 담당: ${newT.name || ''}T)`);
+  } catch(e) {
+    alert('오류: ' + (e.message || e));
+    if (btn) { btn.textContent = '✅ 재입학 처리'; btn.disabled = false; }
+  }
 }
 
 /* ── [퇴원 취소] 되돌리기 ────────────────────────────────
