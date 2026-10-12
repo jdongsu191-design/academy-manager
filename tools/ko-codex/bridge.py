@@ -33,7 +33,8 @@ def run_server(origin, root, codex, port=8765):
     root.mkdir(parents=True, exist_ok=True)
     token = secrets.token_urlsafe(32)
     jobs = {}
-    lock = threading.Lock()
+    sessions = {}  # In-memory, origin-bound approvals; lost when the worker stops.
+    lock = threading.RLock()
 
     def work(jobid, pdf, lo, hi):
         folder = root/jobid
@@ -56,6 +57,12 @@ def run_server(origin, root, codex, port=8765):
                 jobs[jobid].update(status='failed',message=str(e)[:400])
 
     class Handler(BaseHTTPRequestHandler):
+        def approved_origin(self, value):
+            with lock:
+                expired=[key for key,s in sessions.items() if s['expires']<=time.time()]
+                for key in expired: sessions.pop(key,None)
+                return value==origin or any(s['origin']==value for s in sessions.values())
+
         def log_message(self,*args):
             pass  # Never log pairing credentials or document contents.
 
@@ -64,8 +71,8 @@ def run_server(origin, root, codex, port=8765):
             self.send_response(status)
             self.send_header('Content-Type','application/json; charset=utf-8')
             self.send_header('Cache-Control','no-store')
-            if self.headers.get('Origin')==origin:
-                self.send_header('Access-Control-Allow-Origin',origin)
+            if self.approved_origin(self.headers.get('Origin')):
+                self.send_header('Access-Control-Allow-Origin',self.headers.get('Origin'))
                 self.send_header('Vary','Origin')
             self.send_header('Content-Length',str(len(blob)))
             self.end_headers()
@@ -75,16 +82,21 @@ def run_server(origin, root, codex, port=8765):
             local_origin=f'http://127.0.0.1:{port}'
             request_origin=self.headers.get('Origin')
             local_request=request_origin==local_origin or (not request_origin and self.headers.get('Sec-Fetch-Site')=='same-origin')
-            if self.headers.get('Host') != f'127.0.0.1:{port}' or not (request_origin==origin or local_request):
+            if self.headers.get('Host') != f'127.0.0.1:{port}' or not (self.approved_origin(request_origin) or local_request):
                 self.send(403,{'error':'허용되지 않은 웹사이트입니다.'});return False
-            if auth and not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token):
+            credential=self.headers.get('Authorization','')
+            master=hmac.compare_digest(credential,'Bearer '+token) and (local_request or request_origin==origin)
+            with lock:
+                session=sessions.get(credential.removeprefix('Bearer '),{})
+                scoped=session.get('origin')==request_origin and session.get('expires',0)>time.time()
+            if auth and not (master or scoped):
                 self.send(401,{'error':'연결 코드를 확인하세요.'});return False
             return True
 
         def do_OPTIONS(self):
             if not self.trusted(False):return
             self.send_response(204)
-            self.send_header('Access-Control-Allow-Origin',origin)
+            self.send_header('Access-Control-Allow-Origin',self.headers.get('Origin'))
             self.send_header('Access-Control-Allow-Methods','GET, POST, OPTIONS')
             self.send_header('Access-Control-Allow-Headers','Authorization, Content-Type')
             self.send_header('Access-Control-Allow-Private-Network','true')
@@ -101,13 +113,13 @@ def run_server(origin, root, codex, port=8765):
                 self.send_response(200)
                 self.send_header('Content-Type','text/html; charset=utf-8')
                 self.send_header('Cache-Control','no-store')
-                self.send_header('X-BMAPS-Bridge-Version','2')
+                self.send_header('X-BMAPS-Bridge-Version','3')
                 self.send_header('X-Frame-Options','DENY')
                 self.send_header('Content-Security-Policy',f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
                 self.send_header('Content-Length',str(len(blob)));self.end_headers();self.wfile.write(blob);return
             if not self.trusted():return
             if self.path=='/health':
-                self.send(200,{'ok':True,'version':2});return
+                self.send(200,{'ok':True,'version':3});return
             jobid=self.path.removeprefix('/jobs/')
             with lock:
                 state=dict(jobs.get(jobid,{}))
@@ -119,6 +131,26 @@ def run_server(origin, root, codex, port=8765):
 
         def do_POST(self):
             if not self.trusted():return
+            if self.path in ('/sessions','/sessions/revoke'):
+                if self.headers.get('Origin')!=f'http://127.0.0.1:{port}' or not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token):
+                    self.send(403,{'error':'로컬 승인 창에서만 허용할 수 있습니다.'});return
+                try:
+                    n=int(self.headers.get('Content-Length','0'))
+                    if not 1<=n<=2048: raise ValueError('잘못된 승인 요청')
+                    data=json.loads(self.rfile.read(n))
+                    if self.path=='/sessions/revoke':
+                        with lock: sessions.pop(data.get('token',''),None)
+                        self.send(200,{'ok':True});return
+                    approved=data['origin'];parts=urlsplit(approved)
+                    if parts.scheme!='https' or not parts.hostname or parts.username or parts.password or approved!=f'https://{parts.netloc}':
+                        raise ValueError('HTTPS 사이트만 허용할 수 있습니다.')
+                    key=secrets.token_urlsafe(32)
+                    with lock:
+                        if len(sessions)>=100: raise ValueError('승인 세션이 많습니다. 처리 프로그램을 재시작하세요.')
+                        sessions[key]={'origin':approved,'expires':time.time()+12*60*60}
+                    self.send(200,{'token':key});return
+                except (ValueError,KeyError,TypeError) as e:
+                    self.send(400,{'error':str(e)});return
             if self.path=='/shutdown':
                 if self.headers.get('Origin')!=f'http://127.0.0.1:{port}':
                     self.send(403,{'error':'로컬 연결 창에서만 종료할 수 있습니다.'});return

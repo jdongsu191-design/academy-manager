@@ -3,23 +3,44 @@
   'use strict';
   var base = 'http://127.0.0.1:8765', draft = null, running = false;
   var relayWindow = null, relayReady = false, pending = new Map(), helloTimer = null, connecting = false;
+  var directToken = '', directReady = false;
   var $ = function (id) { return document.getElementById(id); };
   var originalRender = koRender, originalReset = koReset, originalSetFile = koSetFile;
-  function token() { return $('ko-codex-token').value.trim(); }
+  function token() { return directToken || $('ko-codex-token').value.trim(); }
   function disconnected() {
-    relayReady = false; connecting = false; clearInterval(helloTimer);
+    directReady = false; directToken = ''; relayReady = false; connecting = false; clearInterval(helloTimer);
     pending.forEach(function (p) { clearTimeout(p.timer); p.reject(new Error('연결 창이 닫혔습니다. Codex 연결을 다시 누르세요.')); });
     pending.clear();
     $('ko-codex-status').textContent = '연결 안 됨';
   }
-  window.addEventListener('message', function (event) {
+  window.addEventListener('message', async function (event) {
     if (event.origin !== base || event.source !== relayWindow || !event.data) return;
     var m = event.data;
     if (m.type === 'bmaps-ready') {
+      if (connecting === 'verifying') return;
       relayReady = true; connecting = false; clearInterval(helloTimer);
-      relayWindow.postMessage({type:'bmaps-ack'}, base);
-      $('ko-codex-status').textContent = 'Codex 연결됨';
-      koMsg('연결됐습니다. PDF를 선택하고 Codex 분석을 누르세요.');
+      if (typeof m.token === 'string' && /^[A-Za-z0-9_-]{40,100}$/.test(m.token)) {
+        directToken = m.token; connecting = 'verifying';
+        $('ko-codex-status').textContent = '백그라운드 연결 확인 중';
+        try {
+          await directCall('/health'); directReady = true; connecting = false;
+          relayWindow.postMessage({type:'bmaps-ack', direct:true}, base);
+          $('ko-codex-status').textContent = 'Codex 연결됨 · 창 닫기 가능';
+          koMsg('백그라운드 연결 완료. 승인 창을 닫아도 Codex 분석을 사용할 수 있습니다.');
+        } catch (e) {
+          directToken = ''; directReady = false; connecting = false;
+          relayWindow.postMessage({type:'bmaps-ack', direct:false}, base);
+          $('ko-codex-status').textContent = '팝업 연결 · 직접 연결 차단';
+          koMsg('브라우저에서 이 사이트의 로컬 네트워크 접근을 허용한 뒤 Codex 연결을 다시 누르세요. 현재는 승인 창을 유지해야 합니다.', true);
+        }
+      } else {
+        relayWindow.postMessage({type:'bmaps-ack',direct:false}, base);
+        $('ko-codex-status').textContent = '팝업 연결 · 프로그램 업데이트 필요';
+        koMsg('로컬 처리 프로그램을 새 버전으로 재시작해야 창을 닫고 사용할 수 있습니다.', true);
+      }
+    } else if (m.type === 'bmaps-window-closed') {
+      relayReady = false;
+      if (!directReady && connecting !== 'verifying') { disconnected(); koMsg('직접 연결 완료 전에 승인 창이 닫혔습니다.', true); }
     } else if (m.type === 'bmaps-disconnected') {
       disconnected();
       koMsg('연결이 해제됐습니다. Codex 연결 버튼으로 다시 연결하세요.', true);
@@ -30,6 +51,7 @@
   });
   window.koCodexConnect = function () {
     if (running || _ko.busy) return;
+    if (directReady) { koCodexCheck(); return; }
     if (relayWindow && !relayWindow.closed) {
       relayWindow.focus();
       relayWindow.postMessage({type:'bmaps-connect'}, base);
@@ -51,7 +73,7 @@
       relayWindow.postMessage({ type:'bmaps-connect' }, base);
     }, 500);
   };
-  setInterval(function () { if (relayReady && (!relayWindow || relayWindow.closed)) { disconnected(); koMsg('연결 창이 닫혔습니다. Codex 연결을 다시 누르세요.', true); } }, 2000);
+  setInterval(function () { if (relayReady && (!relayWindow || relayWindow.closed)) { relayReady = false; if (!directReady && connecting !== 'verifying') { disconnected(); koMsg('연결 창이 닫혔습니다. Codex 연결을 다시 누르세요.', true); } } }, 2000);
   function relayCall(path, options) {
     return new Promise(function (resolve, reject) {
       var id = crypto.randomUUID(), opts = options || {};
@@ -61,7 +83,11 @@
     });
   }
   async function call(path, options) {
+    if (directReady) return directCall(path, options);
     if (relayReady && relayWindow && !relayWindow.closed) return relayCall(path, options);
+    return directCall(path, options);
+  }
+  async function directCall(path, options) {
     if (!token()) throw new Error('먼저 Codex 연결을 누르고 연결 창에서 허용하세요.');
     var controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 20000);
     try {
@@ -103,7 +129,7 @@
   koReset = function () { if (running || _ko.busy) return; draft = null; originalReset(); };
   koSetFile = function (file) { if (running || _ko.busy) return; draft = null; _ko.sets = []; $('ko-result').replaceChildren(); originalSetFile(file); };
   window.koCodexCheck = async function () {
-    try { await call('/health'); $('ko-codex-status').textContent = 'Codex 연결됨'; koMsg('로컬 Codex 처리 프로그램 연결됨'); }
+    try { await call('/health'); $('ko-codex-status').textContent = directReady ? 'Codex 연결됨 · 창 닫기 가능' : 'Codex 연결됨'; koMsg(directReady ? '백그라운드 연결 정상 · 승인 창을 닫아도 됩니다.' : '로컬 Codex 처리 프로그램 연결됨'); }
     catch (e) { disconnected(); koMsg(message(e), true); }
   };
   async function poll(id) {
@@ -122,7 +148,7 @@
   }
   window.koCodexRun = async function (resume) {
     if (running || _ko.busy) return;
-    if (!relayReady && !token()) { koMsg(connecting ? '연결 승인과 사이트의 연결 확인을 기다려 주세요.' : 'Codex 연결 버튼으로 먼저 연결하세요. 분석 버튼은 승인 창을 다시 열지 않습니다.', true); return; }
+    if (connecting === 'verifying' || (!relayReady && !token())) { koMsg(connecting ? '연결 승인과 사이트의 연결 확인을 기다려 주세요.' : 'Codex 연결 버튼으로 먼저 연결하세요. 분석 버튼은 승인 창을 다시 열지 않습니다.', true); return; }
     if (!resume && !_ko.file) { koMsg('국어 문제지 PDF를 선택하세요.', true); return; }
     busy(true);
     try {
