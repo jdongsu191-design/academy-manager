@@ -72,7 +72,10 @@ def run_server(origin, root, codex, port=8765):
             self.wfile.write(blob)
 
         def trusted(self,auth=True):
-            if self.headers.get('Host') != f'127.0.0.1:{port}' or self.headers.get('Origin') != origin:
+            local_origin=f'http://127.0.0.1:{port}'
+            request_origin=self.headers.get('Origin')
+            local_request=request_origin==local_origin or (not request_origin and self.headers.get('Sec-Fetch-Site')=='same-origin')
+            if self.headers.get('Host') != f'127.0.0.1:{port}' or not (request_origin==origin or local_request):
                 self.send(403,{'error':'허용되지 않은 웹사이트입니다.'});return False
             if auth and not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token):
                 self.send(401,{'error':'연결 코드를 확인하세요.'});return False
@@ -89,9 +92,22 @@ def run_server(origin, root, codex, port=8765):
             self.end_headers()
 
         def do_GET(self):
+            if self.path in ('/','/connect'):
+                if self.headers.get('Host') != f'127.0.0.1:{port}':
+                    self.send(403,{'error':'허용되지 않은 주소'});return
+                nonce=secrets.token_urlsafe(20)
+                template=Path(__file__).with_name('connect.html').read_text(encoding='utf-8')
+                blob=template.replace('__TOKEN__',json.dumps(token)).replace('__NONCE__',nonce).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type','text/html; charset=utf-8')
+                self.send_header('Cache-Control','no-store')
+                self.send_header('X-BMAPS-Bridge-Version','2')
+                self.send_header('X-Frame-Options','DENY')
+                self.send_header('Content-Security-Policy',f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+                self.send_header('Content-Length',str(len(blob)));self.end_headers();self.wfile.write(blob);return
             if not self.trusted():return
             if self.path=='/health':
-                self.send(200,{'ok':True,'version':1});return
+                self.send(200,{'ok':True,'version':2});return
             jobid=self.path.removeprefix('/jobs/')
             with lock:
                 state=dict(jobs.get(jobid,{}))
@@ -103,6 +119,11 @@ def run_server(origin, root, codex, port=8765):
 
         def do_POST(self):
             if not self.trusted():return
+            if self.path=='/shutdown':
+                if self.headers.get('Origin')!=f'http://127.0.0.1:{port}':
+                    self.send(403,{'error':'로컬 연결 창에서만 종료할 수 있습니다.'});return
+                self.send(200,{'ok':True})
+                threading.Thread(target=self.server.shutdown,daemon=True).start();return
             parsed=urlsplit(self.path)
             if parsed.path!='/jobs':self.send(404,{'error':'Not found'});return
             from urllib.parse import parse_qs

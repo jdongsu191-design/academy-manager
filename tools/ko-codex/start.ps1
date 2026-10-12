@@ -1,5 +1,17 @@
-param([Parameter(Mandatory=$true)][string]$Origin, [switch]$CheckOnly)
+param([Parameter(Mandatory=$true)][string]$Origin, [switch]$CheckOnly, [switch]$Background)
 $ErrorActionPreference = 'Stop'
+if ($Background) {
+    $existingBridge = $null
+    try {
+        $existingBridge = Invoke-WebRequest 'http://127.0.0.1:8765/connect' -UseBasicParsing -TimeoutSec 3
+    } catch {
+        if ($_.Exception.Response) { throw 'Port 8765 is already in use. Close the previous worker.' }
+    }
+    if ($existingBridge) {
+        if ($existingBridge.Headers['X-BMAPS-Bridge-Version'] -eq '2') { return }
+        throw 'An older worker is running. Close its window before restarting.'
+    }
+}
 python -c "import pymupdf"
 if ($LASTEXITCODE -ne 0) { throw 'Run python -m pip install -r requirements.txt first.' }
 $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
@@ -24,4 +36,21 @@ Write-Host "Codex executable: $codexExecutable"
 & $codexExecutable login status
 if ($LASTEXITCODE -ne 0) { throw "Sign in first: & '$codexExecutable' login" }
 if ($CheckOnly) { Write-Host 'Python and Codex login checks passed.'; return }
+if ($Background) {
+    $workerData = Join-Path $env:USERPROFILE '.bmaps-ko-worker'
+    New-Item -ItemType Directory -Force -Path $workerData | Out-Null
+    $workerPython = (Get-Command python).Source
+    $workerArgs = @('-u', ('"' + "$PSScriptRoot/bridge.py" + '"'), '--origin', ('"' + $Origin + '"'), '--codex', ('"' + $codexExecutable + '"'))
+    $worker = Start-Process -FilePath $workerPython -ArgumentList $workerArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $workerData 'worker.log') -RedirectStandardError (Join-Path $workerData 'worker-error.log')
+    $worker.Id | Set-Content (Join-Path $workerData 'worker.pid')
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        Start-Sleep -Milliseconds 500
+        if ($worker.HasExited) { throw "Worker exited. Check $workerData\worker-error.log" }
+        try {
+            $ready = Invoke-WebRequest 'http://127.0.0.1:8765/connect' -UseBasicParsing -TimeoutSec 1
+            if ($ready.Headers['X-BMAPS-Bridge-Version'] -eq '2') { return }
+        } catch { }
+    }
+    throw "Worker did not become ready. Check $workerData\worker-error.log"
+}
 python "$PSScriptRoot/bridge.py" --origin $Origin --codex $codexExecutable

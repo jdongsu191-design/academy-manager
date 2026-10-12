@@ -2,10 +2,54 @@
 (function () {
   'use strict';
   var base = 'http://127.0.0.1:8765', draft = null, running = false;
+  var relayWindow = null, relayReady = false, pending = new Map(), helloTimer = null;
   var $ = function (id) { return document.getElementById(id); };
   var originalRender = koRender, originalReset = koReset, originalSetFile = koSetFile;
   function token() { return $('ko-codex-token').value.trim(); }
+  function disconnected() {
+    relayReady = false;
+    pending.forEach(function (p) { clearTimeout(p.timer); p.reject(new Error('연결 창이 닫혔습니다. Codex 연결을 다시 누르세요.')); });
+    pending.clear();
+    $('ko-codex-status').textContent = '연결 안 됨';
+  }
+  window.addEventListener('message', function (event) {
+    if (event.origin !== base || event.source !== relayWindow || !event.data) return;
+    var m = event.data;
+    if (m.type === 'bmaps-ready') {
+      relayReady = true; clearInterval(helloTimer);
+      $('ko-codex-status').textContent = 'Codex 연결됨';
+      koMsg('연결됐습니다. PDF를 선택하고 Codex 분석을 누르세요.');
+    } else if (m.type === 'bmaps-disconnected') {
+      disconnected();
+    } else if (m.type === 'bmaps-response' && pending.has(m.id)) {
+      var request = pending.get(m.id); pending.delete(m.id); clearTimeout(request.timer);
+      if (m.error) request.reject(new Error(m.error)); else request.resolve(m.value);
+    }
+  });
+  window.koCodexConnect = function () {
+    clearInterval(helloTimer);
+    disconnected();
+    relayWindow = window.open(base + '/connect', 'bmaps-codex-connection', 'popup,width=650,height=650');
+    if (!relayWindow) { koMsg('팝업이 차단됐습니다. 이 사이트의 팝업을 허용한 뒤 다시 눌러 주세요.', true); return; }
+    koMsg('연결 창에서 이 사이트 연결 허용을 누르세요. 창에 접속할 수 없다면 연결 프로그램을 먼저 실행하세요.');
+    var attempts = 0;
+    helloTimer = setInterval(function () {
+      if (!relayWindow || relayWindow.closed || ++attempts > 240) { clearInterval(helloTimer); return; }
+      relayWindow.postMessage({ type:'bmaps-connect' }, base);
+    }, 500);
+  };
+  setInterval(function () { if (relayReady && (!relayWindow || relayWindow.closed)) disconnected(); }, 2000);
+  function relayCall(path, options) {
+    return new Promise(function (resolve, reject) {
+      var id = crypto.randomUUID(), opts = options || {};
+      var timer = setTimeout(function () { pending.delete(id); reject(new Error('연결 창 응답이 없습니다. 연결 창을 확인하고 다시 연결하세요.')); }, 40000);
+      pending.set(id, {resolve:resolve, reject:reject, timer:timer});
+      relayWindow.postMessage({type:'bmaps-request', id:id, path:path, method:opts.method || 'GET', body:opts.body}, base);
+    });
+  }
   async function call(path, options) {
+    if (relayReady && relayWindow && !relayWindow.closed) return relayCall(path, options);
+    if (!token()) throw new Error('먼저 Codex 연결을 누르고 연결 창에서 허용하세요.');
     var controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 20000);
     try {
       var opts = Object.assign({}, options || {});
@@ -65,7 +109,7 @@
   }
   window.koCodexRun = async function (resume) {
     if (running || _ko.busy) return;
-    if (!token()) { koMsg('Codex 연결 설정에 연결 코드를 입력하세요.', true); return; }
+    if (!relayReady && !token()) { koCodexConnect(); return; }
     if (!resume && !_ko.file) { koMsg('국어 문제지 PDF를 선택하세요.', true); return; }
     busy(true);
     try {
