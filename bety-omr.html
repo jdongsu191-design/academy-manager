@@ -24,6 +24,7 @@
              border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; }
 
   .bo-wrap { max-width: 560px; margin: 0 auto; padding: 14px 14px 90px; }
+  body.ko-wide .bo-wrap { max-width: 1040px; }   /* 국어 지문·문항 나란히 — 태블릿 폭을 쓴다 */
   .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
   .hint { font-size: 12.5px; color: #64748b; line-height: 1.6; }
   .empty { padding: 34px 10px; text-align: center; color: #94a3b8; font-size: 14px; }
@@ -191,6 +192,17 @@
   font-size:12px;font-weight:700;color:rgba(100,116,139,.07);
   transform:rotate(-24deg) scale(1.5);transform-origin:center}
 .pg-ans{padding:12px 14px 16px;border-top:1px solid #e2e8f0}
+/* 국어 — 지문·문항 나란히 (태블릿). 지문은 제 칸 안에서 스크롤, 문항은 기존 상자 그대로 */
+.pg-body{display:flex;align-items:stretch}
+.pg-body .pg-img{flex:1 1 auto;min-width:0}
+.pg-pass{display:none;flex:0 0 50%;min-width:0;border-right:1px solid #e2e8f0;background:#fff;flex-direction:column}
+.pg-body.two .pg-pass{display:flex}
+.pg-pass-h{display:flex;align-items:center;gap:8px;padding:6px 10px;background:#fffbeb;border-bottom:1px solid #fde68a;
+  font-size:12px;font-weight:800;color:#92400e;flex:0 0 auto}
+.pg-pass-h .pg-zoom{margin-left:auto;padding:3px 8px;font-size:11px}
+.pg-pass-scroll{flex:1 1 auto;overflow:auto;-webkit-overflow-scrolling:touch;position:relative;touch-action:pan-y pinch-zoom}
+.pg-pass-inner{position:relative}
+.pg-pass-inner img{display:block;width:100%;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .pg-bar{position:fixed;left:12px;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));
   max-width:536px;margin:0 auto;background:#fff;border:1.5px solid #e2e8f0;border-radius:16px;
   padding:9px 10px;display:flex;gap:8px;z-index:30;box-shadow:0 8px 22px rgba(15,23,42,.16)}
@@ -281,12 +293,21 @@
           <button class="pg-zoom pg-ps" id="pg-passage" onclick="boTogglePassage()" style="display:none">📖 지문</button>
           <button class="pg-zoom" id="pg-zoom" onclick="boZoomOpen()">🔍 확대</button>
         </div>
-        <div class="pg-img" id="pg-img">
-          <div class="pg-inner" id="pg-inner">
-            <img id="pg-image" alt="" draggable="false">
-            <div class="wm" id="pg-wm"></div>
+        <div class="pg-body" id="pg-body">
+          <div class="pg-pass" id="pg-pass">
+            <div class="pg-pass-h"><span id="pg-pass-ttl">📖 지문</span>
+              <button class="pg-zoom" onclick="boZoomOpen('passage')">🔍 확대</button></div>
+            <div class="pg-pass-scroll" id="pg-pass-scroll">
+              <div class="pg-pass-inner"><img id="pg-pass-img" alt="" draggable="false"><div class="wm" id="pg-pass-wm"></div></div>
+            </div>
           </div>
-          <div class="pg-lv" id="pg-lv">100%</div>
+          <div class="pg-img" id="pg-img">
+            <div class="pg-inner" id="pg-inner">
+              <img id="pg-image" alt="" draggable="false">
+              <div class="wm" id="pg-wm"></div>
+            </div>
+            <div class="pg-lv" id="pg-lv">100%</div>
+          </div>
         </div>
         <div class="pg-ans" id="pg-ans"></div>
       </div>
@@ -439,6 +460,8 @@ function boRpcName(k){
   return (_bo.subject === 'korean' ? ko : by)[k];
 }
 function boTogglePassage(){ _bo.showPassage = !_bo.showPassage; boPagedRender(); }
+/* 지문이 있고 화면이 태블릿 폭(700px~)이면 나란히, 폰이면 전환 버튼 */
+function boTwoPane(q){ return !!(q && q.passage_path) && window.innerWidth >= 700; }
 
 /* 문항 이미지는 공개 버킷에 있다 (3단계에서 서명 URL 로 바꾼다) */
 var BO_IMG = SUPABASE_URL + '/storage/v1/object/public/bety-exam/';
@@ -446,6 +469,7 @@ var BO_IMG = SUPABASE_URL + '/storage/v1/object/public/bety-exam/';
 function boEsc(v){ return String(v==null?'':v)
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function boView(name){
+  if(name !== 'omr') document.body.classList.remove('ko-wide');
   ['home','intro','omr','result','code','done'].forEach(function(v){
     document.getElementById('view-'+v).style.display = (v===name) ? '' : 'none';
   });
@@ -965,6 +989,7 @@ function boPagedStart(){
     boCardZoom(); boFullZoom();
     window.addEventListener('resize', function(){
       if(document.getElementById('bo-zoom').classList.contains('open')) boZoomFit();
+      else if(_bo.paged && _bo.subject === 'korean') boPagedRender();   /* 회전 → 나란히/전환 다시 판단 */
       else boCardFit();
     });
   }
@@ -988,12 +1013,26 @@ function boPagedRender(){
   if(_bo.cur > list.length - 1) _bo.cur = list.length - 1;
   var q = list[_bo.cur];
 
-  var hasP = !!q.passage_path;
-  if(!hasP) _bo.showPassage = false;
+  var hasP = !!q.passage_path, two = boTwoPane(q);
+  if(!hasP || two) _bo.showPassage = false;
   var ps = document.getElementById('pg-passage');
-  ps.style.display = hasP ? '' : 'none';
+  ps.style.display = (hasP && !two) ? '' : 'none';
   ps.textContent = _bo.showPassage ? '✏️ 문항' : '📖 지문';
   ps.classList.toggle('on', _bo.showPassage);
+  /* 나란히 — 지문 칸은 지문이 바뀔 때만 다시 싣고 맨 위로 */
+  var body = document.getElementById('pg-body');
+  body.classList.toggle('two', two);
+  document.body.classList.toggle('ko-wide', two);
+  if(two){
+    var pimg = document.getElementById('pg-pass-img');
+    if(_bo.passShown !== q.passage_path){
+      _bo.passShown = q.passage_path;
+      pimg.src = BO_IMG + q.passage_path;
+      document.getElementById('pg-pass-scroll').scrollTop = 0;
+      document.getElementById('pg-pass-wm').innerHTML = document.getElementById('pg-wm').innerHTML;
+    }
+    document.getElementById('pg-pass-ttl').textContent = '📖 지문 [' + (q.set_range || '') + ']';
+  } else { _bo.passShown = null; }
   document.getElementById('pg-no').textContent  = _bo.showPassage ? ('지문 [' + (q.set_range || '') + ']') : (q.q_no + '번');
   document.getElementById('pg-pts').textContent = (q.points || 0) + '점';
   var tag = document.getElementById('pg-tag');
@@ -1157,7 +1196,16 @@ function boCardFit(){
   var cw = box.clientWidth || 1;
   var natH = Math.round(z.ih * (cw / z.iw));
   var maxH = Math.max(200, Math.min(Math.round(window.innerHeight * 0.52), 560));
-  box.style.height = Math.min(natH, maxH) + 'px';
+  var two = document.getElementById('pg-body').classList.contains('two');
+  if(two){
+    /* 지문·문항을 같은 높이로 — 화면의 62% 까지. 지문은 그 안에서 스크롤 */
+    var H = Math.max(320, Math.min(Math.round(window.innerHeight * 0.62), 760));
+    box.style.height = H + 'px';
+    document.getElementById('pg-pass').style.height = H + 'px';
+  } else {
+    box.style.height = Math.min(natH, maxH) + 'px';
+    document.getElementById('pg-pass').style.height = '';
+  }
   z.fitNow();
 }
 
@@ -1170,18 +1218,21 @@ function boFullZoom(){
                          document.getElementById('zm-lv'), 8);
   return _bo.zFull;
 }
-function boZoomOpen(){
+function boZoomOpen(which){
   var q = _bo.questions[_bo.cur];
-  if(!q || !q.image_path) return;
+  if(!q) return;
+  var pass = (which === 'passage') || (_bo.showPassage && q.passage_path);
+  var path = pass ? q.passage_path : q.image_path;
+  if(!path) return;
   var z = boFullZoom();
   document.getElementById('zm-wm').innerHTML = document.getElementById('pg-wm').innerHTML;
-  document.getElementById('zm-no').textContent = q.q_no + '번';
+  document.getElementById('zm-no').textContent = pass ? ('지문 [' + (q.set_range || '') + ']') : (q.q_no + '번');
   document.getElementById('bo-zoom').classList.add('open');
   var hint = document.getElementById('zm-hint');
   hint.style.opacity = '1';
   setTimeout(function(){ hint.style.opacity = '0'; }, 2600);
   z.img.onload = function(){ z.fitNow(); };
-  z.img.src = BO_IMG + q.image_path;
+  z.img.src = BO_IMG + path;
   if(z.img.complete && z.img.naturalWidth) z.fitNow();
 }
 function boZoomClose(){ document.getElementById('bo-zoom').classList.remove('open'); }
