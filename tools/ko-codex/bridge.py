@@ -13,6 +13,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from pipeline import extract, review
+from answers import parse_answers
 
 LIMIT = 30*1024*1024
 
@@ -33,6 +34,11 @@ def run_server(origin, root, codex, port=8765):
     root.mkdir(parents=True, exist_ok=True)
     token = secrets.token_urlsafe(32)
     jobs = {}
+    # Completed results survive updates/restarts so the browser can resume its saved job ID.
+    for resultfile in sorted(root.glob('*/result.json'),key=lambda p:p.stat().st_mtime)[-20:]:
+        jobid=resultfile.parent.name
+        if len(jobid)==32 and all(c in '0123456789abcdef' for c in jobid):
+            jobs[jobid]={'status':'complete','message':'저장된 분석 결과를 불러왔습니다.','created':resultfile.stat().st_mtime}
     sessions = {}  # In-memory, origin-bound approvals; lost when the worker stops.
     lock = threading.RLock()
 
@@ -131,6 +137,14 @@ def run_server(origin, root, codex, port=8765):
 
         def do_POST(self):
             if not self.trusted():return
+            if self.path=='/answers':
+                try:
+                    n=int(self.headers.get('Content-Length','0'))
+                    if not 1<=n<=10*1024*1024 or self.headers.get('Content-Type')!='application/pdf':raise ValueError('10MB 이하 정답 PDF를 사용하세요.')
+                    self.connection.settimeout(30)
+                    self.send(200,parse_answers(self.rfile.read(n)))
+                except Exception as e:self.send(400,{'error':str(e)[:300]})
+                return
             if self.path in ('/sessions','/sessions/revoke'):
                 if self.headers.get('Origin')!=f'http://127.0.0.1:{port}' or not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token):
                     self.send(403,{'error':'로컬 승인 창에서만 허용할 수 있습니다.'});return

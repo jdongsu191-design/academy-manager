@@ -117,7 +117,7 @@
   koRender = function () {
     if (!draft || _ko.sets !== draft.sets) return originalRender();
     var reviews = draft.codexReview || [], issues = [].concat.apply([], reviews.map(function (r) { return r.issues || []; }));
-    $('ko-result').innerHTML = '<div class="ko-warn"><b>Codex 검토가 포함된 등록 초안 · 학생에게 배포되지 않았습니다.</b><br>'
+    $('ko-result').innerHTML = '<div class="ko-warn"><b>Codex 검토가 포함된 분석 초안 · 실제 배포 상태는 시험 목록에서 확인하세요.</b><br>'
       + reviews.map(function (r) { return koEsc(r.pages.join(', ') + '쪽: ' + r.summary); }).join('<br>')
       + (issues.length ? '<br><b>확인 필요</b><br>' + issues.map(koEsc).join('<br>') : '<br>자동 검토에서 보고된 문제 없음 · 등록 전 원본을 확인하세요.')
       + '<br><button class="btn" onclick="koCodexDownload()">등록 초안 내려받기</button></div>'
@@ -170,4 +170,6 @@
     a.href = url; a.download = 'BMAPS-korean-draft.json'; a.click(); setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   };
   $('ko-codex-origin').textContent = location.origin;
+  window.koGetDraft = function () { return draft && _ko.sets === draft.sets ? draft : null; };
+  window.koLocalCall = call;
 })();
