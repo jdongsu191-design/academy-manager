@@ -135,8 +135,10 @@ def run_server(origin, root, codex, port=8765):
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--origin',required=True)
+    parser.add_argument('--codex',help='Local Codex executable resolved by the launcher')
+    parser.add_argument('--port',type=int,default=8765)
     parser.add_argument('--data-dir',type=Path,default=Path.home()/'.bmaps-ko-worker')
     args=parser.parse_args()
-    codex=shutil.which('codex')
+    codex=shutil.which(args.codex or 'codex')
     if not codex:raise SystemExit('Codex CLI를 설치하고 codex login을 실행하세요.')
-    run_server(args.origin,args.data_dir.resolve(),codex)
+    run_server(args.origin,args.data_dir.resolve(),codex,args.port)
