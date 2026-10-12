@@ -5,7 +5,7 @@
 <!-- ⚠ 페이지 전체가 커지면 바·버튼까지 같이 커져 읽기 불편하다.
      그래서 페이지 핀치는 막고, 문항 확대는 확대 창 안에서 직접 다룬다(boZoom*). -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 베티 OMR [v0.8.4-screen]</title>
+<title>BMAPS · 베티 OMR [v0.9-korean]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -147,6 +147,7 @@
   .bk p { font-size: 13.5px; color: #475569; line-height: 1.7; margin-bottom: 16px; }
 
 /* ── 문항 확대 보기 ───────────────────────────────────── */
+.pg-ps{margin-left:auto}.pg-ps.on{background:#1e3a5f;color:#fff;border-color:#1e3a5f}.pg-ps~.pg-zoom{margin-left:0}
 .pg-zoom{margin-left:auto;border:1.5px solid #cbd5e1;background:#fff;border-radius:8px;
   padding:5px 10px;font-size:12px;font-weight:800;color:#334155;cursor:pointer;white-space:nowrap}
 .zoom-ov{position:fixed;inset:0;background:#0f172a;display:none;flex-direction:column;z-index:70}
@@ -219,11 +220,9 @@
 <script src="/auto-reload.js"></script>
 </head>
 <body>
-<div style="padding:10px;text-align:center;background:#e0f2fe"><a href="korean-exam.html">📖 국어 시험 응시</a></div>
-
 <div class="bo-top">
   <span class="bo-title">📝 베티 OMR</span>
-  <span class="bo-ver">v0.8.4-screen</span>
+  <span class="bo-ver">v0.9-korean</span>
   <span class="bo-who" id="bo-who"></span>
   <button class="bo-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -252,7 +251,7 @@
         <li>중간에 화면을 벗어나도 시간은 계속 흐릅니다.</li>
         <li>고른 답은 그때그때 자동으로 저장됩니다.</li>
         <li>시간이 끝나면 그때까지 고른 답으로 자동 제출됩니다.</li>
-        <li>해설 영상은 제출한 뒤에 볼 수 있습니다.</li>
+        <li id="in-yt">해설 영상은 제출한 뒤에 볼 수 있습니다.</li>
       </ul>
       <div class="hint" id="in-resume" style="display:none;margin-bottom:10px"></div>
       <button class="btn btn-primary" style="width:100%;padding:14px;font-size:16px"
@@ -279,6 +278,7 @@
           <span class="pg-no" id="pg-no">-</span>
           <span class="pg-pts" id="pg-pts"></span>
           <span class="pg-tag" id="pg-tag" style="display:none"></span>
+          <button class="pg-zoom pg-ps" id="pg-passage" onclick="boTogglePassage()" style="display:none">📖 지문</button>
           <button class="pg-zoom" id="pg-zoom" onclick="boZoomOpen()">🔍 확대</button>
         </div>
         <div class="pg-img" id="pg-img">
@@ -304,7 +304,7 @@
     </div>
     <div class="card">
       <div style="font-size:14px;font-weight:800;margin-bottom:8px">문항별 결과</div>
-      <div class="hint" style="margin-bottom:8px">틀린 문항은 <b>해설 영상</b>으로 확인하세요. (정답은 영상에서 공개됩니다)</div>
+      <div class="hint" style="margin-bottom:8px" id="res-hint">틀린 문항은 <b>해설 영상</b>으로 확인하세요. (정답은 영상에서 공개됩니다)</div>
       <div id="res-items"></div>
     </div>
     <button class="btn" style="width:100%" onclick="boShowHome()">← 회차 목록으로</button>
@@ -420,7 +420,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v0.8.4-screen';
+window.BETY_OMR_VERSION = 'v0.9-korean';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -428,7 +428,17 @@ var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
             guest:false, guestCode:'', guestName:'',
             /* 화면 응시 */
             paged:false, cur:0, zCard:null, zFull:null, skew:0, expires:0, timer:null,
-            away:0, dirty:false, saveT:null, lastSave:0, hooked:false, listStatus:'' };
+            away:0, dirty:false, saveT:null, lastSave:0, hooked:false, listStatus:'',
+            /* 국어 — 같은 화면·같은 흐름, RPC 이름과 지문 칸만 다르다 */
+            subject:'bety', showPassage:false };
+
+/* 과목별 RPC — 국어(ko_*)는 베티(bety_omr_*)와 호출 규약·반환 모양이 같다 */
+function boRpcName(k){
+  var ko = { start:'ko_start', draft:'ko_save_draft', submit:'ko_submit', result:'ko_get_result' };
+  var by = { start:'bety_omr_start', draft:'bety_omr_save_draft', submit:'bety_omr_submit', result:'bety_omr_get_result' };
+  return (_bo.subject === 'korean' ? ko : by)[k];
+}
+function boTogglePassage(){ _bo.showPassage = !_bo.showPassage; boPagedRender(); }
 
 /* 문항 이미지는 공개 버킷에 있다 (3단계에서 서명 URL 로 바꾼다) */
 var BO_IMG = SUPABASE_URL + '/storage/v1/object/public/bety-exam/';
@@ -482,16 +492,21 @@ function boCandidates(rd){
   var done = (rd.exams||[]).filter(function(e){ return e.submitted; });
   if(done.length) return { mode:'done', exam: done[0] };
   var c = (rd.exams||[]).slice();
+  if(rd.subject === 'korean') return (c.length === 1) ? { mode:'auto', exam: c[0] } : { mode:'pick', exams: c };
   if(rd.known_level) c = boNarrow(c, function(e){ return e.level === rd.known_level; });
   if(_bo.elective)   c = boNarrow(c, function(e){ return !e.elective || e.elective === _bo.elective; });
   return (c.length === 1) ? { mode:'auto', exam: c[0] } : { mode:'pick', exams: c };
 }
-function boExamLabel(e){ return e.level + (e.elective ? (' · ' + e.elective) : ''); }
+function boExamLabel(e){
+  if(!e.level) return '국어' + (e.elective ? (' · ' + e.elective) : '');      /* 국어 시험지 */
+  return e.level + (e.elective ? (' · ' + e.elective) : '');
+}
 
 // 회차 라벨: "8회차 · 2026-07-19" (응시완료 탭에서는 점수 표시)
 function boRoundLabel(rd){
-  var no = (_bo.roundNo || {})[rd.session_date];
-  var base = (no != null ? (no + '회차 · ') : '') + rd.session_date;
+  var ko = (rd.subject === 'korean');
+  var no = ko ? rd.round_no : (_bo.roundNo || {})[rd.session_date];
+  var base = (ko ? '📖 국어 ' : '') + (no != null ? (no + '회차 · ') : '') + rd.session_date;
   var c = boCandidates(rd);
   if(c.mode === 'done') base += ' — ' + c.exam.score + '점';
   return base;
@@ -542,13 +557,21 @@ async function boLoadRounds(){
     var r = await db.rpc('bety_omr_list_for_student', { p_student_id: _bo.user.id });
     if(r.error) throw r.error;
     var d = r.data || {};
-    if(!d.ok){
+    var rounds = d.ok ? (d.rounds || []).map(function(rd){ rd.subject = 'bety'; return rd; }) : [];
+    /* 국어 회차 — 같은 목록에 섞는다 (날짜 내림차순). 실패해도 수학 회차는 보인다 */
+    try {
+      var kr = await db.rpc('ko_list_for_student', { p_student_id: _bo.user.id });
+      var kd = (kr && !kr.error && kr.data) || {};
+      if(kd.ok) (kd.rounds || []).forEach(function(rd){ rd.subject = 'korean'; rounds.push(rd); });
+    } catch(e){ console.warn('[국어 회차]', e); }
+    if(!d.ok && !rounds.length){
       det.innerHTML = '<div class="empty">' + (d.reason==='not_participant'
         ? '베티모의고사 대상 학생이 아닙니다' : '회차를 불러올 수 없습니다') + '</div>';
       return;
     }
+    rounds.sort(function(a, b){ return String(b.session_date).localeCompare(String(a.session_date)); });
     _bo.elective = d.elective || null;
-    _bo.rounds = d.rounds || [];
+    _bo.rounds = rounds;
     if(!_bo.rounds.length){
       det.innerHTML = '<div class="empty">아직 응시할 수 있는 회차가 없습니다.<br>시험지가 준비되면 여기에 표시됩니다.</div>';
       return;
@@ -585,16 +608,16 @@ function boRoundDetail(){
     det.innerHTML = '<div class="rd-box">'
       + '<div class="rd-exam">' + boEsc(boExamLabel(c.exam)) + '</div>'
       + '<div class="rd-score">' + c.exam.score + '<small> / ' + c.exam.total_score + '점</small></div>'
-      + '<button class="rd-done" onclick="boOpenResult(\''+c.exam.id+'\',\''+rd.session_date+'\')">결과 보기</button>'
+      + '<button class="rd-done" onclick="boOpenResult(\''+c.exam.id+'\',\''+rd.session_date+'\',\''+(rd.subject||'bety')+'\')">결과 보기</button>'
       + '</div>';
   } else if(c.mode === 'auto'){
     /* 응시 중에 새로고침하면 목록으로 돌아온다 — 다시 시작하는 게 아님을 알려 준다 */
     var _ing = (c.exam.status === 'in_progress');
     det.innerHTML = '<div class="rd-box">'
       + '<div class="rd-exam">' + boEsc(boExamLabel(c.exam)) + '</div>'
-      + '<div class="rd-meta">' + c.exam.total_score + '점 만점'
+      + '<div class="rd-meta">' + (c.exam.question_count ? (c.exam.question_count + '문항 · ') : '') + c.exam.total_score + '점 만점'
         + (_ing ? ' · <b style="color:#b91c1c">응시 중</b>' : '') + '</div>'
-      + '<button class="rd-go" onclick="boOpenExam(\''+c.exam.id+'\',\''+rd.session_date+'\')">'
+      + '<button class="rd-go" onclick="boOpenExam(\''+c.exam.id+'\',\''+rd.session_date+'\',\''+(rd.subject||'bety')+'\')">'
         + (_ing ? '이어서 응시' : '응시하기') + '</button>'
       + '</div>';
   } else {
@@ -614,6 +637,7 @@ async function boPickFromSel(roundIdx){
   var rd = _bo.rounds[roundIdx]; if(!rd) return;
   var j = parseInt((document.getElementById('rd-exam-sel')||{}).value, 10);
   var e = (_bo.pickExams || [])[j]; if(!e) return;
+  if(rd.subject === 'korean'){ await boOpenExam(e.id, rd.session_date, 'korean'); return; }   /* 국어는 선택과목 저장이 없다 */
   await boPickExam(e.id, rd.session_date, e.elective || '');
 }
 async function boPickExam(examId, date, elective){
@@ -630,8 +654,10 @@ async function boPickExam(examId, date, elective){
 }
 
 /* ── 시험지 진입 (응시/결과 분기) ───────────────────────── */
-async function boOpenExam(examId, date){
+async function boOpenExam(examId, date, subject){
   _bo.date = date;
+  _bo.subject = subject || 'bety';
+  if(_bo.subject === 'korean'){ await boOpenKoExam(examId, date); return; }
   try {
     var r = await db.rpc('bety_omr_get_exam', { p_student_id: _bo.user.id, p_exam_id: examId });
     if(r.error) throw r.error;
@@ -652,6 +678,35 @@ async function boOpenExam(examId, date){
     if(_bo.paged){ boShowIntro(); return; }
     boRenderOmr();
     boView('omr');
+  } catch(e){ alert('오류: ' + (e.message||e)); }
+}
+
+/* 국어 — 지문·문항이 전부 이미지라 언제나 화면 응시. 문항마다 지문 이미지를 달아 둔다 */
+async function boOpenKoExam(examId, date){
+  try {
+    var r = await db.rpc('ko_get_exam', { p_student_id: _bo.user.id, p_exam_id: examId });
+    if(r.error) throw r.error;
+    var d = r.data || {};
+    if(!d.ok){
+      alert(d.reason === 'not_eligible' ? '이 시험지의 응시 대상이 아닙니다.'
+          : d.reason === 'no_exam'      ? '시험지가 없거나 아직 발행되지 않았습니다.'
+          : '시험지를 불러올 수 없습니다.');
+      return;
+    }
+    if(d.submitted){ await boOpenResult(examId, date, 'korean'); return; }
+    var ex = d.exam || {};
+    _bo.exam = { id:ex.id, session_date:ex.session_date, level:'국어', elective:ex.elective,
+                 time_limit_min:ex.duration_min, question_count:ex.question_count, total_score:ex.total_score };
+    _bo.questions = [];
+    (d.sets || []).forEach(function(st){
+      (st.questions || []).forEach(function(q){
+        _bo.questions.push({ q_no:q.no, points:q.points, q_type:'choice', is_excluded:false,
+                             image_path:q.image, passage_path:st.passage || null, set_range:st.range, area:st.area });
+      });
+    });
+    _bo.answers = {}; _bo.paged = true; _bo.showPassage = false;
+    _bo.listStatus = boListStatus(examId);
+    boShowIntro();
   } catch(e){ alert('오류: ' + (e.message||e)); }
 }
 
@@ -844,6 +899,7 @@ function boShowIntro(){
     ex.session_date + ' · ' + ex.level + (ex.elective ? (' · ' + ex.elective) : '')
     + ' · ' + (ex.question_count || _bo.questions.length) + '문항';
   document.getElementById('in-min').textContent = ex.time_limit_min || 100;
+  document.getElementById('in-yt').style.display = (_bo.subject === 'korean') ? 'none' : '';
   var rs = document.getElementById('in-resume'), go = document.getElementById('in-go');
   if(_bo.listStatus === 'in_progress'){
     rs.style.display = '';
@@ -861,7 +917,7 @@ async function boStartExam(){
   var btn = document.getElementById('in-go');
   btn.disabled = true;
   try {
-    var r = await db.rpc('bety_omr_start',
+    var r = await db.rpc(boRpcName('start'),
       { p_student_id:_bo.user.id, p_exam_id:_bo.exam.id });
     if(r.error) throw r.error;
     var d = r.data || {};
@@ -932,7 +988,13 @@ function boPagedRender(){
   if(_bo.cur > list.length - 1) _bo.cur = list.length - 1;
   var q = list[_bo.cur];
 
-  document.getElementById('pg-no').textContent  = q.q_no + '번';
+  var hasP = !!q.passage_path;
+  if(!hasP) _bo.showPassage = false;
+  var ps = document.getElementById('pg-passage');
+  ps.style.display = hasP ? '' : 'none';
+  ps.textContent = _bo.showPassage ? '✏️ 문항' : '📖 지문';
+  ps.classList.toggle('on', _bo.showPassage);
+  document.getElementById('pg-no').textContent  = _bo.showPassage ? ('지문 [' + (q.set_range || '') + ']') : (q.q_no + '번');
   document.getElementById('pg-pts').textContent = (q.points || 0) + '점';
   var tag = document.getElementById('pg-tag');
   if(q.is_excluded){ tag.style.display = ''; tag.textContent = '제외 문항'; }
@@ -941,11 +1003,12 @@ function boPagedRender(){
 
   var img = document.getElementById('pg-image');
   var box = document.getElementById('pg-img');
-  if(q.image_path){
+  var shown = (_bo.showPassage && hasP) ? q.passage_path : q.image_path;
+  if(shown){
     img.style.display = '';
     box.style.display = '';
     img.onload = boCardFit;
-    img.src = BO_IMG + q.image_path;
+    img.src = BO_IMG + shown;
     if(img.complete && img.naturalWidth) boCardFit();
   } else {
     img.removeAttribute('src'); img.style.display = 'none'; box.style.display = 'none';
@@ -1172,7 +1235,7 @@ async function boSaveDraft(flush){
   var payload = {};
   Object.keys(_bo.answers).forEach(function(k){ payload[k] = _bo.answers[k]; });
   try {
-    var r = await db.rpc('bety_omr_save_draft', { p_student_id:_bo.user.id,
+    var r = await db.rpc(boRpcName('draft'), { p_student_id:_bo.user.id,
       p_exam_id:_bo.exam.id, p_answers:payload, p_away:(_bo.away || 0) });
     if(r.error) throw r.error;
     var d = r.data || {};
@@ -1236,7 +1299,7 @@ async function boSubmit(auto){
       return;
     }
 
-    var r = await db.rpc('bety_omr_submit', {
+    var r = await db.rpc(boRpcName('submit'), {
       p_student_id: _bo.user.id, p_exam_id: _bo.exam.id, p_answers: payload });
     if(r.error) throw r.error;
     var d = r.data || {};
@@ -1260,9 +1323,10 @@ async function boSubmit(auto){
 }
 
 /* ── 결과 ───────────────────────────────────────────────── */
-async function boOpenResult(examId, date){
+async function boOpenResult(examId, date, subject){
+  if(subject) _bo.subject = subject;
   try {
-    var r = await db.rpc('bety_omr_get_result', { p_student_id: _bo.user.id, p_exam_id: examId });
+    var r = await db.rpc(boRpcName('result'), { p_student_id: _bo.user.id, p_exam_id: examId });
     if(r.error) throw r.error;
     var d = r.data || {};
     if(!d.ok){ alert('결과가 없습니다.'); return; }
@@ -1271,7 +1335,11 @@ async function boOpenResult(examId, date){
   } catch(e){ alert('오류: ' + (e.message||e)); }
 }
 function boRenderResult(d, date){
-  document.getElementById('res-title').textContent = (date||'') + ' 베티모의고사 결과';
+  var ko = (_bo.subject === 'korean');
+  document.getElementById('res-title').textContent = (date||'') + (ko ? ' 국어 모의고사 결과' : ' 베티모의고사 결과');
+  document.getElementById('res-hint').innerHTML = ko
+    ? '정답과 해설은 선생님께 확인하세요.'
+    : '틀린 문항은 <b>해설 영상</b>으로 확인하세요. (정답은 영상에서 공개됩니다)';
   document.getElementById('res-score').textContent = d.score;
   document.getElementById('res-total').textContent = d.total_score;
   var wrong = (d.items||[]).filter(function(it){ return !it.is_correct; }).length;
