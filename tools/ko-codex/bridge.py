@@ -1,0 +1,142 @@
+"""Paired loopback-only worker for a trusted BMAPS administrator browser."""
+import argparse
+import hmac
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import secrets
+import shutil
+import threading
+import time
+import uuid
+from urllib.parse import urlsplit
+
+from pipeline import extract, review
+
+LIMIT = 30*1024*1024
+
+
+def run_server(origin, root, codex, port=8765):
+    parts = urlsplit(origin)
+    if parts.scheme != 'https' or not parts.hostname or origin != f'https://{parts.netloc}':
+        raise ValueError('정확한 HTTPS BMAPS origin을 지정하세요 (경로/끝 슬래시 제외).')
+    root.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(32)
+    jobs = {}
+    lock = threading.Lock()
+
+    def work(jobid, pdf, lo, hi):
+        folder = root/jobid
+        folder.mkdir()
+        def progress(message):
+            with lock:
+                jobs[jobid]['message'] = message
+        try:
+            progress('Python 원본 영역 분석 중')
+            result = extract(pdf,lo,hi)
+            result = review(result,pdf,folder,codex,progress)
+            blob = json.dumps(result,ensure_ascii=False).encode('utf-8')
+            if len(blob)>80*1024*1024:
+                raise ValueError('결과가 큽니다. 문항 범위를 나누어 분석하세요.')
+            (folder/'result.json').write_bytes(blob)
+            with lock:
+                jobs[jobid].update(status='complete',message='원본·Codex 검토 완료. 등록 전 결과를 확인하세요.')
+        except Exception as e:
+            with lock:
+                jobs[jobid].update(status='failed',message=str(e)[:400])
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self,*args):
+            pass  # Never log pairing credentials or document contents.
+
+        def send(self,status,payload):
+            blob=json.dumps(payload,ensure_ascii=False).encode('utf-8')
+            self.send_response(status)
+            self.send_header('Content-Type','application/json; charset=utf-8')
+            self.send_header('Cache-Control','no-store')
+            if self.headers.get('Origin')==origin:
+                self.send_header('Access-Control-Allow-Origin',origin)
+                self.send_header('Vary','Origin')
+            self.send_header('Content-Length',str(len(blob)))
+            self.end_headers()
+            self.wfile.write(blob)
+
+        def trusted(self,auth=True):
+            if self.headers.get('Host') != f'127.0.0.1:{port}' or self.headers.get('Origin') != origin:
+                self.send(403,{'error':'허용되지 않은 웹사이트입니다.'});return False
+            if auth and not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token):
+                self.send(401,{'error':'연결 코드를 확인하세요.'});return False
+            return True
+
+        def do_OPTIONS(self):
+            if not self.trusted(False):return
+            self.send_response(204)
+            self.send_header('Access-Control-Allow-Origin',origin)
+            self.send_header('Access-Control-Allow-Methods','GET, POST, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers','Authorization, Content-Type')
+            self.send_header('Access-Control-Allow-Private-Network','true')
+            self.send_header('Vary','Origin')
+            self.end_headers()
+
+        def do_GET(self):
+            if not self.trusted():return
+            if self.path=='/health':
+                self.send(200,{'ok':True,'version':1});return
+            jobid=self.path.removeprefix('/jobs/')
+            with lock:
+                state=dict(jobs.get(jobid,{}))
+            if not state:
+                self.send(404,{'error':'작업이 없습니다. 처리 프로그램 재시작 후에는 다시 분석하세요.'});return
+            if state['status']=='complete':
+                state['result']=json.loads((root/jobid/'result.json').read_text(encoding='utf-8'))
+            self.send(200,state)
+
+        def do_POST(self):
+            if not self.trusted():return
+            parsed=urlsplit(self.path)
+            if parsed.path!='/jobs':self.send(404,{'error':'Not found'});return
+            from urllib.parse import parse_qs
+            try:
+                params=parse_qs(parsed.query)
+                lo=int(params.get('from',['1'])[0]);hi=int(params.get('to',['99'])[0])
+                if not 1<=lo<=hi<=99:raise ValueError('문항 범위 오류')
+                n=int(self.headers.get('Content-Length','0'))
+                if not 1<=n<=LIMIT:raise ValueError('30MB 이하 PDF를 사용하세요.')
+                if self.headers.get('Content-Type')!='application/pdf':raise ValueError('PDF만 지원합니다.')
+                with lock:
+                    if any(j['status']=='running' for j in jobs.values()):
+                        self.send(409,{'error':'이미 처리 중인 작업이 있습니다.'});return
+                    # Bound in-memory history; files remain locally until operator removes them.
+                    if len(jobs)>=20:
+                        jobs.pop(next(iter(jobs)))
+                    jobid=uuid.uuid4().hex
+                    jobs[jobid]={'status':'running','message':'파일 수신 중','created':time.time()}
+                self.connection.settimeout(30)
+                pdf=self.rfile.read(n)
+                if len(pdf)!=n or not pdf.startswith(b'%PDF-'):
+                    with lock:jobs.pop(jobid,None)
+                    raise ValueError('유효한 PDF가 아닙니다.')
+                threading.Thread(target=work,args=(jobid,pdf,lo,hi),daemon=True).start()
+                self.send(202,{'id':jobid})
+            except Exception as e:
+                if 'jobid' in locals():
+                    with lock:
+                        if jobs.get(jobid,{}).get('message')=='파일 수신 중':jobs.pop(jobid,None)
+                self.send(400,{'error':str(e)[:300]})
+
+    server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
+    print('BMAPS origin: '+origin,flush=True)
+    print('연결 코드 (브라우저 Codex 연결 설정에 입력): '+token,flush=True)
+    print('이 창이 열려 있는 동안만 동작합니다. 종료: Ctrl+C',flush=True)
+    try:server.serve_forever()
+    finally:server.server_close()
+
+
+if __name__=='__main__':
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--origin',required=True)
+    parser.add_argument('--data-dir',type=Path,default=Path.home()/'.bmaps-ko-worker')
+    args=parser.parse_args()
+    codex=shutil.which('codex')
+    if not codex:raise SystemExit('Codex CLI를 설치하고 codex login을 실행하세요.')
+    run_server(args.origin,args.data_dir.resolve(),codex)
