@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v1.04-consult]</title>
+<title>BMAPS · 독서실 출결 [v1.05-xout3]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -166,7 +166,7 @@
   .wk-tbl input.wk-t:focus { border-color: #0369a1; box-shadow: 0 0 0 2px rgba(3,105,161,0.15); }
   .wk-tbl input.wk-t.dirty { background: #fef9c3; border-color: #facc15; }
   .wk-tbl input.wk-extra { width: 48px; }
-  .wk-xout-wrap { display:flex; align-items:center; gap:3px; justify-content:center; }
+  .wk-xout-wrap { display:flex; align-items:center; gap:3px; justify-content:center; flex-wrap:wrap; }
   .wk-xout-btn { width:22px; height:22px; padding:0; border:1px solid #cbd5e1; background:#f8fafc; border-radius:5px; cursor:pointer; font-size:11px; line-height:1; color:#0f766e; flex-shrink:0; }
   .wk-xout-btn:hover { background:#e0f2fe; border-color:#0ea5e9; }
   .wk-xout-overlay { position:fixed; inset:0; background:rgba(15,23,42,.45); display:none; align-items:center; justify-content:center; z-index:9999; }
@@ -186,6 +186,21 @@
   .wk-xout-add { background:#0d9488; color:#fff; }
   .wk-xout-add:disabled { background:#cbd5e1; cursor:not-allowed; }
   .wk-xout-cancel { background:#f1f5f9; color:#475569; }
+  /* 외출3 이후 기록 모달 */
+  #wk-xo3-overlay .wk-xout-card { width:560px; max-width:96vw; }
+  .xo3-tbl { width:100%; border-collapse:collapse; font-size:13px; margin:6px 0 10px; }
+  .xo3-tbl th { background:#f8fafc; color:#475569; font-weight:700; font-size:11.5px; padding:6px 4px; border-bottom:1px solid #e2e8f0; }
+  .xo3-tbl td { padding:5px 4px; border-bottom:1px solid #f1f5f9; text-align:center; vertical-align:middle; }
+  .xo3-tbl input.xo3-t { width:62px; padding:6px 6px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; text-align:center; font-family:inherit; }
+  .xo3-tbl input.xo3-r { width:100px; padding:6px 6px; border:1px solid #cbd5e1; border-radius:6px; font-size:12px; font-family:inherit; }
+  .xo3-tbl .xo3-now { font-size:10px; padding:2px 5px; border:1px solid #cbd5e1; background:#fff; border-radius:4px; cursor:pointer; margin-left:2px; }
+  .xo3-tbl .xo3-del { font-size:11px; padding:2px 6px; border:1px solid #fecaca; background:#fef2f2; color:#b91c1c; border-radius:4px; cursor:pointer; }
+  .xo3-tbl .xo3-dur { font-size:12px; color:#0369a1; font-weight:700; }
+  .xo3-tbl .xo3-pend { background:#fffbeb; }
+  .xo3-empty { font-size:12.5px; color:#94a3b8; text-align:center; padding:12px 0; }
+  .xo3-addrow { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+  .xo3-addrow button { font-size:12px; padding:5px 10px; border:1px solid #99f6e4; background:#f0fdfa; color:#0f766e; border-radius:7px; cursor:pointer; font-weight:700; }
+  .xo3-note { font-size:11.5px; color:#64748b; margin-bottom:8px; line-height:1.5; }
   .wk-tbl td.wk-req-cell { background: #eff6ff !important; min-width: 150px; white-space: nowrap; }
   .wk-req-group { display: inline-flex; align-items: center; gap: 2px; }
   .wk-tbl input.wk-req-h, .wk-tbl input.wk-req-m { width: 38px; border: 1.5px solid #bfdbfe; background: #fff; padding: 5px 4px; font-size: 13px; text-align: center; outline: none; border-radius: 5px; font-weight: 700; color: #1d4ed8; -moz-appearance: textfield; }
@@ -857,7 +872,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v1.04-consult</span>
+    <span class="tb-ver" id="sc-ver">v1.05-xout3</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1218,7 +1233,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v1.04-consult';
+  window.STUDYCENTER_VERSION = 'v1.05-xout3';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -2404,7 +2419,19 @@
     }catch(e){ console.warn('[scWkRt] realtime 구독 실패(폴링 대체):', e); }
   }
 
+  /* ── 외출3⁺ 기록 (extra_outs jsonb) — 컬럼이 없으면 기능을 숨긴다 ── */
+  var _scXo3Ok = false, _scXo3Probed = false;
+  async function scXo3Probe(){
+    if(_scXo3Probed) return;
+    _scXo3Probed = true;
+    try {
+      var r = await db.from("reading_room_attendance").select("extra_outs").limit(1);
+      _scXo3Ok = !r.error;
+    } catch(e){ _scXo3Ok = false; }
+    if(!_scXo3Ok) console.warn("[독서실] extra_outs 컬럼이 없어 외출3⁺ 기록 기능을 숨깁니다 (DDL 필요)");
+  }
   async function scWkLoad(silent){
+    await scXo3Probe();
     await scNewEnsure();
     var monday = document.getElementById("wk-week-start").value;
     if(!monday){ monday = scWkMonday(scWkFmtDate(new Date())); document.getElementById("wk-week-start").value = monday; }
@@ -4197,7 +4224,11 @@
         + '<td>'+cell("out_1_end", row?row.out_1_end:"")+'</td>'
         + '<td>'+outStartCell(2, "out_2_start", row?row.out_2_start:"")+'</td>'
         + '<td>'+cell("out_2_end", row?row.out_2_end:"")+'</td>'
-        + '<td><div class="wk-xout-wrap"><input class="wk-t wk-extra" data-sid="'+sid+'" data-field="extra_out_minutes" value="'+(row&&row.extra_out_minutes?row.extra_out_minutes:"")+'" oninput="scWkCellEdit(this)" placeholder="0"><button type="button" class="wk-xout-btn" onclick="scWkXoutOpen(\''+sid+'\')" title="외출·복귀 시각으로 추가">➕</button></div></td>'
+        + '<td><div class="wk-xout-wrap"><input class="wk-t wk-extra" data-sid="'+sid+'" data-field="extra_out_minutes" value="'+(row&&row.extra_out_minutes?row.extra_out_minutes:"")+'" oninput="scWkCellEdit(this)" placeholder="0"><button type="button" class="wk-xout-btn" onclick="scWkXoutOpen(\''+sid+'\')" title="외출·복귀 시각으로 추가">➕</button>'
+          + (_scXo3Ok ? '<button type="button" class="wk-xout-btn" onclick="scXo3Open(\''+sid+'\')" title="외출3 이후 기록 · 카톡 멘트">📋</button>'
+                       + '<button class="wk-kakao-btn" type="button" onclick="scMsgXo(\''+sid+'\',\'start\',this)" title="가장 최근 추가외출의 외출 멘트 복사">💬출</button>'
+                       + '<button class="wk-kakao-btn" type="button" onclick="scMsgXo(\''+sid+'\',\'end\',this)" title="가장 최근 추가외출의 복귀 멘트 복사">💬귀</button>' : '')
+          + '</div></td>'
         + '<td>'+cell("check_out_time", row?row.check_out_time:"")+'</td>'
         + '<td class="wk-total">'+(net!=null?scWkFmtDur(net):"-")+'</td>'
         + '<td class="'+remainCls+'">'+remainHtml+'</td>'
@@ -4605,6 +4636,137 @@
     scWkXoutClose();
   }
 
+  /* ── 외출3 이후 기록 모달 ──────────────────────────────────
+     외출1·2 칸 밖의 외출(키오스크 3회⁺ 복귀는 자동으로 쌓이고, 여기서 손으로도 넣는다).
+     extra_out_minutes 는 그대로 '분' 이 기준 — 기록을 반영하면 (새 합계 − 반영 전 합계) 만큼만 더한다.
+     ⚠ '반영' 은 화면 값만 바꾼다. 저장 버튼(또는 전체 저장)을 눌러야 DB 에 쓴다 — 다른 칸과 같은 규칙. */
+  var _wkXo3Edits = {};          // sid → 반영된 기록 배열 (저장되면 지움)
+  var _wkXo3Base  = {};          // sid → 마지막 반영 때 기록 합계(분)
+  var _wkXo3Sid = null, _wkXo3Rows = [];
+  function scXo3Dur(r){
+    var a = scWkT2M(scWkNorm(r.start)), b = scWkT2M(scWkNorm(r.end));
+    if(a == null || b == null) return null;
+    var d = b - a; if(d < 0) d += 24*60;
+    return d;
+  }
+  function scXo3Sum(rows){ return (rows||[]).reduce(function(n, r){ var d = scXo3Dur(r); return n + (d || 0); }, 0); }
+  function scXo3Saved(sid){
+    var row = scWkMsgRow(sid);
+    return (row && Array.isArray(row.extra_outs)) ? row.extra_outs : [];
+  }
+  function scXo3Open(sid){
+    _wkXo3Sid = sid;
+    var src = _wkXo3Edits[sid] || scXo3Saved(sid);
+    _wkXo3Rows = src.map(function(r){ return { start:scWkHm(r.start||""), end:scWkHm(r.end||""), reason:r.reason||"", expected_end:r.expected_end||null }; });
+    if(_wkXo3Base[sid] == null) _wkXo3Base[sid] = scXo3Sum(scXo3Saved(sid));
+    document.getElementById("wk-xo3-name").textContent = scWkXoutFindName(sid) || "학생";
+    scXo3Render();
+    document.getElementById("wk-xo3-overlay").classList.add("open");
+  }
+  function scXo3Close(){ _wkXo3Sid = null; document.getElementById("wk-xo3-overlay").classList.remove("open"); }
+  function scXo3Render(){
+    var sid = _wkXo3Sid, row = scWkMsgRow(sid);
+    var pendingSlot = (row && row.pending_out_start) ? (!row.out_1_start ? 1 : (!row.out_2_start ? 2 : 0)) : -1;
+    var h = '<table class="xo3-tbl"><thead><tr><th>#</th><th>외출 시작</th><th>복귀</th><th>사유</th><th>소요</th><th>카톡</th><th></th></tr></thead><tbody>';
+    if(pendingSlot === 0){
+      h += '<tr class="xo3-pend"><td>진행</td><td>🚶 '+scWkEsc(scWkHm(row.pending_out_start))+'</td><td>외출중</td>'
+        + '<td>'+scWkEsc(row.pending_out_reason||"")+'</td><td>-</td>'
+        + '<td><button class="wk-kakao-btn" type="button" onclick="scMsgOut(\''+sid+'\',0,this)" title="외출 멘트 복사">💬 시작</button></td>'
+        + '<td><span class="xo3-note">키오스크 복귀 시 자동 기록</span></td></tr>';
+    }
+    _wkXo3Rows.forEach(function(r, i){
+      var d = scXo3Dur(r);
+      h += '<tr><td>'+(i+3)+'</td>'
+        + '<td><input class="xo3-t" data-i="'+i+'" data-f="start" value="'+scWkEsc(r.start)+'" placeholder="--:--" maxlength="5" oninput="scWkAutoColonLive(this);scXo3Edit(this)" onblur="scWkAutoColon(this);scXo3Edit(this)">'
+          + '<button class="xo3-now" type="button" onclick="scXo3Now('+i+',\'start\')">지금</button></td>'
+        + '<td><input class="xo3-t" data-i="'+i+'" data-f="end" value="'+scWkEsc(r.end)+'" placeholder="--:--" maxlength="5" oninput="scWkAutoColonLive(this);scXo3Edit(this)" onblur="scWkAutoColon(this);scXo3Edit(this)">'
+          + '<button class="xo3-now" type="button" onclick="scXo3Now('+i+',\'end\')">지금</button></td>'
+        + '<td><input class="xo3-r" data-i="'+i+'" data-f="reason" value="'+scWkEsc(r.reason)+'" placeholder="사유(선택)" maxlength="40" oninput="scXo3Edit(this)"></td>'
+        + '<td class="xo3-dur">'+(d != null ? d + '분' : '-')+'</td>'
+        + '<td><button class="wk-kakao-btn" type="button" onclick="scXo3Msg('+i+',\'start\',this)" title="외출 멘트 복사">💬 시작</button> '
+          + '<button class="wk-kakao-btn" type="button" onclick="scXo3Msg('+i+',\'end\',this)" title="복귀 멘트 복사">💬 종료</button></td>'
+        + '<td><button class="xo3-del" type="button" onclick="scXo3Del('+i+')">삭제</button></td></tr>';
+    });
+    h += '</tbody></table>';
+    if(!_wkXo3Rows.length && pendingSlot !== 0) h += '<div class="xo3-empty">기록된 외출3 이후 외출이 없습니다</div>';
+    document.getElementById("wk-xo3-list").innerHTML = h;
+    var inp = document.querySelector('.wk-extra[data-sid="'+sid+'"]');
+    var cur = inp ? (parseInt(inp.value,10)||0) : 0;
+    var base = _wkXo3Base[sid] || 0, sum = scXo3Sum(_wkXo3Rows);
+    document.getElementById("wk-xo3-cur").innerHTML = '추가외출 누적 <b>'+cur+'</b> 분 → 반영하면 <b>'+(cur + sum - base)+'</b> 분 (기록 합계 '+sum+'분)';
+  }
+  function scXo3Edit(el){
+    var i = +el.getAttribute("data-i"), f = el.getAttribute("data-f");
+    if(!_wkXo3Rows[i]) return;
+    _wkXo3Rows[i][f] = el.value;
+    if(f !== "reason"){   /* 소요·누적만 갱신 (입력 포커스는 지킨다) */
+      var d = scXo3Dur(_wkXo3Rows[i]);
+      var tr = el.closest("tr"); if(tr) tr.querySelector(".xo3-dur").textContent = (d != null ? d + '분' : '-');
+      var inp = document.querySelector('.wk-extra[data-sid="'+_wkXo3Sid+'"]');
+      var cur = inp ? (parseInt(inp.value,10)||0) : 0, base = _wkXo3Base[_wkXo3Sid] || 0, sum = scXo3Sum(_wkXo3Rows);
+      document.getElementById("wk-xo3-cur").innerHTML = '추가외출 누적 <b>'+cur+'</b> 분 → 반영하면 <b>'+(cur + sum - base)+'</b> 분 (기록 합계 '+sum+'분)';
+    }
+  }
+  function scXo3Now(i, f){
+    var d = new Date();
+    if(_wkXo3Rows[i]) _wkXo3Rows[i][f] = String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+    scXo3Render();
+  }
+  function scXo3Add(){ _wkXo3Rows.push({ start:"", end:"", reason:"", expected_end:null }); scXo3Render(); }
+  function scXo3Del(i){ _wkXo3Rows.splice(i, 1); scXo3Render(); }
+  function scXo3Msg(i, which, btn){
+    var r = _wkXo3Rows[i]; if(!r) return;
+    var name = scWkMsgName(_wkXo3Sid);
+    if(which === "start"){
+      var st = scWkNorm(r.start);
+      if(!st){ alert("외출 시각이 없습니다."); return; }
+      scKkCopy(name+" 학생 "+scKkHm(st)+" 외출하였습니다."+(r.expected_end?(" "+scKkHm(r.expected_end)+" 복귀 예정입니다."):"")+(r.reason?(" [사유: "+scReasonLabel(r.reason)+"]"):""), btn);
+    } else {
+      var en = scWkNorm(r.end);
+      if(!en){ alert("복귀 시각이 없습니다."); return; }
+      scKkCopy(name+" 학생 "+scKkHm(en)+" 복귀했습니다.", btn);
+    }
+  }
+  /* 표의 추가외출 칸 💬출·💬귀 — 외출1·2 의 💬 와 같은 자리·같은 문구.
+     외출: 진행중(키오스크 3회⁺ 외출중)이면 그 시각, 아니면 가장 최근 기록. 복귀: 가장 최근 기록의 복귀 시각 */
+  function scMsgXo(sid, which, btn){
+    var row = scWkMsgRow(sid) || {};
+    var recs = _wkXo3Edits[sid] || (Array.isArray(row.extra_outs) ? row.extra_outs : []);
+    var last = recs.length ? recs[recs.length-1] : null;
+    var pendingSlot = row.pending_out_start ? (!row.out_1_start ? 1 : (!row.out_2_start ? 2 : 0)) : -1;
+    var name = scWkMsgName(sid);
+    if(which === "start"){
+      if(pendingSlot === 0){ scMsgOut(sid, 0, btn); return; }
+      if(!last || !last.start){ alert("추가외출 기록이 없습니다. 📋 에서 외출 시각을 넣어 주세요."); return; }
+      scKkCopy(name+" 학생 "+scKkHm(last.start)+" 외출하였습니다."+(last.expected_end?(" "+scKkHm(last.expected_end)+" 복귀 예정입니다."):"")+(last.reason?(" [사유: "+scReasonLabel(last.reason)+"]"):""), btn);
+    } else {
+      if(pendingSlot === 0){ alert("아직 복귀하지 않았습니다. 키오스크 복귀 뒤에 보내 주세요."); return; }
+      if(!last || !last.end){ alert("복귀 시각이 있는 추가외출 기록이 없습니다."); return; }
+      scKkCopy(name+" 학생 "+scKkHm(last.end)+" 복귀했습니다.", btn);
+    }
+  }
+  /* 반영: 화면의 추가외출(분)을 고치고 기록을 저장 대기열에 둔다 */
+  function scXo3Apply(){
+    var sid = _wkXo3Sid; if(!sid) return;
+    var rows = [], bad = false;
+    _wkXo3Rows.forEach(function(r){
+      var st = scWkNorm(r.start), en = scWkNorm(r.end);
+      if(st === undefined || en === undefined){ bad = true; return; }
+      if(!st && !en && !(r.reason||"").trim()) return;          /* 빈 줄은 버린다 */
+      if(!st){ bad = true; return; }
+      rows.push({ start:st.slice(0,5), end:en ? en.slice(0,5) : null, reason:(r.reason||"").trim() || null, expected_end:r.expected_end || null });
+    });
+    if(bad){ alert("시간 형식이 올바르지 않거나 시작 시각이 비어 있습니다. (HH:MM)"); return; }
+    var inp = document.querySelector('.wk-extra[data-sid="'+sid+'"]');
+    if(!inp){ scXo3Close(); return; }
+    var cur = parseInt(inp.value,10)||0, base = _wkXo3Base[sid] || 0, sum = scXo3Sum(rows);
+    inp.value = Math.max(0, cur + sum - base);
+    _wkXo3Base[sid] = sum;
+    _wkXo3Edits[sid] = rows;
+    scWkCellEdit(inp);
+    scXo3Close();
+  }
+
   // 입력 중 실시간: 숫자 4자리가 채워지면 즉시 HH:MM (유효 시각일 때만)
   function scWkAutoColonLive(inp){
     var v = inp.value || "";
@@ -4769,6 +4931,8 @@
     patch.check_out_is_next_day = (ciM!=null && coM!=null && coM < ciM);
     var _rmk = document.querySelector('.wk-remark-day[data-sid="'+sid+'"]');
     if(_rmk) patch.remark = (_rmk.value||"").trim() || null;
+    // [외출3⁺ 기록] 모달에서 '반영'한 것이 있으면 함께 저장 (컬럼이 있을 때만)
+    if(_scXo3Ok && _wkXo3Edits[sid]) patch.extra_outs = _wkXo3Edits[sid];
     // [외출 복귀 정산] 직접입력으로 외출종료를 넣었으면 진행중(pending) 외출을 out 슬롯에 정산하고 '외출중' 해제
     var _curRow = (_wkData[sid] || {})[date] || {};
     if(_curRow.pending_out_start){
@@ -4794,6 +4958,7 @@
       if(res.error) throw res.error;
       if(!_wkData[sid]) _wkData[sid] = {};
       _wkData[sid][date] = res.data;
+      delete _wkXo3Edits[sid];
       // [자동 벌점] 수기 입력·정정 건도 키오스크와 같은 기준으로 부여 (2026-08-31 사용자 결정)
       //  auto_key 가 같아 키오스크에서 이미 부여된 건은 중복되지 않는다. await 안 함 — 저장 흐름 안 막음
       try{
@@ -5305,10 +5470,15 @@
         patch.out_2_expected_end = row.pending_out_expected_end || null;
         if(scTimeToMin(now) < scTimeToMin(startT)) patch.out_2_end_is_next_day = true;
       } else {
-        // 3회⁺ → extra_out_minutes 누적
+        // 3회⁺ → extra_out_minutes 누적 (+ 시작·종료 기록, 컬럼이 있을 때만)
         var diff = scTimeToMin(now) - scTimeToMin(startT);
         if(diff < 0) diff += 24*60;   // 자정 방어
         patch.extra_out_minutes = (row.extra_out_minutes || 0) + diff;
+        if(Object.prototype.hasOwnProperty.call(row, "extra_outs")){
+          patch.extra_outs = (Array.isArray(row.extra_outs) ? row.extra_outs : []).concat([{
+            start: String(startT).slice(0,5), end: String(now).slice(0,5),
+            reason: row.pending_out_reason || null, expected_end: row.pending_out_expected_end || null }]);
+        }
       }
       _scActionRow = await scRrUpsert(patch);
       scKioskMark("return");
@@ -6668,6 +6838,22 @@
       <div class="wk-xout-btns">
         <button type="button" class="wk-xout-cancel" onclick="scWkXoutClose()">닫기</button>
         <button type="button" class="wk-xout-add" id="wk-xout-add" onclick="scWkXoutAdd()" disabled>추가</button>
+      </div>
+    </div>
+  </div>
+  <!-- [외출3 이후 기록] 외출1·2 밖의 외출을 시작·종료로 남기고 카톡 멘트를 낸다 -->
+  <div class="wk-xout-overlay" id="wk-xo3-overlay" onclick="if(event.target===this)scXo3Close()">
+    <div class="wk-xout-card">
+      <h3>📋 외출3 이후 기록</h3>
+      <div class="wk-xout-sub" id="wk-xo3-name">학생</div>
+      <div class="xo3-note">외출1·2 칸을 다 쓴 뒤의 외출입니다. 키오스크로 복귀한 외출은 자동으로 쌓이고, 여기서 직접 넣을 수도 있습니다.<br>
+        <b>반영</b>을 누르면 추가외출(분)이 바뀌고, 행의 <b>저장</b>(또는 전체 저장)을 눌러야 DB 에 남습니다.</div>
+      <div class="xo3-addrow"><div class="wk-xout-cur" id="wk-xo3-cur" style="margin:0;flex:1"></div>
+        <button type="button" onclick="scXo3Add()" style="margin-left:8px">＋ 외출 추가</button></div>
+      <div id="wk-xo3-list"></div>
+      <div class="wk-xout-btns">
+        <button type="button" class="wk-xout-cancel" onclick="scXo3Close()">닫기</button>
+        <button type="button" class="wk-xout-add" onclick="scXo3Apply()">반영</button>
       </div>
     </div>
   </div>
