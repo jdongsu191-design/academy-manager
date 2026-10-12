@@ -26,6 +26,13 @@
   if (window.BMAPS_AUTO_RELOAD_ON) return;          // 중복 로드 방지
   window.BMAPS_AUTO_RELOAD_ON = true;
 
+  /* 설치형 웹앱(PWA) — 서비스워커는 아무것도 캐시하지 않는다(sw.js). 안드로이드 '앱 설치' 조건용.
+     모든 페이지가 이 파일을 쓰므로 등록도 여기서 한 번만 한다. 실패해도 조용히 넘어간다. */
+  try {
+    if ('serviceWorker' in navigator && location.protocol === 'https:')
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+  } catch (e) {}
+
   var SB_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
   var SB_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 
