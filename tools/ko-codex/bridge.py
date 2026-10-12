@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import secrets
 import shutil
+import socket
 import threading
 import time
 import uuid
@@ -14,6 +15,15 @@ from urllib.parse import urlsplit
 from pipeline import extract, review
 
 LIMIT = 30*1024*1024
+
+
+class ExclusiveServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def run_server(origin, root, codex, port=8765):
@@ -124,7 +134,10 @@ def run_server(origin, root, codex, port=8765):
                         if jobs.get(jobid,{}).get('message')=='파일 수신 중':jobs.pop(jobid,None)
                 self.send(400,{'error':str(e)[:300]})
 
-    server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
+    try:
+        server=ExclusiveServer(('127.0.0.1',port),Handler)
+    except OSError as e:
+        raise RuntimeError('이미 실행 중인 처리 프로그램이 있거나 포트를 사용할 수 없습니다. 기존 창을 확인하세요.') from e
     print('BMAPS origin: '+origin,flush=True)
     print('연결 코드 (브라우저 Codex 연결 설정에 입력): '+token,flush=True)
     print('이 창이 열려 있는 동안만 동작합니다. 종료: Ctrl+C',flush=True)
