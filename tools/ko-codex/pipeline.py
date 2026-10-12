@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pymupdf
 
@@ -105,10 +106,34 @@ def review(result, pdf, folder, codex, progress):
         for file in images:
             cmd += ['--image',str(file)]
         cmd += ['-']
-        with (folder/f'codex-{start}.log').open('w',encoding='utf-8') as log:
-            run = subprocess.run(cmd,input=prompt,text=True,encoding='utf-8',stdout=log,stderr=log,cwd=folder,timeout=600)
-        if run.returncode or not output.exists():
-            raise RuntimeError('Codex 검토 실패. 작업 폴더의 로그와 codex login status를 확인하세요.')
+        for attempt in range(3):
+            logfile=folder/(f'codex-{start}.log' if attempt==0 else f'codex-{start}-retry-{attempt}.log')
+            # Never accept an output left by a failed attempt.
+            output.unlink(missing_ok=True)
+            timed_out=False
+            with logfile.open('w',encoding='utf-8') as log:
+                try:
+                    run = subprocess.run(cmd,input=prompt,text=True,encoding='utf-8',stdout=log,stderr=log,cwd=folder,timeout=600)
+                except subprocess.TimeoutExpired:
+                    timed_out=True
+            if not timed_out and run.returncode==0 and output.exists():
+                break
+            # Inspect CLI error lines only, never instructions/content echoed in the prompt.
+            errors='\n'.join(line for line in logfile.read_text(encoding='utf-8',errors='replace').splitlines() if line.startswith('ERROR:')).lower()
+            capacity='at capacity' in errors
+            transient=timed_out or capacity or any(t in errors for t in ('request timed out','connection reset','service unavailable','stream disconnected'))
+            if transient and attempt<2:
+                delay=10*(attempt+1)
+                progress(f'Codex 일시적 혼잡/통신 오류 · {delay}초 후 {attempt+1}/2회 재시도 ('+','.join(map(str,batch))+'쪽)')
+                time.sleep(delay)
+                continue
+            if capacity:
+                raise RuntimeError('Codex 모델 서버가 혼잡하여 2회 재시도 후에도 검토하지 못했습니다. 로그인은 다시 할 필요 없습니다. 잠시 후 다시 분석하세요.')
+            if timed_out or transient:
+                raise RuntimeError('Codex 응답 지연/통신 오류가 재시도 후에도 계속됩니다. 잠시 후 다시 분석하세요.')
+            if any(t in errors for t in ('unauthorized','not logged in','authentication','401')):
+                raise RuntimeError('Codex 로그인 인증이 만료되었거나 거부됐습니다. Codex에서 다시 로그인하세요.')
+            raise RuntimeError(f'Codex 검토 실행 실패. 작업 로그 {logfile.name}을 확인하세요.')
         item = json.loads(output.read_text(encoding='utf-8'))
         if not isinstance(item.get('issues'),list) or not all(isinstance(x,str) for x in item['issues']) or not isinstance(item.get('summary'),str):
             raise ValueError('Codex 검토 응답 형식 오류')

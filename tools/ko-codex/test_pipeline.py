@@ -36,5 +36,31 @@ class ReviewTests(unittest.TestCase):
         pdf,_=self.fixture()
         with self.assertRaises(ValueError):pipeline.extract(pdf)
 
+    def test_capacity_retries_then_success(self):
+        pdf,result=self.fixture()
+        calls=[]
+        def fake(cmd,**kw):
+            calls.append(cmd)
+            if len(calls)==1:
+                kw['stderr'].write('ERROR: Selected model is at capacity. Please try a different model.\n')
+                return type('Run',(),{'returncode':1})()
+            Path(cmd[cmd.index('-o')+1]).write_text(json.dumps({'issues':[],'summary':'ok'}))
+            return type('Run',(),{'returncode':0})()
+        with tempfile.TemporaryDirectory() as d, patch('pipeline.subprocess.run',side_effect=fake), patch('pipeline.time.sleep') as sleep:
+            pipeline.review(result,pdf,Path(d),'codex',lambda x:None)
+            self.assertEqual(len(calls),2)
+            sleep.assert_called_once_with(10)
+
+    def test_capacity_stops_after_three_attempts(self):
+        pdf,result=self.fixture()
+        def fake(cmd,**kw):
+            kw['stderr'].write('ERROR: Selected model is at capacity.\n')
+            return type('Run',(),{'returncode':1})()
+        with tempfile.TemporaryDirectory() as d, patch('pipeline.subprocess.run',side_effect=fake) as run, patch('pipeline.time.sleep'):
+            with self.assertRaisesRegex(RuntimeError,'모델 서버가 혼잡'):
+                pipeline.review(result,pdf,Path(d),'codex',lambda x:None)
+            self.assertEqual(run.call_count,3)
+        self.assertNotIn('codexReview',result)
+
 
 if __name__=='__main__':unittest.main()
