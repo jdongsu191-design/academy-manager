@@ -25,11 +25,30 @@ const root=path.join(__dirname,'../..'),read=f=>fs.readFileSync(path.join(root,f
  assert.equal(calls.filter(c=>c.p_action==='submit').length,1);dom.window.close();
  // Administrator uses the current Codex draft and keeps the two elective answer keys separate.
  const admin=new JSDOM('<div id="ko-result"></div>',{url:'https://bmaps.example/bety-admin.html',runScripts:'outside-only'}),a=admin.window;
- a._ko={file:{name:'test.pdf'}};a.db={rpc:async()=>({data:[]})};a.KoExamCore=core;
- a.koGetDraft=()=>({codexReview:[],sets:[{range:'1',area:'독서',sourceRegions:[],qs:[{no:1,pts:2}]},{range:'35',area:'화법과 작문',sourceRegions:[],qs:[{no:35,pts:2}]},{range:'35',area:'언어와 매체',sourceRegions:[],qs:[{no:35,pts:3}]}]});
- a.eval(read('assets/ko-publish.js'));await a.document.getElementById('kp-prepare').onclick();
+ const roster=[{id:'s1',name:'가학생',school:'A고',grade:'1'},{id:'s2',name:'나학생',school:'A고',grade:'2'},{id:'s3',name:'다학생',school:'B고',grade:'1'}];
+ let published=null;
+ a.sessionStorage.setItem('ko-admin-token','test');a.confirm=()=>true;
+ a._ko={file:{name:'test.pdf'}};a.db={rpc:async(name,p)=>{if(p.p_action==='publish')published=p.p_data;return {data:p.p_action==='students'?roster:[]}},storage:{from:()=>({upload:async()=>({})})}};a.KoExamCore=core;
+ const fixtureDraft={codexReview:[],sets:[{range:'1',area:'독서',sourceRegions:[],qs:[{no:1,pts:2}]},{range:'35',area:'화법과 작문',sourceRegions:[],qs:[{no:35,pts:2}]},{range:'35',area:'언어와 매체',sourceRegions:[],qs:[{no:35,pts:3}]}]};a.koGetDraft=()=>fixtureDraft;
+ a.eval(read('assets/ko-publish.js'));await pause();await a.document.getElementById('kp-prepare').onclick();
  assert.equal(a.document.querySelectorAll('#kp-grid tbody tr').length,2);
  a.document.getElementById('kp-elective').value='언어와 매체';await a.document.getElementById('kp-prepare').onclick();
  assert.equal(a.document.querySelectorAll('#kp-grid input[data-field="points"]')[1].value,'3');
+
+ const ad=id=>a.document.getElementById(id);
+ assert.equal(ad('kp-auth').open,false,'valid session restores authentication automatically');
+ ad('kp-school').value='A고';ad('kp-grade').value='1';ad('kp-grade').dispatchEvent(new a.Event('change'));
+ await ad('kp-apply-targets').onclick();
+ assert.equal(a.document.querySelectorAll('#kp-students input:checked').length,1);
+ assert.equal(a.document.querySelector('#kp-students input:checked').value,'s1');
+ // Manually add a student from another school, then hide selected students with a search.
+ const extra=a.document.querySelector('#kp-students input[value="s3"]');extra.checked=true;extra.dispatchEvent(new a.Event('change'));
+ ad('kp-filter').value='나학생';ad('kp-filter').dispatchEvent(new a.Event('input'));
+ assert.equal(a.document.querySelectorAll('#kp-students input:checked').length,0);
+ assert.match(ad('kp-summary').textContent,/응시 대상 2명/);
+ a.document.querySelectorAll('#kp-grid input[data-field="answer"]').forEach(i=>{i.value='1';i.dispatchEvent(new a.Event('input',{bubbles:true}));});ad('kp-confirm').checked=true;
+ await ad('kp-publish').onclick();assert.deepEqual(Array.from(published.students),['s1','s3'],'search must not remove hidden selected students from publish');
+ published=null;ad('kp-grade').value='2';ad('kp-grade').dispatchEvent(new a.Event('change'));await ad('kp-publish').onclick();assert.equal(published,null,'changed criteria require explicit apply');
+ ad('kp-filter').value='';ad('kp-clear-targets').onclick();assert.match(ad('kp-summary').textContent,/응시 대상 0명/);
  admin.window.close();console.log('PASS UI: answer validation, elective separation, passage display, navigation, save, submit, result');
 })().catch(e=>{console.error(e);process.exitCode=1});
