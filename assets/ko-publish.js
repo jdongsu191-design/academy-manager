@@ -5,7 +5,7 @@
  var token=sessionStorage.getItem('ko-admin-token')||'';
  var card=document.createElement('section');card.className='card';card.style.marginTop='18px';
  card.innerHTML='<h3>국어 시험지 등록</h3><p class="hint">정답 확인 → 시험 설정 → 응시 대상 지정 → 발행 순서로 등록합니다.</p><h4>1️⃣ 정답·배점 확인</h4>'
- +'<p><label>정답 PDF <input id="kp-answer" type="file" accept="application/pdf"></label> <button class="btn" id="kp-read">정답 읽기</button></p>'
+ +'<p class="hint">위 문제지 읽기에서 정답 PDF를 함께 올리면 자동으로 채워집니다. 선택과목을 바꾼 뒤에는 정답·배점 확인을 누르세요.</p>'
  +'<p><label>선택과목 <select class="inp" id="kp-elective"><option>화법과 작문</option><option>언어와 매체</option><option>공통</option></select></label> <button class="btn" id="kp-prepare">정답·배점 확인</button></p>'
  +'<div id="kp-grid" style="max-height:320px;overflow:auto"></div><h4>2️⃣ 시험 설정</h4><div class="frow"><label for="kp-title">시험명</label><input class="inp" id="kp-title" maxlength="150" placeholder="예: 6월 평가원 국어"></div><div class="frow"><label for="kp-duration">제한시간(분)</label><input class="inp" id="kp-duration" type="number" min="1" max="240" value="80" style="max-width:140px"></div>'
  +'<h4>3️⃣ 응시 대상</h4><details open id="kp-auth"><summary id="kp-auth-status">관리자 인증</summary><p class="hint">BMAPS 관리자/데스크 계정으로 인증하면 학생 목록을 자동으로 불러옵니다.</p><input class="inp" id="kp-user" autocomplete="username" placeholder="아이디"><input class="inp" id="kp-password" type="password" autocomplete="current-password" placeholder="비밀번호"><button class="btn" id="kp-login">인증</button></details>'
@@ -20,7 +20,9 @@
  async function api(action,data){if(!token)throw Error('먼저 배포·응시 현황 인증을 해 주세요.');var r=await db.rpc('bmaps_ko_api',{p_token:token,p_action:action,p_data:data||{}});if(r.error)throw Error(r.error.message);return r.data;}
  function action(id,fn){$(id).onclick=async()=>{if(working)return;working=true;$(id).disabled=true;try{await fn();}catch(e){msg(e.message+'\n함수를 찾을 수 없다는 오류라면 국어 시험 SQL 설치가 필요합니다.',true);}finally{working=false;$(id).disabled=false;if(id==='kp-publish')$(id).textContent=pending?'이전 시험 등록 재시도':'시험지 등록 · 발행';}};}
  action('kp-login',async()=>{var password=$('kp-password').value;$('kp-password').value='';var r=await db.rpc('bmaps_ko_login',{p_username:$('kp-user').value.trim(),p_password:password});if(r.error)throw Error(r.error.message);if(!['admin','desk'].includes(r.data.role))throw Error('관리자·데스크 계정만 배포할 수 있습니다.');token=r.data.token;sessionStorage.setItem('ko-admin-token',token);await loadStudents();$('kp-auth-status').textContent=r.data.name+' · 인증 완료';$('kp-auth').open=false;msg('인증 완료. 학교·학년을 고르고 대상 학생을 지정하세요.');await list();});
- action('kp-read',async()=>{var file=$('kp-answer').files[0];if(!file)throw Error('정답 PDF를 선택하세요.');if(file.size>10*1024*1024)throw Error('정답 파일은 10MB 이하여야 합니다.');var result=await koLocalCall('/answers',{method:'POST',headers:{'Content-Type':'application/pdf'},body:file});answerRows=result.rows;prepared=null;rows=[];$('kp-grid').replaceChildren();summary();msg('정답 '+answerRows.length+'개를 읽었습니다. 선택과목을 고르고 정답·배점 확인을 누르세요.');});
+ window.koInvalidateAnswers=function(){answerRows=[];prepared=null;rows=[];$('kp-grid').replaceChildren();$('kp-confirm').checked=false;summary();};
+ window.koAcceptAnswers=function(result){koInvalidateAnswers();answerRows=result?result.rows:[];};
+ window.koPrepareExam=function(){$('kp-prepare').click();};
  action('kp-prepare',async()=>{if(pending)throw Error('먼저 이전 배포 요청을 재시도해 결과를 확인하세요.');prepared=koGetDraft();sets=KoExamCore.selectSets(prepared,$('kp-elective').value);var map={};answerRows.filter(r=>r.elective==='공통'||r.elective===$('kp-elective').value).forEach(r=>{map[r.no]=r;});rows=sets.flatMap(s=>s.qs.map(q=>({no:q.no,answer:map[q.no]?map[q.no].answer:'',points:map[q.no]?map[q.no].points:q.pts||2}))).sort((a,b)=>a.no-b.no);
  $('kp-grid').innerHTML='<table style="width:100%"><thead><tr><th>번호</th><th>정답(1~5)</th><th>배점</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+r.no+'</td><td><input aria-label="'+r.no+'번 정답" data-i="'+i+'" data-field="answer" type="number" min="1" max="5" value="'+esc(r.answer)+'"></td><td><input aria-label="'+r.no+'번 배점" data-i="'+i+'" data-field="points" type="number" min="1" max="10" value="'+r.points+'"></td></tr>').join('')+'</tbody></table>';
  if(!$('kp-title').value)$('kp-title').value=(_ko.file?_ko.file.name.replace(/\.pdf$/i,''):'국어 시험')+' · '+$('kp-elective').value;
@@ -66,6 +68,26 @@
  });
  async function list(){var exams=await api('list');$('kp-exams').replaceChildren();if(!exams.length)$('kp-exams').textContent='등록된 국어 시험지가 없습니다.';exams.forEach(ex=>{var p=document.createElement('div');p.className='ex-card';p.style.cursor='default';var name=document.createElement('div');name.className='ex-name';name.textContent=ex.title;var meta=document.createElement('div');meta.className='ex-meta';meta.textContent=ex.elective+' · '+ex.duration+'분';var badge=document.createElement('span');badge.className='ex-badge '+(ex.published?'bg-pub':'bg-draft');badge.textContent=ex.published?'발행 · 학생 응시 가능':'미발행 · 학생 응시 불가';p.append(name,meta,badge,document.createElement('br'));var b=document.createElement('button');b.className='btn';b.textContent='응시 현황';b.onclick=async()=>{try{var data=await api('results',{id:ex.id});$('kp-results').innerHTML='<h4>'+esc(ex.title)+'</h4>'+data.map(r=>'<p>'+esc(r.name)+' · '+(r.result?esc(r.result.score)+' / '+esc(r.result.total)+'점':r.started_at?'응시 중':'미응시')+'</p>').join('');}catch(e){msg(e.message,true);}};p.append(b);var v=document.createElement('button');v.className='btn';v.textContent=ex.published?'미발행으로 전환':'발행하기';v.onclick=async()=>{if(!confirm('배포 상태를 변경할까요? 비공개이면 진행 중 응시도 접근할 수 없습니다.'))return;try{await api('visibility',{id:ex.id,published:!ex.published});await list();}catch(e){msg(e.message,true);}};p.append(v);$('kp-exams').append(p);});}
  action('kp-list',list);
+ // Keep the existing controls and handlers while presenting the same exam-editor flow.
+ var host=$('sub-ko');
+ if(host){
+  var reader=host.querySelector('.card'),result=$('ko-result'),nav=document.createElement('div');
+  nav.className='row';nav.style.margin='12px 0';nav.setAttribute('aria-label','국어 시험 등록 단계');
+  var panels=[],buttons=[],headings=Array.from(card.querySelectorAll('h4'));
+  var catalog=document.createElement('section');catalog.className='card';
+  var last=headings[headings.length-1];
+  while(last){var next=last.nextSibling;catalog.append(last);last=next;}
+  var add=document.createElement('button');add.className='btn btn-primary';add.textContent='+ 시험지 등록';catalog.prepend(add);
+  host.prepend(catalog,nav);
+  var pdf=document.createElement('section');reader.before(pdf);pdf.append(reader,result);panels.push(pdf);
+  headings.slice(0,-1).forEach(function(h){var panel=document.createElement('section'),node=h;while(node&&(!panels.length||node===h||node.nodeName!=='H4')){var next=node.nextSibling;panel.append(node);node=next;}card.append(panel);panels.push(panel);});
+  var status=$('kp-msg');card.append(status);
+  function show(index){panels.forEach((p,i)=>{p.hidden=i!==index;});buttons.forEach((b,i)=>{b.classList.toggle('btn-primary',i===index);b.setAttribute('aria-pressed',String(i===index));});}
+  ['PDF 읽기','정답·배점','시험 설정','응시 대상','등록·발행'].forEach(function(label,i){var b=document.createElement('button');b.className='btn';b.textContent=label;b.onclick=()=>show(i);buttons.push(b);nav.append(b);});
+  add.onclick=()=>{show(0);nav.scrollIntoView({behavior:'smooth'});};
+  window.koPrepareExam=function(){$('kp-prepare').click();show(1);};
+  show(0);
+ }
  summary();
  if(token){loadStudents().then(()=>{$('kp-auth-status').textContent='관리자 인증 유지 중';$('kp-auth').open=false;return list();}).catch(e=>{msg(e.message,true);$('kp-auth').open=true;});}
 })();

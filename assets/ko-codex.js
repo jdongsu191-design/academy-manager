@@ -106,6 +106,7 @@
   function busy(on) {
     running = on; _ko.busy = on;
     ['ko-run', 'ko-codex-run', 'ko-codex-resume', 'ko-scope', 'ko-from', 'ko-to'].forEach(function (id) { $(id).disabled = on; });
+    document.querySelectorAll('#ko-drop input, #ko-answer-file, #ko-answer-clear').forEach(function(el){el.disabled=on;});
     if (!on) koScope();
   }
   function regionHtml(regions) {
@@ -126,8 +127,8 @@
           + s.qs.map(function (q) { return '<div class="ko-q">' + regionHtml(q.sourceRegions) + '</div>'; }).join('') + '</div></div></div>';
       }).join('');
   };
-  koReset = function () { if (running || _ko.busy) return; draft = null; originalReset(); };
-  koSetFile = function (file) { if (running || _ko.busy) return; draft = null; _ko.sets = []; $('ko-result').replaceChildren(); originalSetFile(file); };
+  koReset = function () { if (running || _ko.busy) return; draft = null; originalReset(); if(window.koClearAnswerFile)koClearAnswerFile(); if(window.koInvalidateAnswers)koInvalidateAnswers(); };
+  koSetFile = function (file) { if (running || _ko.busy) return; draft = null; if(window.koInvalidateAnswers)koInvalidateAnswers(); _ko.sets = []; $('ko-result').replaceChildren(); originalSetFile(file); };
   window.koCodexCheck = async function () {
     try { await call('/health'); $('ko-codex-status').textContent = directReady ? 'Codex 연결됨 · 창 닫기 가능' : 'Codex 연결됨'; koMsg(directReady ? '백그라운드 연결 정상 · 승인 창을 닫아도 됩니다.' : '로컬 Codex 처리 프로그램 연결됨'); }
     catch (e) { disconnected(); koMsg(message(e), true); }
@@ -153,6 +154,13 @@
     busy(true);
     try {
       await call('/health');
+      if(window.koInvalidateAnswers)koInvalidateAnswers();
+      var answerResult=null,answerFile=window.koAnswerFile;
+      if(answerFile){
+        koMsg('정답 PDF를 읽는 중…');
+        answerResult=await call('/answers',{method:'POST',headers:{'Content-Type':'application/pdf'},body:answerFile});
+        if(!answerResult||!Array.isArray(answerResult.rows))throw new Error('정답 결과 형식 오류');
+      }
       var id = resume ? sessionStorage.getItem('ko-codex-job') : null;
       if (resume && !id) throw new Error('이어받을 작업이 없습니다.');
       if (!resume) {
@@ -161,6 +169,9 @@
         id = job.id; sessionStorage.setItem('ko-codex-job', id);
       }
       await poll(id);
+      if(window.koAcceptAnswers)koAcceptAnswers(answerResult);
+      if(window.koPrepareExam)koPrepareExam();
+      koMsg('문제지 분석 완료'+(answerResult?' · 정답 '+answerResult.rows.length+'개 반영':' · 정답 PDF 없음: 정답을 직접 입력하세요.'));
     } catch (e) { koMsg(message(e), true); }
     finally { busy(false); }
   };
@@ -172,4 +183,20 @@
   $('ko-codex-origin').textContent = location.origin;
   window.koGetDraft = function () { return draft && _ko.sets === draft.sets ? draft : null; };
   window.koLocalCall = call;
+  window.koAnswerFile=null;
+  function setAnswerFile(file){
+    if(running||_ko.busy)return;
+    if(file&&(!/\.pdf$/i.test(file.name)||file.size>10*1024*1024)){koMsg('정답 파일은 10MB 이하 PDF를 선택하세요.',true);return;}
+    window.koAnswerFile=file||null;
+    $('ko-answer-name').textContent=file?file.name:'클릭하거나 끌어다 놓으세요 · 없으면 직접 입력';
+    $('ko-answer-drop').classList.toggle('set',!!file);
+    if(window.koInvalidateAnswers)koInvalidateAnswers();
+  }
+  window.koClearAnswerFile=function(){setAnswerFile(null);if($('ko-answer-file'))$('ko-answer-file').value='';};
+  if($('ko-answer-file')){
+    $('ko-answer-file').onchange=function(e){setAnswerFile(e.target.files[0]);};
+    $('ko-answer-clear').onclick=function(e){e.preventDefault();e.stopPropagation();koClearAnswerFile();};
+    $('ko-answer-drop').ondragover=function(e){e.preventDefault();};
+    $('ko-answer-drop').ondrop=function(e){e.preventDefault();setAnswerFile(e.dataTransfer.files[0]);};
+  }
 })();

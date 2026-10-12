@@ -24,7 +24,7 @@ const root=path.join(__dirname,'../..'),read=f=>fs.readFileSync(path.join(root,f
  await w.document.getElementById('submit').onclick();assert.match(w.document.getElementById('result').textContent,/5 \/ 5점/);
  assert.equal(calls.filter(c=>c.p_action==='submit').length,1);dom.window.close();
  // Administrator uses the current Codex draft and keeps the two elective answer keys separate.
- const admin=new JSDOM('<div id="ko-result"></div>',{url:'https://bmaps.example/bety-admin.html',runScripts:'outside-only'}),a=admin.window;
+ const admin=new JSDOM('<div id="sub-ko"><div class="card">PDF reader</div><div id="ko-result"></div></div>',{url:'https://bmaps.example/bety-admin.html',runScripts:'outside-only'}),a=admin.window;
  const roster=[{id:'s1',name:'가학생',school:'A고',grade:'1'},{id:'s2',name:'나학생',school:'A고',grade:'2'},{id:'s3',name:'다학생',school:'B고',grade:'1'}];
  let published=null;
  a.sessionStorage.setItem('ko-admin-token','test');a.confirm=()=>true;
@@ -36,6 +36,11 @@ const root=path.join(__dirname,'../..'),read=f=>fs.readFileSync(path.join(root,f
  assert.equal(a.document.querySelectorAll('#kp-grid input[data-field="points"]')[1].value,'3');
 
  const ad=id=>a.document.getElementById(id);
+ a.koAcceptAnswers({rows:[{no:1,answer:4,points:3,elective:'공통'},{no:35,answer:2,points:2,elective:'언어와 매체'}]});a.koPrepareExam();await pause();
+ assert.equal(a.document.querySelector('#kp-grid input[data-field="answer"]').value,'4');
+ assert.equal(ad('kp-grid').closest('section').hidden,false);
+ a.koInvalidateAnswers();assert.equal(a.document.querySelectorAll('#kp-grid tbody tr').length,0);
+ await ad('kp-prepare').onclick();
  assert.equal(ad('kp-auth').open,false,'valid session restores authentication automatically');
  ad('kp-school').value='A고';ad('kp-grade').value='1';ad('kp-grade').dispatchEvent(new a.Event('change'));
  await ad('kp-apply-targets').onclick();

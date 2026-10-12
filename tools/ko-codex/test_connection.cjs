@@ -9,7 +9,7 @@ let opens = 0, lastMessage = '', ticks = [];
 const popup = {closed:false,focus(){},postMessage(m){this.last=m;}};
 let requests=[];
 const context = {fetch:async(url,opts)=>{requests.push({url,opts});return {ok:true,json:async()=>({ok:true})}},Map,Error,TypeError,Promise,AbortController,crypto:require('node:crypto').webcrypto,
- document:{getElementById:element},location:{origin:'https://test.example'},
+ document:{getElementById:element,querySelectorAll:()=>[]},location:{origin:'https://test.example'},
  _ko:{busy:false},koRender(){},koReset(){},koSetFile(){},koScope(){},koMsg(m){lastMessage=m;},
  setInterval(fn){ticks.push(fn);return ticks.length;},clearInterval(){},setTimeout(){return 1;},clearTimeout(){},
  addEventListener(type,fn){listeners[type]=fn;},open(){opens++;return popup;}};
@@ -40,6 +40,27 @@ assert.equal(requests.at(-1).opts.headers.Authorization,'Bearer '+'a'.repeat(43)
 await context.koCodexRun(false);
 assert.equal(opens,1);
 assert.match(lastMessage,/PDF/);
+// A single analysis sends both files and only applies answers after the exam completes.
+const order=[];
+context.sessionStorage={getItem:()=>null,setItem(){},removeItem(){}};
+context._ko.file={name:'exam.pdf',size:12};context.koAnswerFile={name:'answers.pdf',size:10};
+context.koInvalidateAnswers=()=>order.push('invalidate');
+context.koAcceptAnswers=r=>{assert.equal(r.rows[0].answer,4);order.push('answers');};
+context.koPrepareExam=()=>order.push('prepare');
+context.fetch=async(url)=>({ok:true,json:async()=>{
+ if(url.endsWith('/answers')){order.push('read');return {rows:[{no:1,answer:4}]};}
+ if(url.includes('/jobs?')){order.push('job');return {id:'job1'};}
+ if(url.endsWith('/jobs/job1'))return {status:'complete',result:{sets:[],codexReview:[]}};
+ return {ok:true};
+}});
+await context.koCodexRun(false);
+assert.deepEqual(order,['invalidate','read','job','answers','prepare']);
+assert.equal(context._ko.busy,false);
+order.length=0;
+context.fetch=async(url)=>({ok:true,json:async()=>{if(url.endsWith('/answers'))throw Error('bad answer PDF');return {ok:true};}});
+await context.koCodexRun(false);
+assert.deepEqual(order,['invalidate'],'failed answer parsing must not publish stale answers or start a problem job');
+assert.equal(context._ko.busy,false);
 await listeners.message({origin:'http://127.0.0.1:8765',source:popup,data:{type:'bmaps-disconnected'}});
 assert.equal(element('ko-codex-status').textContent,'연결 안 됨');
 assert.match(lastMessage,/해제/);
