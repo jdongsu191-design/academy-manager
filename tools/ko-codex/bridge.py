@@ -42,7 +42,7 @@ def run_server(origin, root, codex, port=8765):
     sessions = {}  # In-memory, origin-bound approvals; lost when the worker stops.
     lock = threading.RLock()
 
-    def work(jobid, pdf, lo, hi):
+    def work(jobid, pdf, lo, hi, kind="korean"):
         folder = root/jobid
         folder.mkdir()
         def progress(message):
@@ -50,8 +50,12 @@ def run_server(origin, root, codex, port=8765):
                 jobs[jobid]['message'] = message
         try:
             progress('Python 원본 영역 분석 중')
-            result = extract(pdf,lo,hi)
-            result = review(result,pdf,folder,codex,progress)
+            if kind == 'naje':
+                from naje_pipeline import extract_naje
+                result = extract_naje(pdf,folder,codex,progress)
+            else:
+                result = extract(pdf,lo,hi)
+                result = review(result,pdf,folder,codex,progress)
             blob = json.dumps(result,ensure_ascii=False).encode('utf-8')
             if len(blob)>80*1024*1024:
                 raise ValueError('결과가 큽니다. 문항 범위를 나누어 분석하세요.')
@@ -119,13 +123,13 @@ def run_server(origin, root, codex, port=8765):
                 self.send_response(200)
                 self.send_header('Content-Type','text/html; charset=utf-8')
                 self.send_header('Cache-Control','no-store')
-                self.send_header('X-BMAPS-Bridge-Version','3')
+                self.send_header('X-BMAPS-Bridge-Version','4')
                 self.send_header('X-Frame-Options','DENY')
                 self.send_header('Content-Security-Policy',f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
                 self.send_header('Content-Length',str(len(blob)));self.end_headers();self.wfile.write(blob);return
             if not self.trusted():return
             if self.path=='/health':
-                self.send(200,{'ok':True,'version':3});return
+                self.send(200,{'ok':True,'version':4,'capabilities':['korean','naje']});return
             jobid=self.path.removeprefix('/jobs/')
             with lock:
                 state=dict(jobs.get(jobid,{}))
@@ -175,6 +179,8 @@ def run_server(origin, root, codex, port=8765):
             from urllib.parse import parse_qs
             try:
                 params=parse_qs(parsed.query)
+                kind=params.get('kind',['korean'])[0]
+                if kind not in ('korean','naje'):raise ValueError('지원하지 않는 분석 종류')
                 lo=int(params.get('from',['1'])[0]);hi=int(params.get('to',['99'])[0])
                 if not 1<=lo<=hi<=99:raise ValueError('문항 범위 오류')
                 n=int(self.headers.get('Content-Length','0'))
@@ -193,7 +199,7 @@ def run_server(origin, root, codex, port=8765):
                 if len(pdf)!=n or not pdf.startswith(b'%PDF-'):
                     with lock:jobs.pop(jobid,None)
                     raise ValueError('유효한 PDF가 아닙니다.')
-                threading.Thread(target=work,args=(jobid,pdf,lo,hi),daemon=True).start()
+                threading.Thread(target=work,args=(jobid,pdf,lo,hi,kind),daemon=True).start()
                 self.send(202,{'id':jobid})
             except Exception as e:
                 if 'jobid' in locals():
