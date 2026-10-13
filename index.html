@@ -24019,7 +24019,7 @@ async function npLoadAll(){
   var showPast  = !!(document.getElementById('np-past') || {}).checked;
   wrap.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
   try {
-    var q = db.from('users').select('id,name,school,grade,teacher_id,school_level')
+    var q = db.from('users').select('id,name,school,grade,teacher_id,class_id,school_level')
       .eq('role','student').eq('status','active').in('school_level', ['middle','both','elem']).order('name');
     if (teacherId) q = q.eq('teacher_id', teacherId);
     else if (branchId) {
@@ -24029,6 +24029,13 @@ async function npLoadAll(){
     }
     var sr = await q; if (sr.error) throw sr.error;
     _np.students = sr.data || [];
+    /* 반 이름 — 학생별 탭을 월별 수강인원처럼 반별 카드로 묶는다 */
+    _np.classMap = {};
+    var cids = []; _np.students.forEach(function(st){ if (st.class_id && cids.indexOf(st.class_id) === -1) cids.push(st.class_id); });
+    if (cids.length) {
+      var cr = await db.from('classes').select('id,name,teacher_id').in('id', cids);
+      (cr.data || []).forEach(function(c){ _np.classMap[c.id] = c; });
+    }
     var kv = await db.from('inventory_kv').select('value,updated_at').eq('key', 'stock_catalog').maybeSingle();
     if (kv.error) throw kv.error;
     _np.books = npBooksFromCatalog(kv.data ? kv.data.value : null);
@@ -24081,17 +24088,55 @@ function npRender(){
   if (_np.tab === 'books') { npRenderBooks(wrap); return; }
   if (_np.tab === 'book')  { npRenderByBook(wrap, stus, base); return; }
   if (!stus.length) { wrap.innerHTML = '<div class="empty-state" style="padding:40px"><div class="ei">👤</div><p>해당 조건의 학생이 없습니다</p></div>'; return; }
-  var h = '<table style="width:100%;border-collapse:collapse;font-size:13px">'
-    + '<thead><tr style="background:#1e293b;color:#e2e8f0;font-size:11px"><th style="padding:7px 8px;text-align:left">학생</th><th style="padding:7px 8px;text-align:left">담당</th><th style="padding:7px 8px;text-align:left">계획 (교재 · 기간)</th><th style="padding:7px 8px;width:80px"></th></tr></thead><tbody>';
-  stus.forEach(function(s, i){
-    var ps = npPlansOf(s.id);
-    h += '<tr style="background:' + (i % 2 ? '#f8fafc' : '#fff') + ';border-bottom:1px solid #f1f5f9">'
-      + '<td style="padding:6px 8px;white-space:nowrap"><b>' + npEsc(s.name) + '</b><div style="font-size:10px;color:#9ca3af">' + npEsc((s.school || '') + (s.grade ? ' ' + s.grade + (/^\d+$/.test(s.grade) ? '학년' : '') : '')) + '</div></td>'
-      + '<td style="padding:6px 8px;font-size:12px;color:#64748b;white-space:nowrap">' + npEsc(npTeacherName(s.teacher_id)) + '</td>'
-      + '<td style="padding:4px 8px">' + (ps.length ? ps.map(function(p){ return npChip(p, base); }).join('') : '<span style="font-size:12px;color:#cbd5e1">계획 없음</span>') + '</td>'
-      + '<td style="padding:6px 8px;text-align:center"><button class="btn btn-sm" onclick="npOpenModal(\'' + s.id + '\',null)" style="font-weight:700;background:#eef2ff;border-color:#c7d2fe;color:#3730a3">+ 계획</button></td></tr>';
+  /* 월별 수강인원과 같은 모양 — 반별 카드를 2열로. 반 이름은 담당 선생님 반일 때만 (전반 등으로 남의 반이면 '반 미지정') */
+  var groups = {}, keys = [];
+  stus.forEach(function(st){
+    var c = (_np.classMap || {})[st.class_id];
+    var k = (c && c.teacher_id === st.teacher_id) ? c.name : ((npTeacherName(st.teacher_id) || '담당 미지정') + ' · 반 미지정');
+    if (!groups[k]) { groups[k] = []; keys.push(k); }
+    groups[k].push(st);
   });
-  wrap.innerHTML = h + '</tbody></table>';
+  keys.sort(function(x, y){ return x.localeCompare(y, 'ko'); });
+  var COLORS = [
+    { hd: '#1E3A5F', lite: '#EFF6FF', border: '#BFDBFE', sub: '#DBEAFE' },
+    { hd: '#14532D', lite: '#F0FDF4', border: '#BBF7D0', sub: '#DCFCE7' },
+    { hd: '#4C1D95', lite: '#F5F3FF', border: '#DDD6FE', sub: '#EDE9FE' },
+    { hd: '#7C2D12', lite: '#FFF7ED', border: '#FED7AA', sub: '#FFEDD5' },
+    { hd: '#134E4A', lite: '#F0FDFA', border: '#99F6E4', sub: '#CCFBF1' },
+    { hd: '#831843', lite: '#FFF1F2', border: '#FECDD3', sub: '#FFE4E6' }
+  ];
+  function card(k, list, col){
+    var planned = list.filter(function(st){ return npPlansOf(st.id).length; }).length;
+    var rows = list.map(function(st, i){
+      var ps = npPlansOf(st.id);
+      return '<tr style="background:' + (i % 2 ? col.lite : '#fff') + ';border-bottom:1px solid ' + col.border + '">'
+        + '<td style="padding:5px 8px;font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0">' + npEsc((st.school || '') + (st.grade ? ' ' + st.grade + (/^\d+$/.test(st.grade) ? '학년' : '') : '')) + '</td>'
+        + '<td style="padding:5px 8px;font-size:12px;font-weight:700;color:#1e293b;white-space:nowrap">' + npEsc(st.name) + '</td>'
+        + '<td style="padding:3px 6px">' + (ps.length ? ps.map(function(p){ return npChip(p, base); }).join('') : '<span style="font-size:11px;color:#cbd5e1">계획 없음</span>') + '</td>'
+        + '<td style="padding:3px 6px;text-align:center"><button class="btn btn-sm" onclick="npOpenModal(\'' + st.id + '\',null)" style="font-weight:700;font-size:11px;padding:3px 8px;background:#fff;border-color:' + col.border + ';color:' + col.hd + '">+ 계획</button></td></tr>';
+    }).join('');
+    return '<div style="border:1.5px solid ' + col.border + ';border-radius:10px;overflow:hidden;height:100%">'
+      + '<div style="background:' + col.hd + ';padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px">'
+        + '<span style="font-size:12px;font-weight:700;color:#fff;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + npEsc(k) + '</span>'
+        + '<span style="display:flex;gap:4px;flex-shrink:0"><span style="background:rgba(255,255,255,0.2);color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:100px;white-space:nowrap">' + list.length + '명</span>'
+        + '<span style="background:rgba(255,255,255,0.85);color:' + col.hd + ';font-size:11px;font-weight:700;padding:2px 8px;border-radius:100px;white-space:nowrap">계획 ' + planned + '</span></span>'
+      + '</div>'
+      + '<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
+        + '<colgroup><col style="width:26%"><col style="width:17%"><col><col style="width:62px"></colgroup>'
+        + '<thead><tr style="background:' + col.sub + '">'
+          + '<th style="padding:4px 8px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">학교/학년</th>'
+          + '<th style="padding:4px 8px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">이름</th>'
+          + '<th style="padding:4px 6px;font-size:10px;font-weight:700;color:' + col.hd + ';text-align:left">계획 (교재 · 기간)</th>'
+          + '<th style="padding:4px 6px"></th>'
+        + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+  var h = '<div style="padding:10px">';
+  for (var i = 0; i < keys.length; i += 2) {
+    var col = COLORS[Math.floor(i / 2) % COLORS.length], k1 = keys[i], k2 = keys[i + 1];
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
+      + card(k1, groups[k1], col) + (k2 ? card(k2, groups[k2], col) : '<div></div>') + '</div>';
+  }
+  wrap.innerHTML = h + '</div>';
 }
 /* ── 교재별 지정: 교재 하나 + 기간 → 여러 학생에게 ── */
 function npRenderByBook(wrap, stus, base){
