@@ -24138,38 +24138,86 @@ function npRender(){
   }
   wrap.innerHTML = h + '</div>';
 }
-/* ── 교재별 지정: 교재 하나 + 기간 → 여러 학생에게 ── */
+/* ── 교재별 지정: 교재 하나 + 기간 → 여러 학생에게 ──
+   학생 고르기 줄(반·학년·이름)은 이 탭 안에서 걸고, 머리글 체크박스로 보이는 학생을 한 번에 고른다.
+   등록 버튼은 표 아래 고정 띠에 두고 고른 인원을 바로 보여 준다. */
+function npClassLabel(st){
+  var c = (_np.classMap || {})[st.class_id];
+  return (c && c.teacher_id === st.teacher_id) ? c.name : ((npTeacherName(st.teacher_id) || '담당 미지정') + ' · 반 미지정');
+}
 function npRenderByBook(wrap, stus, base){
-  var keep = _np.bookForm || {};
+  var keep = _np.bookForm = _np.bookForm || {};
+  var bookId = keep.book || '', book = _np.books.find(function(x){ return x.id === bookId; });
+  /* 학생 고르기 — 반(이 탭) + 학년·이름(위쪽 공통 필터와 같은 값) */
+  var classes = []; stus.forEach(function(st){ var k = npClassLabel(st); if (classes.indexOf(k) === -1) classes.push(k); });
+  classes.sort(function(x, y){ return x.localeCompare(y, 'ko'); });
+  if (keep.cls && classes.indexOf(keep.cls) === -1) keep.cls = '';
+  var list = stus.filter(function(st){ return !keep.cls || npClassLabel(st) === keep.cls; });
+  var selStyle = 'padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;background:#fff';
   var h = '<div style="padding:12px 14px;background:#f8fafc;border-bottom:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
     + '<span style="font-size:13px;font-weight:700;color:#1e293b">📘 교재</span>'
-    + '<div style="min-width:380px;flex:1 1 380px">' + npPickerHtml('npb', keep.book || '', '', false,
-        "_np.bookForm=_np.bookForm||{};_np.bookForm.book=this.value;_np.bookForm.grp=document.getElementById(\'npb-grp\').value;_np.bookForm.sec=document.getElementById(\'npb-sec\').value;npRender()",
+    + '<div style="min-width:380px;flex:1 1 380px">' + npPickerHtml('npb', bookId, '', false,
+        "_np.bookForm=_np.bookForm||{};_np.bookForm.book=this.value;_np.bookForm.grp=document.getElementById('npb-grp').value;_np.bookForm.sec=document.getElementById('npb-sec').value;npRender()",
         { grp: keep.grp, sec: keep.sec }) + '</div>'
     + '<span style="font-size:12px;color:#6b7280">기간</span>'
-    + '<input type="date" id="npb-start" value="' + npEsc(keep.start || base) + '" onchange="_np.bookForm=_np.bookForm||{};_np.bookForm.start=this.value" style="padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px">'
+    + '<input type="date" id="npb-start" value="' + npEsc(keep.start || base) + '" onchange="_np.bookForm.start=this.value;npBookCount()" style="padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px">'
     + '<span style="color:#9ca3af">~</span>'
-    + '<input type="date" id="npb-end" value="' + npEsc(keep.end || '') + '" onchange="_np.bookForm=_np.bookForm||{};_np.bookForm.end=this.value" style="padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px">'
-    + '<input type="text" id="npb-note" value="' + npEsc(keep.note || '') + '" placeholder="메모(선택)" oninput="_np.bookForm=_np.bookForm||{};_np.bookForm.note=this.value" style="padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;width:140px">'
-    + '<span style="margin-left:auto;display:flex;gap:6px"><button class="btn btn-sm" onclick="npBookCheckAll(true)">전체 선택</button><button class="btn btn-sm" onclick="npBookCheckAll(false)">해제</button>'
-    + '<button class="btn btn-sm btn-primary" id="npb-save" onclick="npBulkAssign()" style="font-weight:700">선택 학생에게 등록</button></span>'
+    + '<input type="date" id="npb-end" value="' + npEsc(keep.end || '') + '" onchange="_np.bookForm.end=this.value;npBookCount()" style="padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px">'
+    + '<input type="text" id="npb-note" value="' + npEsc(keep.note || '') + '" placeholder="메모(선택)" oninput="_np.bookForm.note=this.value" style="padding:6px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;width:140px">'
+    + '</div>'
+    + '<div style="padding:8px 14px;background:#fff;border-bottom:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+    + '<span style="font-size:12px;font-weight:700;color:#475569">👥 학생 고르기</span>'
+    + '<select id="npb-cls" onchange="_np.bookForm.cls=this.value;npRender()" style="' + selStyle + ';max-width:260px"><option value="">전체 반</option>'
+      + classes.map(function(k){ return '<option value="' + npEsc(k) + '"' + (keep.cls === k ? ' selected' : '') + '>' + npEsc(k) + '</option>'; }).join('') + '</select>'
+    + '<select onchange="document.getElementById(\'np-grade\').value=this.value;npRender()" style="' + selStyle + '">'
+      + [['','전체 학년'],['1','중1'],['2','중2'],['3','중3'],['e','초등']].map(function(o){ return '<option value="' + o[0] + '"' + (((document.getElementById('np-grade') || {}).value || '') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>'
+    + '<input type="text" value="' + npEsc((document.getElementById('np-search') || {}).value || '') + '" placeholder="이름 검색" oninput="document.getElementById(\'np-search\').value=this.value;npRender()" style="padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;width:130px">'
+    + '<span style="font-size:12px;color:#6b7280;margin-left:auto">' + list.length + '명 표시' + (book ? ' · 이미 <b>' + npEsc(book.name) + '</b> 계획이 있는 학생은 기간이 표시됩니다' : '') + '</span>'
     + '</div>';
-  if (!stus.length) { wrap.innerHTML = h + '<div class="empty-state" style="padding:30px"><p>해당 조건의 학생이 없습니다</p></div>'; return; }
-  var bookId = keep.book || '', book = _np.books.find(function(b){ return b.id === bookId; });
-  h += '<div style="font-size:11.5px;color:#6b7280;padding:8px 14px">' + (book ? '이미 <b>' + npEsc(book.name) + '</b> 계획이 있는 학생은 기간이 표시됩니다. 체크하면 새 계획이 하나 더 생깁니다.' : '교재를 고르면 학생마다 그 교재의 기존 계획이 보입니다.') + '</div>';
-  h += '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#1e293b;color:#e2e8f0;font-size:11px"><th style="padding:7px 8px;width:36px"></th><th style="padding:7px 8px;text-align:left">학생</th><th style="padding:7px 8px;text-align:left">담당</th><th style="padding:7px 8px;text-align:left">이 교재의 기존 계획</th><th style="padding:7px 8px;text-align:left">다른 계획</th></tr></thead><tbody>';
-  stus.forEach(function(s, i){
-    var ps = npPlansOf(s.id), same = ps.filter(function(p){ return book && (p.book_id === book.id || p.book_name === book.name); }), other = ps.filter(function(p){ return same.indexOf(p) === -1; });
-    h += '<tr style="background:' + (i % 2 ? '#f8fafc' : '#fff') + ';border-bottom:1px solid #f1f5f9">'
-      + '<td style="padding:6px 8px;text-align:center"><input type="checkbox" class="npb-chk" value="' + s.id + '" style="width:16px;height:16px;accent-color:#4f46e5"></td>'
-      + '<td style="padding:6px 8px;white-space:nowrap"><b>' + npEsc(s.name) + '</b> <span style="font-size:10px;color:#9ca3af">' + npEsc((s.school || '') + (s.grade ? ' ' + s.grade + (/^\d+$/.test(s.grade) ? '학년' : '') : '')) + '</span></td>'
-      + '<td style="padding:6px 8px;font-size:12px;color:#64748b;white-space:nowrap">' + npEsc(npTeacherName(s.teacher_id)) + '</td>'
+  if (!list.length) {
+    wrap.innerHTML = h + '<div class="empty-state" style="padding:30px"><p>해당 조건의 학생이 없습니다</p></div>' + npBookFooter(0);
+    return;
+  }
+  h += '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#1e293b;color:#e2e8f0;font-size:11px">'
+    + '<th style="padding:7px 8px;width:36px"><input type="checkbox" id="npb-all" onchange="npBookCheckAll(this.checked)" title="보이는 학생 전체 선택" style="width:16px;height:16px;accent-color:#a5b4fc;cursor:pointer"></th>'
+    + '<th style="padding:7px 8px;text-align:left">학생</th><th style="padding:7px 8px;text-align:left">반</th><th style="padding:7px 8px;text-align:left">이 교재의 기존 계획</th><th style="padding:7px 8px;text-align:left">다른 계획</th></tr></thead><tbody>';
+  list.forEach(function(st, i){
+    var ps = npPlansOf(st.id), same = ps.filter(function(p){ return book && (p.book_id === book.id || p.book_name === book.name); }), other = ps.filter(function(p){ return same.indexOf(p) === -1; });
+    var checked = keep.sel && keep.sel[st.id];
+    h += '<tr style="background:' + (i % 2 ? '#f8fafc' : '#fff') + ';border-bottom:1px solid #f1f5f9;cursor:pointer" onclick="if(event.target.tagName!==\'INPUT\'&&event.target.tagName!==\'BUTTON\'){var c=this.querySelector(\'.npb-chk\');c.checked=!c.checked;npBookCount();}">'
+      + '<td style="padding:6px 8px;text-align:center"><input type="checkbox" class="npb-chk" value="' + st.id + '"' + (checked ? ' checked' : '') + ' onchange="npBookCount()" style="width:16px;height:16px;accent-color:#4f46e5;cursor:pointer"></td>'
+      + '<td style="padding:6px 8px;white-space:nowrap"><b>' + npEsc(st.name) + '</b> <span style="font-size:10px;color:#9ca3af">' + npEsc((st.school || '') + (st.grade ? ' ' + st.grade + (/^\d+$/.test(st.grade) ? '학년' : '') : '')) + '</span></td>'
+      + '<td style="padding:6px 8px;font-size:12px;color:#64748b;white-space:nowrap">' + npEsc(npClassLabel(st)) + '</td>'
       + '<td style="padding:4px 8px">' + (same.length ? same.map(function(p){ return npChip(p, base); }).join('') : '<span style="font-size:12px;color:#cbd5e1">—</span>') + '</td>'
       + '<td style="padding:4px 8px;font-size:11px;color:#64748b">' + other.map(function(p){ return '📘 ' + npEsc(p.book_name) + ' ' + npMD(p.start_date) + '~' + npMD(p.end_date); }).join('<br>') + '</td></tr>';
   });
-  wrap.innerHTML = h + '</tbody></table>';
+  wrap.innerHTML = h + '</tbody></table>' + npBookFooter(0);
+  npBookCount();
 }
-function npBookCheckAll(on){ document.querySelectorAll('.npb-chk').forEach(function(c){ c.checked = on; }); }
+/* 표 아래 고정 띠 — 고른 인원·교재·기간을 보여 주고 등록 버튼을 둔다 */
+function npBookFooter(n){
+  return '<div id="npb-foot" style="position:sticky;bottom:0;background:#eef2ff;border-top:2px solid #c7d2fe;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:0 -4px 12px rgba(79,70,229,0.08)">'
+    + '<span id="npb-sum" style="font-size:13px;font-weight:700;color:#3730a3">선택 ' + n + '명</span>'
+    + '<span style="display:flex;gap:6px"><button class="btn btn-sm" onclick="npBookCheckAll(true)">전체 선택</button><button class="btn btn-sm" onclick="npBookCheckAll(false)">해제</button></span>'
+    + '<span style="flex:1"></span>'
+    + '<button id="npb-save" onclick="npBulkAssign()" style="padding:11px 22px;border:none;border-radius:10px;background:#4f46e5;color:#fff;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 4px 12px rgba(79,70,229,0.3)">📘 선택한 ' + n + '명에게 등록</button>'
+    + '</div>';
+}
+function npBookCount(){
+  var all = Array.prototype.slice.call(document.querySelectorAll('.npb-chk'));
+  var on = all.filter(function(c){ return c.checked; });
+  var keep = _np.bookForm = _np.bookForm || {}; keep.sel = {};
+  on.forEach(function(c){ keep.sel[c.value] = true; });
+  var book = _np.books.find(function(x){ return x.id === keep.book; });
+  var sum = document.getElementById('npb-sum');
+  if (sum) sum.innerHTML = '선택 <b>' + on.length + '</b>명' + (book ? ' · ' + npEsc(book.name) : ' · <span style="color:#b91c1c">교재 미선택</span>')
+    + ((keep.start && keep.end) ? ' · ' + npMD(keep.start) + '~' + npMD(keep.end) : ' · <span style="color:#b91c1c">기간 미입력</span>');
+  var btn = document.getElementById('npb-save');
+  if (btn) { btn.textContent = '📘 선택한 ' + on.length + '명에게 등록'; btn.style.opacity = on.length ? '1' : '.5'; }
+  var allChk = document.getElementById('npb-all');
+  if (allChk) { allChk.checked = all.length > 0 && on.length === all.length; allChk.indeterminate = on.length > 0 && on.length < all.length; }
+}
+function npBookCheckAll(on){ document.querySelectorAll('.npb-chk').forEach(function(c){ c.checked = on; }); npBookCount(); }
 async function npBulkAssign(){
   var bookId = (document.getElementById('npb-book') || {}).value || '';
   var book = _np.books.find(function(b){ return b.id === bookId; });
@@ -24185,13 +24233,16 @@ async function npBulkAssign(){
   if (!targets.length) { alert('선택한 학생 모두 같은 교재·같은 기간의 계획이 이미 있습니다.'); return; }
   if (!confirm(book.name + ' · ' + npMD(start) + '~' + npMD(end) + '\n' + targets.length + '명에게 등록합니다.' + (dup.length ? '\n(같은 계획이 이미 있는 ' + dup.length + '명은 건너뜁니다)' : '') + '\n계속할까요?')) return;
   var btn = document.getElementById('npb-save'); if (btn) { btn.disabled = true; btn.textContent = '등록 중...'; }
+  /* 기간은 bookForm 에도 두어 등록 뒤 다시 그려도 남는다 */
+  _np.bookForm.start = start; _np.bookForm.end = end;
   try {
     var rows = targets.map(function(sid){ return { student_id: sid, book_id: book.id, book_name: book.name, start_date: start, end_date: end, note: note, created_by: currentUser.id }; });
     var r = await db.from('naje_plans').insert(rows); if (r.error) throw r.error;
+    if (_np.bookForm) _np.bookForm.sel = {};
     await npLoadAll();
     alert('✅ ' + targets.length + '명에게 등록했습니다.');
   } catch(e) { alert('등록 실패: ' + (e.message || e)); }
-  finally { if (btn) { btn.disabled = false; btn.textContent = '선택 학생에게 등록'; } }
+  finally { var b2 = document.getElementById('npb-save'); if (b2) { b2.disabled = false; } npBookCount(); }
 }
 /* ── 교재 목록 (읽기 전용 — 재고관리 카탈로그가 원천) ── */
 function npRenderBooks(wrap){
