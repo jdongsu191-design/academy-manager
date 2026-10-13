@@ -24214,52 +24214,98 @@ function npRenderBooks(wrap){
   });
   wrap.innerHTML = h + '</tbody></table>';
 }
-/* ── 학생 한 명 계획 추가/수정 모달 ── */
+/* ── 학생 한 명 계획 추가/수정 모달 ──
+   추가는 줄을 여러 개 두고 한 번에 저장한다(교재마다 기간이 다르니 줄마다 세 단계 고르기 + 기간).
+   새 줄의 시작일은 바로 윗줄 종료일 다음 날로 미리 채운다. 수정은 한 줄만. */
+function npNextDay(ymd){
+  if (!ymd) return '';
+  var p = ymd.split('-'); var d = new Date(+p[0], +p[1] - 1, +p[2] + 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function npRowHtml(i, st, p, start){
+  var pNew = !!(p && !_np.books.some(function(b){ return b.id === p.book_id; }));
+  var pfx = 'npm' + i;
+  var picker = npPickerHtml(pfx, p ? (pNew ? '__new__' : p.book_id) : '', npGradeKey(st), true,
+    "document.getElementById('" + pfx + "-new').style.display=(this.value==='__new__')?'':'none'");
+  var inp = 'width:100%;padding:8px 10px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:13px;box-sizing:border-box;outline:none';
+  return '<div data-i="' + i + '" style="border:1.5px solid #e0e7ff;border-radius:10px;padding:10px;background:#fafaff;display:flex;flex-direction:column;gap:8px;position:relative">'
+    + (p ? '' : '<button type="button" onclick="npRemoveRow(' + i + ')" title="이 줄 빼기" style="position:absolute;top:6px;right:6px;border:none;background:transparent;color:#94a3b8;font-size:15px;cursor:pointer;line-height:1">✕</button>')
+    + '<div><div style="font-size:11px;font-weight:700;color:#4f46e5;margin-bottom:4px">📘 교재 <span style="font-weight:400;color:#9ca3af">학년·학기 → 레벨 → 주차</span></div>' + picker
+    + '<input type="text" id="' + pfx + '-new" value="' + npEsc(pNew ? p.book_name : '') + '" placeholder="교재 이름 직접 입력 (예: 중2B2 4주차)" style="display:' + (pNew ? '' : 'none') + ';margin-top:6px;' + inp + '"></div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:8px">'
+      + '<div><div style="font-size:11px;font-weight:600;color:var(--text-sub);margin-bottom:3px">시작일</div><input type="date" id="' + pfx + '-start" value="' + npEsc(p ? p.start_date : (start || '')) + '" style="' + inp + '"></div>'
+      + '<div><div style="font-size:11px;font-weight:600;color:var(--text-sub);margin-bottom:3px">종료일</div><input type="date" id="' + pfx + '-end" value="' + npEsc(p ? p.end_date : '') + '" style="' + inp + '"></div>'
+      + '<div><div style="font-size:11px;font-weight:600;color:var(--text-sub);margin-bottom:3px">메모 (선택)</div><input type="text" id="' + pfx + '-note" value="' + npEsc(p ? (p.note || '') : '') + '" maxlength="100" style="' + inp + '"></div>'
+    + '</div></div>';
+}
+function npAddRow(){
+  var st = _np.students.find(function(x){ return x.id === _np.studentId; }); if (!st) return;
+  var box = document.getElementById('npm-rows'); if (!box) return;
+  var last = box.lastElementChild, start = '';
+  if (last) { var e = document.getElementById('npm' + last.getAttribute('data-i') + '-end'); start = npNextDay(e ? e.value : ''); }
+  if (!start) start = (document.getElementById('np-base') || {}).value || _localYMD(new Date());
+  var i = _np.rowSeq++;
+  box.insertAdjacentHTML('beforeend', npRowHtml(i, st, null, start));
+  var el = document.getElementById('npm' + i + '-book'); if (el) el.focus();
+  box.lastElementChild.scrollIntoView({ block: 'nearest' });
+}
+function npRemoveRow(i){
+  var box = document.getElementById('npm-rows'); if (!box) return;
+  var row = box.querySelector('[data-i="' + i + '"]'); if (row) row.remove();
+  if (!box.children.length) npAddRow();
+}
 function npOpenModal(studentId, planId){
-  var s = _np.students.find(function(x){ return x.id === studentId; });
+  var st = _np.students.find(function(x){ return x.id === studentId; });
   var p = planId ? _np.plans.find(function(x){ return x.id === planId; }) : null;
-  if (!s) return;
-  _np.studentId = studentId; _np.editId = planId || null;
+  if (!st) return;
+  _np.studentId = studentId; _np.editId = planId || null; _np.rowSeq = 1;
   var ex = document.getElementById('np-modal'); if (ex) ex.remove();
   var base = (document.getElementById('np-base') || {}).value || _localYMD(new Date());
-  var _pNew = !!(p && !_np.books.some(function(b){ return b.id === p.book_id; }));   /* 직접 입력했거나 카탈로그에서 사라진 교재 */
-  var picker = npPickerHtml('npm', p ? (_pNew ? '__new__' : p.book_id) : '', npGradeKey(s), true,
-    "document.getElementById(\'npm-book-new\').style.display=(this.value===\'__new__\')?\'\':\'none\'");
   var modal = document.createElement('div');
   modal.id = 'np-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
-  modal.innerHTML = '<div style="background:#fff;border-radius:16px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden">'
-    + '<div style="background:#4f46e5;padding:16px 20px;display:flex;align-items:center;justify-content:space-between"><div><div style="font-size:15px;font-weight:800;color:#fff">📘 ' + (p ? 'N제 계획 수정' : 'N제 계획 추가') + '</div>'
-    + '<div style="font-size:11px;color:#c7d2fe;margin-top:2px">' + npEsc(s.name) + ' · ' + npEsc((s.school || '') + ' ' + (s.grade || '')) + '</div></div>'
+  modal.innerHTML = '<div style="background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden">'
+    + '<div style="background:#4f46e5;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0"><div><div style="font-size:15px;font-weight:800;color:#fff">📘 ' + (p ? 'N제 계획 수정' : 'N제 계획 추가') + '</div>'
+    + '<div style="font-size:11px;color:#c7d2fe;margin-top:2px">' + npEsc(st.name) + ' · ' + npEsc((st.school || '') + ' ' + (st.grade || '')) + (p ? '' : ' · 여러 교재를 한 번에 넣을 수 있습니다') + '</div></div>'
     + '<button onclick="document.getElementById(\'np-modal\').remove()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;width:28px;height:28px;border-radius:50%;font-size:18px;cursor:pointer">✕</button></div>'
-    + '<div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px">'
-    + '<div><div style="font-size:12px;font-weight:600;color:var(--text-sub);margin-bottom:5px">교재 <span style="font-weight:400;color:#9ca3af">학년·학기 → 레벨 → 주차</span></div>' + picker
-    + '<input type="text" id="npm-book-new" value="' + npEsc(_pNew ? p.book_name : '') + '" placeholder="교재 이름 직접 입력 (예: 중2B2 4주차)" style="display:' + (_pNew ? '' : 'none') + ';width:100%;margin-top:6px;padding:9px 12px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box"></div>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><div style="font-size:12px;font-weight:600;color:var(--text-sub);margin-bottom:5px">시작일</div><input type="date" id="npm-start" value="' + npEsc(p ? p.start_date : base) + '" style="width:100%;padding:8px 10px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:13px;box-sizing:border-box"></div>'
-    + '<div><div style="font-size:12px;font-weight:600;color:var(--text-sub);margin-bottom:5px">종료일</div><input type="date" id="npm-end" value="' + npEsc(p ? p.end_date : '') + '" style="width:100%;padding:8px 10px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:13px;box-sizing:border-box"></div></div>'
-    + '<div><div style="font-size:12px;font-weight:600;color:var(--text-sub);margin-bottom:5px">메모 (선택)</div><input type="text" id="npm-note" value="' + npEsc(p ? (p.note || '') : '') + '" maxlength="100" style="width:100%;padding:9px 12px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:13px;box-sizing:border-box"></div>'
-    + '<div style="display:flex;gap:8px"><button onclick="document.getElementById(\'np-modal\').remove()" style="flex:1;padding:10px;border:1.5px solid var(--border);border-radius:8px;background:#f9fafb;color:var(--text-sub);font-size:13px;font-weight:600;cursor:pointer">취소</button>'
-    + '<button id="npm-save" onclick="npSavePlan()" style="flex:2;padding:10px;border:none;border-radius:8px;background:#4f46e5;color:#fff;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button></div>'
-    + '</div></div>';
+    + '<div id="npm-rows" style="padding:14px 18px;display:flex;flex-direction:column;gap:10px;overflow-y:auto;flex:1">' + npRowHtml(0, st, p, base) + '</div>'
+    + '<div style="padding:12px 18px;border-top:1px solid #eef2ff;display:flex;gap:8px;align-items:center;flex-shrink:0">'
+    + (p ? '' : '<button type="button" onclick="npAddRow()" style="padding:9px 12px;border:1.5px dashed #a5b4fc;border-radius:8px;background:#fff;color:#4f46e5;font-size:13px;font-weight:700;cursor:pointer">＋ 교재 줄 추가</button>')
+    + '<span style="flex:1"></span>'
+    + '<button onclick="document.getElementById(\'np-modal\').remove()" style="padding:9px 16px;border:1.5px solid var(--border);border-radius:8px;background:#f9fafb;color:var(--text-sub);font-size:13px;font-weight:600;cursor:pointer">취소</button>'
+    + '<button id="npm-save" onclick="npSavePlan()" style="padding:9px 22px;border:none;border-radius:8px;background:#4f46e5;color:#fff;font-size:13px;font-weight:700;cursor:pointer">💾 저장</button></div>'
+    + '</div>';
   modal.addEventListener('click', function(e){ if (e.target === modal) modal.remove(); });
   document.body.appendChild(modal);
 }
+/* 줄 하나 읽기 — 비어 있으면 null, 틀렸으면 {error} */
+function npReadRow(i){
+  var g = function(id){ var el = document.getElementById('npm' + i + '-' + id); return el ? el.value : ''; };
+  var bookSel = g('book'), book = _np.books.find(function(b){ return b.id === bookSel; });
+  var name = bookSel === '__new__' ? (g('new') || '').trim() : (book ? book.name : '');
+  var start = g('start'), end = g('end'), note = (g('note') || '').trim() || null;
+  if (!bookSel && !end && !note) return null;                      /* 아무것도 안 건드린 줄 (시작일은 자동으로 채워지니 안 본다) */
+  if (!name) return { error: '교재를 고르거나 이름을 입력하세요.' };
+  if (!start || !end) return { error: name + ' — 시작일과 종료일을 입력하세요.' };
+  if (end < start) return { error: name + ' — 종료일이 시작일보다 빠릅니다.' };
+  return { student_id: _np.studentId, book_id: book ? book.id : null, book_name: name, start_date: start, end_date: end, note: note };
+}
 async function npSavePlan(){
-  var bookSel = document.getElementById('npm-book').value;
-  var book = _np.books.find(function(b){ return b.id === bookSel; });
-  var name = bookSel === '__new__' ? (document.getElementById('npm-book-new').value || '').trim() : (book ? book.name : '');
-  var start = document.getElementById('npm-start').value, end = document.getElementById('npm-end').value;
-  var note = (document.getElementById('npm-note').value || '').trim() || null;
-  if (!name) { alert('교재를 고르거나 이름을 입력하세요.'); return; }
-  if (!start || !end) { alert('시작일과 종료일을 입력하세요.'); return; }
-  if (end < start) { alert('종료일이 시작일보다 빠릅니다.'); return; }
+  var box = document.getElementById('npm-rows'); if (!box) return;
+  var rows = [], idx = Array.prototype.map.call(box.children, function(el){ return +el.getAttribute('data-i'); });
+  for (var k = 0; k < idx.length; k++) {
+    var r = npReadRow(idx[k]);
+    if (!r) continue;
+    if (r.error) { alert((idx.length > 1 ? (k + 1) + '번째 줄: ' : '') + r.error); return; }
+    rows.push(r);
+  }
+  if (!rows.length) { alert('교재와 기간을 입력하세요.'); return; }
   var btn = document.getElementById('npm-save'); btn.disabled = true; btn.textContent = '저장 중...';
   try {
-    var row = { student_id: _np.studentId, book_id: book ? book.id : null, book_name: name, start_date: start, end_date: end, note: note };
-    var r;
-    if (_np.editId) { row.updated_at = new Date().toISOString(); r = await db.from('naje_plans').update(row).eq('id', _np.editId); }
-    else { row.created_by = currentUser.id; r = await db.from('naje_plans').insert(row); }
-    if (r.error) throw r.error;
+    var res;
+    if (_np.editId) { rows[0].updated_at = new Date().toISOString(); res = await db.from('naje_plans').update(rows[0]).eq('id', _np.editId); }
+    else { rows.forEach(function(x){ x.created_by = currentUser.id; }); res = await db.from('naje_plans').insert(rows); }
+    if (res.error) throw res.error;
     document.getElementById('np-modal').remove();
     await npLoadAll();
   } catch(e) { alert('저장 실패: ' + (e.message || e)); btn.disabled = false; btn.textContent = '💾 저장'; }
