@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 독서실 출결 [v1.06-livebadge]</title>
+<title>BMAPS · 독서실 출결 [v1.07-expfix]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -879,7 +879,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v1.06-livebadge</span>
+    <span class="tb-ver" id="sc-ver">v1.07-expfix</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1240,7 +1240,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v1.06-livebadge';
+  window.STUDYCENTER_VERSION = 'v1.07-expfix';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -5014,12 +5014,19 @@
     if(inEl) inEl.value = "";
     if(msgEl){ msgEl.textContent=""; msgEl.classList.remove("err"); }
     var _pSlot = (row && row.pending_out_start) ? (!row.out_1_start ? 1 : (!row.out_2_start ? 2 : 0)) : 0;
-    // 외출중(진행중) 슬롯은 pending 사유·예상복귀를 표시 (복귀 전에도 확인·수정 가능)
-    _scExpLoadOut(1, row?(row.out_1_reason || (_pSlot===1?row.pending_out_reason:"")):"", row?(row.out_1_expected_end || (_pSlot===1?row.pending_out_expected_end:"")):"");
-    _scExpLoadOut(2, row?(row.out_2_reason || (_pSlot===2?row.pending_out_reason:"")):"", row?(row.out_2_expected_end || (_pSlot===2?row.pending_out_expected_end:"")):"");
+    // 외출중(진행중) 슬롯은 pending 사유·예상복귀를 보여준다 — 정산 전 out_N 칸에 남은 옛 값(미리 입력분)보다 pending 이 우선.
+    //  (예전엔 out_N 값을 먼저 읽어, 고쳐 저장해도 창에는 옛 값이 그대로 보이던 버그)
+    _scExpLoadOut(1, row?(_pSlot===1 ? row.pending_out_reason : row.out_1_reason):"", row?(_pSlot===1 ? row.pending_out_expected_end : row.out_1_expected_end):"");
+    _scExpLoadOut(2, row?(_pSlot===2 ? row.pending_out_reason : row.out_2_reason):"", row?(_pSlot===2 ? row.pending_out_expected_end : row.out_2_expected_end):"");
+    // 추가외출(외출1·2 칸이 다 찬 뒤 진행 중): 3번째 칸을 띄워 pending 을 고칠 수 있게
+    var _extraPending = !!(row && row.pending_out_start && _pSlot===0);
+    var _blk3 = document.getElementById("wk-exp-out-block3");
+    if(_blk3) _blk3.style.display = _extraPending ? "" : "none";
+    _scExpLoadOut(3, _extraPending ? row.pending_out_reason : "", _extraPending ? row.pending_out_expected_end : "");
     // 외출 시작시각(실제) 표시: out_N_start, 진행중이면 pending_out_start
-    [1,2].forEach(function(_s){
-      var _stt = (row ? row["out_"+_s+"_start"] : "") || ((_pSlot===_s && row) ? row.pending_out_start : "");
+    [1,2,3].forEach(function(_s){
+      var _stt = (_s===3) ? (_extraPending ? row.pending_out_start : "")
+               : ((row ? row["out_"+_s+"_start"] : "") || ((_pSlot===_s && row) ? row.pending_out_start : ""));
       var _el = document.getElementById("wk-exp-start"+_s);
       if(_el){ _el.textContent = _stt ? ("시작 "+scWkHm(_stt)) : ""; _el.style.display = _stt ? "" : "none"; }
     });
@@ -5094,9 +5101,9 @@
     if(!sid || !date) return;
     var outV = scWkNorm(document.getElementById("wk-exp-out").value);
     var inV  = scWkNorm(document.getElementById("wk-exp-in").value);
-    var o1=_scExpCollectOut(1), o2=_scExpCollectOut(2);
+    var o1=_scExpCollectOut(1), o2=_scExpCollectOut(2), o3=_scExpCollectOut(3);
     var msgEl=document.getElementById("wk-exp-msg");
-    if(outV === undefined || inV === undefined || o1.expEnd === undefined || o2.expEnd === undefined){
+    if(outV === undefined || inV === undefined || o1.expEnd === undefined || o2.expEnd === undefined || o3.expEnd === undefined){
       if(msgEl){ msgEl.textContent="시간 형식이 올바르지 않습니다 (HH:MM)"; msgEl.classList.add("err"); }
       return;
     }
@@ -5105,15 +5112,18 @@
     try {
       var curRow = (_wkData[sid]||{})[date] || null;
       // 당일행: 예상하원 + 외출1/2 사유·예상복귀 (입력값이 있거나, 당일행이 이미 있을 때만 — 빈 행 생성 방지)
-      var hasDay = (outV !== null) || o1.reason || o1.expEnd || o2.reason || o2.expEnd || curRow;
-      // 외출중 슬롯의 사유·예상복귀는 pending_out_*에 기록 (복귀 시 scActReturn이 out_N으로 이전 → 정합성 유지)
+      var hasDay = (outV !== null) || o1.reason || o1.expEnd || o2.reason || o2.expEnd || o3.reason || o3.expEnd || curRow;
+      // 외출중 슬롯의 사유·예상복귀는 pending_out_* 에 기록하고, 같은 값을 out_N 칸에도 써서 두 칸이 어긋나지 않게 한다
+      //  (복귀 시 scActReturn 이 pending → out_N 으로 옮기므로 결과는 같다). 추가외출(슬롯 0)은 3번째 칸 → pending.
       var pSlot = (curRow && curRow.pending_out_start) ? (!curRow.out_1_start ? 1 : (!curRow.out_2_start ? 2 : 0)) : 0;
+      var extraPending = !!(curRow && curRow.pending_out_start && pSlot===0);
       if(hasDay){
         var patch = { student_id: sid, attend_date: date, expected_check_out: outV };
+        patch.out_1_reason = o1.reason; patch.out_1_expected_end = o1.expEnd;
+        patch.out_2_reason = o2.reason; patch.out_2_expected_end = o2.expEnd;
         if(pSlot===1){ patch.pending_out_reason = o1.reason; patch.pending_out_expected_end = o1.expEnd; }
-        else { patch.out_1_reason = o1.reason; patch.out_1_expected_end = o1.expEnd; }
         if(pSlot===2){ patch.pending_out_reason = o2.reason; patch.pending_out_expected_end = o2.expEnd; }
-        else { patch.out_2_reason = o2.reason; patch.out_2_expected_end = o2.expEnd; }
+        if(extraPending){ patch.pending_out_reason = o3.reason; patch.pending_out_expected_end = o3.expEnd; }
         var r1 = await db.from("reading_room_attendance").upsert(
           patch,
           { onConflict: "student_id,attend_date" }
@@ -7040,6 +7050,14 @@
         <select class="wk-exp-subj" id="wk-exp-subj2" style="display:none"><option value="">과목</option><option>국어</option><option>영어</option><option>수학</option><option>과학</option><option>기타</option></select>
         <input type="text" class="wk-exp-rcustom" id="wk-exp-rcustom2" placeholder="사유 입력" maxlength="20" style="display:none">
         <input type="text" class="wk-exp-ret" id="wk-exp-ret2" placeholder="예상복귀 HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)">
+      </div>
+      <div class="wk-exp-out-block" id="wk-exp-out-block3" style="display:none">
+        <span class="wk-exp-out-lbl">추가외출</span>
+        <span class="wk-exp-start" id="wk-exp-start3"></span>
+        <select class="wk-exp-sel" id="wk-exp-r3" onchange="scWkExpReasonChange(3)"><option value="">— 사유 —</option><option>점심</option><option>점심(집)</option><option>점심(외부)</option><option>저녁</option><option>저녁(집)</option><option>저녁(외부)</option><option>타학원</option><option>병원</option><option>집</option><option>베스티안</option><option>직접입력</option></select>
+        <select class="wk-exp-subj" id="wk-exp-subj3" style="display:none"><option value="">과목</option><option>국어</option><option>영어</option><option>수학</option><option>과학</option><option>기타</option></select>
+        <input type="text" class="wk-exp-rcustom" id="wk-exp-rcustom3" placeholder="사유 입력" maxlength="20" style="display:none">
+        <input type="text" class="wk-exp-ret" id="wk-exp-ret3" placeholder="예상복귀 HH:MM" maxlength="5" oninput="scWkAutoColonLive(this)" onblur="scWkAutoColon(this)">
       </div>
       <div class="wk-xout-preview" id="wk-exp-msg"></div>
       <div class="wk-xout-btns">
