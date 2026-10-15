@@ -193,7 +193,8 @@ def run_server(origin, root, codex, port=8765):
                 lo=int(params.get('from',['1'])[0]);hi=int(params.get('to',['99'])[0])
                 if not 1<=lo<=hi<=99:raise ValueError('문항 범위 오류')
                 n=int(self.headers.get('Content-Length','0'))
-                if not 1<=n<=LIMIT:raise ValueError('30MB 이하 PDF를 사용하세요.')
+                limit = 70*1024*1024 if kind == 'exam' else LIMIT  # Base64 plus JSON overhead for a 50MB document.
+                if not 1<=n<=limit:raise ValueError('내신분석은 50MB 이하 문서를 사용하세요.' if kind == 'exam' else '30MB 이하 PDF를 사용하세요.')
                 expected_type = 'application/json' if kind == 'exam' else 'application/pdf'
                 if self.headers.get('Content-Type')!=expected_type:raise ValueError('분석 입력 형식 오류')
                 with lock:

@@ -36,8 +36,8 @@ def validate_request(data):
             pdf = base64.b64decode(data.get('pdf', ''), validate=True)
         except (ValueError, TypeError):
             raise ValueError('PDF 인코딩 오류') from None
-        if len(pdf) > 20*1024*1024:
-            raise ValueError('20MB 이하 문서를 사용하세요.')
+        if len(pdf) > 50*1024*1024:
+            raise ValueError('50MB 이하 문서를 사용하세요.')
         validate_document(pdf, data.get('format', 'pdf'))
     return pdf
 
