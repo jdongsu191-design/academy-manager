@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · N제 등록 [v8.1-codex]</title>
+<title>BMAPS · N제 등록 [v8.2-levels]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
@@ -131,7 +131,7 @@
 <body>
 
 <div class="nje-header">
-  <h1>📄 N제 등록 <span style="font-size:11px;opacity:0.6;font-weight:400">[v8.1-codex]</span></h1>
+  <h1>📄 N제 등록 <span style="font-size:11px;opacity:0.6;font-weight:400">[v8.2-levels]</span></h1>
   <div style="display:flex;align-items:center;gap:10px"><div id="nje-auth-status">로그인 확인 중...</div>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3);color:#fff" onclick="location.href='index.html'">← BMAPS</button></div>
 </div>
@@ -180,6 +180,7 @@
       <button id="nje-tab-p" class="on" onclick="njeTab('p')">📄 PDF 가져오기</button>
       <button id="nje-tab-q" onclick="njeTab('q')">정답 · 해설</button>
       <button id="nje-tab-s" onclick="njeTab('s')">응시 현황</button>
+      <button id="nje-tab-l" onclick="njeTab('l')">단계명</button>
     </div>
 
     <!-- PDF 가져오기 탭 -->
@@ -267,6 +268,18 @@
       </div>
       <div class="qt-wrap"><table class="qt" id="nje-st"></table></div>
     </div>
+
+    <!-- 단계명 탭 -->
+    <div id="nje-pane-l" style="display:none">
+      <div class="hint" style="margin-bottom:8px">단계는 8문항씩 고정(81번부터 킬러)이고 <b>이름·유형만</b> 바꿉니다 · 바꾼 단계의 문항 전체에 저장되며 학생 화면의 문항 표시와 정답·해설 탭에 반영됩니다 · 이미지를 다시 적용해도 고친 이름은 유지됩니다</div>
+      <div class="qt-wrap"><table class="qt" id="nje-lt"></table></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn btn-primary" onclick="njeSaveLevels()">💾 단계명 저장</button>
+        <button class="btn btn-sm" onclick="njeResetLevels()">↺ 기본 이름으로</button>
+        <span class="hint" id="nje-l-sum"></span>
+        <span class="msg" id="nje-l-msg"></span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -302,7 +315,7 @@ const db=createClient(SUPABASE_URL,SUPABASE_KEY);
 if(typeof pdfjsLib !== 'undefined'){
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
-window.NJE_VERSION = "v8.1-codex";
+window.NJE_VERSION = "v8.2-levels";
 console.log("NJE build:", window.NJE_VERSION);
 function _esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
@@ -1542,11 +1555,12 @@ async function njeLoadProblems(){
   var r = await db.from('naje_problems').select('id,problem_number,level_name,level_type,image_url,qr_url,correct_answer').eq('set_id', _nj.set.id).order('problem_number');
   if(!r.error) _nj.problems = r.data || [];
   njeRenderKeys();
+  njeRenderLevels();
   $id('nje-saved-sum').textContent = _nj.problems.length ? ('저장된 문항 ' + _nj.problems.length + '개') : '저장된 문항 없음';
 }
 function njeTab(t){
   _nj.tab = t;
-  ['p','q','s'].forEach(function(k){ $id('nje-tab-' + k).classList.toggle('on', k === t); $id('nje-pane-' + k).style.display = (k === t) ? '' : 'none'; });
+  ['p','q','s','l'].forEach(function(k){ $id('nje-tab-' + k).classList.toggle('on', k === t); $id('nje-pane-' + k).style.display = (k === t) ? '' : 'none'; });
   if(t === 's') njeLoadSubs();
 }
 
@@ -1596,6 +1610,12 @@ async function njeApply(){
   var setId = _nj.set.id;
   try {
     var byNo = {}; _nj.problems.forEach(function(p){ byNo[p.problem_number] = p; });
+    /* 고친 단계명은 이미지를 다시 적용해도 유지한다 — 번호가 같은 기존 문항 → 같은 단계의 기존 문항 순으로 찾는다 */
+    var byStep = {}; _nj.problems.forEach(function(p){ var st = getLevelInfoByNum(p.problem_number).step || 0; if(!byStep[st] && p.level_name) byStep[st] = p; });
+    function keepLevel(no, p){
+      var k = (byNo[no] && byNo[no].level_name) ? byNo[no] : byStep[getLevelInfoByNum(no).step || 0];
+      return k ? { level_name:k.level_name, level_type:k.level_type || p.level_type || null } : { level_name:p.level_name || null, level_type:p.level_type || null };
+    }
     if(oImg){
       var inserts = [];
       for(var i=0;i<rows.length;i++){
@@ -1607,7 +1627,8 @@ async function njeApply(){
         if(up.error) throw new Error('이미지 업로드 실패(' + p.number + '번): ' + up.error.message);
         var url = db.storage.from(NJ.BUCKET).getPublicUrl(fname).data.publicUrl + '?v=' + Date.now();
         var old = byNo[p.number] || {};
-        inserts.push({ set_id:setId, problem_number:p.number, level_name:p.level_name || null, level_type:p.level_type || null,
+        var lv = keepLevel(p.number, p);
+        inserts.push({ set_id:setId, problem_number:p.number, level_name:lv.level_name, level_type:lv.level_type,
           image_url:url, page_number:p.pageNum, qr_url: oQr ? (p.qrUrl || null) : (old.qr_url || null),
           correct_answer: oAns ? (najeAnswerMap[p.number] || old.correct_answer || null) : (old.correct_answer || null) });
       }
@@ -1705,6 +1726,63 @@ async function njeSaveKeys(){
     njMsg('nje-q-msg', '✓ ' + ids.length + '문항 저장');
     await njeLoadSets(); await njeLoadProblems();
   } catch(e){ njMsg('nje-q-msg', '저장 실패: ' + (e.message||e), true); }
+}
+
+/* ── 단계명 탭: 단계(8문항 고정)별 level_name·level_type ─────
+   index.html 의 N제 수정창(loadNajeStagesForEdit)과 같은 규칙 — 단계 범위의 문항 전체를 한 번에 update */
+function njeStageRows(){
+  var map = {};
+  _nj.problems.forEach(function(p){
+    var info = getLevelInfoByNum(p.problem_number), st = info.step || 0;
+    if(!map[st]) map[st] = { step:st, from:p.problem_number, to:p.problem_number, name:p.level_name || info.name || '', type:p.level_type || info.type || '내신', def:info.name || '', defType:info.type || '내신', n:0 };
+    map[st].to = Math.max(map[st].to, p.problem_number); map[st].from = Math.min(map[st].from, p.problem_number); map[st].n++;
+  });
+  return Object.keys(map).map(function(k){ return map[k]; }).sort(function(a,b){ return a.step - b.step; });
+}
+function njeRenderLevels(){
+  var t = $id('nje-lt'); if(!t) return;
+  njMsg('nje-l-msg', '');
+  var rows = njeStageRows();
+  if(!rows.length){ t.innerHTML = '<tbody><tr><td class="empty">문항이 없습니다. [PDF 가져오기] 에서 분석해 적용하세요.</td></tr></tbody>'; $id('nje-l-sum').textContent = ''; return; }
+  t.innerHTML = '<thead><tr><th style="width:70px">단계</th><th style="width:90px">문항</th><th>단계명</th><th style="width:110px">유형</th><th style="width:120px">기본 이름</th></tr></thead><tbody>'
+    + rows.map(function(r){
+      return '<tr><td style="font-weight:800;text-align:center">' + (r.step <= 10 ? r.step + '단계' : '킬러') + '</td>'
+        + '<td class="hint" style="text-align:center">' + (r.from === r.to ? r.from + '번' : r.from + '~' + r.to + '번') + ' (' + r.n + ')</td>'
+        + '<td><input class="inp nje-l" data-step="' + r.step + '" data-f="level_name" value="' + _esc(r.name) + '" maxlength="40" placeholder="예: 내신3점"></td>'
+        + '<td><select class="inp nje-l" data-step="' + r.step + '" data-f="level_type">' + ['내신','모고'].map(function(x){ return '<option' + (x === r.type ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></td>'
+        + '<td class="hint">' + _esc(r.def) + (r.name !== r.def ? ' <b style="color:#b45309">·수정됨</b>' : '') + '</td></tr>';
+    }).join('') + '</tbody>';
+  var changed = rows.filter(function(r){ return r.name !== r.def || r.type !== r.defType; }).length;
+  $id('nje-l-sum').textContent = rows.length + '단계' + (changed ? ' · 기본과 다른 이름 ' + changed : '');
+}
+function njeResetLevels(){
+  njeStageRows().forEach(function(r){
+    var nm = document.querySelector('#nje-lt .nje-l[data-step="' + r.step + '"][data-f="level_name"]'), tp = document.querySelector('#nje-lt .nje-l[data-step="' + r.step + '"][data-f="level_type"]');
+    if(nm) nm.value = r.def; if(tp) tp.value = r.defType;
+  });
+  njMsg('nje-l-msg', '기본 이름을 채웠습니다 — [단계명 저장] 을 눌러야 반영됩니다');
+}
+async function njeSaveLevels(){
+  if(!_nj.set || _nj.busy) return;
+  var rows = njeStageRows(), changes = [];
+  rows.forEach(function(r){
+    var nm = document.querySelector('#nje-lt .nje-l[data-step="' + r.step + '"][data-f="level_name"]'), tp = document.querySelector('#nje-lt .nje-l[data-step="' + r.step + '"][data-f="level_type"]');
+    var name = nm ? nm.value.trim() : r.name, type = tp ? tp.value : r.type;
+    if(!name){ njMsg('nje-l-msg', (r.step <= 10 ? r.step + '단계' : '킬러') + ' 이름이 비었습니다', true); changes = null; return; }
+    if(name !== r.name || type !== r.type) changes.push({ step:r.step, from:r.from, to:r.to, name:name, type:type });
+  });
+  if(!changes) return;
+  if(!changes.length){ njMsg('nje-l-msg', '바뀐 것이 없습니다'); return; }
+  njMsg('nje-l-msg', '저장 중...');
+  try {
+    for(var i=0;i<changes.length;i++){
+      var c = changes[i];
+      var r = await db.from('naje_problems').update({ level_name:c.name, level_type:c.type }).eq('set_id', _nj.set.id).gte('problem_number', c.from).lte('problem_number', c.to);
+      if(r.error) throw r.error;
+    }
+    await njeLoadProblems();
+    njMsg('nje-l-msg', '✓ ' + changes.length + '단계 저장');
+  } catch(e){ njMsg('nje-l-msg', '저장 실패: ' + (e.message||e), true); }
 }
 
 /* ── 응시 현황 탭 (naje_submissions · RPC) ───────────────── */
