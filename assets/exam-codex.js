@@ -70,8 +70,9 @@
     const parts=body.contents[0].parts;
     const request={operation,prompt:parts.filter(p=>typeof p.text==='string').map(p=>p.text).join('\n'),
       units:operation==='analysis'?properties.items.items.properties.unit.enum:operation==='range'?properties.units.items.properties.name.enum:[],
-      pdf:(parts.find(p=>p.inlineData)||{}).inlineData?.data||''};
-    supports(await call('/health'));
+      pdf:(parts.find(p=>p.inlineData)||{}).inlineData?.data||'', format:_eaMake?.fileFormat||'pdf'};
+    const health=await call('/health');supports(health);
+    if(operation!=='summary' && request.format!=='pdf' && !health.capabilities?.includes('exam-hwp'))throw Error('한글 지원 처리기(v6)로 업데이트한 뒤 다시 연결하세요.');
     const owner=_eaMake;
     const encoded=JSON.stringify(request);
     const signature=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(encoded)))).join('-');

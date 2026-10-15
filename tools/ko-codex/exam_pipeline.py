@@ -5,6 +5,7 @@ import math
 import subprocess
 
 import pymupdf
+from hwp_convert import validate_document, to_pdf
 
 
 def obj(properties):
@@ -35,8 +36,9 @@ def validate_request(data):
             pdf = base64.b64decode(data.get('pdf', ''), validate=True)
         except (ValueError, TypeError):
             raise ValueError('PDF 인코딩 오류') from None
-        if not pdf.startswith(b'%PDF-') or len(pdf) > 20*1024*1024:
-            raise ValueError('20MB 이하 PDF를 사용하세요.')
+        if len(pdf) > 20*1024*1024:
+            raise ValueError('20MB 이하 문서를 사용하세요.')
+        validate_document(pdf, data.get('format', 'pdf'))
     return pdf
 
 
@@ -84,6 +86,8 @@ def validate_items(items, units):
 
 def extract_exam(data, folder, codex, progress):
     pdf = validate_request(data)
+    if pdf:
+        pdf = to_pdf(pdf, data.get('format', 'pdf'), folder, progress)
     operation, units = data['operation'], data.get('units', [])
     images, inventory = [], None
     if pdf:

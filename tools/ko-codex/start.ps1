@@ -8,7 +8,7 @@ if ($Background) {
         if ($_.Exception.Response) { throw 'Port 8765 is already in use. Close the previous worker.' }
     }
     if ($existingBridge) {
-        if ($existingBridge.Headers['X-BMAPS-Bridge-Version'] -eq '5') { return }
+        if ($existingBridge.Headers['X-BMAPS-Bridge-Version'] -eq '6') { return }
         throw 'An older worker is running. Close its window before restarting.'
     }
 }
@@ -48,7 +48,7 @@ if ($Background) {
         if ($worker.HasExited) { throw "Worker exited. Check $workerData\worker-error.log" }
         try {
             $ready = Invoke-WebRequest 'http://127.0.0.1:8765/connect' -UseBasicParsing -TimeoutSec 1
-            if ($ready.Headers['X-BMAPS-Bridge-Version'] -eq '5') { return }
+            if ($ready.Headers['X-BMAPS-Bridge-Version'] -eq '6') { return }
         } catch { }
     }
     throw "Worker did not become ready. Check $workerData\worker-error.log"

@@ -126,13 +126,13 @@ def run_server(origin, root, codex, port=8765):
                 self.send_response(200)
                 self.send_header('Content-Type','text/html; charset=utf-8')
                 self.send_header('Cache-Control','no-store')
-                self.send_header('X-BMAPS-Bridge-Version','5')
+                self.send_header('X-BMAPS-Bridge-Version','6')
                 self.send_header('X-Frame-Options','DENY')
                 self.send_header('Content-Security-Policy',f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
                 self.send_header('Content-Length',str(len(blob)));self.end_headers();self.wfile.write(blob);return
             if not self.trusted():return
             if self.path=='/health':
-                self.send(200,{'ok':True,'version':5,'capabilities':['korean','naje','exam']});return
+                self.send(200,{'ok':True,'version':6,'capabilities':['korean','naje','exam','exam-hwp']});return
             jobid=self.path.removeprefix('/jobs/')
             with lock:
                 state=dict(jobs.get(jobid,{}))
