@@ -28366,7 +28366,7 @@ function eaCurriculum(year, grade) {
 function eaHiSubjects(year, grade) {
   return eaCurriculum(year, grade) === '2015' ? EA_HI_SUBJECTS_2015 : EA_HI_SUBJECTS_2022;
 }
-var EA_MAX_PDF_MB = 3;
+var EA_MAX_PDF_MB = 20;
 var _eaMake = null;
 
 function eaF(id) { var e = document.getElementById(id); return e ? e.value : ''; }
@@ -28602,9 +28602,7 @@ function eaUnitCount() {
     : '\uc120\ud0dd \uc5c6\uc74c \u2014 AI \uac00 \ubc94\uc704\ub97c \uc790\ub3d9\uc73c\ub85c \uc778\uc2dd\ud569\ub2c8\ub2e4';
 }
 
-/* \uc2dc\ud5d8 \ubc94\uc704 \uc790\ub3d9 \uc778\uc2dd.
-   \uc2e4\uce21: \uc815\ub2f5 \ub2e8\uc6d0\uc740 \ud56d\uc0c1 \ub2e4 \uc7a1\uc558\uace0 \uacfc\uc789\ub9cc 1~2\uac1c \uc0dd\uacbc\ub294\ub370,
-   \uacfc\uc789 \ub2e8\uc6d0\uc740 \uadfc\uac70 \ubb38\ud56d\uc774 \ud558\ub098\ubfd0\uc774\uc5c8\ub2e4. \uadf8\ub798\uc11c \uadfc\uac70 2\ubb38\ud56d \uc774\uc0c1\ub9cc \ucc44\ud0dd\ud55c\ub2e4. */
+/* 시험 범위 자동 인식: 근거 문항이 하나여도 보존한다. */
 async function eaDetectRange(cands, round) {
   var prompt = [
     '\ub108\ub294 \uc218\ud559 \uc2dc\ud5d8\uc9c0\uc758 \ucd9c\uc81c \ubc94\uc704\ub97c \ud310\uc815\ud558\ub294 \ub3c4\uad6c\ub2e4. \uccb4\ubd80\ud55c \uc2dc\ud5d8\uc9c0 PDF \uc804\uccb4\ub97c \ud6d1\uace0,',
@@ -28625,16 +28623,13 @@ async function eaDetectRange(cands, round) {
     '\u3010\ubc18\ud658\u3011 \uc21c\uc218 JSON\ub9cc. \ub9c8\ud06c\ub2e4\uc6b4 \uae08\uc9c0.'
   ].join('\n');
 
-  var out = await eaCallGemini({
-    model: 'gemini-2.5-flash',
+  var out = await eaCallCodex({
+    model: 'codex-local',
     contents: [{ parts: [
       { inlineData: { mimeType: 'application/pdf', data: _eaMake.pdfB64 } },
       { text: prompt }
     ] }],
     generationConfig: {
-      /* 생각을 풀어 두면 60초(프록시 제한)를 넘겨 죽는다. 27문항 시험지에서 61.4초 504 를 실측했다.
-         중2 시험지 7종으로 재보니 2048 이면 8.7~12.1초로 들어오고 결과는 무제한일 때와 같았다.
-         출력은 실제로 200토큰 남짓만 쓰므로 4096 이면 넉넉하다. */
       temperature: 0, maxOutputTokens: 4096, responseMimeType: 'application/json',
       thinkingConfig: { thinkingBudget: 2048 },
       responseSchema: { type: 'object', properties: { units: { type: 'array', items: { type: 'object', properties: {
@@ -28645,11 +28640,8 @@ async function eaDetectRange(cands, round) {
   }, 60000);
 
   var all = (out && out.units) || [];
-  var strong = all.filter(function(u) {
-    return String(u.evidence || '').split(/[,\u00b7\u3001\/\s]+/).filter(Boolean).length >= 2;
-  }).map(function(u) { return u.name; });
-  /* \uadfc\uac70 2\ubb38\ud56d \uc774\uc0c1\uc774 \ud558\ub098\ub3c4 \uc5c6\uc73c\uba74 \ud310\uc815\uc744 \ubbff\uc9c0 \ubabb\ud558\ub2c8 \uc804\uccb4\ub97c \ub3cc\ub824\uc900\ub2e4 */
-  return { picked: strong.length ? strong : all.map(function(u) { return u.name; }), raw: all };
+  var picked = Array.from(new Set(all.filter(function(u){ return cands.indexOf(u.name) >= 0 && String(u.evidence || '').trim(); }).map(function(u){ return u.name; })));
+  return { picked: picked, raw: all };
 }
 
 function eaPickPdf(ev) {
@@ -28677,11 +28669,11 @@ function eaStatus(msg, color) {
 /* ── \ud504\ub86c\ud504\ud2b8\u00b7\uc2a4\ud0a4\ub9c8 (\uc2e4\uce21\uc73c\ub85c \uac80\uc99d\ub41c \ubb38\uad6c\ub97c \uadf8\ub300\ub85c \uc4f4\ub2e4) ── */
 function eaBuildPrompt(units) {
   return [
-    '\ub108\ub294 \uc218\ud559 \uc2dc\ud5d8\uc9c0\ub97c \ubd84\uc11d\ud558\ub294 \ub3c4\uad6c\ub2e4. \uccb4\ubd80\ud55c \uc2dc\ud5d8\uc9c0 PDF \uc804\uccb4\ub97c \uc77d\uace0 \ubaa8\ub4e0 \ubb38\ud56d\uc744 \ube60\uc9d0\uc5c6\uc774 \ucd94\ucd9c\ud558\ub77c.',
+    '\ub108\ub294 \uc218\ud559 \uc2dc\ud5d8\uc9c0\ub97c \ubd84\uc11d\ud558\ub294 \ub3c4\uad6c\ub2e4. 첨부한 \uc2dc\ud5d8\uc9c0 PDF \uc804\uccb4\ub97c \uc77d\uace0 \ubaa8\ub4e0 \ubb38\ud56d\uc744 \ube60\uc9d0\uc5c6\uc774 \ucd94\ucd9c\ud558\ub77c.',
     '',
     '\u3010\ubb38\ud56d \ucd94\ucd9c\u3011',
     '\u2460 \ubb38\ud56d\uc744 \ud558\ub098\ub3c4 \ube60\ub728\ub9ac\uc9c0 \ub9c8\ub77c. \ubc30\uc810 \ud45c\uae30([4\uc810] \ub4f1)\ub97c \uc6d0\ubcf8 \uadf8\ub300\ub85c \uc77d\uc5b4\ub77c.',
-    '\u2461 number_label \uc740 "\uac1d\uad00\uc4291", "\uc11c\uc220\ud6551", "\ub2e8\ub2f5\ud6551" \ud615\uc2dd.',
+    '\u2461 number_label \uc740 "객관식1", "서술형1", "단답형1" \ud615\uc2dd.',
     '\u2462 \uc18c\ubb38\ud56d(3-1, 3-2 ...)\uc740 \ucabc\uac1c\uc9c0 \ub9d0\uace0 \ubd80\ubaa8 \ubb38\ud56d \ud558\ub098\ub85c \ud569\uccd0\ub77c. \ubc30\uc810\uc740 \uc18c\ubb38\ud56d \ubc30\uc810\uc758 \ud569.',
     '\u2463 is_essay \ub294 \uc11c\uc220\ud615/\ub17c\uc220\ud615\uc774\uba74 true.',
     '\u2464 type_description \uc740 \uadf8 \ubb38\ud56d\uc774 \ubb3b\ub294 \uac83\uc744 \ud55c\uad6d\uc5b4 \ud55c \uc904\ub85c. \uc608: "\uc0bc\uac01\ud615\uc758 \ub0b4\uc2ec\uacfc \ub0b4\uc811\uc6d0\uc758 \ubc18\uc9c0\ub984"',
@@ -28697,10 +28689,9 @@ function eaBuildPrompt(units) {
     '  2(\ubcf4\ud1b5)   : \uac1c\ub150 \ub450 \uac00\uc9c0\ub97c \uc5f0\uacb0\ud558\uac70\ub098, \uc2dd \uc138\uc6b0\uae30 \u2192 \uacc4\uc0b0 \u2192 \ud574\uc11d\uc758 \ub2e4\ub2e8\uacc4 \ud480\uc774\uac00 \ud544\uc694\ud558\ub2e4.',
     '  3(\uc5b4\ub824\uc6c0) : \ubcf4\uc870\uc120\u00b7\uacbd\uc6b0 \ub098\ub204\uae30\u00b7\uc870\uac74 \uc7ac\ud574\uc11d \uac19\uc740 \ubc1c\uc0c1\uc774 \ud544\uc694\ud558\uac70\ub098 \uac1c\ub150 \uc138 \uac00\uc9c0 \uc774\uc0c1\uc774 \uc5bd\ud78c\ub2e4.',
     '',
-    '\u2468 \uc808\ub300 \uae30\uc900\uc774 \uc544\ub2c8\ub77c \uc774 \uc2dc\ud5d8\uc9c0 \uc548\uc5d0\uc11c\uc758 \uc0c1\ub300 \ub09c\uc774\ub3c4\ub85c \ub9e4\uaca8\ub77c.',
-    '\u2469 \uc804\uccb4 \ubb38\ud56d \ub300\ube44 \ub300\ub7b5 1\uc774 30%, 2\uac00 50%, 3\uc774 20% \uac00 \ub418\ub3c4\ub85d \ubd84\ud3ec\uc2dc\ucf1c\ub77c.',
-    '   \ud55c\ucabd\uc5d0 \ubab0\ub9ac\uba74 \uc548 \ub41c\ub2e4. \ub09c\uc774\ub3c4 3\uc740 \ucd5c\uc18c 2\ubb38\ud56d \uc774\uc0c1, \uc804\uccb4\uc758 30%\ub97c \ub118\uc9c0 \uc54a\uac8c \ud558\ub77c.',
-    '\u246a \ubc30\uc810\uc774 \uac00\uc7a5 \ub192\uc740 \ubb38\ud56d\uacfc \uc11c\uc220\ud615/\ub17c\uc220\ud615\uc758 \ub9c8\uc9c0\ub9c9 \ubb38\ud56d\ub4e4\uc740 \ub09c\uc774\ub3c4 3 \ud6c4\ubcf4\ub85c \uba3c\uc800 \uac80\ud1a0\ud558\ub77c.',
+    '⑧ 각 문항의 실제 풀이 단계·개념 연결·발상 필요성을 기준으로 난이도를 판단하라. 쉬움/보통/어려움의 비율을 강제로 맞추지 마라.',
+    '배점 판독이 불가능하면 score는 0으로 두어 검수자가 확인하게 하라. 만점 합계에 맞춰 배점을 추정하지 마라.',
+    '⑨ 배점이 높거나 서술형이라는 이유만으로 어렵다고 분류하지 마라. 확인 가능한 문제 내용에 근거하라.',
     '',
     '\u3010\ubc18\ud658\u3011 \uc21c\uc218 JSON\ub9cc. \ub9c8\ud06c\ub2e4\uc6b4 \uae08\uc9c0.'
   ].join('\n');
@@ -28719,38 +28710,6 @@ function eaBuildSchema(units) {
   required: ['items'] };
 }
 
-/* \ud504\ub85d\uc2dc\ub294 60\ucd08\uc5d0 \uc8fd\ub294\ub2e4. \uadf8\ubcf4\ub2e4 \uc870\uae08 \ub2a6\uac8c \ub04a\uc5b4 \uc6d0\uc778\uc744 \uad6c\ubd84\ud560 \uc218 \uc788\uac8c \ud55c\ub2e4 */
-async function eaCallGemini(body, ms) {
-  var ctl = new AbortController();
-  var tid = setTimeout(function() { ctl.abort(); }, ms || 90000);
-  try {
-    var res  = await fetch('/api/gemini-proxy', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal: ctl.signal
-    });
-    /* 프록시가 60초 제한에 걸리면 JSON 이 아니라 오류 페이지를 돌려준다.
-       그대로 res.json() 하면 알아볼 수 없는 구문 오류가 되므로 먼저 글로 받는다. */
-    var body0 = await res.text();
-    var data;
-    try { data = JSON.parse(body0); }
-    catch (e0) {
-      throw new Error(res.status === 504
-        ? '\uc11c\ubc84\uac00 60\ucd08 \uc548\uc5d0 \uc751\ub2f5\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4 (504). \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694'
-        : '\uc11c\ubc84 \uc751\ub2f5\uc744 \uc77d\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4 (HTTP ' + res.status + ')');
-    }
-    if (data.error) throw new Error(data.error.message || 'API \uc624\ub958');
-    var cand = (data.candidates || [])[0];
-    var text = cand && cand.content && cand.content.parts && cand.content.parts[0] && cand.content.parts[0].text;
-    if (!text) throw new Error((cand && cand.finishReason) === 'MAX_TOKENS'
-      ? '\ucd9c\ub825\uc774 \ud55c\ub3c4\uc5d0 \uac78\ub824 \uc798\ub838\uc2b5\ub2c8\ub2e4 (MAX_TOKENS)'
-      : '\ube48 \uc751\ub2f5 (finish=' + (cand && cand.finishReason) + ')');
-    return JSON.parse(text);
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('\uc11c\ubc84\uac00 ' + Math.round((ms || 90000) / 1000)
-      + '\ucd08 \uc548\uc5d0 \uc751\ub2f5\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4. \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694');
-    throw e;
-  } finally { clearTimeout(tid); }
-}
 
 /* \u2500\u2500 \ucd1d\ud3c9 (exam_analyses.review) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
    \uc2dc\ud5d8\uc9c0 PDF \ub97c \ub2e4\uc2dc \uc77d\ud788\uc9c0 \uc54a\uace0 \ud655\uc815\ub41c \ubb38\ud56d\ud45c\ub9cc \uadfc\uac70\ub85c \uc4f4\ub2e4.
@@ -28802,10 +28761,10 @@ async function eaGenSummary() {
   var st  = document.getElementById('eam-sumstatus');
   _eaMake.busy = true;
   if (btn) { btn.disabled = true; btn.style.opacity = '0.55'; btn.style.cursor = 'wait'; }
-  if (st)  { st.textContent = '\ucd1d\ud3c9\uc744 \uc4f0\ub294 \uc911\uc785\ub2c8\ub2e4. 12\ucd08\ucbe4 \uac78\ub9bd\ub2c8\ub2e4...'; st.style.color = '#6d28d9'; }
+  if (st)  { st.textContent = '\ucd1d\ud3c9\uc744 \uc4f0\ub294 \uc911\uc785\ub2c8\ub2e4. Codex 처리 중...'; st.style.color = '#6d28d9'; }
   try {
-    var out = await eaCallGemini({
-      model: 'gemini-2.5-flash',
+    var out = await eaCallCodex({
+      model: 'codex-local',
       contents: [{ parts: [{ text: eaSumPrompt(_eaMake.meta, _eaMake.items, _eaMake.fullScore) }] }],
       generationConfig: {
         temperature: 0.3, maxOutputTokens: 32768, responseMimeType: 'application/json',
@@ -28888,10 +28847,7 @@ function eaValidate(items, full, range) {
       soft.push('1\ubb38\ud56d\ub9cc \ubc30\uc815\ub41c \ub2e8\uc6d0: ' + singles.join(', ') + ' \u2014 \uc2dc\ud5d8 \ubc94\uc704\uac00 \ub9de\ub294\uc9c0 \ud655\uc778\ud574 \uc8fc\uc138\uc694');
   }
 
-  var d3 = items.filter(function(x) { return Number(x.difficulty) === 3; }).length;
-  var p3 = Math.round(d3 / n * 100);
-  if (p3 > 30)     soft.push('\ub09c\uc774\ub3c4 3\uc774 ' + p3 + '% (\uad8c\uc7a5 20% \uc548\ud30e)');
-  else if (d3 < 2) soft.push('\ub09c\uc774\ub3c4 3\uc774 ' + d3 + '\uac1c (\ucd5c\uc18c 2\uac1c \uad8c\uc7a5)');
+  eaAuditValidate(items, hard, soft);
 
   return { hard: hard, soft: soft, sum: sum, count: n };
 }
@@ -28916,6 +28872,7 @@ async function eaAnalyze() {
   };
   _eaMake.fullScore = full;
   _eaMake.autoRange = false;
+  _eaMake.audit = null;
 
   var goBtn0 = document.getElementById('eam-go');
   if (goBtn0) { goBtn0.disabled = true; goBtn0.style.opacity = '0.55'; goBtn0.style.cursor = 'wait'; }
@@ -28953,16 +28910,12 @@ async function eaAnalyze() {
 
   var cands = units.indexOf('\uae30\ud0c0') >= 0 ? units.slice() : units.concat(['\uae30\ud0c0']);
   var body  = {
-    model: 'gemini-2.5-flash',
+    model: 'codex-local',
     contents: [{ parts: [
       { inlineData: { mimeType: 'application/pdf', data: _eaMake.pdfB64 } },
       { text: eaBuildPrompt(cands) }
     ] }],
     generationConfig: {
-      /* 생각을 풀어 두면 60초(프록시 제한)를 넘겨 죽는다.
-         고등 8종 실측 — 무제한 28~37초에 1건 61초 504 실패 / 6144 20~36초 / 4096 23~28초 / 2048 15~21초.
-         단원 배정은 예산을 줄여도 나빠지지 않았고(불일치 6~10%), 난이도는 어느 예산이든 22~29% 흔들린다
-         (원래 검수에서 고치는 값이다). 4096 은 시간 폭이 가장 좁아(5초) 더 어려운 시험지에도 여유가 남는다. */
       temperature: 0, maxOutputTokens: 32768,
       thinkingConfig: { thinkingBudget: 4096 },
       responseMimeType: 'application/json', responseSchema: eaBuildSchema(cands)
@@ -28973,9 +28926,9 @@ async function eaAnalyze() {
 
   try {
     for (var attempt = 1; attempt <= 2; attempt++) {
-      eaStatus(attempt === 1 ? '\ubd84\uc11d \uc911\uc785\ub2c8\ub2e4. 25\ucd08\ucbe4 \uac78\ub9bd\ub2c8\ub2e4...'   /* \uc2e4\uce21 23~28\ucd08 */ : '\uac80\uc0b0\uc5d0 \uac78\ub824 \ud55c \ubc88 \ub354 \ubd84\uc11d\ud569\ub2c8\ub2e4...', '#6d28d9');
+      eaStatus(attempt === 1 ? '\ubd84\uc11d \uc911\uc785\ub2c8\ub2e4. Codex 처리 중...' : '\uac80\uc0b0\uc5d0 \uac78\ub824 \ud55c \ubc88 \ub354 \ubd84\uc11d\ud569\ub2c8\ub2e4...', '#6d28d9');
       try {
-        var out   = await eaCallGemini(body);
+        var out   = await eaCallCodex(body);
         var items = (out && out.items) || [];
         items.sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
         var v = eaValidate(items, full, units);
@@ -34223,5 +34176,6 @@ tryAutoLogin();
   <img id="viewerImg" src="" alt="">
   <div id="viewerCaption" style="display:none;position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.6);color:#fff;padding:6px 16px;border-radius:100px;font-size:14px;font-weight:600;white-space:nowrap;pointer-events:none;"></div>
 </div>
+<script src="assets/exam-codex.js?v=1"></script>
 </body>
 </html>
