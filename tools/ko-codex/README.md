@@ -1,7 +1,7 @@
 # 내신분석표 Codex 처리기
 
 기존 내신분석표에서 Codex 연결 → 파일 선택 → 분석 → 검수 → 총평 생성 → 저장 순서로 사용합니다.
-PDF·HWP·HWPX는 20MB/30쪽 이하입니다. SQL 변경은 없습니다.
+PDF·HWP·HWPX는 50MB/30쪽 이하입니다. SQL 변경은 없습니다.
 
 Windows 처리 PC에서 한컴 한글과 Codex 로그인을 준비합니다. 이 폴더에서 `python -m pip install -r requirements.txt`로 의존성을 설치합니다.
 `./start.ps1 -Origin https://academy-manager-eosin.vercel.app -Background`로 실행하고 웹에서 연결을 허용합니다.
