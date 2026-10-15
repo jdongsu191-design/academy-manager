@@ -1,0 +1,50 @@
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict'),{JSDOM}=require('jsdom');
+const root=path.join(__dirname,'../..'),html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+const w=new JSDOM(html,{runScripts:'outside-only',url:'https://test.example'}).window;
+const callbacks={};w.addEventListener=(event,fn)=>callbacks[event]=fn;
+w.crypto.subtle=require('node:crypto').webcrypto.subtle;w.TextEncoder=TextEncoder;
+let opens=0,posts=[],operation='analysis';const popup={closed:false,focus(){},postMessage(){}};
+w.open=()=>{opens++;return popup};w._eaMake={};w.eaRenderReview=()=>{};w.eaGenSummary=async()=>{};w.eaAnalyze=async()=>{};w.closeModal=()=>{};
+function load(name){const start=html.search(new RegExp('(?:async )?function '+name+'\\('));const tail=html.slice(start);const end=tail.slice(1).search(/\n(?:async )?function /);w.eval(tail.slice(0,end+1));}
+['eaSum','eaBuildPrompt','eaBuildSchema','eaValidate','eaAnalyze','eaPickPdf'].forEach(load);
+w.EA_MAX_PDF_MB=20;w.alert=()=>{};
+w.eaF=id=>({'eam-school':'테스트학교','eam-full':'4','eam-level':'중','eam-grade':'1','eam-subject':'수학','eam-year':'2026','eam-sem':'1','eam-round':'중간','eam-teacher':'테스트'}[id]||'');
+w.eaCheckedUnits=()=>['단원'];w.eaStatus=()=>{};
+w.eaRenderReview=()=>{w.document.getElementById('eam-body').innerHTML='<div id="eam-warn"></div>';};
+const audit={questions:[{number_label:'객관식1',page:1,score:4}],issues:[]};
+w.fetch=async(url,opts)=>{
+ assert(url.startsWith('http://127.0.0.1:8765/'),'must not call external APIs');
+ if(url.endsWith('/health'))return {ok:true,json:async()=>({capabilities:['exam','exam-hwp']})};
+ if(opts?.method==='POST'){posts.push(JSON.parse(opts.body));operation=posts.at(-1).operation;return {ok:true,json:async()=>({id:'a'.repeat(32)})};}
+ return {ok:true,json:async()=>({status:'complete',result:{kind:'exam',operation,output:operation==='analysis'?{items:[{order:1,number_label:'객관식1',score:4,is_essay:false,unit:'단원',difficulty:1,type_description:'일차방정식 풀이'}],audit}:{units:[{name:'단원',evidence:'1번'}]}}})};
+};
+w.eval(fs.readFileSync(path.join(root,'assets/exam-codex.js'),'utf8'));
+const body={contents:[{parts:[{inlineData:{data:'test'}},{text:'분석'}]}],generationConfig:{responseSchema:{properties:{items:{items:{properties:{unit:{enum:['단원']}}}}}}}};
+(async()=>{
+ await assert.rejects(w.eaCallCodex(body),/연결/);assert.equal(opens,0);
+ w.document.getElementById('eac-connect').click();assert.equal(opens,1);
+ await callbacks.message({origin:'https://evil.example',source:popup,data:{type:'bmaps-ready',token:'a'.repeat(43)}});
+ assert.equal(w.document.getElementById('eac-status').textContent,'승인 대기 중');
+ await callbacks.message({origin:'http://127.0.0.1:8765',source:popup,data:{type:'bmaps-ready',token:'a'.repeat(43)}});
+ popup.closed=true;
+ await w.eaCallCodex(body);assert.equal(posts.length,1);assert.equal(w._eaMake.audit.questions.length,1);
+ let reader;w.FileReader=class{constructor(){reader=this}readAsDataURL(){}};
+ w.eaPickPdf({target:{files:[{name:'시험.HWPX',size:100}]}});assert.equal(w._eaMake.busy,true);assert.equal(w._eaMake.pdfB64,'');
+ reader.result='data:application/hwp+zip;base64,test';reader.onload();reader.onloadend();assert.equal(w._eaMake.fileFormat,'hwpx');
+ await w.eaCallCodex(body);assert.equal(posts.at(-1).format,'hwpx');
+ w.eaPickPdf({target:{files:[{name:'bad.exe',size:100}]}});assert.equal(w._eaMake.pdfB64,'');
+ w._eaMake.fileFormat='pdf';
+ w._eaMake.pdfB64='test';w._eaMake.allUnits=['단원'];await w.eaAnalyze();
+ assert.equal(w._eaMake.view,'review');assert.equal(w._eaMake.items.length,1);assert.equal(w._eaMake.busy,false);
+ assert(w.document.getElementById('eam-body').textContent.includes('원본 대조표'));
+ assert(!posts.at(-1).prompt.includes('30%'));
+ let hard=[],soft=[];w.eaAuditValidate([{order:1,number_label:'객관식1',score:3,difficulty:1}],hard,soft);
+ assert(hard.some(x=>x.includes('배점 불일치')));
+ hard=[];w.eaAuditValidate([{order:1,number_label:'객관식1',score:4,difficulty:1}],hard,[]);assert.equal(hard.length,0,'all-easy exam must not get quota warnings');
+ hard=[];w.eaAuditValidate([{order:1,number_label:'객관식2',score:4,difficulty:1}],hard,[]);assert(hard.some(x=>x.includes('누락')));
+ const start=html.indexOf('async function eaDetectRange('),end=html.indexOf('\nfunction eaPickPdf',start);
+ w.eval(html.slice(start,end));w.eaCallCodex=async()=>({units:[{name:'단원',evidence:'1번'}]});
+ const range=await w.eaDetectRange(['단원'],'중간');assert.deepEqual(Array.from(range.picked),['단원']);
+ assert(!html.slice(html.indexOf('async function eaAnalyze()'),html.indexOf('function eaGradeText()')).includes('eaCallGemini'));
+ console.log('PASS exam UI: origin check, closed-popup direct connection, no Gemini/DB writes, audit discrepancy/edit correction, single-question unit and no difficulty quota');
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>w.close());

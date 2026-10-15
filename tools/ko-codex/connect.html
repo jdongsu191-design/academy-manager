@@ -1,0 +1,28 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BMAPS Codex 연결</title><style>
+body{font:15px/1.7 'Malgun Gothic',sans-serif;margin:30px;color:#173b43;background:#edf4f5}main{padding:25px;background:white;border-radius:12px}h1{font-size:22px}button{padding:12px 18px;border:0;border-radius:7px;background:#157969;color:white;cursor:pointer;margin:7px 8px 7px 0}button:disabled{opacity:.5;cursor:default}code{overflow-wrap:anywhere}#stop{background:#6d5555}.hint{color:#56737a;font-size:13px}
+</style><main><h1>Codex 연결 프로그램</h1><p id="status">프로그램이 실행 중입니다. BMAPS에서 ‘Codex 연결’을 누르세요.</p><p>연결 요청 사이트: <code id="site">없음</code></p><button id="approve" disabled>이 사이트 연결 허용</button><button id="disconnect" disabled>연결 해제</button><p class="hint">허용하면 해당 사이트가 이 PC에서 PDF 분석과 Codex 검토를 요청할 수 있습니다. 주소를 확인하세요. 사이트에 “창 닫기 가능”이 표시되면 이 창을 닫아도 됩니다. 코드를 복사할 필요가 없습니다.</p><hr><button id="stop">처리 프로그램 종료</button><p class="hint">PC가 켜져 있어야 처리됩니다. 백그라운드 연결 완료 후에는 이 창을 닫아도 연결이 유지됩니다. 승인은 최대 12시간 또는 프로그램 종료까지 유효합니다.</p></main><script nonce="__NONCE__">
+const TOKEN=__TOKEN__;let parentWindow=null,parentOrigin=null,connected=false,ackTimer=null,sessionToken=null;const $=id=>document.getElementById(id);
+function send(value){if(parentWindow)parentWindow.postMessage(value,parentOrigin)}
+async function local(path,method='GET',body,jsonBody=false){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);try{const r=await fetch(path,{method,headers:{Authorization:'Bearer '+TOKEN,...(body?{'Content-Type':jsonBody?'application/json':'application/pdf'}:{})},body,signal:controller.signal});const value=await r.json();if(!r.ok)throw Error(value.error||'연결 오류');return value}finally{clearTimeout(timer)}}
+addEventListener('message',async e=>{
+ if(e.source!==opener||!e.source||!e.data||!e.origin.startsWith('https://'))return;
+ const m=e.data;
+ if(m.type==='bmaps-ack'&&connected&&e.source===parentWindow&&e.origin===parentOrigin){clearTimeout(ackTimer);$('status').textContent=m.direct?'백그라운드 연결 완료. 이제 이 창을 닫아도 됩니다.':'직접 연결이 차단됐습니다. 사이트의 로컬 네트워크 권한을 허용하고 Codex 연결을 다시 누르세요. 현재는 이 창을 유지해야 합니다.';return}
+ if(m.type==='bmaps-connect'){
+   if(parentOrigin&&parentOrigin!==e.origin)return;
+   parentWindow=e.source;parentOrigin=e.origin;$('site').textContent=e.origin;
+   if(connected){send({type:'bmaps-ready',token:sessionToken});return}
+   $('approve').disabled=false;$('status').textContent='아래 주소가 사용 중인 BMAPS인지 확인한 뒤 연결을 허용하세요.';return;
+ }
+ if(!connected||e.source!==parentWindow||e.origin!==parentOrigin||m.type!=='bmaps-request'||typeof m.id!=='string')return;
+ let path=m.path,method=m.method||'GET';
+ const permitted=(method==='GET'&&(path==='/health'||/^\/jobs\/[a-f0-9]{32}$/.test(path)))||(method==='POST'&&(path==='/answers'||path==='/jobs?kind=naje'||path==='/jobs?kind=exam'||/^\/jobs\?from=\d{1,2}&to=\d{1,2}$/.test(path)));
+ if(!permitted){send({type:'bmaps-response',id:m.id,error:'허용되지 않은 요청'});return}
+ if(method==='POST'&&(path==='/jobs?kind=exam' ? (typeof m.body!=='string'||new Blob([m.body]).size>30*1024*1024) : (!(m.body instanceof Blob)||m.body.size>30*1024*1024))){send({type:'bmaps-response',id:m.id,error:'30MB 이하 PDF만 지원합니다.'});return}
+ try{const value=await local(path,method,m.body,path==='/jobs?kind=exam');send({type:'bmaps-response',id:m.id,value})}catch(err){send({type:'bmaps-response',id:m.id,error:err.message})}
+});
+$('approve').onclick=async()=>{try{const grant=await local('/sessions','POST',JSON.stringify({origin:parentOrigin}),true);sessionToken=grant.token;connected=true;$('approve').disabled=true;$('disconnect').disabled=false;$('status').textContent='로컬 프로그램 정상 · 사이트의 연결 확인을 기다리는 중입니다.';clearTimeout(ackTimer);ackTimer=setTimeout(()=>{$('status').textContent='로컬 프로그램은 정상이지만 사이트의 확인 응답이 없습니다. 일반 Chrome 또는 Edge에서 BMAPS를 열고 다시 연결하세요.'},8000);send({type:'bmaps-ready',token:sessionToken})}catch(e){$('status').textContent=e.message}};
+$('disconnect').onclick=async()=>{try{await local('/sessions/revoke','POST',JSON.stringify({token:sessionToken}),true)}catch(e){$('status').textContent=e.message;return}clearTimeout(ackTimer);send({type:'bmaps-disconnected'});connected=false;$('approve').disabled=false;$('disconnect').disabled=true;$('status').textContent='연결을 해제했습니다.'};
+$('stop').onclick=async()=>{if(!confirm('실행 중인 분석도 중단됩니다. 처리 프로그램을 종료할까요?'))return;try{await local('/shutdown','POST');send({type:'bmaps-disconnected'});connected=false;$('status').textContent='프로그램을 종료했습니다.';$('approve').disabled=true;$('disconnect').disabled=true;$('stop').disabled=true}catch(e){$('status').textContent=e.message}};
+addEventListener('beforeunload',()=>send({type:'bmaps-window-closed'}));
+</script></html>
