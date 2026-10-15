@@ -2213,6 +2213,10 @@
             style="flex:1;padding:9px 8px;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;background:transparent;color:#6b7280;transition:all 0.15s">
             🏢 데스크
           </button>
+          <button id="acct-tab-test" onclick="switchAcctTab('test')"
+            style="flex:1;padding:9px 8px;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;background:transparent;color:#6b7280;transition:all 0.15s;display:none">
+            🧪 테스트계정
+          </button>
         </div>
 
         <!-- ── 선생님 탭 ── -->
@@ -2376,6 +2380,29 @@
               </button>
             </div>
             <div id="desk-account-list"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
+          </div>
+        </div>
+
+        <!-- ── 테스트계정 탭 (마스터 관리자만) ── -->
+        <div id="acct-panel-test" style="display:none">
+          <div class="card" style="border:1.5px solid #c4b5fd">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+              <div>
+                <div class="card-title" style="margin:0;color:#5b21b6">🧪 테스트 계정</div>
+                <div style="font-size:11px;color:#6b7280;margin-top:3px;line-height:1.6">기능을 시험해 보는 계정입니다. 월별 수강인원 · 계정 현황 · 포텐셜 순위 · 입퇴원 통계에는 <b>집계되지 않습니다</b>.<br>
+                  비활성·퇴원이 아니라 <b>완전 삭제</b>로 정리하며, 삭제하면 그 계정이 남긴 응시·출결·업무일지 등 기록도 함께 지워집니다.</div>
+              </div>
+              <button onclick="openTestAccountModal()"
+                style="padding:6px 14px;border:none;border-radius:8px;background:#7c3aed;color:#fff;font-size:13px;font-weight:700;cursor:pointer">
+                + 테스트 계정 추가
+              </button>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 10px;background:#faf5ff;border:1px dashed #c4b5fd;border-radius:8px;margin-bottom:12px">
+              <span style="font-size:12px;color:#5b21b6;font-weight:700">기존 계정을 테스트로 표시</span>
+              <input id="test-mark-q" placeholder="이름 또는 아이디" oninput="testMarkSearch()" style="flex:1;min-width:140px;padding:6px 10px;border:1.5px solid #ddd6fe;border-radius:7px;font-size:12px;outline:none">
+              <div id="test-mark-result" style="flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap"></div>
+            </div>
+            <div id="test-account-list"><div class="loading"><div class="spinner"></div>불러오는 중...</div></div>
           </div>
         </div>
 
@@ -4603,7 +4630,7 @@ async function showApp() {
     // 학생 전용 화면
     document.getElementById('appScreen').classList.remove('active');
     document.getElementById('studentScreen').classList.add('active');
-    document.getElementById('studentName').textContent = currentUser.name + ' 학생';
+    document.getElementById('studentName').textContent = currentUser.name + ' 학생' + (currentUser.is_test ? ' · 🧪 테스트' : '');
     // N제 노출: 중등(middle) 배정 학생은 숨김, 고등/중고등(high 등)은 표시 (운영본 동일)
     var najeNav = document.getElementById('snav-naje');
     if (najeNav) {
@@ -4646,7 +4673,7 @@ function renderHeader() {
   const role = currentUser.role;
   const roleLabel = { admin: '관리자', desk: '데스크', teacher: '선생님' }[role] || role;
   document.getElementById('headerTitle').textContent = 'BMAPS';
-  document.getElementById('headerBadge').textContent = currentUser.name + ' · ' + roleLabel;
+  document.getElementById('headerBadge').textContent = currentUser.name + ' · ' + roleLabel + (currentUser.is_test ? ' · 🧪 테스트 계정' : '');
 }
 
 /* ============================================================
@@ -8779,7 +8806,7 @@ async function ptQuarterFetch(q, dates){
   });
 
   // 후보 학생 = 지금 참여 + 이력에 참여했던 적 있음 + 그 분기 기록 있음
-  var cur = await db.from('users').select('id').eq('role','student').eq('potential_yn', true);
+  var cur = await db.from('users').select('id').eq('role','student').eq('potential_yn', true).eq('is_test', false);
   var idset = {};
   (cur.data || []).forEach(function(u){ idset[u.id] = true; });
   hist.forEach(function(h){ if (h.potential_yn === true) idset[h.student_id] = true; });
@@ -8789,10 +8816,13 @@ async function ptQuarterFetch(q, dates){
   var umap = {};
   var us = await fetchRowsByIds(function(chunk){
     return db.from('users')
-      .select('id,name,school,grade,teacher_id,branch_id,status,enrolled_at,withdrawn_at,potential_yn')
+      .select('id,name,school,grade,teacher_id,branch_id,status,enrolled_at,withdrawn_at,potential_yn,is_test')
       .in('id', chunk);
   }, ids);
-  (us || []).forEach(function(u){ umap[u.id] = u; });
+  /* 테스트 계정은 순위·점수표에서 뺀다 (기록이 있어도 더하지 않는다) */
+  var _testIds = {};
+  (us || []).forEach(function(u){ if (u.is_test) _testIds[u.id] = true; else umap[u.id] = u; });
+  if (Object.keys(_testIds).length) rows = rows.filter(function(r){ return !_testIds[r.student_id]; });
 
   // 분원명 — 학생 branch_id 우선, 없으면 담당 선생님 분원 상속 (앱 공통 규칙)
   var _brs = (typeof _allBranches !== 'undefined' && _allBranches && _allBranches.length) ? _allBranches : null;
@@ -14436,13 +14466,16 @@ function switchAcctTab(tab) {
   if (currentUser && currentUser.role === 'desk' && (tab === 'admin' || tab === 'desk')) return;
   _acctCurrentTab = tab;
   var isDesk = currentUser && currentUser.role === 'desk';
-  ['teacher','class','student','admin','desk'].forEach(function(t) {
+  var isMaster = !!(currentUser && currentUser.is_master === true);
+  if (tab === 'test' && !isMaster) return;
+  ['teacher','class','student','admin','desk','test'].forEach(function(t) {
     var panel = document.getElementById('acct-panel-' + t);
     var btn   = document.getElementById('acct-tab-' + t);
     if (!panel || !btn) return;
     if (isDesk && (t === 'admin' || t === 'desk')) {
       btn.style.display = 'none'; panel.style.display = 'none'; return;
     }
+    if (t === 'test' && !isMaster) { btn.style.display = 'none'; panel.style.display = 'none'; return; }
     btn.style.display = '';
     var active = (t === tab);
     panel.style.display  = active ? 'block' : 'none';
@@ -14455,6 +14488,7 @@ function switchAcctTab(tab) {
   if (tab === 'student') { setAdmStatusFilter(_admStudentStatusFilter); }
   if (tab === 'admin')   { loadAdminAccounts(); }
   if (tab === 'desk')    { loadDeskAccounts(); }
+  if (tab === 'test')    { loadTestAccounts(); }
 }
 
 /* ============================================================
@@ -15613,9 +15647,9 @@ function updateAcctStats() {
     var t = all.find(function(x){ return x.id === u.teacher_id; });
     return !!(t && t.branch_id && _allowed.indexOf(t.branch_id) !== -1);
   };
-  var teachers = all.filter(function(u){ return isActiveStaffAccount(u) && _inScope(u); }).length;
-  var stus     = all.filter(function(u){ return isAcademyStudent(u) && u.status==='active' && _inScope(u); }).length;
-  var pending  = all.filter(function(u){ return u.role==='teacher' && u.status==='pending' && _inScope(u); }).length;
+  var teachers = all.filter(function(u){ return isActiveStaffAccount(u) && !u.is_test && _inScope(u); }).length;
+  var stus     = all.filter(function(u){ return isAcademyStudent(u) && u.status==='active' && !u.is_test && _inScope(u); }).length;
+  var pending  = all.filter(function(u){ return u.role==='teacher' && u.status==='pending' && !u.is_test && _inScope(u); }).length;
   var tEl = document.getElementById('adm-teachers'); if (tEl) tEl.textContent = teachers;
   var sEl = document.getElementById('adm-students');  if (sEl) sEl.textContent = stus;
   var pEl = document.getElementById('adm-pending');   if (pEl) pEl.textContent = pending;
@@ -16463,6 +16497,213 @@ async function deleteDeskAccount(id, name) {
   } catch(e) { alert('오류: ' + (e.message||e)); }
 }
 
+/* ============================================================
+   [SECTION: TEST ACCOUNTS] 테스트 계정 (마스터 관리자)
+   - users.is_test = true. 월별 수강인원·계정 현황·포텐셜 순위·입퇴원 통계에서 뺀다
+   - 삭제는 비활성/퇴원이 아니라 RPC test_account_purge 로 기록까지 완전 삭제
+   - 이름은 '테스트 ' 접두어 고정
+============================================================ */
+var TEST_NAME_PREFIX = '테스트 ';
+function testRoleLabel(r){ return { student:'학생', teacher:'선생님', vice_director:'부원장', desk:'데스크' }[r] || r; }
+function testRoleColor(r){ return { student:'#15803d', teacher:'#1d4ed8', vice_director:'#7c2d12', desk:'#92400e' }[r] || '#334155'; }
+function testIsMaster(){ return !!(currentUser && currentUser.is_master === true); }
+
+async function loadTestAccounts() {
+  var el = document.getElementById('test-account-list');
+  if (!el) return;
+  if (!testIsMaster()) { el.innerHTML = '<div style="padding:16px;color:#9ca3af;font-size:12px">마스터 관리자만 볼 수 있습니다</div>'; return; }
+  el.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+  try {
+    var r = await db.from('users').select('id,username,name,role,status,branch_id,branch_ids,teacher_id,class_id,school,grade,school_level,created_at')
+      .eq('is_test', true).order('created_at');
+    if (r.error) throw r.error;
+    var rows = r.data || [];
+    if (!rows.length) {
+      el.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:13px"><div style="font-size:36px;margin-bottom:8px">🧪</div><div>테스트 계정이 없습니다</div></div>';
+      return;
+    }
+    var bmap = {}; (_allBranches||[]).forEach(function(b){ bmap[b.id] = b.name; });
+    var umap = {}; (allUsers||[]).forEach(function(u){ umap[u.id] = u; });
+    var cmap = {}; (allClasses||[]).forEach(function(c){ cmap[c.id] = c.name; });
+    el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">'
+      + rows.map(function(a){
+        var bids = Array.isArray(a.branch_ids) && a.branch_ids.length ? a.branch_ids : (a.branch_id ? [a.branch_id] : []);
+        var bn = bids.map(function(b){ return bmap[b] || '?'; }).join(', ');
+        var t = a.teacher_id ? umap[a.teacher_id] : null;
+        var sub = a.role === 'student'
+          ? [(a.school||'') + (a.grade ? ' ' + a.grade : ''), t ? '담당 ' + t.name : '', a.class_id ? (cmap[a.class_id] || '') : ''].filter(Boolean).join(' · ')
+          : (a.school_level ? ({high:'고등',middle:'중등',both:'중고등'}[a.school_level] || a.school_level) : '');
+        return '<div style="background:#fff;border:1.5px solid #ddd6fe;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:8px">'
+          + '<div style="display:flex;align-items:center;gap:10px">'
+            + '<div style="width:38px;height:38px;border-radius:50%;background:#ede9fe;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🧪</div>'
+            + '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700;color:#1e293b">' + _esc(a.name) + '</div>'
+            + '<div style="font-size:12px;color:#64748b;margin-top:1px">@' + _esc(a.username||'') + '</div></div>'
+            + '<span style="font-size:10px;padding:2px 8px;border-radius:100px;background:#f5f3ff;color:' + testRoleColor(a.role) + ';font-weight:700">' + testRoleLabel(a.role) + '</span>'
+          + '</div>'
+          + (bn ? '<div style="font-size:12px;color:#5b21b6;background:#faf5ff;padding:5px 10px;border-radius:7px">🏢 ' + _esc(bn) + (sub ? ' · ' + _esc(sub) : '') + '</div>' : (sub ? '<div style="font-size:12px;color:#5b21b6">' + _esc(sub) + '</div>' : ''))
+          + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px">'
+            + '<button class="btn btn-sm" onclick="openTestAccountModal(\'' + a.id + '\')" style="background:#faf5ff;border-color:#ddd6fe;color:#5b21b6;font-size:11px">✏️ 수정</button>'
+            + '<button class="btn btn-sm" onclick="unmarkTestAccount(\'' + a.id + '\',\'' + _esc(a.name) + '\')" style="font-size:11px" title="테스트 표시만 해제 (계정은 남김)">표시 해제</button>'
+            + '<button class="btn btn-danger btn-sm" onclick="deleteTestAccount(\'' + a.id + '\',\'' + _esc(a.name) + '\')" style="font-size:11px">완전 삭제</button>'
+          + '</div>'
+        + '</div>';
+      }).join('') + '</div>';
+  } catch(e) { el.innerHTML = '<div style="color:#dc2626;padding:10px">오류: ' + _esc(e.message||e) + (String(e.message||'').indexOf('is_test') >= 0 ? '<br><span style="font-size:11px">migrations/20261015_test_accounts.sql 을 먼저 실행해야 합니다</span>' : '') + '</div>'; }
+}
+
+function testAcctRoleChange(){
+  var role = (document.getElementById('inp-test-role')||{}).value || 'student';
+  var sf = document.getElementById('test-student-fields'), tf = document.getElementById('test-staff-fields'), dn = document.getElementById('test-desk-note');
+  if (sf) sf.style.display = role === 'student' ? 'grid' : 'none';
+  if (tf) tf.style.display = (role === 'teacher' || role === 'vice_director') ? 'block' : 'none';
+  if (dn) dn.style.display = role === 'desk' ? 'block' : 'none';
+}
+function testAcctTeacherChange(){
+  var tid = (document.getElementById('inp-test-teacher')||{}).value || '';
+  var sel = document.getElementById('inp-test-class'); if (!sel) return;
+  var keep = sel.value;
+  var list = (allClasses||[]).filter(function(c){ return !tid || c.teacher_id === tid; });
+  sel.innerHTML = '<option value="">반 없음</option>' + list.map(function(c){ return '<option value="' + c.id + '">' + _esc(c.name) + '</option>'; }).join('');
+  if (keep && list.some(function(c){ return c.id === keep; })) sel.value = keep;
+}
+
+async function openTestAccountModal(editId) {
+  if (!testIsMaster()) { alert('마스터 관리자만 사용할 수 있습니다'); return; }
+  var isEdit = !!editId;
+  var ex = isEdit ? (allUsers||[]).find(function(u){ return u.id === editId; }) : null;
+  if (isEdit && !ex) {
+    var r0 = await db.from('users').select('*').eq('id', editId).maybeSingle();
+    ex = r0.data || null;
+    if (!ex) { alert('계정을 찾지 못했습니다'); return; }
+  }
+  var $ = function(id){ return document.getElementById(id); };
+  $('test-modal-title').textContent = isEdit ? '🧪 테스트 계정 수정' : '🧪 테스트 계정 추가';
+  $('inp-test-id').value = editId || '';
+  $('inp-test-role').value = ex ? ex.role : 'student';
+  $('inp-test-role').disabled = isEdit;
+  $('inp-test-name').value = ex ? String(ex.name||'').replace(new RegExp('^' + TEST_NAME_PREFIX), '') : '';
+  $('inp-test-username').value = ex ? (ex.username||'') : '';
+  $('inp-test-password').value = '';
+  $('test-pwd-hint').style.display = isEdit ? 'block' : 'none';
+  $('test-pwd-req').style.display = isEdit ? 'none' : '';
+  var bsel = $('inp-test-branch');
+  bsel.innerHTML = (_allBranches||[]).map(function(b){ return '<option value="' + b.id + '">' + _esc(b.name) + '</option>'; }).join('') || '<option value="">분원 없음</option>';
+  var exB = ex ? (ex.branch_id || (Array.isArray(ex.branch_ids) && ex.branch_ids[0]) || '') : '';
+  if (exB) bsel.value = exB;
+  $('inp-test-level').value = (ex && ex.school_level) || 'high';
+  $('inp-test-staff-level').value = (ex && ex.school_level) || 'high';
+  $('inp-test-grade').value = ex ? (ex.grade||'') : '';
+  $('inp-test-school').value = ex ? (ex.school||'') : '';
+  var tsel = $('inp-test-teacher');
+  var teachers = (allUsers||[]).filter(function(u){ return (u.role === 'teacher' || u.role === 'vice_director') && u.status === 'active' && !u.deleted_at; });
+  tsel.innerHTML = '<option value="">담당 없음</option>' + teachers.map(function(t){ return '<option value="' + t.id + '">' + _esc(t.name) + (t.is_test ? ' 🧪' : '') + '</option>'; }).join('');
+  tsel.value = (ex && ex.teacher_id) || '';
+  testAcctTeacherChange();
+  if (ex && ex.class_id) $('inp-test-class').value = ex.class_id;
+  testAcctRoleChange();
+  openModal('testAccount');
+}
+
+async function saveTestAccount() {
+  if (!testIsMaster()) return;
+  var $ = function(id){ return document.getElementById(id); };
+  var id = $('inp-test-id').value || '', isEdit = !!id;
+  var role = $('inp-test-role').value;
+  var rawName = ($('inp-test-name').value || '').trim().replace(new RegExp('^' + TEST_NAME_PREFIX), '');
+  var username = ($('inp-test-username').value || '').trim();
+  var password = $('inp-test-password').value || '';
+  var branch = $('inp-test-branch').value || '';
+  if (!rawName) { alert('이름을 입력하세요'); return; }
+  if (!username) { alert('아이디를 입력하세요'); return; }
+  if (!isEdit && !password) { alert('비밀번호를 입력하세요'); return; }
+  if (!branch) { alert('분원을 선택하세요'); return; }
+  var name = TEST_NAME_PREFIX + rawName;
+  var patch = { name: name, username: username, is_test: true, status: 'active' };
+  if (password) patch.password = password;
+  if (role === 'student') {
+    patch.school_level = $('inp-test-level').value || 'high';
+    patch.grade = ($('inp-test-grade').value || '').trim() || null;
+    patch.school = ($('inp-test-school').value || '').trim() || null;
+    patch.teacher_id = $('inp-test-teacher').value || null;
+    patch.class_id = $('inp-test-class').value || null;
+    patch.branch_id = branch;
+  } else if (role === 'desk') {
+    patch.branch_ids = [branch];
+    var perms = {}; (DESK_PERMISSIONS||[]).forEach(function(p){ perms[p.key] = true; });
+    patch.permissions = perms;
+  } else {
+    patch.branch_id = branch;
+    patch.branch_ids = [branch];
+    patch.school_level = $('inp-test-staff-level').value || 'high';
+  }
+  var btn = $('test-modal-save-btn'); if (btn) { btn.disabled = true; btn.textContent = '저장 중...'; }
+  try {
+    var dup = await db.from('users').select('id').eq('username', username).limit(2);
+    if (dup.error) throw dup.error;
+    if ((dup.data||[]).some(function(u){ return u.id !== id; })) { alert('이미 사용 중인 아이디입니다'); return; }
+    if (isEdit) {
+      var r1 = await db.from('users').update(patch).eq('id', id);
+      if (r1.error) throw r1.error;
+    } else {
+      patch.role = role;
+      if (role === 'student') patch.enrolled_at = _localYMD(new Date());
+      var r2 = await db.from('users').insert(patch);
+      if (r2.error) throw r2.error;
+    }
+    closeModal('testAccount');
+    await loadAdminData();
+    loadTestAccounts();
+    alert('✅ 테스트 계정이 ' + (isEdit ? '수정' : '추가') + '됐습니다 (' + name + ')');
+  } catch(e) { alert('오류: ' + (e.message||e) + (String(e.message||'').indexOf('is_test') >= 0 ? '\n\nmigrations/20261015_test_accounts.sql 을 먼저 실행해야 합니다' : '')); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '저장'; } }
+}
+
+/* 완전 삭제 — RPC 가 is_test 가 아닌 계정은 거부한다. 기록(응시·출결·업무일지 등)도 함께 지운다 */
+async function deleteTestAccount(id, name) {
+  if (!testIsMaster()) return;
+  if (!confirm('테스트 계정 "' + name + '" 을(를) 완전히 삭제합니다.\n\n이 계정이 남긴 응시·출결·업무일지 등 기록도 함께 지워지며 되돌릴 수 없습니다.\n계속할까요?')) return;
+  try {
+    var r = await db.rpc('test_account_purge', { p_actor_id: currentUser.id, p_user_id: id });
+    if (r.error) throw r.error;
+    var res = r.data || {};
+    if (!res.ok) { alert('삭제 거부: ' + ({ not_master:'마스터 관리자가 아닙니다', not_found:'계정이 없습니다', not_test:'테스트 계정이 아닙니다' }[res.reason] || res.reason)); return; }
+    var det = Object.keys(res.detail||{}).map(function(k){ return k + ' ' + res.detail[k]; }).join(', ');
+    alert('🗑 삭제 완료 — ' + name + (res.deleted_rows ? '\n함께 지운 기록 ' + res.deleted_rows + '건 (' + det + ')' : '\n남은 기록 없음') + ((res.errors||[]).length ? '\n⚠ 일부 표 오류: ' + res.errors.join(' / ') : ''));
+    await loadAdminData();
+    loadTestAccounts();
+  } catch(e) { alert('삭제 실패: ' + (e.message||e)); }
+}
+async function unmarkTestAccount(id, name) {
+  if (!testIsMaster()) return;
+  if (!confirm('"' + name + '" 의 테스트 표시를 해제합니다. 계정은 그대로 남고 이후 집계에 포함됩니다. 계속할까요?')) return;
+  try {
+    var r = await db.from('users').update({ is_test: false }).eq('id', id);
+    if (r.error) throw r.error;
+    await loadAdminData(); loadTestAccounts();
+  } catch(e) { alert('오류: ' + (e.message||e)); }
+}
+/* 기존 계정(예: 김뽀삐)을 테스트로 표시 — 이름은 바꾸지 않는다 */
+function testMarkSearch(){
+  var q = ((document.getElementById('test-mark-q')||{}).value || '').trim().toLowerCase();
+  var box = document.getElementById('test-mark-result'); if (!box) return;
+  if (q.length < 2) { box.innerHTML = ''; return; }
+  var hits = (allUsers||[]).filter(function(u){ return !u.is_test && !u.deleted_at && ((u.name||'').toLowerCase().indexOf(q) >= 0 || (u.username||'').toLowerCase().indexOf(q) >= 0); }).slice(0, 8);
+  box.innerHTML = hits.length ? hits.map(function(u){
+    return '<button class="btn btn-sm" onclick="markTestAccount(\'' + u.id + '\',\'' + _esc(u.name) + '\')" style="font-size:11px;background:#fff;border-color:#ddd6fe;color:#5b21b6">' + _esc(u.name) + ' <span style="color:#9ca3af">' + testRoleLabel(u.role) + ' @' + _esc(u.username||'') + '</span> → 테스트로</button>';
+  }).join('') : '<span style="font-size:11px;color:#9ca3af">검색 결과 없음</span>';
+}
+async function markTestAccount(id, name){
+  if (!testIsMaster()) return;
+  if (!confirm('"' + name + '" 을(를) 테스트 계정으로 표시합니다.\n이후 월별 수강인원·계정 현황·포텐셜 순위·입퇴원 통계에서 빠지고, 이 탭에서 완전 삭제할 수 있습니다.\n계속할까요?')) return;
+  try {
+    var r = await db.from('users').update({ is_test: true }).eq('id', id);
+    if (r.error) throw r.error;
+    var q = document.getElementById('test-mark-q'); if (q) q.value = '';
+    var box = document.getElementById('test-mark-result'); if (box) box.innerHTML = '';
+    await loadAdminData(); loadTestAccounts();
+  } catch(e) { alert('오류: ' + (e.message||e)); }
+}
+
 /* ── 분원 추가/수정 ─────────────────────────────────────── */
 async function addBranch() {
   var name    = (document.getElementById('inp-branch-name')?.value || '').trim();
@@ -17221,7 +17462,7 @@ function _mrStartOwner(d, studentId){
    ⚠ 철산관 2026-07: 권수현(cancelled)이 7/30 전반 기록을 타고 총원(시작) 에만
       들어가 말일보다 1명 많아졌다. */
 function _mrCountable(s){
-  return !!s && s.status !== 'cancelled';
+  return !!s && s.status !== 'cancelled' && !s.is_test;   /* 테스트 계정은 어느 달에도 세지 않는다 */
 }
 
 /* 조회월 '이후' 에 전반이 여러 번 일어난 학생의 그 달 소속.
@@ -17305,7 +17546,7 @@ async function generateTeacherMonthlyReport() {
         .eq('role','student').eq('teacher_id', currentUser.id).neq('status','cancelled')
         .gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd),
       db.from('transfer_requests')
-        .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
+        .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id,is_test), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
         .eq('status','done')
         .or('from_teacher_id.eq.'+currentUser.id+',to_teacher_id.eq.'+currentUser.id)
         .gte('transfer_date', monthStart),   // 상한 제거: 조회월 이후 전반까지 로드(과거 시점 소속 복원용)
@@ -17596,7 +17837,7 @@ async function generateMonthlyReport() {
        그래서 비활성까지 조회하고, 그 달에 아무 움직임도 없는 선생님만 아래에서 숨긴다. */
     var tQuery = db.from('users')
       .select('id,name,branch_id,status').in('role',['teacher','vice_director'])
-      .in('status',['active','inactive']).order('name');
+      .in('status',['active','inactive']).eq('is_test', false).order('name');
     if (branchId)  tQuery = tQuery.eq('branch_id', branchId);
     if (teacherId) tQuery = tQuery.eq('id', teacherId);
     if (_isVice && !branchId) tQuery = tQuery.in('branch_id', _viceBr);   // [VICE] E: 담당 분원 선생님만
@@ -17608,13 +17849,13 @@ async function generateMonthlyReport() {
     var _qClasses = db.from('classes').select('id,name,teacher_id').eq('active', true);
     var _qStudents = db.from('users')
         .select('id,name,school,grade,teacher_id,class_id,status,enrolled_at,withdrawn_at,last_class_date,naje_steps,withdraw_reason')
-        .eq('role','student')
+        .eq('role','student').eq('is_test', false)
         .or('status.eq.active,and(status.eq.inactive,last_class_date.gte.'+monthStart+'),and(status.eq.inactive,and(last_class_date.is.null,withdrawn_at.gte.'+monthStart+'))');
     var _qNew = db.from('users')
         .select('id,name,school,grade,teacher_id,class_id,enrolled_at,last_class_date,naje_steps')
-        .eq('role','student').neq('status','cancelled').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
+        .eq('role','student').eq('is_test', false).neq('status','cancelled').gte('enrolled_at', monthStart).lte('enrolled_at', monthEnd);
     var _qTransfer = db.from('transfer_requests')
-        .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
+        .select('*, student:student_id(id,name,school,grade,naje_steps,enrolled_at,withdrawn_at,last_class_date,status,class_id,is_test), from_teacher:from_teacher_id(id,name), to_teacher:to_teacher_id(id,name), to_class:to_class_id(id,name)')
         .eq('status','done')
         .gte('transfer_date', monthStart);
     var _qHist = db.from('student_class_history')
@@ -27780,9 +28021,9 @@ async function loadAdminData() {
   const allowedBranchIds = isDeskMode ? getDeskAllowedBranchIds() : [];
 
   // 통계
-  let activeStudents    = allUsers.filter(u => isAcademyStudent(u) && u.status==='active');
-  let withdrawnStudents = allUsers.filter(u => isAcademyStudent(u) && u.status==='inactive');  // 'cancelled'(등록취소) 제외
-  let activeTeachers    = allUsers.filter(u => isActiveStaffAccount(u));   // 부원장 포함
+  let activeStudents    = allUsers.filter(u => isAcademyStudent(u) && u.status==='active' && !u.is_test);
+  let withdrawnStudents = allUsers.filter(u => isAcademyStudent(u) && u.status==='inactive' && !u.is_test);  // 'cancelled'(등록취소) 제외
+  let activeTeachers    = allUsers.filter(u => isActiveStaffAccount(u) && !u.is_test);   // 부원장 포함 · 테스트 계정 제외
 
   if (isDeskMode && allowedBranchIds.length) {
     const filtered = (arr) => arr.filter(u => {
@@ -34303,6 +34544,49 @@ tryAutoLogin();
 </div>
 
 <!-- 데스크 계정 추가/수정 -->
+<div class="modal-backdrop" id="modal-testAccount">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="test-modal-title">🧪 테스트 계정 추가</div>
+    <input type="hidden" id="inp-test-id">
+    <div style="font-size:12px;color:#6b7280;margin-bottom:12px">이름 앞에 <b>"테스트 "</b> 가 자동으로 붙어 어느 화면에서든 구분됩니다. 집계에는 들어가지 않습니다.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group" style="margin:0"><label>역할 <span style="color:#dc2626">*</span></label>
+        <select id="inp-test-role" onchange="testAcctRoleChange()">
+          <option value="student">👨‍🎓 학생</option>
+          <option value="teacher">👨‍🏫 선생님</option>
+          <option value="vice_director">👑 부원장</option>
+          <option value="desk">🏢 데스크</option>
+        </select></div>
+      <div class="form-group" style="margin:0"><label>분원 <span style="color:#dc2626">*</span></label><select id="inp-test-branch"></select></div>
+      <div class="form-group" style="margin:0"><label>이름 <span style="color:#dc2626">*</span></label><input type="text" id="inp-test-name" placeholder="예: 학생A (앞에 '테스트 ' 자동)"></div>
+      <div class="form-group" style="margin:0"><label>아이디 <span style="color:#dc2626">*</span></label><input type="text" id="inp-test-username" placeholder="예: test_stu1" autocomplete="off"></div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label>비밀번호 <span style="color:#dc2626" id="test-pwd-req">*</span></label>
+      <input type="password" id="inp-test-password" placeholder="비밀번호" autocomplete="new-password">
+      <div id="test-pwd-hint" style="font-size:11px;color:#9ca3af;margin-top:4px;display:none">비워두면 비밀번호 변경 안 함</div>
+    </div>
+    <div id="test-student-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group" style="margin:0"><label>학교급</label>
+        <select id="inp-test-level"><option value="high">고등</option><option value="middle">중등</option><option value="both">중고등</option></select></div>
+      <div class="form-group" style="margin:0"><label>학년</label><input type="text" id="inp-test-grade" placeholder="예: 2"></div>
+      <div class="form-group" style="margin:0"><label>학교</label><input type="text" id="inp-test-school" placeholder="예: 테스트고"></div>
+      <div class="form-group" style="margin:0"><label>담당 선생님</label><select id="inp-test-teacher" onchange="testAcctTeacherChange()"></select></div>
+      <div class="form-group" style="margin:0;grid-column:1/-1"><label>반</label><select id="inp-test-class"></select></div>
+    </div>
+    <div id="test-staff-fields" style="display:none">
+      <div class="form-group" style="margin:0"><label>담당 학교급</label>
+        <select id="inp-test-staff-level"><option value="high">고등</option><option value="middle">중등</option><option value="both">중고등</option></select></div>
+    </div>
+    <div id="test-desk-note" style="display:none;font-size:11px;color:#92400e;background:#fef3c7;padding:6px 10px;border-radius:7px">데스크 테스트 계정은 모든 데스크 권한을 켠 채로 만듭니다.</div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-full" onclick="closeModal('testAccount')">취소</button>
+      <button class="btn btn-primary btn-full" id="test-modal-save-btn" onclick="saveTestAccount()" style="background:#7c3aed;border-color:#7c3aed">저장</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="modal-deskAccount">
   <div class="modal" style="max-width:560px">
     <div class="modal-handle"></div>
