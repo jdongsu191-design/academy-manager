@@ -12,9 +12,6 @@ import time
 import uuid
 from urllib.parse import urlsplit
 
-from pipeline import extract, review
-from answers import parse_answers
-
 LIMIT = 30*1024*1024
 
 
@@ -28,6 +25,11 @@ class ExclusiveServer(ThreadingHTTPServer):
 
 
 def run_server(origin, root, codex, port=8765):
+    # A main checkout may install just the exam worker, without preview-only parsers.
+    here = Path(__file__).parent
+    kinds = [name for name, module in [('korean','pipeline.py'), ('naje','naje_pipeline.py'), ('exam','exam_pipeline.py')]
+             if (here/module).exists()]
+    capabilities = kinds + (['exam-hwp'] if 'exam' in kinds and (here/'hwp_convert.py').exists() else [])
     parts = urlsplit(origin)
     if parts.scheme != 'https' or not parts.hostname or origin != f'https://{parts.netloc}':
         raise ValueError('정확한 HTTPS BMAPS origin을 지정하세요 (경로/끝 슬래시 제외).')
@@ -57,6 +59,7 @@ def run_server(origin, root, codex, port=8765):
                 from naje_pipeline import extract_naje
                 result = extract_naje(pdf,folder,codex,progress)
             else:
+                from pipeline import extract, review
                 result = extract(pdf,lo,hi)
                 result = review(result,pdf,folder,codex,progress)
             blob = json.dumps(result,ensure_ascii=False).encode('utf-8')
@@ -132,7 +135,7 @@ def run_server(origin, root, codex, port=8765):
                 self.send_header('Content-Length',str(len(blob)));self.end_headers();self.wfile.write(blob);return
             if not self.trusted():return
             if self.path=='/health':
-                self.send(200,{'ok':True,'version':6,'capabilities':['korean','naje','exam','exam-hwp']});return
+                self.send(200,{'ok':True,'version':6,'capabilities':capabilities});return
             jobid=self.path.removeprefix('/jobs/')
             with lock:
                 state=dict(jobs.get(jobid,{}))
@@ -145,7 +148,10 @@ def run_server(origin, root, codex, port=8765):
         def do_POST(self):
             if not self.trusted():return
             if self.path=='/answers':
+                if 'korean' not in kinds:
+                    self.send(404,{'error':'이 처리기에는 국어 정답 분석이 설치되지 않았습니다.'});return
                 try:
+                    from answers import parse_answers
                     n=int(self.headers.get('Content-Length','0'))
                     if not 1<=n<=10*1024*1024 or self.headers.get('Content-Type')!='application/pdf':raise ValueError('10MB 이하 정답 PDF를 사용하세요.')
                     self.connection.settimeout(30)
@@ -183,7 +189,7 @@ def run_server(origin, root, codex, port=8765):
             try:
                 params=parse_qs(parsed.query)
                 kind=params.get('kind',['korean'])[0]
-                if kind not in ('korean','naje','exam'):raise ValueError('지원하지 않는 분석 종류')
+                if kind not in kinds:raise ValueError('지원하지 않는 분석 종류')
                 lo=int(params.get('from',['1'])[0]);hi=int(params.get('to',['99'])[0])
                 if not 1<=lo<=hi<=99:raise ValueError('문항 범위 오류')
                 n=int(self.headers.get('Content-Length','0'))

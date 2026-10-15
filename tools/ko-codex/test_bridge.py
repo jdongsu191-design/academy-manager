@@ -49,7 +49,7 @@ class PairingTests(unittest.TestCase):
                     grant_call('/sessions',{'origin':'https://evil.example'},approved,session)
                 self.assertEqual(denied.exception.code,403)
                 denied.exception.close()
-                req=urllib.request.Request(local+'/jobs?from=1&to=3',data=b'invalid test PDF',headers={'Origin':approved,'Authorization':'Bearer '+session,'Content-Type':'application/pdf'})
+                req=urllib.request.Request(local+'/jobs?kind=exam',data=json.dumps({'operation':'analysis','prompt':'test','units':['test'],'pdf':'not base64!'}).encode(),headers={'Origin':approved,'Authorization':'Bearer '+session,'Content-Type':'application/json'})
                 with self.assertRaises(urllib.error.HTTPError) as invalid:
                     urllib.request.urlopen(req,timeout=5)
                 self.assertEqual(invalid.exception.code,400)

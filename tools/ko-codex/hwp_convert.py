@@ -62,6 +62,19 @@ def to_pdf(blob, extension, folder, progress):
         raise ValueError('한글 변환 대기 시간 초과. 한글의 파일 접근 확인창을 확인하고 다시 분석하세요.') from None
 
 
+def close_conversion_document(hwp, source, target):
+    paths = (str(source.resolve()), str(target.resolve()))
+    if hwp.XHwpDocuments.Count == 1 and hwp.Path in paths:
+        # hwpDiscard: discard only the verified temporary document before Quit.
+        hwp.Clear(1)
+        hwp.Quit()
+    else:
+        for i in range(hwp.XHwpDocuments.Count-1, -1, -1):
+            document = hwp.XHwpDocuments.Item(i)
+            if document.FullName in paths:
+                document.Close(False)
+
+
 def convert(source, target):
     import pythoncom
     import win32com.client
@@ -87,15 +100,12 @@ def convert(source, target):
             raise RuntimeError('한글 PDF 저장 실패')
         target.with_suffix('.json').write_text(json.dumps({'pages':pages}),encoding='utf-8')
     finally:
-        if hwp is not None and owned:
-            if hwp.XHwpDocuments.Count == 1 and hwp.Path in (str(source.resolve()), str(target.resolve())):
-                hwp.Quit()
-            else:
-                for i in range(hwp.XHwpDocuments.Count-1, -1, -1):
-                    document = hwp.XHwpDocuments.Item(i)
-                    if document.FullName in (str(source.resolve()), str(target.resolve())):
-                        document.Close(False)
-        pythoncom.CoUninitialize()
+        try:
+            if hwp is not None and owned:
+                close_conversion_document(hwp, source, target)
+        finally:
+            hwp = None
+            pythoncom.CoUninitialize()
 
 
 if __name__ == '__main__':
