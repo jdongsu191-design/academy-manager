@@ -186,7 +186,16 @@
           <span style="font-size:12px">종료</span><input type="date" id="ev-until"></span>
       </div></div>
       <div class="fr"><label>공개 범위</label><div class="row"><select id="ev-vis" onchange="evVisChange()"><option value="all">전체 직원</option><option value="shared">참조자만</option><option value="private">나만</option></select><span class="msg" id="ev-vis-hint"></span></div></div>
-      <div class="fr" id="ev-share-row"><label>참조자</label><div><input type="text" id="ev-share-q" placeholder="이름으로 찾기" oninput="renderShare()" style="width:100%;padding:6px 10px;border:1.5px solid var(--border);border-radius:8px;margin-bottom:4px"><div class="share-box" id="ev-share"></div></div></div>
+      <div class="fr" id="ev-share-row"><label>참조자</label><div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px">
+          <select id="ev-share-br" class="bsel" onchange="renderShare()" style="padding:5px 8px"></select>
+          <input type="text" id="ev-share-q" placeholder="이름으로 찾기" oninput="renderShare()" style="flex:1;min-width:120px;padding:6px 10px;border:1.5px solid var(--border);border-radius:8px">
+          <button type="button" class="btn btn-sm" onclick="shareAll(true)">전체 선택</button>
+          <button type="button" class="btn btn-sm" onclick="shareAll(false)">전체 해제</button>
+          <span class="msg" id="ev-share-n"></span>
+        </div>
+        <div class="share-box" id="ev-share"></div>
+      </div></div>
       <div class="fr"><label>메모</label><textarea id="ev-memo" rows="2" maxlength="500"></textarea></div>
       <div class="msg" id="ev-msg"></div>
       <div class="btns">
@@ -333,12 +342,13 @@ async function enterApp(){
   if(!isAdmin()){ var mine = myBranchIds(); if(mine.length === 1){ sel.value = mine[0]; _branch = mine[0]; } }
   var bopts = '<option value="">전체 분원</option>' + _branches.map(function(x){ return '<option value="' + x.id + '">' + esc(x.name) + '</option>'; }).join('');
   ['ev-branch','paste-branch','neis-branch','mgr-bulk-branch'].forEach(function(id){ if($(id)) $(id).innerHTML = bopts; });
+  $('ev-share-br').innerHTML = '<option value="">모든 분원</option>' + _branches.map(function(x){ return '<option value="' + x.id + '">' + esc(x.name) + '</option>'; }).join('') + '<option value="__none__">분원 없음</option>';
   await Promise.all([loadStaff(), loadSchools()]);
   calView('month');
   var v = new URLSearchParams(location.search).get('view'); if(v && ['month','week','day','year','list'].indexOf(v) >= 0) calView(v);
 }
 async function loadStaff(){
-  var r = await db.from('users').select('id,name,role,branch_id,is_test').in('role', ['admin','vice_director','teacher','desk']).eq('status','active').is('deleted_at', null).order('name');
+  var r = await db.from('users').select('id,name,role,branch_id,branch_ids,is_test').in('role', ['admin','vice_director','teacher','desk']).eq('status','active').is('deleted_at', null).order('name');
   _staff = (r.data || []).filter(function(u){ return u.id !== currentUser.id; });
 }
 async function loadSchools(){
@@ -558,14 +568,30 @@ function evStartChange(){ if(!$('ev-end').value || $('ev-end').value < $('ev-sta
 function evAlldayChange(){ $('ev-time-row').style.display = $('ev-allday').checked ? 'none' : ''; }
 function evFreqChange(){ var f = $('ev-freq').value; $('ev-rep-opts').style.display = f ? 'inline-flex' : 'none'; $('ev-wd').style.display = f === 'weekly' ? '' : 'none'; $('ev-interval-u').textContent = { daily:'일마다', weekly:'주마다', monthly:'개월마다', yearly:'년마다' }[f] || ''; }
 function evVisChange(){ var v = $('ev-vis').value; $('ev-share-row').style.display = v === 'private' ? 'none' : ''; $('ev-vis-hint').textContent = { all:'모든 직원에게 보이고, 참조자에게는 굵게 표시됩니다', shared:'참조자와 나만 봅니다', private:'나만 봅니다' }[v]; }
-function renderShare(sel){
-  var q = ($('ev-share-q').value || '').trim().toLowerCase();
-  var cur = sel || Array.prototype.map.call(document.querySelectorAll('#ev-share input:checked'), function(c){ return c.value; });
-  var bmap = {}; _branches.forEach(function(b){ bmap[b.id] = b.name; });
-  $('ev-share').innerHTML = _staff.filter(function(u){ return !q || (u.name || '').toLowerCase().indexOf(q) >= 0 || cur.indexOf(u.id) >= 0; }).map(function(u){
-    return '<label><input type="checkbox" value="' + u.id + '"' + (cur.indexOf(u.id) >= 0 ? ' checked' : '') + '>' + esc(u.name) + ' <span style="color:#94a3b8;font-size:10.5px">' + ({admin:'관리자',desk:'데스크',teacher:'선생님',vice_director:'부원장'}[u.role] || '') + (bmap[u.branch_id] ? ' · ' + esc(bmap[u.branch_id]) : '') + (u.is_test ? ' 🧪' : '') + '</span></label>';
-  }).join('') || '<span class="msg">해당 없음</span>';
+var _shareSel = {};   /* 참조자 선택 상태 — 분원·검색 필터와 무관하게 유지 */
+function staffBranches(u){ var ids = Array.isArray(u.branch_ids) && u.branch_ids.length ? u.branch_ids.slice() : []; if(u.branch_id && ids.indexOf(u.branch_id) < 0) ids.push(u.branch_id); return ids; }
+function shareFiltered(){
+  var q = ($('ev-share-q').value || '').trim().toLowerCase(), br = $('ev-share-br').value;
+  return _staff.filter(function(u){
+    if(q && (u.name || '').toLowerCase().indexOf(q) < 0) return false;
+    if(br === '__none__') return !staffBranches(u).length;
+    if(br) return staffBranches(u).indexOf(br) >= 0;
+    return true;
+  });
 }
+function renderShare(sel){
+  if(Array.isArray(sel)){ _shareSel = {}; sel.forEach(function(id){ _shareSel[id] = true; }); }
+  var bmap = {}; _branches.forEach(function(b){ bmap[b.id] = b.name; });
+  var list = shareFiltered();
+  $('ev-share').innerHTML = list.map(function(u){
+    return '<label><input type="checkbox" value="' + u.id + '"' + (_shareSel[u.id] ? ' checked' : '') + ' onchange="shareToggle(this.value,this.checked)">' + esc(u.name) + ' <span style="color:#94a3b8;font-size:10.5px">' + ({admin:'관리자',desk:'데스크',teacher:'선생님',vice_director:'부원장'}[u.role] || '') + (staffBranches(u).length ? ' · ' + esc(staffBranches(u).map(function(b){ return bmap[b] || ''; }).filter(Boolean).join('·')) : '') + (u.is_test ? ' 🧪' : '') + '</span></label>';
+  }).join('') || '<span class="msg">해당 없음</span>';
+  shareCount();
+}
+function shareToggle(id, on){ if(on) _shareSel[id] = true; else delete _shareSel[id]; shareCount(); }
+function shareAll(on){ shareFiltered().forEach(function(u){ if(on) _shareSel[u.id] = true; else delete _shareSel[u.id]; }); renderShare(); }
+function shareSelected(){ return Object.keys(_shareSel); }
+function shareCount(){ var n = Object.keys(_shareSel).length, el = $('ev-share-n'); if(el) el.textContent = n ? n + '명 선택' : ''; }
 function canEdit(ev){ return isAdmin() || !ev || !ev.id || ev.owner_id === currentUser.id; }
 function openEvent(id, occ){
   var ev = id ? _events.find(function(e){ return e.id === id; }) : null;
@@ -583,7 +609,7 @@ function openEvent(id, occ){
   var wdSel = r && Array.isArray(r.byday) ? r.byday.map(Number) : [pd(s0).getDay()];
   $('ev-wd').innerHTML = WD.map(function(w, i){ return '<label class="' + (wdSel.indexOf(i) >= 0 ? 'on' : '') + '" onclick="this.classList.toggle(\'on\');event.preventDefault()" data-d="' + i + '">' + w + '</label>'; }).join('');
   $('ev-vis').value = ev ? ev.visibility : 'all';
-  $('ev-share-q').value = ''; renderShare(ev ? (ev.share_user_ids || []) : []);
+  $('ev-share-q').value = ''; $('ev-share-br').value = ''; renderShare(ev ? (ev.share_user_ids || []) : []);
   $('ev-memo').value = ev ? (ev.memo || '') : '';
   $('ev-msg').textContent = ev && ev.owner_id && ev.owner_id !== currentUser.id ? '작성: ' + ((_staff.find(function(u){ return u.id === ev.owner_id; }) || {}).name || '다른 직원') + (ev.source === 'neis' ? ' · 나이스 학사일정' : '') : (ev && ev.source === 'neis' ? '나이스 학사일정에서 가져옴' : '');
   evCatChange(); evAlldayChange(); evFreqChange(); evVisChange();
@@ -591,7 +617,7 @@ function openEvent(id, occ){
   $('ev-save').style.display = editable ? '' : 'none';
   $('ev-del').style.display = ev && editable ? '' : 'none';
   $('ev-skip').style.display = ev && editable && ev.rrule && occ ? '' : 'none';
-  document.querySelectorAll('#ev-ov input, #ev-ov select, #ev-ov textarea').forEach(function(el){ if(el.id !== 'ev-share-q') el.disabled = !editable; });
+  document.querySelectorAll('#ev-ov input, #ev-ov select, #ev-ov textarea, #ev-ov button.btn-sm').forEach(function(el){ if(el.id !== 'ev-share-q' && el.id !== 'ev-share-br') el.disabled = !editable; });
   $('ev-ov').classList.add('open');
   if(editable) setTimeout(function(){ $('ev-name').focus(); }, 50);
 }
@@ -604,7 +630,7 @@ function collectEvent(){
   if(!allday && !st) throw new Error('시간을 입력하거나 종일을 선택하세요');
   var rr = null, f = $('ev-freq').value;
   if(f){ rr = { freq:f, interval:Math.max(1, parseInt($('ev-interval').value) || 1) }; if(f === 'weekly') rr.byday = Array.prototype.filter.call(document.querySelectorAll('#ev-wd label'), function(l){ return l.classList.contains('on'); }).map(function(l){ return +l.dataset.d; }); if($('ev-until').value) rr.until = $('ev-until').value; }
-  var vis = $('ev-vis').value, share = vis === 'private' ? [] : Array.prototype.map.call(document.querySelectorAll('#ev-share input:checked'), function(c){ return c.value; });
+  var vis = $('ev-vis').value, share = vis === 'private' ? [] : shareSelected();
   if(vis === 'shared' && !share.length) throw new Error('참조자를 한 명 이상 고르세요');
   return { title:title, category:cat, school:(cat === 'exam' || cat === 'school') ? ($('ev-school').value.trim() || null) : null, branch_id:$('ev-branch').value || null,
     starts_on:s, ends_on:e, all_day:allday, start_time:st, end_time:et, rrule:rr, visibility:vis, share_user_ids:share, memo:$('ev-memo').value.trim() || null, updated_at:new Date().toISOString() };
