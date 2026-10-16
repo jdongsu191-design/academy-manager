@@ -27,7 +27,7 @@ class ExclusiveServer(ThreadingHTTPServer):
 def run_server(origin, root, codex, port=8765):
     # A main checkout may install just the exam worker, without preview-only parsers.
     here = Path(__file__).parent
-    kinds = [name for name, module in [('korean','pipeline.py'), ('naje','naje_pipeline.py'), ('exam','exam_pipeline.py')]
+    kinds = [name for name, module in [('korean','pipeline.py'), ('naje','naje_pipeline.py'), ('exam','exam_pipeline.py'), ('source','source_pipeline.py')]
              if (here/module).exists()]
     capabilities = kinds + (['exam-hwp'] if 'exam' in kinds and (here/'hwp_convert.py').exists() else [])
     parts = urlsplit(origin)
@@ -52,7 +52,10 @@ def run_server(origin, root, codex, port=8765):
                 jobs[jobid]['message'] = message
         try:
             progress('Python 원본 영역 분석 중')
-            if kind == 'exam':
+            if kind == 'source':
+                from source_pipeline import extract_source
+                result = extract_source(pdf,folder,codex,progress)
+            elif kind == 'exam':
                 from exam_pipeline import extract_exam
                 result = extract_exam(pdf,folder,codex,progress)
             elif kind == 'naje':
@@ -129,13 +132,13 @@ def run_server(origin, root, codex, port=8765):
                 self.send_response(200)
                 self.send_header('Content-Type','text/html; charset=utf-8')
                 self.send_header('Cache-Control','no-store')
-                self.send_header('X-BMAPS-Bridge-Version','6')
+                self.send_header('X-BMAPS-Bridge-Version','7')
                 self.send_header('X-Frame-Options','DENY')
                 self.send_header('Content-Security-Policy',f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
                 self.send_header('Content-Length',str(len(blob)));self.end_headers();self.wfile.write(blob);return
             if not self.trusted():return
             if self.path=='/health':
-                self.send(200,{'ok':True,'version':6,'capabilities':capabilities});return
+                self.send(200,{'ok':True,'version':7,'capabilities':capabilities});return
             jobid=self.path.removeprefix('/jobs/')
             with lock:
                 state=dict(jobs.get(jobid,{}))
@@ -193,9 +196,9 @@ def run_server(origin, root, codex, port=8765):
                 lo=int(params.get('from',['1'])[0]);hi=int(params.get('to',['99'])[0])
                 if not 1<=lo<=hi<=99:raise ValueError('문항 범위 오류')
                 n=int(self.headers.get('Content-Length','0'))
-                limit = 70*1024*1024 if kind == 'exam' else LIMIT  # Base64 plus JSON overhead for a 50MB document.
-                if not 1<=n<=limit:raise ValueError('내신분석은 50MB 이하 문서를 사용하세요.' if kind == 'exam' else '30MB 이하 PDF를 사용하세요.')
-                expected_type = 'application/json' if kind == 'exam' else 'application/pdf'
+                limit = 70*1024*1024 if kind in ('exam', 'source') else LIMIT  # Base64 plus JSON overhead for a 50MB document.
+                if not 1<=n<=limit:raise ValueError('내신분석은 50MB 이하 문서를 사용하세요.' if kind in ('exam', 'source') else '30MB 이하 PDF를 사용하세요.')
+                expected_type = 'application/json' if kind in ('exam', 'source') else 'application/pdf'
                 if self.headers.get('Content-Type')!=expected_type:raise ValueError('분석 입력 형식 오류')
                 with lock:
                     if any(j['status']=='running' for j in jobs.values()):
@@ -207,11 +210,14 @@ def run_server(origin, root, codex, port=8765):
                     jobs[jobid]={'status':'running','message':'파일 수신 중','created':time.time()}
                 self.connection.settimeout(30)
                 pdf=self.rfile.read(n)
-                if len(pdf)!=n or (kind != 'exam' and not pdf.startswith(b'%PDF-')):
+                if len(pdf)!=n or (kind not in ('exam', 'source') and not pdf.startswith(b'%PDF-')):
                     with lock:jobs.pop(jobid,None)
                     raise ValueError('유효한 PDF가 아닙니다.')
-                if kind == 'exam':
-                    from exam_pipeline import validate_request
+                if kind in ('exam', 'source'):
+                    if kind == 'source':
+                        from source_pipeline import validate_request
+                    else:
+                        from exam_pipeline import validate_request
                     pdf = json.loads(pdf)
                     validate_request(pdf)
                 threading.Thread(target=work,args=(jobid,pdf,lo,hi,kind),daemon=True).start()
