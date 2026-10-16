@@ -4869,6 +4869,8 @@ async function showApp() {
   enterFirstPanel();     // 첫 패널 진입 (allUsers/students 채워진 상태 보장)
   if (currentUser && currentUser.role === 'teacher' && typeof initQuestionAlert === 'function') setTimeout(initQuestionAlert, 700);
 
+  // 운영 일정 알림 팝업 (직원 전체) — 화면이 자리잡은 뒤, 이후 30분마다
+  if (typeof calAlarmCheck === 'function') { setTimeout(calAlarmCheck, 1200); if (!window._calAlarmTimer) window._calAlarmTimer = setInterval(calAlarmCheck, 30 * 60 * 1000); }
   // 알림 Realtime 구독 시작 (마스터 제외 전체)
   if (typeof initNotifyRealtime === 'function') initNotifyRealtime();
   // 로그인 중 받지 못한 알림 확인 (500ms 지연 — 화면 안정 후)
@@ -5173,6 +5175,54 @@ function openLobbyPage() {
 function openCalendarPage() {
   window.open('/calendar.html', '_blank');
 }
+/* ── 운영 일정 알림 팝업 — cal_events.remind (calendar.html 에서 설정) ──
+   규칙·전개는 assets/cal-core.js(CalRules). 닫은 기록은 localStorage(기기별). */
+var CAL_ALARM_SEEN_KEY = 'bmaps_cal_alarm_seen_v1';
+var _calAlarmItems = [];
+function calAlarmSeen(){ try { return JSON.parse(localStorage.getItem(CAL_ALARM_SEEN_KEY) || '{}') || {}; } catch(e){ return {}; } }
+function calAlarmMark(keys){
+  var seen = calAlarmSeen(), now = Date.now();
+  keys.forEach(function(k){ seen[k] = now; });
+  var cut = now - 60 * 86400000; Object.keys(seen).forEach(function(k){ if(seen[k] < cut) delete seen[k]; });   /* 60일 지난 기록 정리 */
+  try { localStorage.setItem(CAL_ALARM_SEEN_KEY, JSON.stringify(seen)); } catch(e){}
+}
+async function calAlarmCheck(){
+  if(!currentUser || currentUser.role === 'student' || !window.CalRules) return;
+  try {
+    var q = db.from('cal_events').select('id,title,category,school,starts_on,ends_on,all_day,start_time,rrule,exdates,visibility,share_user_ids,owner_id,memo,remind').not('remind', 'is', null);
+    if(currentUser.role !== 'admin') q = q.or('visibility.eq.all,owner_id.eq.' + currentUser.id + ',share_user_ids.cs.{' + currentUser.id + '}');
+    var r = await q;
+    if(r.error){ if(String(r.error.message || '').indexOf('remind') < 0) console.warn('[calAlarm]', r.error.message); return; }
+    var today = CalRules.ymd(new Date());
+    _calAlarmItems = CalRules.dueAlarms(r.data || [], today, currentUser.id, calAlarmSeen());
+    if(!_calAlarmItems.length) return;
+    calAlarmRender();
+    openModal('calAlarm');
+  } catch(e){ console.warn('[calAlarm]', e); }
+}
+function calAlarmRender(){
+  var CAT = { academy:'🏫 학원 운영', exam:'📝 학교 시험', school:'🎒 학교 행사', personal:'📌 개인 메모' };
+  var el = document.getElementById('cal-alarm-list'); if(!el) return;
+  el.innerHTML = _calAlarmItems.map(function(it, i){
+    var ev = it.ev, d = it.daysLeft === 0 ? '오늘' : 'D-' + it.daysLeft;
+    var when = it.start + (it.end !== it.start ? ' ~ ' + it.end : '') + (ev.all_day === false && ev.start_time ? ' ' + String(ev.start_time).slice(0,5) : '');
+    return '<div style="border:1.5px solid ' + (it.daysLeft === 0 ? '#fca5a5' : '#e5e7eb') + ';border-radius:10px;padding:10px 12px;background:' + (it.daysLeft === 0 ? '#fff5f5' : '#fff') + '">'
+      + '<div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;font-weight:800;color:' + (it.daysLeft === 0 ? '#dc2626' : '#b45309') + ';white-space:nowrap">' + d + '</span>'
+      + '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700;color:#1e293b">' + (ev.school ? _esc(ev.school) + ' · ' : '') + _esc(ev.title) + '</div>'
+      + '<div style="font-size:11.5px;color:#64748b;margin-top:2px">' + (CAT[ev.category] || '') + ' · ' + when + (it.mode === 'daily' ? ' · 매일 알림' : '') + (ev.memo ? '<br>' + _esc(ev.memo) : '') + '</div></div></div>'
+      + '<div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">'
+      + (it.mode === 'daily' ? '<button class="btn btn-sm" onclick="calAlarmDismiss(' + i + ',false)">오늘은 그만</button><button class="btn btn-sm" onclick="calAlarmDismiss(' + i + ',true)" style="color:#6b7280">이 일정 알림 끄기</button>' : '<button class="btn btn-sm" onclick="calAlarmDismiss(' + i + ',true)">확인</button>')
+      + '</div></div>';
+  }).join('');
+}
+function calAlarmDismiss(i, forever){
+  var it = _calAlarmItems[i]; if(!it) return;
+  calAlarmMark(forever && it.mode === 'daily' ? [it.key, it.ev.id + '|' + it.occ + '|off'] : [it.key]);
+  _calAlarmItems.splice(i, 1);
+  if(!_calAlarmItems.length){ closeModal('calAlarm'); return; }
+  calAlarmRender();
+}
+function calAlarmCloseAll(){ calAlarmMark(_calAlarmItems.map(function(it){ return it.key; })); _calAlarmItems = []; closeModal('calAlarm'); }
 // 입퇴원 상담: 별도 페이지를 새 탭으로 열기 (관리자/부원장)
 function openConsultPage() {
   window.open('/consult.html', '_blank');
@@ -34395,6 +34445,19 @@ tryAutoLogin();
 </div>
 
 <!-- 데스크 계정 추가/수정 -->
+<div class="modal-backdrop" id="modal-calAlarm" style="z-index:3200">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🔔 운영 일정 알림</div>
+    <div id="cal-alarm-list" style="display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto"></div>
+    <div style="font-size:11px;color:#9ca3af;margin-top:8px">닫은 기록은 이 기기(브라우저)에만 남습니다 · "매일 지속" 알림은 다음 날 다시 뜹니다</div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-full" onclick="openCalendarPage()">📅 달력 열기</button>
+      <button class="btn btn-primary btn-full" onclick="calAlarmCloseAll()">오늘은 모두 닫기</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="modal-testAccount">
   <div class="modal" style="max-width:560px">
     <div class="modal-handle"></div>
@@ -34577,6 +34640,7 @@ tryAutoLogin();
   <img id="viewerImg" src="" alt="">
   <div id="viewerCaption" style="display:none;position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.6);color:#fff;padding:6px 16px;border-radius:100px;font-size:14px;font-weight:600;white-space:nowrap;pointer-events:none;"></div>
 </div>
+<script src="assets/cal-core.js?v=1"></script>
 <script src="assets/exam-codex.js?v=2"></script>
 </body>
 </html>
