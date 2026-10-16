@@ -284,7 +284,8 @@
     <div class="md" style="max-width:960px">
       <h3>🗂 학교 일정 관리 <span style="font-size:11px;color:var(--text-sub);font-weight:500">저장된 학교 시험·행사를 표에서 한꺼번에 고칩니다</span></h3>
       <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-        <select id="mgr-school" class="bsel" onchange="mgrLoad()"><option value="">학교 선택</option></select>
+        <select id="mgr-level" class="bsel" onchange="mgrSchoolOptions();mgrLoad()"><option value="">중·고 전체</option><option value="middle">중등</option><option value="high">고등</option></select>
+        <select id="mgr-school" class="bsel" onchange="mgrLoad()"><option value="">학교 전체</option></select>
         <input type="date" id="mgr-from" onchange="mgrLoad()"> ~ <input type="date" id="mgr-to" onchange="mgrLoad()">
         <span class="msg" id="mgr-msg"></span>
       </div>
@@ -293,6 +294,7 @@
         <select id="mgr-bulk-branch" class="bsel"></select><button class="btn btn-sm" onclick="mgrBulk('branch')">분원 적용</button>
         <select id="mgr-bulk-cat" class="bsel"><option value="exam">학교 시험</option><option value="school">학교 행사</option><option value="academy">학원 운영</option></select><button class="btn btn-sm" onclick="mgrBulk('category')">종류 적용</button>
         <select id="mgr-bulk-level" class="bsel"><option value="">구분 없음</option><option value="middle">중등</option><option value="high">고등</option></select><button class="btn btn-sm" onclick="mgrBulk('level')">학교급 적용</button>
+        <button class="btn btn-sm" onclick="mgrFillLevels()" title="학교급이 비어 있는 줄을 학교 이름(○○고→고등, ○○중→중등)으로 채웁니다">비어 있는 학교급 이름으로 채우기</button>
         <span style="display:inline-flex;gap:4px;align-items:center">날짜 <input type="number" id="mgr-bulk-shift" value="0" style="width:56px;padding:4px" min="-365" max="365">일 이동<button class="btn btn-sm" onclick="mgrBulk('shift')">적용</button></span>
       </div>
       <div style="max-height:380px;overflow:auto"><table class="pv" id="mgr-table"></table></div>
@@ -1018,40 +1020,50 @@ async function neisSave(){
 
 /* ── 학교 일정 관리: 학교·기간으로 DB 에서 바로 읽어 표로 고친다 (화면 필터와 무관) ── */
 var _mgrRows = [];
+var _mgrSchools = [];   /* [{school, level(저장값 또는 추정)}] */
+function effLevel(e){ return e.school_level || guessLevel(e.school) || ''; }
 async function openMgr(){
-  var sel = $('mgr-school'), keep = $('f-school').value;
-  var r = await db.from('cal_events').select('school').not('school', 'is', null);
-  var set = {}; (r.data || []).forEach(function(x){ if(x.school) set[x.school] = 1; });
-  var list = Object.keys(set).sort(function(a, b){ return a.localeCompare(b, 'ko'); });
-  sel.innerHTML = '<option value="">학교 선택</option>' + list.map(function(x){ return '<option value="' + esc(x) + '">' + esc(x) + '</option>'; }).join('');
-  if(keep && list.indexOf(keep) >= 0) sel.value = keep;
+  var r = await db.from('cal_events').select('school,school_level').not('school', 'is', null);
+  var map = {}; (r.data || []).forEach(function(x){ if(!x.school) return; var lv = effLevel(x); if(!map[x.school] || x.school_level) map[x.school] = lv; });
+  _mgrSchools = Object.keys(map).sort(function(a, b){ return a.localeCompare(b, 'ko'); }).map(function(k){ return { school:k, level:map[k] }; });
+  $('mgr-level').value = $('f-level').value || '';
+  mgrSchoolOptions($('f-school').value);
   var y = _cur.getFullYear(); $('mgr-from').value = y + '-01-01'; $('mgr-to').value = y + '-12-31';
-  $('mgr-table').innerHTML = ''; $('mgr-msg').textContent = list.length ? '학교를 고르세요' : '저장된 학교 일정이 없습니다';
+  $('mgr-table').innerHTML = ''; $('mgr-msg').textContent = _mgrSchools.length ? '' : '저장된 학교 일정이 없습니다';
   $('mgr-ov').classList.add('open');
-  if(sel.value) mgrLoad();
+  if(_mgrSchools.length) mgrLoad();
+}
+function mgrSchoolOptions(keep){
+  var sel = $('mgr-school'), lv = $('mgr-level').value, cur = keep !== undefined ? keep : sel.value;
+  var list = _mgrSchools.filter(function(x){ return !lv || x.level === lv; });
+  sel.innerHTML = '<option value="">' + (lv ? levelLabel(lv) + ' 학교 전체' : '학교 전체') + ' (' + list.length + ')</option>' + list.map(function(x){ return '<option value="' + esc(x.school) + '">' + esc(x.school) + (x.level ? ' · ' + levelLabel(x.level) : '') + '</option>'; }).join('');
+  if(cur && list.some(function(x){ return x.school === cur; })) sel.value = cur;
 }
 async function mgrLoad(){
-  var school = $('mgr-school').value, from = $('mgr-from').value, to = $('mgr-to').value;
+  var school = $('mgr-school').value, lv = $('mgr-level').value, from = $('mgr-from').value, to = $('mgr-to').value;
   _mgrRows = []; $('mgr-table').innerHTML = '';
-  if(!school){ $('mgr-msg').textContent = '학교를 고르세요'; return; }
   $('mgr-msg').textContent = '불러오는 중...';
-  var q = db.from('cal_events').select('*').eq('school', school).order('starts_on');
+  var q = db.from('cal_events').select('*').not('school', 'is', null).order('school').order('starts_on');
+  if(school) q = q.eq('school', school);
   if(from) q = q.gte('ends_on', from); if(to) q = q.lte('starts_on', to);
   if(!isAdmin()) q = q.or('visibility.eq.all,owner_id.eq.' + currentUser.id + ',share_user_ids.cs.{' + currentUser.id + '}');
   var r = await q;
   if(r.error){ $('mgr-msg').textContent = '불러오기 실패: ' + r.error.message; return; }
-  _mgrRows = (r.data || []).map(function(e){ return { ev:e, title:e.title, starts_on:e.starts_on, ends_on:e.ends_on, category:e.category, school_level:e.school_level || '', branch_id:e.branch_id || '', editable:canEdit(e) }; });
+  var data = (r.data || []).filter(function(e){ return !lv || effLevel(e) === lv; });
+  _mgrRows = data.map(function(e){ return { ev:e, title:e.title, starts_on:e.starts_on, ends_on:e.ends_on, category:e.category, school_level:e.school_level || '', branch_id:e.branch_id || '', editable:canEdit(e) }; });
+  var nEmpty = _mgrRows.filter(function(x){ return !x.school_level; }).length;
   var bopts = '<option value="">전체 분원</option>' + _branches.map(function(x){ return '<option value="' + x.id + '">' + esc(x.name) + '</option>'; }).join('');
-  $('mgr-msg').textContent = _mgrRows.length + '건' + (_mgrRows.some(function(x){ return !x.editable; }) ? ' · 회색 줄은 다른 직원이 만든 일정(관리자만 수정)' : '');
-  $('mgr-table').innerHTML = '<tr><th style="width:24px"><input type="checkbox" onchange="mgrAll(this.checked)"></th><th>제목</th><th style="width:130px">시작</th><th style="width:130px">종료</th><th style="width:110px">종류</th><th style="width:90px">학교급</th><th style="width:120px">분원</th><th style="width:60px">출처</th></tr>'
+  $('mgr-msg').textContent = _mgrRows.length + '건' + (nEmpty ? ' · 학교급 비어 있음 ' + nEmpty + '건(달력에서는 이름으로 추정해 보여 줌 — "이름으로 채우기"로 저장 가능)' : '') + (_mgrRows.some(function(x){ return !x.editable; }) ? ' · 회색 줄은 다른 직원이 만든 일정(관리자만 수정)' : '');
+  $('mgr-table').innerHTML = '<tr><th style="width:24px"><input type="checkbox" onchange="mgrAll(this.checked)"></th><th style="width:110px">학교</th><th>제목</th><th style="width:130px">시작</th><th style="width:130px">종료</th><th style="width:110px">종류</th><th style="width:90px">학교급</th><th style="width:120px">분원</th><th style="width:60px">출처</th></tr>'
     + _mgrRows.map(function(x, i){
       var dis = x.editable ? '' : ' disabled';
       return '<tr' + (x.editable ? '' : ' style="opacity:.55"') + '><td><input type="checkbox" data-i="' + i + '"' + dis + '></td>'
+        + '<td style="font-weight:700;white-space:nowrap">' + esc(x.ev.school || '') + '</td>'
         + '<td><input type="text" value="' + esc(x.title) + '" data-i="' + i + '" data-f="title" oninput="mgrEdit(this)"' + dis + '></td>'
         + '<td><input type="date" value="' + x.starts_on + '" data-i="' + i + '" data-f="starts_on" onchange="mgrEdit(this)" style="width:100%;border:1px solid var(--border);border-radius:5px;padding:3px"' + dis + '></td>'
         + '<td><input type="date" value="' + x.ends_on + '" data-i="' + i + '" data-f="ends_on" onchange="mgrEdit(this)" style="width:100%;border:1px solid var(--border);border-radius:5px;padding:3px"' + dis + '></td>'
         + '<td><select data-i="' + i + '" data-f="category" onchange="mgrEdit(this)"' + dis + '>' + ['exam','school','academy','personal'].map(function(k){ return '<option value="' + k + '"' + (k === x.category ? ' selected' : '') + '>' + CAT[k].label + '</option>'; }).join('') + '</select></td>'
-        + '<td><select data-i="' + i + '" data-f="school_level" onchange="mgrEdit(this)"' + dis + '><option value=""' + (!x.school_level ? ' selected' : '') + '>없음</option><option value="middle"' + (x.school_level === 'middle' ? ' selected' : '') + '>중등</option><option value="high"' + (x.school_level === 'high' ? ' selected' : '') + '>고등</option></select></td>'
+        + '<td><select data-i="' + i + '" data-f="school_level" onchange="mgrEdit(this)"' + dis + '><option value=""' + (!x.school_level ? ' selected' : '') + '>없음' + (guessLevel(x.ev.school) ? ' (추정 ' + levelLabel(guessLevel(x.ev.school)) + ')' : '') + '</option><option value="middle"' + (x.school_level === 'middle' ? ' selected' : '') + '>중등</option><option value="high"' + (x.school_level === 'high' ? ' selected' : '') + '>고등</option></select></td>'
         + '<td><select data-i="' + i + '" data-f="branch_id" onchange="mgrEdit(this)"' + dis + '>' + bopts.replace('value="' + x.branch_id + '"', 'value="' + x.branch_id + '" selected') + '</select></td>'
         + '<td style="font-size:11px;color:var(--text-sub)">' + ({neis:'나이스', paste:'붙여넣기', manual:'직접', copy:'복제'}[x.ev.source] || '') + '</td></tr>';
     }).join('');
@@ -1073,6 +1085,16 @@ function mgrBulk(kind){
     tr.querySelector('[data-f="starts_on"]').value = x.starts_on; tr.querySelector('[data-f="ends_on"]').value = x.ends_on;
   });
   $('mgr-msg').textContent = idx.length + '건에 적용 — [바뀐 것 저장]을 눌러야 반영됩니다';
+}
+function mgrFillLevels(){
+  var n = 0;
+  _mgrRows.forEach(function(x, i){
+    if(x.school_level || !x.editable) return;
+    var lv = guessLevel(x.ev.school); if(!lv) return;
+    x.school_level = lv; x.dirty = true; n++;
+    var cb = document.querySelector('#mgr-table input[type=checkbox][data-i="' + i + '"]'); if(cb){ var tr = cb.closest('tr'); tr.style.background = '#fffbeb'; tr.querySelector('[data-f="school_level"]').value = lv; }
+  });
+  $('mgr-msg').textContent = n ? n + '건을 이름으로 채웠습니다 — [바뀐 것 저장]을 눌러야 반영됩니다' : '채울 줄이 없습니다 (이미 정해졌거나 이름으로 알 수 없음)';
 }
 async function mgrSave(){
   var dirty = _mgrRows.filter(function(x){ return x.dirty && x.editable; });
