@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="BMAPS">
   <link rel="apple-touch-icon" href="/icon-192.png">
-  <title>BMAPS 운영 일정 v1.1</title>
+  <title>BMAPS 운영 일정 v1.2</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -204,10 +204,25 @@
       <div class="btns">
         <button class="btn btn-danger" id="ev-del" onclick="deleteEvent()" style="display:none">삭제</button>
         <button class="btn" id="ev-skip" onclick="skipOccurrence()" style="display:none" title="반복 일정에서 이 날만 뺍니다">이 날만 제외</button>
+        <button class="btn" id="ev-dup" onclick="dupOpen()" style="display:none" title="이 일정을 다른 날짜에 복사합니다">📑 복제</button>
         <span class="sp"></span>
         <button class="btn" onclick="closeEvent()">닫기</button>
         <button class="btn btn-primary" id="ev-save" onclick="saveEvent()">저장</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 일정 복제 -->
+  <div class="ov" id="dup-ov" onclick="if(event.target===this)$('dup-ov').classList.remove('open')">
+    <div class="md" style="max-width:560px">
+      <h3>📑 일정 복제</h3>
+      <div class="msg" id="dup-src" style="margin-bottom:8px"></div>
+      <div class="fr"><label>복제할 날짜</label><div class="row"><input type="date" id="dup-date" onkeydown="if(event.key==='Enter'){dupAdd();event.preventDefault();}"><button type="button" class="btn btn-sm" onclick="dupAdd()">+ 추가</button>
+        <button type="button" class="btn btn-sm" onclick="dupQuick(7)">+1주 뒤</button><button type="button" class="btn btn-sm" onclick="dupQuick(14)">+2주 뒤</button><button type="button" class="btn btn-sm" onclick="dupQuick(28)">+4주 뒤</button></div></div>
+      <div class="fr"><label>여러 날짜 한꺼번에</label><textarea id="dup-multi" rows="2" placeholder="2026-11-03, 11/10, 2026.11.17 처럼 쉼표·줄바꿈으로 여러 개" oninput="dupMultiParse()"></textarea></div>
+      <div class="fr"><label>복제 목록</label><div id="dup-list" style="display:flex;gap:6px;flex-wrap:wrap;min-height:28px"><span class="msg">아직 없음</span></div></div>
+      <div class="msg" id="dup-msg"></div>
+      <div class="btns"><span class="sp"></span><button class="btn" onclick="$('dup-ov').classList.remove('open')">닫기</button><button class="btn btn-primary" id="dup-save" onclick="dupSave()">복제 저장</button></div>
     </div>
   </div>
 
@@ -272,7 +287,7 @@
    · 반복: rrule {freq, interval, byday[], until} + exdates / 공개: all·shared·private + share_user_ids
    · 공휴일은 코드 내장(2025~2027) — 해마다 아래 HOLIDAYS 에 추가
 ============================================================ */
-window.CALENDAR_VERSION = 'v1.1';
+window.CALENDAR_VERSION = 'v1.2';
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -626,6 +641,7 @@ function openEvent(id, occ){
   $('ev-save').style.display = editable ? '' : 'none';
   $('ev-del').style.display = ev && editable ? '' : 'none';
   $('ev-skip').style.display = ev && editable && ev.rrule && occ ? '' : 'none';
+  $('ev-dup').style.display = ev ? '' : 'none'; $('ev-dup').disabled = false;
   document.querySelectorAll('#ev-ov input, #ev-ov select, #ev-ov textarea, #ev-ov button.btn-sm').forEach(function(el){ if(el.id !== 'ev-share-q' && el.id !== 'ev-share-br') el.disabled = !editable; });
   $('ev-ov').classList.add('open');
   if(editable) setTimeout(function(){ $('ev-name').focus(); }, 50);
@@ -672,6 +688,43 @@ async function skipOccurrence(){
   var r = await db.from('cal_events').update({ exdates: ex, updated_at: new Date().toISOString() }).eq('id', id);
   if(r.error){ alert('실패: ' + r.error.message); return; }
   closeEvent(); render(true);
+}
+
+/* ── 일정 복제: 같은 내용으로 다른 날짜에 새 일정을 만든다 (반복은 복제하지 않음, 작성자는 나) ── */
+var _dup = { ev:null, dates:[] };
+function dupOpen(){
+  var id = $('ev-id').value, ev = _events.find(function(e){ return e.id === id; }); if(!ev) return;
+  _dup = { ev:ev, dates:[] };
+  var len = daysBetween(ev.starts_on, ev.ends_on);
+  $('dup-src').innerHTML = '<b>' + esc(ev.title) + '</b> · ' + CAT[ev.category].label + (ev.school ? ' · ' + esc(ev.school) : '') + ' · 원본 ' + ev.starts_on + (len ? ' ~ ' + ev.ends_on + ' (' + (len+1) + '일)' : '') + (ev.all_day ? ' · 종일' : ' · ' + hm(ev.start_time) + (ev.end_time ? '~' + hm(ev.end_time) : ''))
+    + '<br><span style="font-size:11px">복제한 날짜가 시작일이 되고 ' + (len ? '기간 ' + (len+1) + '일이 그대로 이어집니다' : '하루짜리로 들어갑니다') + '. 종류·학교·분원·시간·공개 범위·참조자·메모는 그대로, 반복 설정은 복제하지 않습니다.</span>';
+  $('dup-date').value = ymd(addDays(pd(ev.starts_on), 7)); $('dup-multi').value = ''; $('dup-msg').textContent = '';
+  dupRender(); $('dup-ov').classList.add('open');
+}
+function dupPush(d){ if(!d) return; if(_dup.dates.indexOf(d) < 0) _dup.dates.push(d); _dup.dates.sort(); dupRender(); }
+function dupAdd(){ var d = $('dup-date').value; if(!d){ $('dup-msg').textContent = '날짜를 고르세요'; return; } dupPush(d); $('dup-date').value = ymd(addDays(pd(d), 7)); }
+function dupQuick(n){ var base = _dup.dates.length ? _dup.dates[_dup.dates.length-1] : _dup.ev.starts_on; dupPush(ymd(addDays(pd(base), n))); }
+function dupMultiParse(){
+  var year = _cur.getFullYear(), bad = [];
+  $('dup-multi').value.split(/[,\n;]+/).map(function(x){ return x.trim(); }).filter(Boolean).forEach(function(x){ var d = parseDate(x, year); if(d) dupPush(d); else bad.push(x); });
+  $('dup-msg').textContent = bad.length ? '못 읽은 날짜: ' + bad.join(', ') : '';
+}
+function dupRemove(d){ _dup.dates = _dup.dates.filter(function(x){ return x !== d; }); dupRender(); }
+function dupRender(){
+  var box = $('dup-list');
+  box.innerHTML = _dup.dates.length ? _dup.dates.map(function(d){ var dt = pd(d); return '<span class="chip on" style="background:var(--navy);cursor:default;padding-left:11px"><span style="font-weight:600">' + d + ' (' + WD[dt.getDay()] + ')</span><button type="button" onclick="dupRemove(\'' + d + '\')" style="border:none;background:none;color:#fff;font-size:12px;padding:0 0 0 2px;cursor:pointer" title="빼기">✕</button></span>'; }).join('') : '<span class="msg">아직 없음</span>';
+  $('dup-save').textContent = _dup.dates.length ? '복제 저장 (' + _dup.dates.length + '건)' : '복제 저장';
+}
+async function dupSave(){
+  var ev = _dup.ev; if(!ev || !_dup.dates.length){ $('dup-msg').textContent = '복제할 날짜를 추가하세요'; return; }
+  var len = daysBetween(ev.starts_on, ev.ends_on);
+  var rows = _dup.dates.map(function(d){ return { title:ev.title, category:ev.category, school:ev.school || null, branch_id:ev.branch_id || null, starts_on:d, ends_on:ymd(addDays(pd(d), len)), all_day:ev.all_day, start_time:ev.start_time || null, end_time:ev.end_time || null, rrule:null, exdates:[], visibility:ev.visibility, share_user_ids:ev.share_user_ids || [], memo:ev.memo || null, owner_id:currentUser.id, source:'copy' }; });
+  $('dup-save').disabled = true; $('dup-msg').textContent = '저장 중...';
+  try {
+    var r = await db.from('cal_events').insert(rows); if(r.error) throw r.error;
+    $('dup-ov').classList.remove('open'); closeEvent(); render(true);
+  } catch(e){ $('dup-msg').textContent = '복제 실패: ' + (e.message || e); }
+  finally { $('dup-save').disabled = false; }
 }
 
 /* ── 붙여넣기 등록 ── */
@@ -841,7 +894,7 @@ async function mgrLoad(){
         + '<td><input type="date" value="' + x.ends_on + '" data-i="' + i + '" data-f="ends_on" onchange="mgrEdit(this)" style="width:100%;border:1px solid var(--border);border-radius:5px;padding:3px"' + dis + '></td>'
         + '<td><select data-i="' + i + '" data-f="category" onchange="mgrEdit(this)"' + dis + '>' + ['exam','school','academy','personal'].map(function(k){ return '<option value="' + k + '"' + (k === x.category ? ' selected' : '') + '>' + CAT[k].label + '</option>'; }).join('') + '</select></td>'
         + '<td><select data-i="' + i + '" data-f="branch_id" onchange="mgrEdit(this)"' + dis + '>' + bopts.replace('value="' + x.branch_id + '"', 'value="' + x.branch_id + '" selected') + '</select></td>'
-        + '<td style="font-size:11px;color:var(--text-sub)">' + ({neis:'나이스', paste:'붙여넣기', manual:'직접'}[x.ev.source] || '') + '</td></tr>';
+        + '<td style="font-size:11px;color:var(--text-sub)">' + ({neis:'나이스', paste:'붙여넣기', manual:'직접', copy:'복제'}[x.ev.source] || '') + '</td></tr>';
     }).join('');
 }
 function mgrEdit(el){ var x = _mgrRows[+el.dataset.i]; if(!x) return; x[el.dataset.f] = el.value; x.dirty = true; el.closest('tr').style.background = '#fffbeb'; }
