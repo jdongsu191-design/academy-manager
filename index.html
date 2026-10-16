@@ -16611,7 +16611,7 @@ async function loadDeskAccounts() {
   el.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
   try {
     var {data, error} = await db.from('users')
-      .select('id,username,name,role,status,branch_ids,permissions,created_at')
+      .select('id,username,name,role,status,branch_id,branch_ids,permissions,created_at')
       .eq('role','desk').order('created_at');
     if (error) throw error;
     var accounts = data || [];
@@ -16624,7 +16624,7 @@ async function loadDeskAccounts() {
     el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">'
       + accounts.map(function(a) {
         var branchIds   = Array.isArray(a.branch_ids) ? a.branch_ids : [];
-        var branchNames = branchIds.map(function(bid){ return branchMap[bid] || '?'; });
+        var branchNames = branchIds.map(function(bid){ return (branchMap[bid] || '?') + (a.branch_id === bid ? ' ★' : ''); });
         var permKeys    = getDeskPermKeys(a);
         var isActive    = a.status === 'active';
         var safe        = function(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,"&#39;"); };
@@ -16637,7 +16637,7 @@ async function loadDeskAccounts() {
             + '</div>'
             + '<span style="font-size:10px;padding:2px 8px;border-radius:100px;background:' + (isActive?'#dcfce7;color:#15803d':'#fee2e2;color:#dc2626') + ';font-weight:700">' + (isActive?'활성':'비활성') + '</span>'
           + '</div>'
-          + (branchNames.length ? '<div style="font-size:12px;color:#92400e;background:#fef3c7;padding:5px 10px;border-radius:7px">🏢 ' + branchNames.join(', ') + '</div>' : '')
+          + (branchNames.length ? '<div style="font-size:12px;color:#92400e;background:#fef3c7;padding:5px 10px;border-radius:7px" title="★ = 기본 분원">🏢 ' + branchNames.join(', ') + '</div>' : '')
           + (permKeys.length ? '<div style="font-size:11px;color:#6b7280">권한: ' + permKeys.length + '개</div>' : '')
           + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">'
             + '<button class="btn btn-sm" onclick="openDeskAccountModal(\'' + a.id + '\')" style="background:#fffbeb;border-color:#fde68a;color:#92400e;font-size:11px">✏️ 수정</button>'
@@ -16672,11 +16672,12 @@ async function openDeskAccountModal(editId) {
     var existBranches = existing && Array.isArray(existing.branch_ids) ? existing.branch_ids : [];
     branchBox.innerHTML = (_allBranches||[]).map(function(b) {
       return '<label style="display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;font-size:12px;background:#fff;border:1px solid #e5e7eb;border-radius:7px">'
-        + '<input type="checkbox" name="desk-branch" value="' + b.id + '"' + (existBranches.indexOf(b.id) !== -1 ? ' checked' : '') + ' style="accent-color:#f59e0b">'
+        + '<input type="checkbox" name="desk-branch" value="' + b.id + '"' + (existBranches.indexOf(b.id) !== -1 ? ' checked' : '') + ' style="accent-color:#f59e0b" onchange="deskDefaultBranchRefresh()">'
         + b.name
         + '</label>';
     }).join('') || '<div style="font-size:12px;color:#9ca3af;padding:6px">분원 없음</div>';
   }
+  deskDefaultBranchRefresh(existing ? (existing.branch_id || '') : '');
 
   // 권한 체크박스
   var permBox = document.getElementById('desk-perm-checkboxes');
@@ -16693,6 +16694,15 @@ async function openDeskAccountModal(editId) {
   openModal('deskAccount');
 }
 
+/* 기본 분원 select = 체크된 담당 분원만. 선택값은 유지하되 체크가 풀리면 비운다 */
+function deskDefaultBranchRefresh(keepId) {
+  var sel = document.getElementById('inp-desk-default-branch'); if (!sel) return;
+  var keep = keepId !== undefined ? keepId : sel.value;
+  var checked = Array.from(document.querySelectorAll('input[name="desk-branch"]:checked')).map(function(c){ return c.value; });
+  var bmap = {}; (_allBranches||[]).forEach(function(b){ bmap[b.id] = b.name; });
+  sel.innerHTML = '<option value="">첫 번째 담당 분원</option>' + checked.map(function(id){ return '<option value="' + id + '">' + _esc(bmap[id] || '') + '</option>'; }).join('');
+  sel.value = (keep && checked.indexOf(keep) !== -1) ? keep : '';
+}
 async function saveDeskAccount() {
   var id       = document.getElementById('inp-desk-id')?.value || '';
   var isEdit   = !!id;
@@ -16714,8 +16724,10 @@ async function saveDeskAccount() {
   document.querySelectorAll('input[name="desk-perm"]:checked').forEach(function(c){ selectedPerms[c.value] = true; });
 
   try {
+    var defaultBranch = document.getElementById('inp-desk-default-branch')?.value || null;
+    if (defaultBranch && selectedBranches.indexOf(defaultBranch) === -1) defaultBranch = null;
     if (isEdit) {
-      var update = { name, username, branch_ids: selectedBranches, permissions: selectedPerms };
+      var update = { name, username, branch_ids: selectedBranches, permissions: selectedPerms, branch_id: defaultBranch };
       if (password) update.password = password;
       var {error} = await db.from('users').update(update).eq('id', id);
       if (error) throw error;
@@ -16724,7 +16736,7 @@ async function saveDeskAccount() {
       if (exists) { alert('이미 사용 중인 아이디입니다'); return; }
       var {error: err2} = await db.from('users').insert({
         username, password, name, role: 'desk', status: 'active',
-        branch_ids: selectedBranches, permissions: selectedPerms
+        branch_ids: selectedBranches, permissions: selectedPerms, branch_id: defaultBranch
       });
       if (err2) throw err2;
     }
@@ -34521,6 +34533,10 @@ tryAutoLogin();
       <div id="desk-branch-checkboxes" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px;padding:10px;background:#f9fafb;border:1.5px solid var(--border);border-radius:10px;max-height:160px;overflow-y:auto">
         <div style="font-size:12px;color:#9ca3af;padding:8px;grid-column:1/-1">분원을 불러오는 중...</div>
       </div>
+    </div>
+    <div class="form-group">
+      <label>기본 분원 <span style="font-size:11px;color:#9ca3af;font-weight:400">(운영 일정 등 분원을 고르는 화면에서 처음 선택되는 분원)</span></label>
+      <select id="inp-desk-default-branch"><option value="">첫 번째 담당 분원</option></select>
     </div>
     <div class="form-group">
       <label>부여 권한 <span style="font-size:11px;color:#9ca3af;font-weight:400">(체크된 메뉴만 사이드바에 표시)</span></label>
