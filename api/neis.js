@@ -29,3 +29,4 @@ export default async function handler(req, res) {
     res.status(502).json({ error: 'NEIS 연결 실패: ' + (e.message || e) });
   }
 }
+// 2026-10-16 NEIS_API_KEY 적용을 위한 재배포
