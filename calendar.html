@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="BMAPS">
   <link rel="apple-touch-icon" href="/icon-192.png">
-  <title>BMAPS 운영 일정 v1.2</title>
+  <title>BMAPS 운영 일정 v1.3</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -194,6 +194,7 @@
         <select id="ev-freq" onchange="evFreqChange()"><option value="">반복 없음</option><option value="daily">매일</option><option value="weekly">매주</option><option value="monthly">매월</option><option value="yearly">매년</option></select>
         <span id="ev-rep-opts" style="display:none;gap:6px;align-items:center;flex-wrap:wrap"><input type="number" id="ev-interval" min="1" max="52" value="1" style="width:56px;padding:6px"><span id="ev-interval-u" style="font-size:12px">주마다</span>
           <span class="wd" id="ev-wd"></span>
+          <span id="ev-mdays-wrap" style="display:none;align-items:center;gap:4px"><span style="font-size:12px">매월</span><input type="text" id="ev-mdays" placeholder="예: 25 또는 1, 15, 말일" style="width:150px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px"><span style="font-size:12px">일</span></span>
           <span style="font-size:12px">종료</span><input type="date" id="ev-until"></span>
       </div></div>
       <div class="fr"><label>공개 범위</label><div class="row"><select id="ev-vis" onchange="evVisChange()"><option value="all">전체 직원</option><option value="shared">참조자만</option><option value="private">나만</option></select><span class="msg" id="ev-vis-hint"></span></div></div>
@@ -296,7 +297,7 @@
    · 반복: rrule {freq, interval, byday[], until} + exdates / 공개: all·shared·private + share_user_ids
    · 공휴일은 코드 내장(2025~2027) — 해마다 아래 HOLIDAYS 에 추가
 ============================================================ */
-window.CALENDAR_VERSION = 'v1.2';
+window.CALENDAR_VERSION = 'v1.3';
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -445,7 +446,14 @@ function expand(ev, from, to){
       days.forEach(function(dw){ var d2 = addDays(w, dw); if(ymd(d2) >= ymd(start) && ymd(d2) <= limit) push(d2); });
     }
   }
-  else if(r.freq === 'monthly'){ for(var m = 0; n < 600; m += iv, n++){ var dm = new Date(start.getFullYear(), start.getMonth() + m, start.getDate()); if(dm.getDate() !== start.getDate()) continue; if(ymd(dm) > limit) break; push(dm); } }
+  else if(r.freq === 'monthly'){
+    var mdays = Array.isArray(r.bymonthday) && r.bymonthday.length ? r.bymonthday : [start.getDate()];
+    for(var m = 0; n < 600; m += iv, n++){
+      var y0 = start.getFullYear(), m0 = start.getMonth() + m, lastD = new Date(y0, m0 + 1, 0).getDate();
+      if(ymd(new Date(y0, m0, 1)) > limit) break;
+      mdays.forEach(function(md){ var dd = md === 'L' ? lastD : md; if(dd > lastD) return; var dm = new Date(y0, m0, dd); if(ymd(dm) < ymd(start) || ymd(dm) > limit) return; push(dm); });
+    }
+  }
   else if(r.freq === 'yearly'){ for(var y = 0; n < 100; y += iv, n++){ var dy = new Date(start.getFullYear() + y, start.getMonth(), start.getDate()); if(ymd(dy) > limit) break; push(dy); } }
   return out;
 }
@@ -550,13 +558,22 @@ function renderWeek(){
 function toMin(t){ var p = String(t).split(':'); return (+p[0]) * 60 + (+p[1] || 0); }
 
 /* ── 일 보기 / 목록 ── */
+function rruleText(r){
+  if(!r || !r.freq) return '';
+  var iv = (r.interval || 1) > 1 ? (r.interval + (r.freq === 'daily' ? '일' : r.freq === 'weekly' ? '주' : r.freq === 'monthly' ? '개월' : '년') + '마다') : '';
+  if(r.freq === 'daily') return '매일 반복' + (iv ? '(' + iv + ')' : '');
+  if(r.freq === 'weekly') return '매주 ' + (Array.isArray(r.byday) ? r.byday.map(function(d){ return WD[d]; }).join('·') : '') + ' 반복' + (iv ? '(' + iv + ')' : '');
+  if(r.freq === 'monthly') return '매월 ' + (Array.isArray(r.bymonthday) && r.bymonthday.length ? r.bymonthday.map(function(x){ return x === 'L' ? '말일' : x + '일'; }).join('·') : '같은 날') + ' 반복' + (iv ? '(' + iv + ')' : '');
+  if(r.freq === 'yearly') return '매년 반복';
+  return '반복';
+}
 function dayItems(dy){
   var occ = occurrences(pd(dy), pd(dy)).filter(function(o){ return o.start <= dy && o.end >= dy; });
   var html = HOLIDAYS[dy] && _cats.holiday ? '<div class="dl holiday"><div class="tm">공휴일</div><div><div class="tt">' + esc(HOLIDAYS[dy]) + '</div></div></div>' : '';
   html += occ.map(function(o){
     var ev = o.ev, tm = ev.all_day || !ev.start_time ? '종일' : hm(ev.start_time) + (ev.end_time ? '~' + hm(ev.end_time) : '');
     var span = o.start !== o.end ? ' · ' + o.start.slice(5).replace('-', '/') + '~' + o.end.slice(5).replace('-', '/') : '';
-    return '<div class="dl ' + ev.category + '" onclick="openEvent(\'' + ev.id + '\',\'' + o.occ + '\')"><div class="tm">' + tm + '</div><div><div class="tt">' + (ev.school ? esc(ev.school) + ' · ' : '') + esc(ev.title) + (isShared(ev) ? ' <span style="font-size:11px;color:#b45309">참조</span>' : '') + '</div><div class="sb">' + CAT[ev.category].icon + ' ' + CAT[ev.category].label + span + (ev.rrule ? ' · 반복' : '') + (ev.memo ? ' · ' + esc(ev.memo) : '') + '</div></div></div>';
+    return '<div class="dl ' + ev.category + '" onclick="openEvent(\'' + ev.id + '\',\'' + o.occ + '\')"><div class="tm">' + tm + '</div><div><div class="tt">' + (ev.school ? esc(ev.school) + ' · ' : '') + esc(ev.title) + (isShared(ev) ? ' <span style="font-size:11px;color:#b45309">참조</span>' : '') + '</div><div class="sb">' + CAT[ev.category].icon + ' ' + CAT[ev.category].label + span + (ev.rrule ? ' · ' + rruleText(ev.rrule) : '') + (ev.memo ? ' · ' + esc(ev.memo) : '') + '</div></div></div>';
   }).join('');
   return html || '<div class="msg" style="padding:14px">일정이 없습니다</div>';
 }
@@ -619,7 +636,7 @@ function evDatesRender(){
 function evCatChange(){ var c = $('ev-cat').value; $('ev-school-row').style.display = (c === 'exam' || c === 'school') ? '' : 'none'; }
 function evStartChange(){ if(!$('ev-end').value || $('ev-end').value < $('ev-start').value) $('ev-end').value = $('ev-start').value; }
 function evAlldayChange(){ $('ev-time-row').style.display = $('ev-allday').checked ? 'none' : ''; }
-function evFreqChange(){ var f = $('ev-freq').value; $('ev-rep-opts').style.display = f ? 'inline-flex' : 'none'; $('ev-wd').style.display = f === 'weekly' ? '' : 'none'; $('ev-interval-u').textContent = { daily:'일마다', weekly:'주마다', monthly:'개월마다', yearly:'년마다' }[f] || ''; }
+function evFreqChange(){ var f = $('ev-freq').value; $('ev-rep-opts').style.display = f ? 'inline-flex' : 'none'; $('ev-wd').style.display = f === 'weekly' ? '' : 'none'; $('ev-mdays-wrap').style.display = f === 'monthly' ? 'inline-flex' : 'none'; if(f === 'monthly' && !$('ev-mdays').value && $('ev-start').value) $('ev-mdays').value = String(pd($('ev-start').value).getDate()); $('ev-interval-u').textContent = { daily:'일마다', weekly:'주마다', monthly:'개월마다', yearly:'년마다' }[f] || ''; }
 function evVisChange(){ var v = $('ev-vis').value; $('ev-share-row').style.display = v === 'private' ? 'none' : ''; $('ev-vis-hint').textContent = { all:'모든 직원에게 보이고, 참조자에게는 굵게 표시됩니다', shared:'참조자와 나만 봅니다', private:'나만 봅니다' }[v]; }
 var _shareSel = {};   /* 참조자 선택 상태 — 분원·검색 필터와 무관하게 유지 */
 function staffBranches(u){ var ids = Array.isArray(u.branch_ids) && u.branch_ids.length ? u.branch_ids.slice() : []; if(u.branch_id && ids.indexOf(u.branch_id) < 0) ids.push(u.branch_id); return ids; }
@@ -666,6 +683,7 @@ function openEvent(id, occ){
   $('ev-allday').checked = ev ? !!ev.all_day : true; $('ev-st').value = ev && ev.start_time ? hm(ev.start_time) : ''; $('ev-et').value = ev && ev.end_time ? hm(ev.end_time) : '';
   var r = ev && ev.rrule ? ev.rrule : null;
   $('ev-freq').value = r ? r.freq : ''; $('ev-interval').value = r ? (r.interval || 1) : 1; $('ev-until').value = r && r.until ? String(r.until).slice(0,10) : '';
+  $('ev-mdays').value = r && Array.isArray(r.bymonthday) && r.bymonthday.length ? r.bymonthday.map(function(x){ return x === 'L' ? '말일' : x; }).join(', ') : '';
   var wdSel = r && Array.isArray(r.byday) ? r.byday.map(Number) : [pd(s0).getDay()];
   $('ev-wd').innerHTML = WD.map(function(w, i){ return '<label class="' + (wdSel.indexOf(i) >= 0 ? 'on' : '') + '" onclick="this.classList.toggle(\'on\');event.preventDefault()" data-d="' + i + '">' + w + '</label>'; }).join('');
   $('ev-vis').value = ev ? ev.visibility : 'all';
@@ -688,6 +706,16 @@ function newEventAt(dy, hour){
   openEvent(null, dy);
   if(hour != null){ $('ev-allday').checked = false; evAlldayChange(); $('ev-st').value = String(hour).padStart(2,'0') + ':00'; $('ev-et').value = String(Math.min(23, hour + 1)).padStart(2,'0') + ':00'; }
 }
+function parseMonthDays(v){
+  var out = [];
+  String(v || '').split(/[,\s]+/).forEach(function(x){
+    x = x.trim(); if(!x) return;
+    if(/^(말일|마지막|L|last)$/i.test(x)){ if(out.indexOf('L') < 0) out.push('L'); return; }
+    var n = parseInt(x.replace(/일$/, ''), 10);
+    if(n >= 1 && n <= 31 && out.indexOf(n) < 0) out.push(n);
+  });
+  return out.sort(function(a, b){ return (a === 'L' ? 99 : a) - (b === 'L' ? 99 : b); });
+}
 function collectEvent(){
   var title = $('ev-name').value.trim(); if(!title) throw new Error('제목을 입력하세요');
   var multi = _evMode === 'multi' && !$('ev-id').value;
@@ -697,7 +725,9 @@ function collectEvent(){
   var st = allday ? null : ($('ev-st').value || null), et = allday ? null : ($('ev-et').value || null);
   if(!allday && !st) throw new Error('시간을 입력하거나 종일을 선택하세요');
   var rr = null, f = $('ev-freq').value;
-  if(f){ rr = { freq:f, interval:Math.max(1, parseInt($('ev-interval').value) || 1) }; if(f === 'weekly') rr.byday = Array.prototype.filter.call(document.querySelectorAll('#ev-wd label'), function(l){ return l.classList.contains('on'); }).map(function(l){ return +l.dataset.d; }); if($('ev-until').value) rr.until = $('ev-until').value; }
+  if(f){ rr = { freq:f, interval:Math.max(1, parseInt($('ev-interval').value) || 1) }; if(f === 'weekly') rr.byday = Array.prototype.filter.call(document.querySelectorAll('#ev-wd label'), function(l){ return l.classList.contains('on'); }).map(function(l){ return +l.dataset.d; });
+    if(f === 'monthly'){ rr.bymonthday = parseMonthDays($('ev-mdays').value); if(!rr.bymonthday.length) rr.bymonthday = [pd(s).getDate()]; }
+    if($('ev-until').value) rr.until = $('ev-until').value; }
   var vis = $('ev-vis').value, share = vis === 'private' ? [] : shareSelected();
   if(vis === 'shared' && !share.length) throw new Error('참조자를 한 명 이상 고르세요');
   return { title:title, category:cat, school:(cat === 'exam' || cat === 'school') ? ($('ev-school').value.trim() || null) : null, branch_id:$('ev-branch').value || null,
