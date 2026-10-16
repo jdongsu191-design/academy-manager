@@ -180,7 +180,15 @@
         <select id="ev-branch"><option value="">전체 분원</option></select>
       </div></div>
       <div class="fr" id="ev-school-row"><label>학교</label><div class="row"><input type="text" id="ev-school" list="school-list" placeholder="학교명 (학생 명단에서 자동 완성)" style="flex:1"><datalist id="school-list"></datalist></div></div>
-      <div class="fr"><label>기간</label><div class="row"><input type="date" id="ev-start" onchange="evStartChange()"> ~ <input type="date" id="ev-end"></div></div>
+      <div class="fr"><label>날짜</label><div class="row">
+        <span id="ev-mode-wrap" style="display:inline-flex;gap:4px"><button type="button" class="btn btn-sm on" id="ev-mode-range" onclick="evMode('range')">연속 기간</button><button type="button" class="btn btn-sm" id="ev-mode-multi" onclick="evMode('multi')">여러 날짜</button></span>
+        <span id="ev-range-row" style="display:inline-flex;gap:6px;align-items:center"><input type="date" id="ev-start" onchange="evStartChange()"> ~ <input type="date" id="ev-end"></span>
+      </div></div>
+      <div class="fr" id="ev-multi-row" style="display:none"><label></label><div>
+        <div class="row" style="margin-bottom:4px"><input type="date" id="ev-md" onkeydown="if(event.key==='Enter'){evDatesAdd();event.preventDefault();}"><button type="button" class="btn btn-sm" onclick="evDatesAdd()">+ 추가</button><button type="button" class="btn btn-sm" onclick="evDatesQuick(7)">+1주 뒤</button><button type="button" class="btn btn-sm" onclick="evDatesQuick(14)">+2주 뒤</button>
+          <input type="text" id="ev-md-multi" placeholder="여러 개 한꺼번에: 11/3, 11/10, 2026-11-17" style="flex:1;min-width:160px;padding:6px 8px;border:1.5px solid var(--border);border-radius:8px" onchange="evDatesParse()"></div>
+        <div id="ev-md-list" style="display:flex;gap:6px;flex-wrap:wrap;min-height:24px"><span class="msg">날짜를 추가하세요 — 고른 날짜마다 하루짜리 일정이 따로 만들어집니다</span></div>
+      </div></div>
       <div class="fr"><label>시간</label><div class="row"><label style="font-weight:600;font-size:12.5px;display:flex;gap:4px;align-items:center"><input type="checkbox" id="ev-allday" checked onchange="evAlldayChange()">종일</label><span id="ev-time-row"><input type="time" id="ev-st"> ~ <input type="time" id="ev-et"></span></div></div>
       <div class="fr"><label>반복</label><div class="row">
         <select id="ev-freq" onchange="evFreqChange()"><option value="">반복 없음</option><option value="daily">매일</option><option value="weekly">매주</option><option value="monthly">매월</option><option value="yearly">매년</option></select>
@@ -582,6 +590,32 @@ function renderYear(){
 }
 
 /* ── 일정 모달 ── */
+var _evMode = 'range', _evDates = [];
+function evMode(m){
+  _evMode = m;
+  $('ev-mode-range').classList.toggle('on', m === 'range'); $('ev-mode-multi').classList.toggle('on', m === 'multi');
+  $('ev-range-row').style.display = m === 'range' ? '' : 'none'; $('ev-multi-row').style.display = m === 'multi' ? '' : 'none';
+  /* 여러 날짜는 반복과 함께 쓰지 않는다 */
+  $('ev-freq').disabled = (m === 'multi'); if(m === 'multi'){ $('ev-freq').value = ''; evFreqChange(); }
+  if(m === 'multi' && !_evDates.length && $('ev-start').value){ _evDates = [$('ev-start').value]; }
+  if(m === 'multi') $('ev-md').value = ymd(addDays(pd(_evDates.length ? _evDates[_evDates.length-1] : ($('ev-start').value || todayYmd())), 7));
+  evDatesRender();
+}
+function evDatesPush(d){ if(!d) return; if(_evDates.indexOf(d) < 0) _evDates.push(d); _evDates.sort(); evDatesRender(); }
+function evDatesAdd(){ var d = $('ev-md').value; if(!d) return; evDatesPush(d); $('ev-md').value = ymd(addDays(pd(d), 7)); }
+function evDatesQuick(n){ var base = _evDates.length ? _evDates[_evDates.length-1] : ($('ev-start').value || todayYmd()); evDatesPush(ymd(addDays(pd(base), n))); }
+function evDatesParse(){
+  var year = _cur.getFullYear(), bad = [];
+  $('ev-md-multi').value.split(/[,\n;]+/).map(function(x){ return x.trim(); }).filter(Boolean).forEach(function(x){ var d = parseDate(x, year); if(d) evDatesPush(d); else bad.push(x); });
+  $('ev-md-multi').value = ''; $('ev-msg').textContent = bad.length ? '못 읽은 날짜: ' + bad.join(', ') : ''; $('ev-msg').classList.toggle('err', !!bad.length);
+}
+function evDatesRemove(d){ _evDates = _evDates.filter(function(x){ return x !== d; }); evDatesRender(); }
+function evDatesRender(){
+  var box = $('ev-md-list'); if(!box) return;
+  box.innerHTML = _evDates.length ? _evDates.map(function(d){ var dt = pd(d); return '<span class="chip on" style="background:var(--navy);cursor:default;padding-left:11px"><span style="font-weight:600">' + d + ' (' + WD[dt.getDay()] + ')</span><button type="button" onclick="evDatesRemove(\'' + d + '\')" style="border:none;background:none;color:#fff;font-size:12px;padding:0 0 0 2px;cursor:pointer" title="빼기">✕</button></span>'; }).join('') + '<span class="msg" style="align-self:center">' + _evDates.length + '일</span>'
+    : '<span class="msg">날짜를 추가하세요 — 고른 날짜마다 하루짜리 일정이 따로 만들어집니다</span>';
+  var sv = $('ev-save'); if(sv && !$('ev-id').value) sv.textContent = (_evMode === 'multi' && _evDates.length > 1) ? '저장 (' + _evDates.length + '건)' : '저장';
+}
 function evCatChange(){ var c = $('ev-cat').value; $('ev-school-row').style.display = (c === 'exam' || c === 'school') ? '' : 'none'; }
 function evStartChange(){ if(!$('ev-end').value || $('ev-end').value < $('ev-start').value) $('ev-end').value = $('ev-start').value; }
 function evAlldayChange(){ $('ev-time-row').style.display = $('ev-allday').checked ? 'none' : ''; }
@@ -621,6 +655,7 @@ function canEdit(ev){ return isAdmin() || !ev || !ev.id || ev.owner_id === curre
 function openEvent(id, occ){
   var ev = id ? _events.find(function(e){ return e.id === id; }) : null;
   $('ev-id').value = ev ? ev.id : ''; $('ev-occ').value = occ || '';
+  _evDates = []; $('ev-mode-wrap').style.display = ev ? 'none' : ''; $('ev-md-multi').value = '';
   $('ev-title').textContent = ev ? (canEdit(ev) ? '일정 수정' : '일정 보기') : '일정 등록';
   $('ev-name').value = ev ? ev.title : '';
   $('ev-cat').value = ev ? ev.category : 'academy';
@@ -637,7 +672,7 @@ function openEvent(id, occ){
   $('ev-share-q').value = ''; $('ev-share-br').value = ''; renderShare(ev ? (ev.share_user_ids || []) : []);
   $('ev-memo').value = ev ? (ev.memo || '') : '';
   $('ev-msg').textContent = ev && ev.owner_id && ev.owner_id !== currentUser.id ? '작성: ' + ((_staff.find(function(u){ return u.id === ev.owner_id; }) || {}).name || '다른 직원') + (ev.source === 'neis' ? ' · 나이스 학사일정' : '') : (ev && ev.source === 'neis' ? '나이스 학사일정에서 가져옴' : '');
-  evCatChange(); evAlldayChange(); evFreqChange(); evVisChange();
+  evCatChange(); evAlldayChange(); evFreqChange(); evVisChange(); evMode('range');
   var editable = canEdit(ev);
   $('ev-save').style.display = editable ? '' : 'none';
   $('ev-del').style.display = ev && editable ? '' : 'none';
@@ -655,7 +690,9 @@ function newEventAt(dy, hour){
 }
 function collectEvent(){
   var title = $('ev-name').value.trim(); if(!title) throw new Error('제목을 입력하세요');
-  var s = $('ev-start').value, e = $('ev-end').value || s; if(!s) throw new Error('시작일을 입력하세요'); if(e < s) throw new Error('종료일이 시작일보다 빠릅니다');
+  var multi = _evMode === 'multi' && !$('ev-id').value;
+  if(multi && !_evDates.length) throw new Error('날짜를 하나 이상 추가하세요');
+  var s = multi ? _evDates[0] : $('ev-start').value, e = multi ? _evDates[0] : ($('ev-end').value || s); if(!s) throw new Error('시작일을 입력하세요'); if(e < s) throw new Error('종료일이 시작일보다 빠릅니다');
   var cat = $('ev-cat').value, allday = $('ev-allday').checked;
   var st = allday ? null : ($('ev-st').value || null), et = allday ? null : ($('ev-et').value || null);
   if(!allday && !st) throw new Error('시간을 입력하거나 종일을 선택하세요');
@@ -673,11 +710,15 @@ async function saveEvent(){
     $('ev-save').disabled = true;
     var r;
     if(id){ r = await db.from('cal_events').update(p).eq('id', id); }
+    else if(_evMode === 'multi'){
+      var rows = _evDates.map(function(d){ var q = Object.assign({}, p, { starts_on:d, ends_on:d, rrule:null, owner_id:currentUser.id, source:'manual' }); return q; });
+      r = await db.from('cal_events').insert(rows);
+    }
     else { p.owner_id = currentUser.id; p.source = 'manual'; r = await db.from('cal_events').insert(p); }
     if(r.error) throw r.error;
     closeEvent(); render(true);
   } catch(e){ msg.textContent = (e.message || e); msg.classList.add('err'); }
-  finally { $('ev-save').disabled = false; }
+  finally { $('ev-save').disabled = false; $('ev-save').textContent = '저장'; }
 }
 async function deleteEvent(){
   var id = $('ev-id').value; if(!id) return;
