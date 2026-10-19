@@ -2,7 +2,9 @@
 // 플랫폼 3종: 경기(○○.goegm.kr 등 경기도교육청 통합 홈페이지) · 서울(○○.sen.hs.kr / sen.ms.kr) · 인천(○○.icehs.kr / icems.kr)
 // GET /api/school-cal?hp=https://soha-h.goegm.kr&from=2026-10-01&to=2026-12-31
 //  → { ok, platform, platformLabel, page, events:[{ id, title, start, end }], note }
-export const config = { maxDuration: 25 };
+export const config = { maxDuration: 60 };
+// 서울 홈페이지는 페이지마다 1.6MB·응답이 느려(Vercel 에서 건당 5~7초) 메뉴 탐색 결과를 인스턴스 안에 캐시하고 달별 조회는 병렬로 한다
+const _menuCache = {};
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 const PLATFORMS = [
@@ -25,7 +27,7 @@ function monthsBetween(from, to) {
 
 async function fetchText(url, opt) {
   opt = opt || {};
-  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), opt.timeout || 12000);
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), opt.timeout || 25000);
   try {
     const headers = Object.assign({ 'User-Agent': UA, 'Accept': 'text/html,application/json;q=0.9,*/*;q=0.8', 'Accept-Language': 'ko-KR,ko;q=0.9' }, opt.headers || {});
     const r = await fetch(url, { method: opt.method || 'GET', headers, body: opt.body, redirect: 'follow', signal: ctl.signal });
@@ -63,9 +65,9 @@ async function gyeonggi(u, from, to) {
   if (!mi) throw new Error('경기 홈페이지에서 학사일정 메뉴를 찾지 못했습니다');
   const years = []; for (let y = +from.slice(0, 4); y <= +to.slice(0, 4); y++) years.push(y);
   const seen = {}, events = [];
-  for (const y of years) {
-    const r = await postForm(origin + '/' + sysId + '/ps/schdul/selectSchdulList.do?mi=' + mi, { schdulSeq: '', schdulLevel: 'Y', fromDate: '', toDate: '', date: '', weekNum: '', chkNP: '', srchDate: String(y), schType: '', schColor: '', menuId: mi }, true);
-    let html = r.text; try { const j = JSON.parse(html); if (typeof j === 'string') html = j; } catch (e) { /* 그대로 HTML */ }
+  const yearPages = await Promise.all(years.map(y => postForm(origin + '/' + sysId + '/ps/schdul/selectSchdulList.do?mi=' + mi, { schdulSeq: '', schdulLevel: 'Y', fromDate: '', toDate: '', date: '', weekNum: '', chkNP: '', srchDate: String(y), schType: '', schColor: '', menuId: mi }, true).then(r => r.text)));
+  for (const page of yearPages) {
+    let html = page; try { const j = JSON.parse(html); if (typeof j === 'string') html = j; } catch (e) { /* 그대로 HTML */ }
     const re = /viewSchdulInfo\('(\w+)',\s*'([\d/]+)',\s*'([\d/]+)',\s*'[^']*'\);"[^>]*>([^<]*)/g; let m;
     while ((m = re.exec(html))) {
       if (seen[m[1]]) continue; seen[m[1]] = 1;
@@ -79,23 +81,27 @@ async function gyeonggi(u, from, to) {
 /* ── 서울: 메인에서 '학교일정' 메뉴(/NNNNN/subMenu.do) → siteId → 달마다 캘린더형 POST, 같은 일정번호(fnDetail)를 날짜로 이어 붙임 ── */
 async function seoul(u, from, to) {
   const origin = u.protocol + '//' + u.host;
-  const root = await fetchText(origin + '/');
-  const cands = [];
-  const re = /<a[^>]+href=["'](\/\d+\/subMenu\.do)["'][^>]*>\s*(?:<[^>]+>\s*)*([^<]*일정[^<]*)/g; let m;
-  while ((m = re.exec(root.text))) { const t = decodeEntities(m[2]); if (/급식|식단/.test(t)) continue; cands.push({ path: m[1], text: t, rank: /^학교\s*일정$/.test(t) ? 0 : /학사\s*일정/.test(t) ? 1 : 2 }); }
-  cands.sort((a, b) => a.rank - b.rank);
   let page = null, siteId = null;
-  for (const c of cands.slice(0, 4)) {
-    const p = await fetchText(origin + c.path);
-    const sid = (p.text.match(/name="siteId"\s+value="([^"]+)"/) || [])[1];
-    if (sid && /srhSchdulYear/.test(p.text)) { page = origin + c.path; siteId = sid; break; }
+  const cached = _menuCache[origin];
+  if (cached && Date.now() - cached.t < 6 * 3600 * 1000) { page = cached.page; siteId = cached.siteId; }
+  else {
+    const root = await fetchText(origin + '/');
+    const cands = [];
+    const re = /<a[^>]+href=["'](\/\d+\/subMenu\.do)["'][^>]*>\s*(?:<[^>]+>\s*)*([^<]*일정[^<]*)/g; let m;
+    while ((m = re.exec(root.text))) { const t = decodeEntities(m[2]); if (/급식|식단/.test(t)) continue; if (cands.some(c => c.path === m[1])) continue; cands.push({ path: m[1], text: t, rank: /^학교\s*일정$/.test(t) ? 0 : /학사\s*일정/.test(t) ? 1 : 2 }); }
+    cands.sort((a, b) => a.rank - b.rank);
+    const probed = await Promise.all(cands.slice(0, 4).map(async c => {
+      try { const p = await fetchText(origin + c.path); const sid = (p.text.match(/name="siteId"\s+value="([^"]+)"/) || [])[1]; return (sid && /srhSchdulYear/.test(p.text)) ? { path: c.path, sid } : null; } catch (e) { return null; }
+    }));
+    const hit = probed.find(Boolean);
+    if (!hit) throw new Error(cands.length ? '이 학교의 일정 메뉴는 표준 일정 모듈이 아니어서 읽을 수 없습니다(붙여넣기 등록을 이용하세요)' : '서울 홈페이지에서 학교일정 메뉴를 찾지 못했습니다');
+    page = origin + hit.path; siteId = hit.sid; _menuCache[origin] = { page, siteId, t: Date.now() };
   }
-  if (!page) throw new Error(cands.length ? '이 학교의 일정 메뉴는 표준 일정 모듈이 아니어서 읽을 수 없습니다(붙여넣기 등록을 이용하세요)' : '서울 홈페이지에서 학교일정 메뉴를 찾지 못했습니다');
   const byId = {};
-  for (const [y, mo] of monthsBetween(from, to)) {
-    const r = await postForm(page, { siteId, viewType: 'calendar', arrSchdulId: '0', srhSchdulYear: String(y), srhSchdulMonth: pad2(mo) });
-    const i = r.text.indexOf('캘린더형 목록'); if (i < 0) continue;
-    let seg = r.text.slice(i); seg = seg.slice(0, seg.indexOf('</table>'));
+  const pages = await Promise.all(monthsBetween(from, to).map(([y, mo]) => postForm(page, { siteId, viewType: 'calendar', arrSchdulId: '0', srhSchdulYear: String(y), srhSchdulMonth: pad2(mo) }).then(r => [y, mo, r.text])));
+  for (const [y, mo, text] of pages) {
+    const i = text.indexOf('캘린더형 목록'); if (i < 0) continue;
+    let seg = text.slice(i); seg = seg.slice(0, seg.indexOf('</table>'));
     const tdRe = /<td[^>]*>([\s\S]*?)<\/td>/gi; let td;
     while ((td = tdRe.exec(seg))) {
       const day = (td[1].match(/^\s*(\d{1,2})\b/) || [])[1]; if (!day) continue;
@@ -126,10 +132,10 @@ async function incheon(u, from, to) {
     if (overlaps(y + '-08-01', (y + 1) + '-02-29', from, to)) sems.push([y, 2]);
   }
   const seen = {}, events = [];
-  for (const [y, sec] of sems) {
-    const r = await postForm(base, { section: String(sec), year: String(y), workType: 'H' });
+  const semPages = await Promise.all(sems.map(([y, sec]) => postForm(base, { section: String(sec), year: String(y), workType: 'H' }).then(r => r.text)));
+  for (const text of semPages) {
     const re = /<li id=['"]date(\d{4})\/(\d{2})_s(\d+)['"]>([^<]*)<\/li>/g; let li;
-    while ((li = re.exec(r.text))) {
+    while ((li = re.exec(text))) {
       const yy = +li[1], mm = +li[2], id = li[3], text = decodeEntities(li[4]);
       if (seen[id]) continue; seen[id] = 1;
       const t = text.match(/^(\d{1,2})\s*일(?:\s*[~∼-]\s*(?:(\d{1,2})\s*월)?\s*(\d{1,2})\s*일)?\s*:\s*(.*)$/);
@@ -154,10 +160,11 @@ export default async function handler(req, res) {
   const host = u.hostname.toLowerCase();
   const pf = PLATFORMS.find(p => p.test(host));
   if (!pf) { res.status(200).json({ ok: false, platform: null, error: '지원하지 않는 홈페이지 플랫폼(' + host + ') — 경기·서울·인천 교육청 통합 홈페이지만 읽습니다' }); return; }
+  const t0 = Date.now();
   try {
     const r = await (pf.key === 'gyeonggi' ? gyeonggi(u, from, to) : pf.key === 'seoul' ? seoul(u, from, to) : incheon(u, from, to));
     const events = r.events.filter(e => overlaps(e.start, e.end, from, to)).sort((a, b) => a.start.localeCompare(b.start) || a.title.localeCompare(b.title));
-    res.status(200).json({ ok: true, platform: pf.key, platformLabel: pf.label, page: r.page, total: r.events.length, events });
+    res.status(200).json({ ok: true, platform: pf.key, platformLabel: pf.label, page: r.page, total: r.events.length, events, ms: Date.now() - t0 });
   } catch (e) {
     res.status(200).json({ ok: false, platform: pf.key, platformLabel: pf.label, error: (e && e.name === 'AbortError') ? '학교 홈페이지 응답이 없습니다(시간 초과)' : String(e && e.message || e) });
   }
