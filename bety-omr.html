@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 베티 OMR [v1.3-ink]</title>
+<title>BMAPS · 베티 OMR [v1.4-ink]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -481,7 +481,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v1.3-ink';
+window.BETY_OMR_VERSION = 'v1.4-ink';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -1047,10 +1047,14 @@ function boPagedStart(){
     _bo.hooked = true;
     document.addEventListener('visibilitychange', boAway);
     boCardZoom(); boFullZoom();
+    var _lastW = window.innerWidth;
     window.addEventListener('resize', function(){
+      if(window.innerWidth === _lastW) return;              /* iOS: 핀치·주소창·키보드로도 resize 가 온다 → 가로 폭이 바뀔 때(회전)만 */
+      _lastW = window.innerWidth;
       if(document.getElementById('bo-zoom').classList.contains('open')) boZoomFit();
       else if(_bo.paged && _bo.subject === 'korean') boPagedRender();   /* 회전 → 나란히/전환 다시 판단 */
       else boCardFit();
+      boInkSyncAll();
     });
   }
 }
@@ -1182,6 +1186,7 @@ function boInkAttach(box, cvs, img, keyFn){
     _ink.cur = null; _ink.penDown = false; box.classList.remove('inking');
     if(c.pts.length === 1) c.pts.push([c.pts[0][0] + 0.0005, c.pts[0][1]]);   /* 점 하나도 보이게 */
     boInkRedrawAll(c.key);                                                     /* 다른 보기(확대 창 등)에도 */
+    boInkDiag(v);
   }
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
   /* 펜이 가까이 오면(호버 지원 기기) 미리 손가락 스크롤을 끈다 → 빠른 첫 접촉도 선으로 */
@@ -1216,7 +1221,25 @@ function boInkFit(v){
   var k = Math.min(1, 2400 / Math.max(iw, ih));
   var w = Math.round(iw * k), h = Math.round(ih * k);
   if(v.cvs.width !== w || v.cvs.height !== h){ v.cvs.width = w; v.cvs.height = h; }
+  boInkSync(v);
   boInkRedraw(v);
+}
+/* canvas 의 화면 상자를 이미지 상자와 똑같이(px) — 확대·배율이 바뀔 때마다 호출 */
+function boInkSync(v){
+  if(!v || !v.img) return;
+  var iw = v.img.offsetWidth, ih = v.img.offsetHeight; if(!iw || !ih) return;
+  v.cvs.style.width = iw + 'px'; v.cvs.style.height = ih + 'px'; v.cvs.style.left = v.img.offsetLeft + 'px'; v.cvs.style.top = v.img.offsetTop + 'px';
+}
+function boInkSyncAll(){ _ink.views.forEach(boInkSync); }
+/* 진단: 획을 그린 직후 canvas 상자와 이미지 상자가 어긋나 있으면 도구 줄에 수치를 보여 준다(실기기 원인 추적용) */
+function boInkDiag(v){
+  var hint = document.querySelector('.ik-hint'); if(!hint || !v) return;
+  var a = v.cvs.getBoundingClientRect(), b = v.img.getBoundingClientRect();
+  var dx = Math.round(a.left - b.left), dy = Math.round(a.top - b.top), dw = Math.round(a.width - b.width), dh = Math.round(a.height - b.height);
+  var vs = window.visualViewport ? +window.visualViewport.scale.toFixed(2) : 1;
+  var bad = Math.abs(dx) > 2 || Math.abs(dy) > 2 || Math.abs(dw) > 2 || Math.abs(dh) > 2 || Math.abs(vs - 1) > 0.02;
+  hint.style.color = bad ? '#dc2626' : '';
+  hint.textContent = bad ? ('⚠ 필기층 어긋남 Δ(' + dx + ',' + dy + ') 크기Δ(' + dw + ',' + dh + ') 페이지배율 ' + vs + ' · 이 문구를 알려 주세요') : '펜으로 쓰고 손가락으로 넘기세요 · 두 손가락으로 벌리면 확대, 두 번 두드리면 되돌아감';
 }
 function boInkTool(t){
   _ink.tool = t;
@@ -1271,6 +1294,7 @@ document.addEventListener('click', function(e){
 var _pz = { k:1, k0:1, p0:0, fx:0, fy:0, lastTap:0, ready:false };
 function boPassZoomApply(){
   var inner = document.getElementById('pg-pass-inner'); if(!inner) return; inner.style.width = (_pz.k * 100) + '%';
+  boInkSyncAll();
   var lv = document.getElementById('pg-pass-lv'); if(lv){ lv.textContent = Math.round(_pz.k * 100) + '%'; lv.classList.toggle('on', _pz.k > 1.02); }
 }
 function boPassZoomReset(){ _pz.k = 1; var sc = document.getElementById('pg-pass-scroll'); if(sc){ sc.scrollLeft = 0; } boPassZoomApply(); }
@@ -1328,6 +1352,7 @@ function boMakeZoom(body, inner, img, lv, maxMul){
     inner.style.width  = z.iw + 'px';
     inner.style.height = z.ih + 'px';
     inner.style.transform = 'translate(' + z.tx + 'px,' + z.ty + 'px) scale(' + z.k + ')';
+    if(window.boInkSyncAll) boInkSyncAll();
     var pct = Math.round(z.k / (z.fit || 1) * 100);
     if(lv) lv.textContent = pct + '%';
     if(z.onLv) z.onLv(pct);
