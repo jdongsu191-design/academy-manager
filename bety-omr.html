@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 베티 OMR [v1.0-ink]</title>
+<title>BMAPS · 베티 OMR [v1.1-ink]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -207,7 +207,7 @@
 .pg-pass-h{display:flex;align-items:center;gap:8px;padding:6px 10px;background:#fffbeb;border-bottom:1px solid #fde68a;
   font-size:12px;font-weight:800;color:#92400e;flex:0 0 auto}
 .pg-pass-h .pg-zoom{margin-left:auto;padding:3px 8px;font-size:11px}
-.pg-pass-scroll{flex:1 1 auto;overflow:auto;-webkit-overflow-scrolling:touch;position:relative;touch-action:pan-y pinch-zoom}
+.pg-pass-scroll{flex:1 1 auto;overflow:auto;-webkit-overflow-scrolling:touch;position:relative;touch-action:pan-y}
 .pg-pass-inner{position:relative}
 .pg-pass-inner img{display:block;width:100%;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 /* 문항 이동 바 — 답 입력 바로 아래(고정 아님) */
@@ -215,7 +215,7 @@
   padding:8px 8px;display:flex;gap:8px}
 /* 필기 층·도구 */
 .ink{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
-.pg-img.inking,.zoom-body.inking,.pg-pass-scroll.inking{touch-action:none}
+.pg-img.inking,.zoom-body.inking,.pg-pass-scroll.inking,.pg-img.pen-near,.zoom-body.pen-near,.pg-pass-scroll.pen-near{touch-action:none}
 .ink-bar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:7px 10px;background:#f8fafc;border-top:1px solid #e2e8f0}
 .ik-t{border:1.5px solid #cbd5e1;background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;font-weight:800;color:#334155;line-height:1}
 .ik-t.on{background:#1e3a5f;border-color:#1e3a5f;color:#fff}
@@ -479,7 +479,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v1.0-ink';
+window.BETY_OMR_VERSION = 'v1.1-ink';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -1156,6 +1156,7 @@ function boInkAttach(box, cvs, img, keyFn){
     if(!usable(e)) return;
     var key = keyFn(); if(!key || !cvs.width) return;
     if(e.pointerType === 'pen') _ink.penDown = true;
+    _ink.lastKey = key; _ink.penAt = Date.now();
     box.classList.add('inking');
     e.preventDefault(); try { box.setPointerCapture(e.pointerId); } catch(x){}
     var p = pos(e);
@@ -1177,6 +1178,9 @@ function boInkAttach(box, cvs, img, keyFn){
     boInkRedrawAll(c.key);                                                     /* 다른 보기(확대 창 등)에도 */
   }
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+  /* 펜이 가까이 오면(호버 지원 기기) 미리 손가락 스크롤을 끈다 → 빠른 첫 접촉도 선으로 */
+  box.addEventListener('pointerover', function(e){ if(e.pointerType === 'pen'){ _ink.penAt = Date.now(); box.classList.add('pen-near'); } });
+  box.addEventListener('pointerout', function(e){ if(e.pointerType === 'pen' && !_ink.cur) box.classList.remove('pen-near'); });
   return v;
 }
 /* 획 하나 그리기 — tail 만(마지막 두 점) 이어 그려 가볍게 */
@@ -1213,13 +1217,15 @@ function boInkTool(t){
   ['pen','eraser'].forEach(function(k){ var a = document.getElementById('ik-' + k), b = document.getElementById('zk-' + k); if(a) a.classList.toggle('on', k === t); if(b) b.classList.toggle('on', k === t); });
 }
 function boInkUndo(){
-  var key = boInkKey(); var list = boInkList(key); if(!list.length) return;
-  list.pop(); boInkRedrawAll(key);
+  /* 마지막으로 그린 칸(지문이든 문항이든)에서 되돌린다 */
+  var keys = [_ink.lastKey, boInkKey(), boInkKey('passage')].filter(Boolean);
+  for(var i = 0; i < keys.length; i++){ var list = boInkList(keys[i]); if(list.length){ list.pop(); boInkRedrawAll(keys[i]); return; } }
 }
 function boInkClear(){
-  var key = boInkKey(); if(!key || !boInkList(key).length) return;
-  if(!confirm('이 문항의 필기를 모두 지울까요?')) return;
-  _ink.strokes[key] = []; boInkRedrawAll(key);
+  var keys = [boInkKey(), boInkKey('passage')].filter(function(k, i, a){ return k && a.indexOf(k) === i && boInkList(k).length; });
+  if(!keys.length) return;
+  if(!confirm('이 문항(지문 포함)의 필기를 모두 지울까요?')) return;
+  keys.forEach(function(k){ _ink.strokes[k] = []; boInkRedrawAll(k); });
 }
 function boInkBarInit(){
   var c = document.getElementById('ik-colors'), w = document.getElementById('ik-widths'); if(!c || c.children.length) return;
@@ -1230,6 +1236,9 @@ function boInkColor(col){ _ink.color = col; boInkTool('pen'); document.querySele
 function boInkWidth(wd){ _ink.width = wd; document.querySelectorAll('.ik-w').forEach(function(b){ b.classList.toggle('on', +b.dataset.w === wd); }); }
 function boInkSetup(){
   if(_ink.ready) return; _ink.ready = true;
+  /* 페이지 전체가 두 손가락에 커지면 필기 좌표가 어긋난다(iOS 는 viewport 설정을 무시) → 페이지 확대 제스처를 막는다. 문항·확대 창의 두 손가락 확대는 자체 처리라 영향 없음 */
+  ['gesturestart','gesturechange'].forEach(function(ev){ document.addEventListener(ev, function(e){ e.preventDefault(); }, { passive:false }); });
+  document.addEventListener('touchmove', function(e){ if(e.touches.length > 1 && e.target.closest && e.target.closest('.pg-pass-scroll')) e.preventDefault(); }, { passive:false });
   boInkBarInit();
   boInkAttach(document.getElementById('pg-img'), document.getElementById('pg-ink'), document.getElementById('pg-image'), function(){ return boInkKey(); });
   boInkAttach(document.getElementById('zm-body'), document.getElementById('zm-ink'), document.getElementById('zm-img'), function(){ return _ink.zoomKey || null; });
@@ -1241,6 +1250,7 @@ function boInkSetup(){
 }
 function boInkStylus(e){
   if(_ink.penDown) return true;
+  if(_ink.penAt && Date.now() - _ink.penAt < 1200) return true;      /* 펜을 막 뗀 직후의 빠른 재접촉 */
   var t = e.touches || []; for(var i = 0; i < t.length; i++) if(t[i].touchType === 'stylus') return true;
   return false;
 }
