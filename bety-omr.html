@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 베티 OMR [v1.4-ink]</title>
+<title>BMAPS · 베티 OMR [v1.5-ink]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -168,7 +168,7 @@
   font-variant-numeric:tabular-nums}
 .zoom-body{flex:1;overflow:hidden;background:#fff;position:relative;touch-action:none}
 .zoom-inner{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
-.zoom-inner img{display:block;width:100%;height:100%;-webkit-user-select:none;user-select:none;
+.zoom-inner img{display:block;width:100%;-webkit-user-select:none;user-select:none;
   -webkit-touch-callout:none;pointer-events:none}
 .zoom-hint{position:absolute;left:0;right:0;bottom:14px;text-align:center;pointer-events:none;
   font-size:11px;font-weight:700;color:#fff;transition:opacity .4s}
@@ -187,7 +187,7 @@
 .pg-img{position:relative;background:#fff;overflow:hidden;min-height:120px;
   touch-action:pan-y}                      /* 한 손가락은 쪽 넘김(세로 스크롤), 두 손가락은 확대 */
 .pg-inner{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
-.pg-inner img{display:block;width:100%;height:100%;-webkit-user-select:none;user-select:none;
+.pg-inner img{display:block;width:100%;-webkit-user-select:none;user-select:none;
   -webkit-touch-callout:none;pointer-events:none}
 .pg-lv{position:absolute;right:8px;top:8px;background:rgba(15,23,42,.55);color:#fff;
   border-radius:100px;padding:3px 9px;font-size:10px;font-weight:800;pointer-events:none;
@@ -481,7 +481,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v1.4-ink';
+window.BETY_OMR_VERSION = 'v1.5-ink';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -1144,7 +1144,7 @@ function boGo(step){ _bo.cur += step; boPagedRender(); }
 /* ── 펜 필기 (저장 안 함) ─────────────────────────────────
    획은 이미지 안의 비율 좌표(0~1)로 두고 그림키(이미지 경로)별로 메모리에 보관.
    문항 상자·확대 창·지문 칸의 canvas 가 같은 획 목록을 그린다. 펜(pen)·마우스만 그리고 손가락(touch)은 그대로 둔다. */
-var _ink = { tool:'pen', color:'#dc2626', width:3, strokes:{}, cur:null, penDown:false, views:[] };
+var _ink = { tool:'pen', color:'#dc2626', width:3, strokes:{}, cur:null, penDown:false, views:[], padY:{}, baseW:{} };
 var INK_COLORS = ['#dc2626', '#1d4ed8', '#111827', '#15803d'], INK_WIDTHS = [2, 3.5, 6];
 function boInkKey(which){
   var q = _bo.questions && _bo.questions[_bo.cur]; if(!q) return null;
@@ -1153,8 +1153,8 @@ function boInkKey(which){
 }
 function boInkList(key){ if(!key) return []; return _ink.strokes[key] || (_ink.strokes[key] = []); }
 /* 한 보기(view) = 상자 + canvas + 이미지 + 그림키 함수 */
-function boInkAttach(box, cvs, img, keyFn){
-  var v = { box:box, cvs:cvs, img:img, keyFn:keyFn };
+function boInkAttach(box, cvs, img, keyFn, inner){
+  var v = { box:box, cvs:cvs, img:img, keyFn:keyFn, inner:inner || null };
   cvs.width = 0; cvs.height = 0;                       /* 기본 300×150 에 그리면 굵고 흐리게 늘어난다 */
   _ink.views.push(v);
   function pos(e){ var r = cvs.getBoundingClientRect(); return { x:(e.clientX - r.left) / (r.width || 1), y:(e.clientY - r.top) / (r.height || 1), sc:(cvs.width || 1) / (r.width || 1) }; }
@@ -1162,14 +1162,16 @@ function boInkAttach(box, cvs, img, keyFn){
   box.addEventListener('pointerdown', function(e){
     if(!usable(e)) return;
     var key = keyFn(); if(!key) return;
-    if(!cvs.width || cvs.width !== Math.round((img.naturalWidth || 0) * Math.min(1, 2400 / Math.max(img.naturalWidth || 1, img.naturalHeight || 1)))) boInkFit(v);
+    var ex = boInkExpect(v); if(!cvs.width || cvs.width !== ex[0] || cvs.height !== ex[1]) boInkFit(v);
     if(!cvs.width) return;
     if(e.pointerType === 'pen') _ink.penDown = true;
     _ink.lastKey = key; _ink.penAt = Date.now();
     box.classList.add('inking');
     e.preventDefault(); try { box.setPointerCapture(e.pointerId); } catch(x){}
     var p = pos(e);
-    _ink.cur = { key:key, tool:_ink.tool, color:_ink.color, w:_ink.width * p.sc * (_ink.tool === 'eraser' ? 4 : 1), pts:[[p.x, p.y]], id:e.pointerId };
+    /* 굵기: 지금 배율이 아니라 '맞춤(원래 크기)' 화면 폭 기준 → 확대해서 써도 축소하면 같은 굵기 */
+    var baseW = _ink.baseW[key] || (cvs.getBoundingClientRect().width || 1), sc = (cvs.width || 1) / baseW;
+    _ink.cur = { key:key, tool:_ink.tool, color:_ink.color, w:_ink.width * sc * (_ink.tool === 'eraser' ? 4 : 1), pts:[[p.x, p.y]], id:e.pointerId };
     boInkList(key).push(_ink.cur);
     boInkDrawStroke(cvs, _ink.cur, true);
   }, { passive:false });
@@ -1216,25 +1218,32 @@ function boInkRedraw(v){
 }
 function boInkRedrawAll(key){ _ink.views.forEach(function(v){ if(!key || v.keyFn() === key) boInkRedraw(v); }); }
 /* 이미지 크기에 맞춰 canvas 해상도 잡기(긴 변 2400px 까지) 후 다시 그림 */
+/* canvas 해상도(여백 포함): 이미지 원본 + 위아래 여백, 긴 변 2400 상한 */
+function boInkExpect(v){
+  var iw = v.img.naturalWidth || 0, ih = v.img.naturalHeight || 0; if(!iw) return [0, 0];
+  var key = v.keyFn(), pad = v.inner ? ((key && _ink.padY[key]) || 0) * ih : 0, H = ih + pad;
+  var k = Math.min(1, 2400 / Math.max(iw, H));
+  return [Math.round(iw * k), Math.round(H * k)];
+}
 function boInkFit(v){
-  var iw = v.img.naturalWidth || 0, ih = v.img.naturalHeight || 0; if(!iw){ v.cvs.width = v.cvs.height = 0; return; }
-  var k = Math.min(1, 2400 / Math.max(iw, ih));
-  var w = Math.round(iw * k), h = Math.round(ih * k);
+  var ex = boInkExpect(v), w = ex[0], h = ex[1]; if(!w){ v.cvs.width = v.cvs.height = 0; return; }
   if(v.cvs.width !== w || v.cvs.height !== h){ v.cvs.width = w; v.cvs.height = h; }
+  if(!v.inner){ var key = v.keyFn(); if(key && _pz.k <= 1.001) _ink.baseW[key] = v.img.offsetWidth || _ink.baseW[key]; }
   boInkSync(v);
   boInkRedraw(v);
 }
 /* canvas 의 화면 상자를 이미지 상자와 똑같이(px) — 확대·배율이 바뀔 때마다 호출 */
 function boInkSync(v){
   if(!v || !v.img) return;
-  var iw = v.img.offsetWidth, ih = v.img.offsetHeight; if(!iw || !ih) return;
-  v.cvs.style.width = iw + 'px'; v.cvs.style.height = ih + 'px'; v.cvs.style.left = v.img.offsetLeft + 'px'; v.cvs.style.top = v.img.offsetTop + 'px';
+  var ref = v.inner || v.img;                      /* 여백이 있는 보기는 inner(이미지+여백) 전체가 필기 면 */
+  var iw = ref.offsetWidth, ih = ref.offsetHeight; if(!iw || !ih) return;
+  v.cvs.style.width = iw + 'px'; v.cvs.style.height = ih + 'px'; v.cvs.style.left = (v.inner ? 0 : v.img.offsetLeft) + 'px'; v.cvs.style.top = (v.inner ? 0 : v.img.offsetTop) + 'px';
 }
 function boInkSyncAll(){ _ink.views.forEach(boInkSync); }
 /* 진단: 획을 그린 직후 canvas 상자와 이미지 상자가 어긋나 있으면 도구 줄에 수치를 보여 준다(실기기 원인 추적용) */
 function boInkDiag(v){
   var hint = document.querySelector('.ik-hint'); if(!hint || !v) return;
-  var a = v.cvs.getBoundingClientRect(), b = v.img.getBoundingClientRect();
+  var a = v.cvs.getBoundingClientRect(), b = (v.inner || v.img).getBoundingClientRect();
   var dx = Math.round(a.left - b.left), dy = Math.round(a.top - b.top), dw = Math.round(a.width - b.width), dh = Math.round(a.height - b.height);
   var vs = window.visualViewport ? +window.visualViewport.scale.toFixed(2) : 1;
   var bad = Math.abs(dx) > 2 || Math.abs(dy) > 2 || Math.abs(dw) > 2 || Math.abs(dh) > 2 || Math.abs(vs - 1) > 0.02;
@@ -1270,8 +1279,8 @@ function boInkSetup(){
   ['gesturestart','gesturechange'].forEach(function(ev){ document.addEventListener(ev, function(e){ e.preventDefault(); }, { passive:false }); });
   document.addEventListener('touchmove', function(e){ if(e.touches.length > 1 && e.target.closest && e.target.closest('.pg-pass-scroll')) e.preventDefault(); }, { passive:false });
   boInkBarInit();
-  boInkAttach(document.getElementById('pg-img'), document.getElementById('pg-ink'), document.getElementById('pg-image'), function(){ return boInkKey(); });
-  boInkAttach(document.getElementById('zm-body'), document.getElementById('zm-ink'), document.getElementById('zm-img'), function(){ return _ink.zoomKey || null; });
+  boInkAttach(document.getElementById('pg-img'), document.getElementById('pg-ink'), document.getElementById('pg-image'), function(){ return boInkKey(); }, document.getElementById('pg-inner'));
+  boInkAttach(document.getElementById('zm-body'), document.getElementById('zm-ink'), document.getElementById('zm-img'), function(){ return _ink.zoomKey || null; }, document.getElementById('zm-inner'));
   boInkAttach(document.getElementById('pg-pass-scroll'), document.getElementById('pg-pass-ink'), document.getElementById('pg-pass-img'), function(){ return boInkKey('passage'); });
   /* 지문 칸: 펜이 닿은 터치는 스크롤로 넘기지 않는다 */
   document.getElementById('pg-pass-scroll').addEventListener('touchstart', function(e){ if(boInkStylus(e)) e.preventDefault(); }, { passive:false });
@@ -1341,7 +1350,7 @@ function boInkStylus(e){
    문항 상자와 확대 창이 같은 것을 쓴다 — 고칠 곳이 하나가 되도록. */
 function boMakeZoom(body, inner, img, lv, maxMul){
   var z = { body:body, inner:inner, img:img, lv:lv, maxMul:maxMul || 8,
-            k:1, fit:1, tx:0, ty:0, iw:0, ih:0, cw:1, ch:1,
+            k:1, fit:1, tx:0, ty:0, iw:0, ih:0, cw:1, ch:1, padY:0,
             p0:0, k0:1, sx:0, sy:0, drag:false, lastTap:0, onLv:null };
   function pt(x, y){ var r = body.getBoundingClientRect(); return { x:x-r.left, y:y-r.top }; }
   function dist(t){
@@ -1351,6 +1360,8 @@ function boMakeZoom(body, inner, img, lv, maxMul){
   z.apply = function(){
     inner.style.width  = z.iw + 'px';
     inner.style.height = z.ih + 'px';
+    /* 위아래 흰 여백(필기 공간): 이미지는 여백 절반만큼 내려 그린다 */
+    img.style.position = 'absolute'; img.style.left = '0'; img.style.top = (z.padY / 2) + 'px'; img.style.height = (z.ih - z.padY) + 'px';
     inner.style.transform = 'translate(' + z.tx + 'px,' + z.ty + 'px) scale(' + z.k + ')';
     if(window.boInkSyncAll) boInkSyncAll();
     var pct = Math.round(z.k / (z.fit || 1) * 100);
@@ -1358,7 +1369,7 @@ function boMakeZoom(body, inner, img, lv, maxMul){
     if(z.onLv) z.onLv(pct);
   };
   z.measure = function(){
-    z.iw = img.naturalWidth || 1; z.ih = img.naturalHeight || 1;
+    z.iw = img.naturalWidth || 1; z.ih = (img.naturalHeight || 1) + (z.padY || 0);
     z.cw = body.clientWidth || 1; z.ch = body.clientHeight || 1;
   };
   z.fitNow = function(){
@@ -1450,23 +1461,30 @@ function boCardZoom(){
 /* 상자 높이 — 짧은 문항은 딱 맞게, 긴 문항은 화면 절반까지만 쓰고 안에서 민다 */
 function boCardFit(){
   var z = boCardZoom(), box = document.getElementById('pg-img');
-  z.iw = z.img.naturalWidth || 0; z.ih = z.img.naturalHeight || 0;
-  if(!z.iw){ box.style.height = ''; return; }
-  boInkSetup(); boInkFit(_ink.views[0]);
+  var iw = z.img.naturalWidth || 0, ih = z.img.naturalHeight || 0;
+  if(!iw){ box.style.height = ''; return; }
+  boInkSetup();
   var cw = box.clientWidth || 1;
-  var natH = Math.round(z.ih * (cw / z.iw));
+  var natH = Math.round(ih * (cw / iw));
   var maxH = Math.max(200, Math.min(Math.round(window.innerHeight * 0.52), 560));
   var two = document.getElementById('pg-body').classList.contains('two');
+  var key = boInkKey();
   if(two){
     /* 지문·문항을 같은 높이로 — 화면의 62% 까지. 지문은 그 안에서 스크롤 */
     var H = Math.max(320, Math.min(Math.round(window.innerHeight * 0.62), 760));
     box.style.height = H + 'px';
     document.getElementById('pg-pass').style.height = H + 'px';
+    /* 잘린 문항 위아래 흰 여백(필기 공간): 폭 맞춤 때 남는 세로 공간과 이미지 높이의 50% 중 큰 쪽. 그림키마다 한 번 정해 고정(획이 안 밀리게) */
+    if(key && _ink.padY[key] == null){ var natural = H / (cw / iw) - ih; _ink.padY[key] = Math.max(natural, ih * 0.5) / ih; }
   } else {
     box.style.height = Math.min(natH, maxH) + 'px';
     document.getElementById('pg-pass').style.height = '';
+    if(key && _ink.padY[key] == null) _ink.padY[key] = 0;
   }
+  z.padY = (key ? (_ink.padY[key] || 0) : 0) * ih;
   z.fitNow();
+  if(key) _ink.baseW[key] = iw * z.fit;            /* 굵기 기준: 맞춤 배율에서의 이미지 화면 폭 */
+  boInkFit(_ink.views[0]);
 }
 
 /* ── 확대 창 (더 넓게 보고 싶을 때) ─────────────────────── */
@@ -1492,9 +1510,10 @@ function boZoomOpen(which){
   hint.style.opacity = '1';
   setTimeout(function(){ hint.style.opacity = '0'; }, 2600);
   boInkSetup(); _ink.zoomKey = path;
-  z.img.onload = function(){ z.fitNow(); boInkFit(_ink.views[1]); };
+  var zfit = function(){ z.padY = (_ink.padY[path] || 0) * (z.img.naturalHeight || 0); z.fitNow(); boInkFit(_ink.views[1]); };
+  z.img.onload = zfit;
   z.img.src = BO_IMG + path;
-  if(z.img.complete && z.img.naturalWidth){ z.fitNow(); boInkFit(_ink.views[1]); }
+  if(z.img.complete && z.img.naturalWidth) zfit();
 }
 function boZoomClose(){ document.getElementById('bo-zoom').classList.remove('open'); }
 function boZoomFit(){ boFullZoom().fitNow(); }
