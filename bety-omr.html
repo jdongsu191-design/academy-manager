@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 베티 OMR [v1.1-ink]</title>
+<title>BMAPS · 베티 OMR [v1.2-ink]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -479,7 +479,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v1.1-ink';
+window.BETY_OMR_VERSION = 'v1.2-ink';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -1149,12 +1149,15 @@ function boInkList(key){ if(!key) return []; return _ink.strokes[key] || (_ink.s
 /* 한 보기(view) = 상자 + canvas + 이미지 + 그림키 함수 */
 function boInkAttach(box, cvs, img, keyFn){
   var v = { box:box, cvs:cvs, img:img, keyFn:keyFn };
+  cvs.width = 0; cvs.height = 0;                       /* 기본 300×150 에 그리면 굵고 흐리게 늘어난다 */
   _ink.views.push(v);
   function pos(e){ var r = cvs.getBoundingClientRect(); return { x:(e.clientX - r.left) / (r.width || 1), y:(e.clientY - r.top) / (r.height || 1), sc:(cvs.width || 1) / (r.width || 1) }; }
   function usable(e){ return (e.pointerType === 'pen' || e.pointerType === 'mouse') && (e.buttons & 1 || e.type === 'pointerdown'); }
   box.addEventListener('pointerdown', function(e){
     if(!usable(e)) return;
-    var key = keyFn(); if(!key || !cvs.width) return;
+    var key = keyFn(); if(!key) return;
+    if(!cvs.width || cvs.width !== Math.round((img.naturalWidth || 0) * Math.min(1, 2400 / Math.max(img.naturalWidth || 1, img.naturalHeight || 1)))) boInkFit(v);
+    if(!cvs.width) return;
     if(e.pointerType === 'pen') _ink.penDown = true;
     _ink.lastKey = key; _ink.penAt = Date.now();
     box.classList.add('inking');
@@ -1172,6 +1175,7 @@ function boInkAttach(box, cvs, img, keyFn){
     boInkDrawStroke(cvs, c, false);
   }, { passive:false });
   function end(e){
+    try { if(box.hasPointerCapture && box.hasPointerCapture(e.pointerId)) box.releasePointerCapture(e.pointerId); } catch(x){}
     var c = _ink.cur; if(!c || c.id !== e.pointerId) return;
     _ink.cur = null; _ink.penDown = false; box.classList.remove('inking');
     if(c.pts.length === 1) c.pts.push([c.pts[0][0] + 0.0005, c.pts[0][1]]);   /* 점 하나도 보이게 */
@@ -1247,7 +1251,19 @@ function boInkSetup(){
   document.getElementById('pg-pass-scroll').addEventListener('touchstart', function(e){ if(boInkStylus(e)) e.preventDefault(); }, { passive:false });
   var pimg = document.getElementById('pg-pass-img');
   pimg.addEventListener('load', function(){ boInkFit(_ink.views[2]); });
+  if(pimg.complete && pimg.naturalWidth) boInkFit(_ink.views[2]);   /* 첫 문항은 설정 전에 이미 로드됨 */
 }
+/* 펜으로 버튼 누르기 — 일부 기기에서 펜 탭이 click 으로 안 이어져 확대 창 윗줄·도구 줄이 안 눌림 */
+document.addEventListener('pointerup', function(e){
+  if(e.pointerType !== 'pen') return;
+  var btn = e.target && e.target.closest ? e.target.closest('.zoom-top button, .ink-bar button, .pg-bar button, .pg-head button, .pg-ans button, .pad button, .kp button, .pg-pass-h button') : null;
+  if(!btn || btn.disabled) return;
+  var t = Date.now(); btn._penAt = 0; var ev = new MouseEvent('click', { bubbles:true, cancelable:true }); ev._fromPen = true; btn.dispatchEvent(ev); btn._penAt = t;
+}, true);
+document.addEventListener('click', function(e){
+  var btn = e.target && e.target.closest ? e.target.closest('button') : null;
+  if(btn && btn._penAt && Date.now() - btn._penAt < 600 && !e._fromPen){ btn._penAt = 0; e.stopImmediatePropagation(); e.preventDefault(); }
+}, true);
 function boInkStylus(e){
   if(_ink.penDown) return true;
   if(_ink.penAt && Date.now() - _ink.penAt < 1200) return true;      /* 펜을 막 뗀 직후의 빠른 재접촉 */
