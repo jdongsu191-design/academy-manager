@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 베티 OMR [v1.2-ink]</title>
+<title>BMAPS · 베티 OMR [v1.3-ink]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -208,7 +208,8 @@
   font-size:12px;font-weight:800;color:#92400e;flex:0 0 auto}
 .pg-pass-h .pg-zoom{margin-left:auto;padding:3px 8px;font-size:11px}
 .pg-pass-scroll{flex:1 1 auto;overflow:auto;-webkit-overflow-scrolling:touch;position:relative;touch-action:pan-y}
-.pg-pass-inner{position:relative}
+.pg-pass-inner{position:relative;width:100%;transform-origin:0 0}
+.pg-pass-scroll{touch-action:pan-x pan-y}
 .pg-pass-inner img{display:block;width:100%;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 /* 문항 이동 바 — 답 입력 바로 아래(고정 아님) */
 .pg-bar{margin:0 14px 14px;background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;
@@ -322,7 +323,8 @@
             <div class="pg-pass-h"><span id="pg-pass-ttl">📖 지문</span>
               <button class="pg-zoom" onclick="boZoomOpen('passage')">🔍 확대</button></div>
             <div class="pg-pass-scroll" id="pg-pass-scroll">
-              <div class="pg-pass-inner"><img id="pg-pass-img" alt="" draggable="false"><canvas class="ink" id="pg-pass-ink"></canvas><div class="wm" id="pg-pass-wm"></div></div>
+              <div class="pg-pass-inner" id="pg-pass-inner"><img id="pg-pass-img" alt="" draggable="false"><canvas class="ink" id="pg-pass-ink"></canvas><div class="wm" id="pg-pass-wm"></div></div>
+              <div class="pg-lv" id="pg-pass-lv" style="position:sticky;float:right;top:8px;right:8px">100%</div>
             </div>
           </div>
           <div class="pg-img" id="pg-img">
@@ -343,7 +345,7 @@
           <span class="ik-colors" id="ik-colors"></span>
           <span class="ik-sep"></span>
           <span class="ik-widths" id="ik-widths"></span>
-          <span class="ik-hint">펜으로 쓰고 손가락으로 넘기세요</span>
+          <span class="ik-hint">펜으로 쓰고 손가락으로 넘기세요 · 두 손가락으로 벌리면 확대, 두 번 두드리면 되돌아감</span>
         </div>
         <div class="pg-ans" id="pg-ans"></div>
         <div class="pg-bar" id="bo-nav-bar" style="display:none">
@@ -479,7 +481,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v1.2-ink';
+window.BETY_OMR_VERSION = 'v1.3-ink';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -1084,7 +1086,7 @@ function boPagedRender(){
   if(two){
     var pimg = document.getElementById('pg-pass-img');
     if(_bo.passShown !== q.passage_path){
-      _bo.passShown = q.passage_path;
+      _bo.passShown = q.passage_path; boPassZoomReset();
       pimg.src = BO_IMG + q.passage_path;
       document.getElementById('pg-pass-scroll').scrollTop = 0;
       document.getElementById('pg-pass-wm').innerHTML = document.getElementById('pg-wm').innerHTML;
@@ -1240,6 +1242,7 @@ function boInkColor(col){ _ink.color = col; boInkTool('pen'); document.querySele
 function boInkWidth(wd){ _ink.width = wd; document.querySelectorAll('.ik-w').forEach(function(b){ b.classList.toggle('on', +b.dataset.w === wd); }); }
 function boInkSetup(){
   if(_ink.ready) return; _ink.ready = true;
+  boPassZoomSetup();
   /* 페이지 전체가 두 손가락에 커지면 필기 좌표가 어긋난다(iOS 는 viewport 설정을 무시) → 페이지 확대 제스처를 막는다. 문항·확대 창의 두 손가락 확대는 자체 처리라 영향 없음 */
   ['gesturestart','gesturechange'].forEach(function(ev){ document.addEventListener(ev, function(e){ e.preventDefault(); }, { passive:false }); });
   document.addEventListener('touchmove', function(e){ if(e.touches.length > 1 && e.target.closest && e.target.closest('.pg-pass-scroll')) e.preventDefault(); }, { passive:false });
@@ -1264,10 +1267,45 @@ document.addEventListener('click', function(e){
   var btn = e.target && e.target.closest ? e.target.closest('button') : null;
   if(btn && btn._penAt && Date.now() - btn._penAt < 600 && !e._fromPen){ btn._penAt = 0; e.stopImmediatePropagation(); e.preventDefault(); }
 }, true);
+/* ── 지문 칸 확대(확대 버튼 없이): 두 손가락으로 폭을 키우고 스크롤로 본다. 두 번 두드리면 2배 ↔ 원래대로 ── */
+var _pz = { k:1, k0:1, p0:0, fx:0, fy:0, lastTap:0, ready:false };
+function boPassZoomApply(){
+  var inner = document.getElementById('pg-pass-inner'); if(!inner) return; inner.style.width = (_pz.k * 100) + '%';
+  var lv = document.getElementById('pg-pass-lv'); if(lv){ lv.textContent = Math.round(_pz.k * 100) + '%'; lv.classList.toggle('on', _pz.k > 1.02); }
+}
+function boPassZoomReset(){ _pz.k = 1; var sc = document.getElementById('pg-pass-scroll'); if(sc){ sc.scrollLeft = 0; } boPassZoomApply(); }
+function boPassZoomTo(nk, cx, cy){
+  var sc = document.getElementById('pg-pass-scroll'), r = sc.getBoundingClientRect();
+  var k1 = _pz.k; nk = Math.min(4, Math.max(1, nk));
+  var fx = (cx - r.left + sc.scrollLeft) / k1, fy = (cy - r.top + sc.scrollTop) / k1;   /* 손가락 아래 내용 좌표 */
+  _pz.k = nk; boPassZoomApply();
+  sc.scrollLeft = fx * nk - (cx - r.left); sc.scrollTop = fy * nk - (cy - r.top);
+}
+function boPassZoomSetup(){
+  if(_pz.ready) return; _pz.ready = true;
+  var sc = document.getElementById('pg-pass-scroll');
+  var dist = function(t){ var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY; return Math.sqrt(dx*dx + dy*dy); };
+  sc.addEventListener('touchstart', function(e){
+    if(boInkStylus(e)) return;
+    var t = e.touches;
+    if(t.length === 2){ _pz.p0 = dist(t); _pz.k0 = _pz.k; e.preventDefault(); }
+    else if(t.length === 1){
+      var now = Date.now();
+      if(now - _pz.lastTap < 300){ boPassZoomTo(_pz.k > 1.02 ? 1 : 2, t[0].clientX, t[0].clientY); _pz.lastTap = 0; e.preventDefault(); }
+      else _pz.lastTap = now;
+    }
+  }, { passive:false });
+  sc.addEventListener('touchmove', function(e){
+    var t = e.touches; if(t.length !== 2 || !_pz.p0 || boInkStylus(e)) return;
+    boPassZoomTo(_pz.k0 * (dist(t) / _pz.p0), (t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2); e.preventDefault();
+  }, { passive:false });
+  sc.addEventListener('touchend', function(e){ if(e.touches.length < 2) _pz.p0 = 0; });
+  sc.addEventListener('wheel', function(e){ if(!e.ctrlKey) return; e.preventDefault(); boPassZoomTo(_pz.k * (e.deltaY < 0 ? 1.2 : 1/1.2), e.clientX, e.clientY); }, { passive:false });
+}
 function boInkStylus(e){
   if(_ink.penDown) return true;
-  if(_ink.penAt && Date.now() - _ink.penAt < 1200) return true;      /* 펜을 막 뗀 직후의 빠른 재접촉 */
   var t = e.touches || []; for(var i = 0; i < t.length; i++) if(t[i].touchType === 'stylus') return true;
+  if(t.length < 2 && _ink.penAt && Date.now() - _ink.penAt < 1200) return true;   /* 펜을 막 뗀 직후의 빠른 한 손가락 재접촉(두 손가락 확대는 통과) */
   return false;
 }
 
