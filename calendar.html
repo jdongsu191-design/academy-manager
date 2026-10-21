@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="BMAPS">
   <link rel="apple-touch-icon" href="/icon-192.png">
-  <title>BMAPS 운영 일정 v1.11</title>
+  <title>BMAPS 운영 일정 v1.12</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -107,6 +107,18 @@
     .brchips label.all{border-style:solid}
     .brchips input{margin:0;width:13px;height:13px}
     .brchips.sm label{font-size:11px;padding:1px 6px}
+    /* 조회 전용 카드 */
+    .evv{display:flex;flex-direction:column;gap:12px;margin-bottom:10px}
+    .evv .evv-tags{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;font-weight:700}
+    .evtag{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;border:1.5px solid var(--border);background:#f8fafc;color:#374151}
+    .evtag.cat{color:#fff;border-color:transparent} .evtag.academy{background:var(--c-academy)} .evtag.exam{background:var(--c-exam)} .evtag.school{background:var(--c-school)} .evtag.personal{background:var(--c-personal)}
+    .evv .evv-name{font-size:21px;font-weight:800;color:var(--navy);line-height:1.3;word-break:keep-all}
+    .evv .evv-when{display:flex;flex-direction:column;gap:3px;padding:10px 14px;border-radius:10px;background:#f1f5f9;border-left:4px solid var(--navy)}
+    .evv .evv-when .d{font-size:16px;font-weight:800;color:#111827} .evv .evv-when .t{font-size:13px;font-weight:600;color:#374151}
+    .evv .evv-memo{padding:12px 14px;border:1.5px solid var(--border);border-radius:10px;background:#fffdf5;font-size:14.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:#111827}
+    .evv .evv-memo.empty{background:#f8fafc;color:#94a3b8;font-size:13px}
+    .evv .evv-lbl{font-size:11.5px;font-weight:700;color:#6b7280;margin-bottom:4px}
+    .evv .evv-small{font-size:12px;color:#4b5563;line-height:1.5} .evv .evv-small b{color:#374151}
     .fr .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap} .fr .row input[type=date],.fr .row input[type=time]{width:auto}
     .fr .wd{display:flex;gap:4px} .fr .wd label{font-size:11px;border:1.5px solid var(--border);border-radius:6px;padding:3px 7px;cursor:pointer;font-weight:600} .fr .wd input{display:none} .fr .wd input:checked+span{color:#fff} .fr .wd label.on{background:var(--navy);color:#fff;border-color:var(--navy)}
     .share-box{border:1.5px solid var(--border);border-radius:8px;padding:6px;max-height:190px;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:2px}
@@ -185,6 +197,8 @@
     <div class="md" style="max-width:860px">
       <h3 id="ev-title">일정 등록</h3>
       <input type="hidden" id="ev-id"><input type="hidden" id="ev-occ">
+      <div class="evv" id="ev-view" style="display:none"></div>
+      <div id="ev-form">
       <div class="fr"><label>제목 *</label><input type="text" id="ev-name" maxlength="120" placeholder="예: 신송고 2학기 중간시험 / 추석 휴원"></div>
       <div class="fr"><label>종류</label><div class="row">
         <select id="ev-cat" onchange="evCatChange()"><option value="academy">🏫 학원 운영</option><option value="exam">📝 학교 시험</option><option value="school">🎒 학교 행사</option><option value="personal">📌 개인 메모</option></select>
@@ -235,6 +249,7 @@
       </div></div>
       <div class="fr" id="ev-rm-hint-row" style="display:none"><label></label><div class="msg" id="ev-rm-hint"></div></div>
       <div class="fr"><label>메모</label><textarea id="ev-memo" rows="2" maxlength="500"></textarea></div>
+      </div>
       <div class="msg" id="ev-msg"></div>
       <div class="btns">
         <button class="btn btn-danger" id="ev-del" onclick="deleteEvent()" style="display:none">삭제</button>
@@ -328,7 +343,7 @@
    · 반복: rrule {freq, interval, byday[], until} + exdates / 공개: all·shared·private + share_user_ids
    · 공휴일은 코드 내장(2025~2027) — 해마다 아래 HOLIDAYS 에 추가
 ============================================================ */
-window.CALENDAR_VERSION = 'v1.11';
+window.CALENDAR_VERSION = 'v1.12';
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -777,6 +792,33 @@ function shareCount(){
   box.style.display = ''; box.innerHTML = '<b>참조</b> ' + names.map(esc).join(', ');
 }
 function canEdit(ev){ return isAdmin() || !ev || !ev.id || ev.owner_id === currentUser.id; }
+/* 조회 전용 카드: 제목·종류·날짜·참조자·메모가 한눈에 보이게 */
+function kdate(s, withYear){ var d = pd(s); return (withYear ? d.getFullYear() + '년 ' : '') + (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + WD[d.getDay()] + ')'; }
+function staffName(id){ if(id === currentUser.id) return currentUser.name || '나'; var u = _staff.find(function(x){ return x.id === id; }); return u ? u.name : null; }
+function renderEventView(ev, occ){
+  var box = $('ev-view'); if(!ev){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  var c = CAT[ev.category] || { icon:'', label:ev.category };
+  var tags = '<span class="evtag cat ' + esc(ev.category) + '">' + c.icon + ' ' + esc(c.label) + '</span>';
+  if(ev.school) tags += '<span class="evtag">🏫 ' + esc(ev.school) + (ev.school_level ? ' · ' + levelLabel(ev.school_level) : '') + '</span>';
+  else if(ev.school_level) tags += '<span class="evtag">' + levelLabel(ev.school_level) + '</span>';
+  tags += '<span class="evtag">📍 ' + esc(branchNames(evBranches(ev))) + '</span>';
+  var sameYear = pd(ev.starts_on).getFullYear() === pd(ev.ends_on).getFullYear();
+  var len = daysBetween(ev.starts_on, ev.ends_on);
+  var dline = len ? kdate(ev.starts_on, true) + ' ~ ' + kdate(ev.ends_on, !sameYear) + ' <span style="font-size:13px;color:#6b7280;font-weight:700">· ' + (len + 1) + '일간</span>' : kdate(ev.starts_on, true);
+  var tline = ev.all_day || !ev.start_time ? '종일' : hm(ev.start_time) + (ev.end_time ? ' ~ ' + hm(ev.end_time) : '');
+  if(ev.rrule) tline += ' · 🔁 ' + rruleText(ev.rrule) + (ev.rrule.until ? ' (' + kdate(String(ev.rrule.until).slice(0, 10), true) + '까지)' : '');
+  if(occ && ev.rrule && occ !== ev.starts_on) tline += ' · 이번 회차 ' + kdate(occ, false);
+  var when = '<div class="evv-when"><div class="d">📅 ' + dline + '</div><div class="t">' + tline + '</div></div>';
+  var memo = ev.memo ? '<div class="evv-memo">' + esc(ev.memo) + '</div>' : '<div class="evv-memo empty">메모 없음</div>';
+  var owner = staffName(ev.owner_id) || '다른 직원';
+  var visLbl = ev.visibility === 'private' ? '나만' : ev.visibility === 'shared' ? '참조자만' : '전체 직원';
+  var names = (ev.share_user_ids || []).map(staffName).filter(Boolean).sort(function(a, b){ return a.localeCompare(b, 'ko'); });
+  var small = '<div class="evv-small"><b>작성</b> ' + esc(owner) + (ev.source === 'neis' ? ' · 나이스 학사일정' : ev.source === 'site' ? ' · 학교 홈페이지' : '') + ' &nbsp;·&nbsp; <b>공개</b> ' + visLbl
+    + (names.length ? '<br><b>참조</b> ' + names.map(esc).join(', ') : '')
+    + (ev.remind ? '<br>' + remindText(ev.remind) : '') + '</div>';
+  box.innerHTML = tags ? '<div class="evv-tags">' + tags + '</div>' + '<div class="evv-name">' + esc(ev.title) + '</div>' + when + '<div><div class="evv-lbl">메모</div>' + memo + '</div>' + small : '';
+  box.style.display = '';
+}
 function openEvent(id, occ){
   var ev = id ? _events.find(function(e){ return e.id === id; }) : null;
   $('ev-id').value = ev ? ev.id : ''; $('ev-occ').value = occ || '';
@@ -804,6 +846,9 @@ function openEvent(id, occ){
   $('ev-msg').textContent = ev && ev.owner_id && ev.owner_id !== currentUser.id ? '작성: ' + ((_staff.find(function(u){ return u.id === ev.owner_id; }) || {}).name || '다른 직원') + (ev.source === 'neis' ? ' · 나이스 학사일정' : '') : (ev && ev.source === 'neis' ? '나이스 학사일정에서 가져옴' : '');
   evCatChange(); evAlldayChange(); evFreqChange(); evVisChange(); evMode('range');
   var editable = canEdit(ev);
+  $('ev-form').style.display = editable ? '' : 'none';
+  renderEventView(editable ? null : ev, occ);
+  if(!editable) $('ev-msg').textContent = '';
   $('ev-save').style.display = editable ? '' : 'none';
   $('ev-del').style.display = ev && editable ? '' : 'none';
   $('ev-skip').style.display = ev && editable && ev.rrule && occ ? '' : 'none';
