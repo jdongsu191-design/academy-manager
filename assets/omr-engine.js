@@ -107,7 +107,7 @@
       var pts = [tl, tr, br, bl], sgn = 0;
       for(var i = 0; i < 4; i++){ var p = pts[i], q2 = pts[(i+1)%4], r = pts[(i+2)%4]; var cr = (q2.cx - p.cx) * (r.cy - q2.cy) - (q2.cy - p.cy) * (r.cx - q2.cx); if(!sgn) sgn = cr > 0 ? 1 : -1; else if((cr > 0 ? 1 : -1) !== sgn) return null; }
       /* 마크 크기와 변 길이의 비(7mm : 282mm)도 맞아야 */
-      var expTop = ((tl.size + tr.size) / 2) * (282 / 7); if(top / expTop > 1.3 || expTop / top > 1.3) return null;
+      var expTop = ((tl.size + tr.size) / 2) * (282 / 7); if(top / expTop > 1.45 || expTop / top > 1.45) return null;   /* 렌즈 왜곡으로 귀퉁이 마크가 작아 보일 수 있어 여유 */
       return tl.s + tr.s + bl.s + br.s - (smax / smin - 1) * 80 - Math.abs(top / expTop - 1) * 40;
     }
     lists[0].forEach(function(tl){ lists[1].forEach(function(tr){ lists[2].forEach(function(bl){ lists[3].forEach(function(br){
@@ -143,6 +143,17 @@
       A.push([0, 0, 0, x, y, 1, -v*x, -v*y]); b.push(v);
     }
     var hv = solve(A, b); if(!hv) return null;
+    return [hv[0], hv[1], hv[2], hv[3], hv[4], hv[5], hv[6], hv[7], 1];
+  }
+  function homographyLS(src, dst){   /* n≥4 점 최소제곱(정규방정식) */
+    if(src.length === 4) return homography(src, dst);
+    var AtA = [], Atb = []; for(var i = 0; i < 8; i++){ AtA.push([0,0,0,0,0,0,0,0]); Atb.push(0); }
+    function acc(row, val){ for(var i = 0; i < 8; i++){ Atb[i] += row[i] * val; for(var j = 0; j < 8; j++) AtA[i][j] += row[i] * row[j]; } }
+    for(var k = 0; k < src.length; k++){
+      var x = src[k][0], y = src[k][1], u = dst[k][0], v = dst[k][1];
+      acc([x, y, 1, 0, 0, 0, -u*x, -u*y], u); acc([0, 0, 0, x, y, 1, -v*x, -v*y], v);
+    }
+    var hv = solve(AtA, Atb); if(!hv) return homography(src.slice(0, 4), dst.slice(0, 4));
     return [hv[0], hv[1], hv[2], hv[3], hv[4], hv[5], hv[6], hv[7], 1];
   }
   function apply(H, x, y){ var d = H[6]*x + H[7]*y + H[8]; return [(H[0]*x + H[1]*y + H[2]) / d, (H[3]*x + H[4]*y + H[5]) / d]; }
@@ -208,12 +219,30 @@
     var F = form.fiducials, src4 = [[F.TL.cx, F.TL.cy], [F.TR.cx, F.TR.cy], [F.BR.cx, F.BR.cy], [F.BL.cx, F.BL.cy]];
     var dst4 = [fd.TL, fd.TR, fd.BR, fd.BL].map(function(c){ return [c.cx * k, c.cy * k]; });
     var H = homography(src4, dst4); if(!H) return { ok: false, reason: 'homography', message: '답안지 모양을 계산하지 못했어요. 다시 찍어 주세요.', quality: q };
+    /* 보조 마크(변 가운데 3.5mm 검정 사각형)를 예측 위치 ±6mm 에서 찾아 8점 최소제곱으로 다시 맞춘다 */
+    var g = full.g, w = full.w, h = full.h, Sf = integral(g, w, h);
+    var mmPx0 = Math.hypot(dst4[1][0] - dst4[0][0], dst4[1][1] - dst4[0][1]) / (F.TR.cx - F.TL.cx);
+    var srcN = src4.slice(), dstN = dst4.slice(), auxFound = 0;
+    (form.aux_marks || []).forEach(function(a){
+      var p = apply(H, a.cx, a.cy), half = 1.75 * mmPx0, best = null;
+      for(var dy = -6 * mmPx0; dy <= 6 * mmPx0; dy += Math.max(1, mmPx0 * 0.5)) for(var dx = -6 * mmPx0; dx <= 6 * mmPx0; dx += Math.max(1, mmPx0 * 0.5)){
+        var cx = p[0] + dx, cy = p[1] + dy;
+        var x0 = Math.round(cx - half), y0 = Math.round(cy - half), x1 = Math.round(cx + half), y1 = Math.round(cy + half);
+        var X0 = Math.round(cx - half * 2.2), Y0 = Math.round(cy - half * 2.2), X1 = Math.round(cx + half * 2.2), Y1 = Math.round(cy + half * 2.2);
+        if(X0 < 0 || Y0 < 0 || X1 >= w || Y1 >= h || x1 - x0 < 2) continue;
+        var inner = boxMean(Sf, w, x0, y0, x1, y1), outerAll = boxMean(Sf, w, X0, Y0, X1, Y1);
+        var ring = (outerAll * (X1 - X0) * (Y1 - Y0) - inner * (x1 - x0) * (y1 - y0)) / Math.max(1, (X1 - X0) * (Y1 - Y0) - (x1 - x0) * (y1 - y0));
+        var sc = ring - inner; if(!best || sc > best.sc) best = { sc: sc, cx: cx, cy: cy, inner: inner, ring: ring };
+      }
+      if(best && best.ring - best.inner > 60 && best.inner < best.ring * 0.6){ srcN.push([a.cx, a.cy]); dstN.push([best.cx, best.cy]); auxFound++; }
+    });
+    if(auxFound >= 2){ var H2 = homographyLS(srcN, dstN); if(H2) H = H2; }
+    q.auxFound = auxFound;
     /* 품질: 답안지 폭(px) · 기울기 · 선명도 · 대비 */
     var pxPerMmX = Math.hypot(dst4[1][0] - dst4[0][0], dst4[1][1] - dst4[0][1]) / (F.TR.cx - F.TL.cx);
     var pxPerMmY = Math.hypot(dst4[3][0] - dst4[0][0], dst4[3][1] - dst4[0][1]) / (F.BL.cy - F.TL.cy);
     q.sheetWidthPx = Math.round(pxPerMmX * form.page_mm[0] / (full.scale || 1));
     q.aspectSkew = Math.abs(1 - (pxPerMmX / pxPerMmY));
-    var g = full.g, w = full.w, h = full.h;
     var ptsX = dst4.map(function(p){ return p[0]; }), ptsY = dst4.map(function(p){ return p[1]; });
     q.blur = Math.round(blurScore(g, w, h, Math.min.apply(null, ptsX), Math.min.apply(null, ptsY), Math.max.apply(null, ptsX), Math.max.apply(null, ptsY)));
     /* 검정 기준: 마크 테두리 / 흰 기준: 마크 안쪽 흰 띠와 종이 */
@@ -228,10 +257,58 @@
 
     /* 칸 측정: 안쪽 원(반지름 r_mm) 평균 밝기, 바깥 고리(2.6~3.4mm) 종이 밝기 → 채움률 */
     var rIn = form.r_mm * pxPerMmX, cells = [];
-    function measure(x, y){
-      var p = apply(H, x, y), inner = sampleDisc(g, w, h, p[0], p[1], rIn), paper = sampleRing(g, w, h, p[0], p[1], 2.6 * pxPerMmX, 3.4 * pxPerMmX, 'median');
-      var fill = (paper - inner) / Math.max(1, paper - black);
-      return { px: p[0], py: p[1], inner: inner, paper: paper, fill: Math.max(0, Math.min(1.2, fill)) };
+    /* 인쇄된 원 테두리(검정, 반지름≈r_mm)가 있는 자리로 ±1.6mm 안에서 달라붙기: 테두리 고리는 어둡고 바로 바깥은 종이색.
+       채워진 칸도 바깥 고리는 종이라 같은 식이 통한다. 문항 단위로 중앙값을 써서 한두 칸이 엉뚱한 곳에 붙는 것을 막는다 */
+    var rEdge0 = (form.r_mm - 0.35) * pxPerMmX, rEdge1 = (form.r_mm + 0.45) * pxPerMmX, rOut0 = (form.r_mm + 0.9) * pxPerMmX, rOut1 = (form.r_mm + 1.7) * pxPerMmX;
+    /* 고리 샘플 좌표표(한 번만) → 빠른 평균 */
+    function ringOffsets(r0, r1){ var o = [], a0 = r0 * r0, a1 = r1 * r1, R = Math.ceil(r1); for(var dy = -R; dy <= R; dy++) for(var dx = -R; dx <= R; dx++){ var d = dx*dx + dy*dy; if(d >= a0 && d <= a1) o.push(dx, dy); } return o; }
+    var offEdge = ringOffsets(rEdge0, rEdge1), offOut = ringOffsets(rOut0, rOut1);
+    function ringMean(cx, cy, offs){ var sum = 0, n = 0, X = Math.round(cx), Y = Math.round(cy); for(var i = 0; i < offs.length; i += 2){ var x = X + offs[i], y = Y + offs[i+1]; if(x >= 0 && y >= 0 && x < w && y < h){ sum += g[y*w + x]; n++; } } return n ? sum / n : 255; }
+    function edgeScore(px, py){ return ringMean(px, py, offOut) - ringMean(px, py, offEdge); }
+    /* 묶음 전체(원 5개 또는 10개)의 테두리 점수 합이 가장 큰 오프셋 — 이전 묶음의 보정값 주변 ±3.2mm, 0.4mm 간격 → 0.1mm 정밀화 */
+    var spanBlk = 3.2 * pxPerMmX, stepBlk = Math.max(1, 0.4 * pxPerMmX), prev = { dx: 0, dy: 0 }, maxAbs = 4.5 * pxPerMmX;   /* 이전 묶음 보정값 주변을 보되, 호모그래피 예측에서 4.5mm 넘게는 못 벗어남(숫자열 주기 6.6mm 별칭 방지) */
+    function blockOffset(pts){
+      var P = pts.map(function(o){ return apply(H, o.x, o.y); }), best = null;
+      function total(dx, dy){ var t = 0; for(var i = 0; i < P.length; i++) t += edgeScore(P[i][0] + dx, P[i][1] + dy); return t; }
+      var c0x = Math.max(-maxAbs + spanBlk, Math.min(maxAbs - spanBlk, prev.dx)), c0y = Math.max(-maxAbs + spanBlk, Math.min(maxAbs - spanBlk, prev.dy));
+      for(var dy = c0y - spanBlk; dy <= c0y + spanBlk; dy += stepBlk) for(var dx = c0x - spanBlk; dx <= c0x + spanBlk; dx += stepBlk){ var t = total(dx, dy); if(!best || t > best.t) best = { t: t, dx: dx, dy: dy }; }
+      var fine = Math.max(1, 0.12 * pxPerMmX), b2 = best;
+      for(var dy2 = best.dy - stepBlk; dy2 <= best.dy + stepBlk; dy2 += fine) for(var dx2 = best.dx - stepBlk; dx2 <= best.dx + stepBlk; dx2 += fine){ var t2 = total(dx2, dy2); if(t2 > b2.t) b2 = { t: t2, dx: dx2, dy: dy2 }; }
+      prev = { dx: b2.dx, dy: b2.dy };
+      return { P: P, dx: b2.dx, dy: b2.dy };
+    }
+    var spanCell = 0.7 * pxPerMmX, stepCell = Math.max(1, 0.25 * pxPerMmX);
+    /* ── 1차: 모든 묶음의 보정값 수집 → 2차 다항식 면으로 맞춤(이상치 제거) ── */
+    var groups = [];
+    Object.keys(form.choice).forEach(function(qn){ groups.push({ pts: form.choice[qn] }); });
+    Object.keys(form.short).forEach(function(qn){ ['백', '십', '일'].forEach(function(pl){ if(form.short[qn][pl]) groups.push({ pts: form.short[qn][pl] }); }); });
+    groups.forEach(function(G){ var B = blockOffset(G.pts); G.cx = G.pts.reduce(function(a, o){ return a + o.x; }, 0) / G.pts.length; G.cy = G.pts.reduce(function(a, o){ return a + o.y; }, 0) / G.pts.length; G.dx = B.dx; G.dy = B.dy; G.P = B.P; });
+    function fitPoly(key){   /* dx 또는 dy = a0 + a1 x + a2 y + a3 x² + a4 xy + a5 y² (x,y 는 mm/100) */
+      var use = groups.slice(), coef = null;
+      for(var it = 0; it < 3; it++){
+        var AtA = [], Atb = []; for(var i = 0; i < 6; i++){ AtA.push([0,0,0,0,0,0]); Atb.push(0); }
+        use.forEach(function(G){ var x = G.cx / 100, y = G.cy / 100, row = [1, x, y, x*x, x*y, y*y], v = G[key]; for(var i = 0; i < 6; i++){ Atb[i] += row[i] * v; for(var j = 0; j < 6; j++) AtA[i][j] += row[i] * row[j]; } });
+        coef = solve(AtA, Atb); if(!coef) return null;
+        var res = groups.map(function(G){ var x = G.cx / 100, y = G.cy / 100; return Math.abs(G[key] - (coef[0] + coef[1]*x + coef[2]*y + coef[3]*x*x + coef[4]*x*y + coef[5]*y*y)); });
+        var keep = groups.filter(function(G, i){ return res[i] <= 1.5 * pxPerMmX; });
+        if(keep.length === use.length || keep.length < 8) break; use = keep;
+      }
+      return coef;
+    }
+    var cfx = fitPoly('dx'), cfy = fitPoly('dy'), gi = 0;
+    function modelAt(cf, x, y){ x /= 100; y /= 100; return cf[0] + cf[1]*x + cf[2]*y + cf[3]*x*x + cf[4]*x*y + cf[5]*y*y; }
+    var outliers = 0;
+    function measureGroup(pts){
+      var G = groups[gi++], B = { P: G.P, dx: G.dx, dy: G.dy };
+      if(cfx && cfy){ var mx = modelAt(cfx, G.cx, G.cy), my = modelAt(cfy, G.cx, G.cy); if(Math.abs(mx - G.dx) > 1.5 * pxPerMmX || Math.abs(my - G.dy) > 1.5 * pxPerMmX){ B.dx = mx; B.dy = my; outliers++; } }
+      return pts.map(function(o, i){
+        var bx = B.P[i][0] + B.dx, by = B.P[i][1] + B.dy, best = null;
+        for(var dy = -spanCell; dy <= spanCell; dy += stepCell) for(var dx = -spanCell; dx <= spanCell; dx += stepCell){ var sc = edgeScore(bx + dx, by + dy); if(!best || sc > best.sc) best = { sc: sc, dx: dx, dy: dy }; }
+        var cx = bx + best.dx, cy = by + best.dy;
+        var inner = sampleDisc(g, w, h, cx, cy, rIn * 0.85), paper = ringMean(cx, cy, offOut);
+        var fill = (paper - inner) / Math.max(1, paper - black);
+        return { px: cx, py: cy, inner: inner, paper: paper, fill: Math.max(0, Math.min(1.2, fill)), snap: [(B.dx + best.dx) / pxPerMmX, (B.dy + best.dy) / pxPerMmX] };
+      });
     }
     var answers = {};
     var FILL = opts.fillMin || 0.42, AMB = opts.ambMin || 0.16;
@@ -245,7 +322,8 @@
       return { st: 'ok', pick: top, on: [top] };
     }      /* 연필 허용 → 채움 임계를 낮게, 모호 구간을 넓게 */
     Object.keys(form.choice).forEach(function(qn){
-      var opts5 = form.choice[qn].map(function(o){ var m = measure(o.x, o.y); m.v = o.v; m.q = +qn; m.key = 'q' + qn + ':' + o.v; cells.push(m); return m; });
+      var ms = measureGroup(form.choice[qn]);
+      var opts5 = form.choice[qn].map(function(o, i){ var m = ms[i]; m.v = o.v; m.q = +qn; m.key = 'q' + qn + ':' + o.v; cells.push(m); return m; });
       /* 기준선: 이 문항의 가장 밝은 3칸 중앙값(빈 칸에도 글자 잉크가 있으므로 상대 비교) */
       var base = opts5.map(function(m){ return m.fill; }).sort(function(a, b){ return a - b; });
       var floor = base[1];
@@ -257,7 +335,8 @@
     Object.keys(form.short).forEach(function(qn){
       var digits = [], st = 'ok', anyAmb = false, anyMulti = false, anyBlank = false, places = ['백', '십', '일'];
       places.forEach(function(pl){
-        var col = (form.short[qn][pl] || []).map(function(o){ var m = measure(o.x, o.y); m.v = o.v; m.q = +qn; m.key = 'q' + qn + ':' + pl + ':' + o.v; cells.push(m); return m; });
+        var msc = measureGroup(form.short[qn][pl] || []);
+        var col = (form.short[qn][pl] || []).map(function(o, i){ var m = msc[i]; m.v = o.v; m.q = +qn; m.key = 'q' + qn + ':' + pl + ':' + o.v; cells.push(m); return m; });
         var base = col.map(function(m){ return m.fill; }).sort(function(a, b){ return a - b; }); var floor = base[2];
         col.forEach(function(m){ m.rel = m.fill - floor; });
         var J = judge(col.map(function(m){ return { v: m.v, f: m.rel, m: m }; }));
@@ -270,6 +349,8 @@
       var value = (blanks === 3) ? null : String(parseInt(digits.map(function(d){ return d == null ? '0' : String(d); }).join(''), 10));
       answers[qn] = { kind: 'short', value: value, status: st, digits: digits };
     });
+    q.snapOutliers = outliers;
+    var snaps = cells.map(function(c){ return Math.hypot(c.snap[0], c.snap[1]); }); q.snapMeanMm = +(snaps.reduce(function(a, b){ return a + b; }, 0) / Math.max(1, snaps.length)).toFixed(2); q.snapMaxMm = +Math.max.apply(null, snaps.concat([0])).toFixed(2);
     var warped = opts.warp === false ? null : warp(full, H, opts.pxPerMm || 5, form);
     q.ms = Math.round(performance.now() - t0);
     var counts = { ok: 0, ambiguous: 0, multi: 0, blank: 0 };
