@@ -4678,6 +4678,8 @@ async function showApp() {
   enterFirstPanel();     // 첫 패널 진입 (allUsers/students 채워진 상태 보장)
   if (currentUser && currentUser.role === 'teacher' && typeof initQuestionAlert === 'function') setTimeout(initQuestionAlert, 700);
 
+  // 운영 일정 알림 팝업 (직원 전체) — 화면이 자리잡은 뒤, 이후 30분마다
+  if (typeof calAlarmCheck === 'function') { setTimeout(calAlarmCheck, 1200); if (!window._calAlarmTimer) window._calAlarmTimer = setInterval(calAlarmCheck, 30 * 60 * 1000); }
   // 알림 Realtime 구독 시작 (마스터 제외 전체)
   if (typeof initNotifyRealtime === 'function') initNotifyRealtime();
   // 로그인 중 받지 못한 알림 확인 (500ms 지연 — 화면 안정 후)
@@ -4741,6 +4743,7 @@ function buildTeacherSidebar() {
       ${menuItem('homework',  '📝',  '숙제 관리',      'switchPanel')}
       ${menuItem('questions', '💬',  '질문',           'switchPanel')}
       ${menuItem('worklog',   '📋',  '업무일지',       'switchPanel')}
+      <button class="menu-item" id="tmenu-calendar" onclick="openCalendarPage()"><span class="mi-icon">📅</span><span class="mi-label">운영 일정</span><span class="mi-ext" title="새 탭으로 열림">↗</span></button>
       ${menuItem('naje',      '📄',  '고등 일일N제',   'switchPanel', ((currentUser.school_level || 'high') === 'middle') ? 'display:none' : '')}
       ${menuItem('middle-naje-result', '✅', '중등 N제 결과', 'switchPanel', (['middle','both'].indexOf(currentUser.school_level || 'high') === -1) ? 'display:none' : '')}
       ${menuItem('admin-naje-plan',    '📘', '중등 N제 계획', 'switchPanel', (['middle','both'].indexOf(currentUser.school_level || 'high') === -1) ? 'display:none' : '')}
@@ -4813,6 +4816,7 @@ function buildAdminSidebar() {
    · kw: 검색 별칭 */
 var ADMIN_MENU_SECTIONS = [
   { id:'amsec-ops', icon:'🏠', label:'운영', items:[
+    { btnId:'amenu-calendar', onclick:"openCalendarPage()", icon:'📅', label:'운영 일정', kw:'달력 캘린더 일정 학사일정 시험일정 휴원 행사 수학여행 공휴일 calendar', ext:true },
     { btnId:'amenu-accounts', tabId:'admin-accounts', icon:'🏠', label:'계정 관리', kw:'학생 선생님 데스크 반 테스트계정 비밀번호 승인 account' },
     { btnId:'amenu-branches', tabId:'admin-branches', icon:'🏢', label:'분원 관리', kw:'지점 관 branch' },
     { btnId:'amenu-promote',  tabId:'admin-promote',  icon:'📈', label:'학년 승급', kw:'진급 졸업 예비고 예비중 새학년', cond:function(u){ return u.role === 'admin'; } },
@@ -4972,6 +4976,58 @@ function openStudycenterPage() {
 function openLobbyPage() {
   window.open('/lobby.html', '_blank');
 }
+// 운영 일정(달력): 별도 페이지를 새 탭으로 열기 (전 직원)
+function openCalendarPage() {
+  window.open('/calendar.html', '_blank');
+}
+/* ── 운영 일정 알림 팝업 — cal_events.remind (calendar.html 에서 설정) ──
+   규칙·전개는 assets/cal-core.js(CalRules). 닫은 기록은 localStorage(기기별). */
+var CAL_ALARM_SEEN_KEY = 'bmaps_cal_alarm_seen_v1';
+var _calAlarmItems = [];
+function calAlarmSeen(){ try { return JSON.parse(localStorage.getItem(CAL_ALARM_SEEN_KEY) || '{}') || {}; } catch(e){ return {}; } }
+function calAlarmMark(keys){
+  var seen = calAlarmSeen(), now = Date.now();
+  keys.forEach(function(k){ seen[k] = now; });
+  var cut = now - 60 * 86400000; Object.keys(seen).forEach(function(k){ if(seen[k] < cut) delete seen[k]; });   /* 60일 지난 기록 정리 */
+  try { localStorage.setItem(CAL_ALARM_SEEN_KEY, JSON.stringify(seen)); } catch(e){}
+}
+async function calAlarmCheck(){
+  if(!currentUser || currentUser.role === 'student' || !window.CalRules) return;
+  try {
+    var q = db.from('cal_events').select('id,title,category,school,starts_on,ends_on,all_day,start_time,rrule,exdates,visibility,share_user_ids,owner_id,memo,remind').not('remind', 'is', null);
+    if(currentUser.role !== 'admin') q = q.or('visibility.eq.all,owner_id.eq.' + currentUser.id + ',share_user_ids.cs.{' + currentUser.id + '}');
+    var r = await q;
+    if(r.error){ if(String(r.error.message || '').indexOf('remind') < 0) console.warn('[calAlarm]', r.error.message); return; }
+    var today = CalRules.ymd(new Date());
+    _calAlarmItems = CalRules.dueAlarms(r.data || [], today, currentUser.id, calAlarmSeen());
+    if(!_calAlarmItems.length) return;
+    calAlarmRender();
+    openModal('calAlarm');
+  } catch(e){ console.warn('[calAlarm]', e); }
+}
+function calAlarmRender(){
+  var CAT = { academy:'🏫 학원 운영', exam:'📝 학교 시험', school:'🎒 학교 행사', personal:'📌 개인 메모' };
+  var el = document.getElementById('cal-alarm-list'); if(!el) return;
+  el.innerHTML = _calAlarmItems.map(function(it, i){
+    var ev = it.ev, d = it.daysLeft === 0 ? '오늘' : 'D-' + it.daysLeft;
+    var when = it.start + (it.end !== it.start ? ' ~ ' + it.end : '') + (ev.all_day === false && ev.start_time ? ' ' + String(ev.start_time).slice(0,5) : '');
+    return '<div style="border:1.5px solid ' + (it.daysLeft === 0 ? '#fca5a5' : '#e5e7eb') + ';border-radius:10px;padding:10px 12px;background:' + (it.daysLeft === 0 ? '#fff5f5' : '#fff') + '">'
+      + '<div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;font-weight:800;color:' + (it.daysLeft === 0 ? '#dc2626' : '#b45309') + ';white-space:nowrap">' + d + '</span>'
+      + '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700;color:#1e293b">' + (ev.school ? _esc(ev.school) + ' · ' : '') + _esc(ev.title) + '</div>'
+      + '<div style="font-size:11.5px;color:#64748b;margin-top:2px">' + (CAT[ev.category] || '') + ' · ' + when + (it.mode === 'daily' ? ' · 매일 알림' : '') + (ev.memo ? '<br>' + _esc(ev.memo) : '') + '</div></div></div>'
+      + '<div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">'
+      + (it.mode === 'daily' ? '<button class="btn btn-sm" onclick="calAlarmDismiss(' + i + ',false)">오늘은 그만</button><button class="btn btn-sm" onclick="calAlarmDismiss(' + i + ',true)" style="color:#6b7280">이 일정 알림 끄기</button>' : '<button class="btn btn-sm" onclick="calAlarmDismiss(' + i + ',true)">확인</button>')
+      + '</div></div>';
+  }).join('');
+}
+function calAlarmDismiss(i, forever){
+  var it = _calAlarmItems[i]; if(!it) return;
+  calAlarmMark(forever && it.mode === 'daily' ? [it.key, it.ev.id + '|' + it.occ + '|off'] : [it.key]);
+  _calAlarmItems.splice(i, 1);
+  if(!_calAlarmItems.length){ closeModal('calAlarm'); return; }
+  calAlarmRender();
+}
+function calAlarmCloseAll(){ calAlarmMark(_calAlarmItems.map(function(it){ return it.key; })); _calAlarmItems = []; closeModal('calAlarm'); }
 // 입퇴원 상담: 별도 페이지를 새 탭으로 열기 (관리자/부원장)
 function openConsultPage() {
   window.open('/consult.html', '_blank');
@@ -16488,7 +16544,7 @@ async function loadDeskAccounts() {
   el.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
   try {
     var {data, error} = await db.from('users')
-      .select('id,username,name,role,status,branch_ids,permissions,created_at')
+      .select('id,username,name,role,status,branch_id,branch_ids,permissions,created_at')
       .eq('role','desk').order('created_at');
     if (error) throw error;
     var accounts = data || [];
@@ -16501,7 +16557,7 @@ async function loadDeskAccounts() {
     el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">'
       + accounts.map(function(a) {
         var branchIds   = Array.isArray(a.branch_ids) ? a.branch_ids : [];
-        var branchNames = branchIds.map(function(bid){ return branchMap[bid] || '?'; });
+        var branchNames = branchIds.map(function(bid){ return (branchMap[bid] || '?') + (a.branch_id === bid ? ' ★' : ''); });
         var permKeys    = getDeskPermKeys(a);
         var isActive    = a.status === 'active';
         var safe        = function(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,"&#39;"); };
@@ -16514,7 +16570,7 @@ async function loadDeskAccounts() {
             + '</div>'
             + '<span style="font-size:10px;padding:2px 8px;border-radius:100px;background:' + (isActive?'#dcfce7;color:#15803d':'#fee2e2;color:#dc2626') + ';font-weight:700">' + (isActive?'활성':'비활성') + '</span>'
           + '</div>'
-          + (branchNames.length ? '<div style="font-size:12px;color:#92400e;background:#fef3c7;padding:5px 10px;border-radius:7px">🏢 ' + branchNames.join(', ') + '</div>' : '')
+          + (branchNames.length ? '<div style="font-size:12px;color:#92400e;background:#fef3c7;padding:5px 10px;border-radius:7px" title="★ = 기본 분원">🏢 ' + branchNames.join(', ') + '</div>' : '')
           + (permKeys.length ? '<div style="font-size:11px;color:#6b7280">권한: ' + permKeys.length + '개</div>' : '')
           + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">'
             + '<button class="btn btn-sm" onclick="openDeskAccountModal(\'' + a.id + '\')" style="background:#fffbeb;border-color:#fde68a;color:#92400e;font-size:11px">✏️ 수정</button>'
@@ -16549,11 +16605,12 @@ async function openDeskAccountModal(editId) {
     var existBranches = existing && Array.isArray(existing.branch_ids) ? existing.branch_ids : [];
     branchBox.innerHTML = (_allBranches||[]).map(function(b) {
       return '<label style="display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;font-size:12px;background:#fff;border:1px solid #e5e7eb;border-radius:7px">'
-        + '<input type="checkbox" name="desk-branch" value="' + b.id + '"' + (existBranches.indexOf(b.id) !== -1 ? ' checked' : '') + ' style="accent-color:#f59e0b">'
+        + '<input type="checkbox" name="desk-branch" value="' + b.id + '"' + (existBranches.indexOf(b.id) !== -1 ? ' checked' : '') + ' style="accent-color:#f59e0b" onchange="deskDefaultBranchRefresh()">'
         + b.name
         + '</label>';
     }).join('') || '<div style="font-size:12px;color:#9ca3af;padding:6px">분원 없음</div>';
   }
+  deskDefaultBranchRefresh(existing ? (existing.branch_id || '') : '');
 
   // 권한 체크박스
   var permBox = document.getElementById('desk-perm-checkboxes');
@@ -16570,6 +16627,15 @@ async function openDeskAccountModal(editId) {
   openModal('deskAccount');
 }
 
+/* 기본 분원 select = 체크된 담당 분원만. 선택값은 유지하되 체크가 풀리면 비운다 */
+function deskDefaultBranchRefresh(keepId) {
+  var sel = document.getElementById('inp-desk-default-branch'); if (!sel) return;
+  var keep = keepId !== undefined ? keepId : sel.value;
+  var checked = Array.from(document.querySelectorAll('input[name="desk-branch"]:checked')).map(function(c){ return c.value; });
+  var bmap = {}; (_allBranches||[]).forEach(function(b){ bmap[b.id] = b.name; });
+  sel.innerHTML = '<option value="">첫 번째 담당 분원</option>' + checked.map(function(id){ return '<option value="' + id + '">' + _esc(bmap[id] || '') + '</option>'; }).join('');
+  sel.value = (keep && checked.indexOf(keep) !== -1) ? keep : '';
+}
 async function saveDeskAccount() {
   var id       = document.getElementById('inp-desk-id')?.value || '';
   var isEdit   = !!id;
@@ -16591,8 +16657,10 @@ async function saveDeskAccount() {
   document.querySelectorAll('input[name="desk-perm"]:checked').forEach(function(c){ selectedPerms[c.value] = true; });
 
   try {
+    var defaultBranch = document.getElementById('inp-desk-default-branch')?.value || null;
+    if (defaultBranch && selectedBranches.indexOf(defaultBranch) === -1) defaultBranch = null;
     if (isEdit) {
-      var update = { name, username, branch_ids: selectedBranches, permissions: selectedPerms };
+      var update = { name, username, branch_ids: selectedBranches, permissions: selectedPerms, branch_id: defaultBranch };
       if (password) update.password = password;
       var {error} = await db.from('users').update(update).eq('id', id);
       if (error) throw error;
@@ -16601,7 +16669,7 @@ async function saveDeskAccount() {
       if (exists) { alert('이미 사용 중인 아이디입니다'); return; }
       var {error: err2} = await db.from('users').insert({
         username, password, name, role: 'desk', status: 'active',
-        branch_ids: selectedBranches, permissions: selectedPerms
+        branch_ids: selectedBranches, permissions: selectedPerms, branch_id: defaultBranch
       });
       if (err2) throw err2;
     }
@@ -34656,6 +34724,19 @@ tryAutoLogin();
 </div>
 
 <!-- 데스크 계정 추가/수정 -->
+<div class="modal-backdrop" id="modal-calAlarm" style="z-index:3200">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🔔 운영 일정 알림</div>
+    <div id="cal-alarm-list" style="display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto"></div>
+    <div style="font-size:11px;color:#9ca3af;margin-top:8px">닫은 기록은 이 기기(브라우저)에만 남습니다 · "매일 지속" 알림은 다음 날 다시 뜹니다</div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-full" onclick="openCalendarPage()">📅 달력 열기</button>
+      <button class="btn btn-primary btn-full" onclick="calAlarmCloseAll()">오늘은 모두 닫기</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="modal-testAccount">
   <div class="modal" style="max-width:560px">
     <div class="modal-handle"></div>
@@ -34719,6 +34800,10 @@ tryAutoLogin();
       <div id="desk-branch-checkboxes" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px;padding:10px;background:#f9fafb;border:1.5px solid var(--border);border-radius:10px;max-height:160px;overflow-y:auto">
         <div style="font-size:12px;color:#9ca3af;padding:8px;grid-column:1/-1">분원을 불러오는 중...</div>
       </div>
+    </div>
+    <div class="form-group">
+      <label>기본 분원 <span style="font-size:11px;color:#9ca3af;font-weight:400">(운영 일정 등 분원을 고르는 화면에서 처음 선택되는 분원)</span></label>
+      <select id="inp-desk-default-branch"><option value="">첫 번째 담당 분원</option></select>
     </div>
     <div class="form-group">
       <label>부여 권한 <span style="font-size:11px;color:#9ca3af;font-weight:400">(체크된 메뉴만 사이드바에 표시)</span></label>
@@ -34838,6 +34923,7 @@ tryAutoLogin();
   <img id="viewerImg" src="" alt="">
   <div id="viewerCaption" style="display:none;position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.6);color:#fff;padding:6px 16px;border-radius:100px;font-size:14px;font-weight:600;white-space:nowrap;pointer-events:none;"></div>
 </div>
+<script src="assets/cal-core.js?v=1"></script>
 <script src="assets/exam-codex.js?v=2"></script>
 </body>
 </html>
