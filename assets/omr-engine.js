@@ -345,7 +345,10 @@
         else { digits.push(J.pick.v); if(J.st === 'multi') anyMulti = true; else if(J.st === 'ambiguous') anyAmb = true; }
       });
       var blanks = digits.filter(function(d){ return d == null; }).length;
-      if(blanks === 3) st = 'blank'; else if(anyMulti) st = 'multi'; else if(blanks || anyAmb) st = 'ambiguous';
+      /* 앞자리(백·십)만 비고 일의 자리가 있으면 빈 칸은 0 — "7 → 일의 자리만 칠함" 을 그대로 읽는다.
+         일의 자리가 비었거나 가운데가 비면(백 칠하고 십 빔) 7인지 70인지 알 수 없으니 '애매' */
+      var leadingOnly = blanks > 0 && blanks < 3 && digits[2] != null && !(digits[0] != null && digits[1] == null);
+      if(blanks === 3) st = 'blank'; else if(anyMulti) st = 'multi'; else if((blanks && !leadingOnly) || anyAmb) st = 'ambiguous';
       var value = (blanks === 3) ? null : String(parseInt(digits.map(function(d){ return d == null ? '0' : String(d); }).join(''), 10));
       answers[qn] = { kind: 'short', value: value, status: st, digits: digits };
     });
