@@ -321,13 +321,21 @@
       if(top.f < FILL * 0.7) return { st: 'ambiguous', pick: top, on: [top] };
       return { st: 'ok', pick: top, on: [top] };
     }      /* 연필 허용 → 채움 임계를 낮게, 모호 구간을 넓게 */
+    /* ── 측정(전부) → 글자별 기준선 → 판정 ── */
+    var measured = { choice: {}, short: {} };
+    Object.keys(form.choice).forEach(function(qn){ var ms = measureGroup(form.choice[qn]); measured.choice[qn] = form.choice[qn].map(function(o, i){ var m = ms[i]; m.v = o.v; m.q = +qn; m.key = 'q' + qn + ':' + o.v; cells.push(m); return m; }); });
+    Object.keys(form.short).forEach(function(qn){ measured.short[qn] = {}; ['백', '십', '일'].forEach(function(pl){ if(!form.short[qn][pl]) return; var msc = measureGroup(form.short[qn][pl]); measured.short[qn][pl] = form.short[qn][pl].map(function(o, i){ var m = msc[i]; m.v = o.v; m.q = +qn; m.key = 'q' + qn + ':' + pl + ':' + o.v; cells.push(m); return m; }); }); });
+    /* 글자별 기준선: 같은 글자(①~⑤ / ⓪~⑨)의 모든 칸 중 아래 35% 지점 값 — 대부분 빈 칸이라 '그 글자의 인쇄 잉크' 가 된다 */
+    function pct(arr, p){ var a = arr.slice().sort(function(x, y){ return x - y; }); return a.length ? a[Math.min(a.length - 1, Math.floor(a.length * p))] : 0; }
+    var baseC = {}, baseD = {};
+    [1,2,3,4,5].forEach(function(v){ var vals = []; Object.keys(measured.choice).forEach(function(qn){ measured.choice[qn].forEach(function(m){ if(m.v === v) vals.push(m.fill); }); }); baseC[v] = pct(vals, 0.35); });
+    for(var dv = 0; dv <= 9; dv++){ (function(v){ var vals = []; Object.keys(measured.short).forEach(function(qn){ Object.keys(measured.short[qn]).forEach(function(pl){ measured.short[qn][pl].forEach(function(m){ if(m.v === v) vals.push(m.fill); }); }); }); baseD[v] = pct(vals, 0.35); })(dv); }
     Object.keys(form.choice).forEach(function(qn){
-      var ms = measureGroup(form.choice[qn]);
-      var opts5 = form.choice[qn].map(function(o, i){ var m = ms[i]; m.v = o.v; m.q = +qn; m.key = 'q' + qn + ':' + o.v; cells.push(m); return m; });
-      /* 기준선: 이 문항의 가장 밝은 3칸 중앙값(빈 칸에도 글자 잉크가 있으므로 상대 비교) */
-      var base = opts5.map(function(m){ return m.fill; }).sort(function(a, b){ return a - b; });
-      var floor = base[1];
-      var rel = opts5.map(function(m){ return { v: m.v, f: m.fill - floor, raw: m.fill }; });
+      var opts5 = measured.choice[qn];
+      /* 글자 잉크를 뺀 값에서 다시 이 문항의 바닥(2번째로 낮은 값)을 빼 조명 차이도 제거 */
+      var r1 = opts5.map(function(m){ return m.fill - (baseC[m.v] || 0); });
+      var floor = r1.slice().sort(function(a, b){ return a - b; })[1];
+      var rel = opts5.map(function(m, i){ return { v: m.v, f: r1[i] - floor, raw: m.fill }; });
       var J = judge(rel);
       answers[qn] = { kind: 'choice', value: J.pick ? String(J.pick.v) : null, status: J.st, marks: J.on.map(function(r){ return r.v; }), scores: rel.map(function(r){ return +r.f.toFixed(2); }) };
       opts5.forEach(function(m){ var r = rel.find(function(x){ return x.v === m.v; }); m.rel = r.f; m.on = J.on.indexOf(r) >= 0; m.amb = !m.on && r.f >= AMB; });
@@ -335,10 +343,11 @@
     Object.keys(form.short).forEach(function(qn){
       var digits = [], st = 'ok', anyAmb = false, anyMulti = false, anyBlank = false, places = ['백', '십', '일'];
       places.forEach(function(pl){
-        var msc = measureGroup(form.short[qn][pl] || []);
-        var col = (form.short[qn][pl] || []).map(function(o, i){ var m = msc[i]; m.v = o.v; m.q = +qn; m.key = 'q' + qn + ':' + pl + ':' + o.v; cells.push(m); return m; });
-        var base = col.map(function(m){ return m.fill; }).sort(function(a, b){ return a - b; }); var floor = base[2];
-        col.forEach(function(m){ m.rel = m.fill - floor; });
+        var col = measured.short[qn][pl] || [];
+        if(!col.length){ anyBlank = true; digits.push(null); return; }
+        var r1 = col.map(function(m){ return m.fill - (baseD[m.v] || 0); });
+        var floor = r1.slice().sort(function(a, b){ return a - b; })[2];
+        col.forEach(function(m, i){ m.rel = r1[i] - floor; });
         var J = judge(col.map(function(m){ return { v: m.v, f: m.rel, m: m }; }));
         col.forEach(function(m){ m.on = J.on.some(function(r){ return r.m === m; }); m.amb = !m.on && m.rel >= AMB; });
         if(J.st === 'blank'){ anyBlank = true; digits.push(null); }
