@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="BMAPS">
   <link rel="apple-touch-icon" href="/icon-192.png">
-  <title>BMAPS 운영 일정 v1.10</title>
+  <title>BMAPS 운영 일정 v1.11</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -328,7 +328,7 @@
    · 반복: rrule {freq, interval, byday[], until} + exdates / 공개: all·shared·private + share_user_ids
    · 공휴일은 코드 내장(2025~2027) — 해마다 아래 HOLIDAYS 에 추가
 ============================================================ */
-window.CALENDAR_VERSION = 'v1.10';
+window.CALENDAR_VERSION = 'v1.11';
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -723,6 +723,7 @@ function guessLevel(name){ var n = String(name || ''); if(/고등학교|여고$|
 function levelLabel(l){ return l === 'high' ? '고등' : l === 'middle' ? '중등' : l === 'elem' ? '초등' : ''; }
 var _evSchools = [], _evLevelManual = false;   /* 학교급을 손으로 고르면 모든 학교에 같은 값, 아니면 학교 이름으로 각각 추정 */
 function evSchoolAdd(){
+  var inp0 = $('ev-school'); if(inp0 && inp0.value.trim()){ var c0 = canonSchool(inp0.value.trim()); if(c0 !== inp0.value.trim()) inp0.value = c0; }
   var inp = $('ev-school'), v = (inp.value || '').trim(); if(!v) return;
   var editing = !!$('ev-id').value;
   if(editing) _evSchools = [v]; else if(_evSchools.indexOf(v) < 0) _evSchools.push(v);
@@ -1082,8 +1083,11 @@ async function neisFetch(){
     /* ── 기존 저장분과 대조(동기화) — 같은 학교·같은 기간·나이스 출처 ──
        같은 제목+같은 시작일 = 이미 있음 / 같은 제목인데 날짜가 다름 = 날짜 변경(기존 일정 갱신) / 나이스에 없는 기존 일정 = 사라짐(삭제 후보) */
     var schoolName = neisSchoolName();
-    var ex = await db.from('cal_events').select('id,title,starts_on,ends_on,source,category,branch_id').eq('school', schoolName).in('source', ['neis', 'site']).gte('ends_on', $('neis-from').value).lte('starts_on', $('neis-to').value);
-    var existing = (ex.data || []), used = {};
+    /* 같은 기간의 학교 시험·행사 전부를 읽어 ① 정식 학교명 + 나이스·홈페이지 출처(동기화 대상) ② 그 밖의 '수기' 일정 중 학교명·제목이 이 학교를 가리키는 것(갱신 후보)으로 나눈다 */
+    var ex = await db.from('cal_events').select('id,title,starts_on,ends_on,source,category,branch_id,school,memo').in('category', ['exam', 'school']).gte('ends_on', $('neis-from').value).lte('starts_on', $('neis-to').value);
+    var allEx = (ex.data || []);
+    var existing = allEx.filter(function(e){ return e.school === schoolName && (e.source === 'neis' || e.source === 'site'); }), used = {};
+    var manual = allEx.filter(function(e){ return !(e.source === 'neis' || e.source === 'site') && (sameSchool(e.school || '', schoolName) || sameSchool(e.title || '', schoolName)); });
     var base = function(t){ return String(t || '').replace(/\s*\((?:[1-3]학년(?:·)?)+\)\s*$/, '').trim(); };
     merged.forEach(function(r){
       r.action = 'new'; r.exist = null;
@@ -1092,13 +1096,27 @@ async function neisFetch(){
       if(!exact) exact = existing.find(function(e){ return !used[e.id] && e.starts_on === r.start && e.ends_on === r.end && /고사|시험|평가/.test(e.title) && /고사|시험|평가/.test(r.title); });
       if(exact){ r.action = 'same'; r.exist = exact; used[exact.id] = 1; return; }
       var moved = existing.find(function(e){ return !used[e.id] && base(e.title) === r.title; });
-      if(moved){ r.action = 'changed'; r.exist = moved; used[moved.id] = 1; }
+      if(moved){ r.action = 'changed'; r.exist = moved; used[moved.id] = 1; return; }
+      /* 수기 등록 갱신: 시험 뜻(학기·중간/기말)이 같거나, 뜻을 못 읽으면 같은 종류(시험/행사)로 기간이 겹치거나 시작일이 7일 안 */
+      var rk = examKey(r.title);
+      var man = manual.find(function(e){
+        if(used[e.id]) return false;
+        var ek = examKey(e.title);
+        if(rk && ek) return rk === ek || (rk.slice(1) === ek.slice(1) && (rk[0] === '?' || ek[0] === '?') && Math.abs(daysBetween(e.starts_on, r.start)) <= 45);
+        var isExam = /고사|시험|평가/.test(r.title), eExam = /고사|시험|평가/.test(e.title) || e.category === 'exam';
+        if(isExam !== eExam) return false;
+        /* 행사는 날짜만으로 묶으면 다른 행사를 덮을 수 있어, 제목에 공통 낱말(2글자 겹침)이 있어야 한다: 체육대회↔체육한마당 ○, 학부모총회↔체육한마당 × */
+        if(!isExam && !titleOverlap(e.title, r.title, schoolName)) return false;
+        return (e.starts_on <= r.end && r.start <= e.ends_on) || Math.abs(daysBetween(e.starts_on, r.start)) <= 7;
+      });
+      if(man){ r.action = 'changed'; r.exist = man; r.manual = true; used[man.id] = 1; }
     });
     _neisGone = existing.filter(function(e){ return !used[e.id]; });
     var nNew = merged.filter(function(r){ return r.action === 'new'; }).length, nSame = merged.filter(function(r){ return r.action === 'same'; }).length, nChg = merged.filter(function(r){ return r.action === 'changed'; }).length;
-    $('neis-msg').textContent = '나이스 ' + rows.length + '건 → ' + merged.length + '건 · 새로 ' + nNew + ' · 이미 있음 ' + nSame + ' · 날짜 변경 ' + nChg + ' · 사라짐 ' + _neisGone.length + hint;
+    $('neis-msg').textContent = '나이스 ' + rows.length + '건 → ' + merged.length + '건 · 새로 ' + nNew + ' · 이미 있음 ' + nSame + ' · 날짜 변경 ' + (nChg - merged.filter(function(r){ return r.manual; }).length) + ' · 수기 등록 갱신 ' + merged.filter(function(r){ return r.manual; }).length + ' · 사라짐 ' + _neisGone.length + hint;
     var badge = function(r){
       if(r.action === 'same') return '<span style="color:#94a3b8;font-size:11px">이미 있음</span>';
+      if(r.action === 'changed' && r.manual) return '<span style="color:#7c3aed;font-size:11px;font-weight:700">수기 등록 갱신</span> <span style="color:#94a3b8;font-size:11px">기존 「' + esc(r.exist.title) + '」 ' + r.exist.starts_on + (r.exist.ends_on !== r.exist.starts_on ? '~' + r.exist.ends_on : '') + (r.exist.school && r.exist.school !== schoolName ? ' · 학교명 ' + esc(r.exist.school) + ' → ' + esc(schoolName) : '') + '</span>';
       if(r.action === 'changed') return '<span style="color:#b45309;font-size:11px;font-weight:700">날짜 변경</span> <span style="color:#94a3b8;font-size:11px">기존 ' + r.exist.starts_on + (r.exist.ends_on !== r.exist.starts_on ? '~' + r.exist.ends_on : '') + ' → 갱신</span>';
       return '<span style="color:#15803d;font-size:11px;font-weight:700">새로</span>';
     };
@@ -1113,6 +1131,59 @@ async function neisFetch(){
   } catch(e){ $('neis-msg').textContent = '받기 실패: ' + (e.message || e); }
 }
 function shortSchool(nm){ return String(nm || '').replace(/고등학교$/, '고').replace(/중학교$/, '중').replace(/초등학교$/, '초'); }
+/* ── 학교명 변칙 인식 ─────────────────────────────────────
+   '광명북중학교' → 광명북중 / 광북중(첫·끝 글자 축약) / 인천청라고 → 청라고(지역 접두 제거) 등 별칭을 만들어 같은 학교인지 본다 */
+var SCHOOL_REGION = /^(서울|인천|경기|부천|광명|구로|안양|시흥|김포|고양|수원|성남|용인|화성|안산|의정부|남양주|평택|파주)/;
+function schoolKey(nm){
+  var n = String(nm || '').replace(/\s+/g, '').replace(/\(.*?\)/g, '');
+  n = n.replace(/여자고등학교$/, '여고').replace(/여자중학교$/, '여중').replace(/고등학교$/, '고').replace(/중학교$/, '중').replace(/초등학교$/, '초');
+  return n;
+}
+function schoolAliases(nm){
+  var k = schoolKey(nm); if(!k) return [];
+  var m = k.match(/^(.*?)(여고|여중|고|중|초)$/); if(!m) return [k];
+  var base = m[1], suf = m[2], out = {}; out[k] = 1;
+  var bases = [base];
+  var r = base.match(SCHOOL_REGION); if(r && base.length - r[0].length >= 2) bases.push(base.slice(r[0].length));   /* 인천청라 → 청라 */
+  bases.forEach(function(b){
+    out[b + suf] = 1;
+    if(b.length >= 3) out[b[0] + b[b.length - 1] + suf] = 1;                     /* 광명북 → 광북 */
+    if(b.length >= 4) out[b.slice(0, 2) + suf] = 1;                                /* 네 글자 이상은 앞 두 글자(서울공연예술 → 서울…은 제외되게 길이 제한) */
+    if(suf === '여고') out[b + '고'] = 1; if(suf === '여중') out[b + '중'] = 1;
+  });
+  return Object.keys(out).filter(function(a){ return a.length >= 3; });
+}
+/* a(학교명 또는 제목)에 b 학교의 별칭이 들어 있는가 */
+function sameSchool(a, b){
+  var ka = schoolKey(a), ta = String(a || '').replace(/\s+/g, ''); if(!ka && !ta) return false;
+  var al = schoolAliases(b);
+  if(al.indexOf(ka) >= 0) return true;
+  /* 제목 안에 별칭이 통째로 들어 있을 때(앞뒤가 한글 음절이 아니어야 '청라고'가 '청라고등'에 과잉 매칭되지 않음) */
+  return al.some(function(x){ var i = ta.indexOf(x); if(i < 0) return false; var nx = ta[i + x.length]; return !nx || !/[가-힣]/.test(nx) || /^(학교|등학교)/.test(ta.slice(i + x.length)); });
+}
+/* 학생 명단 학교명(_schools) 중 같은 학교가 있으면 그 정식 표기로 */
+function canonSchool(nm){
+  if(!nm) return nm; var t = String(nm).trim();
+  if(_schools.indexOf(t) >= 0) return t;
+  var hit = _schools.filter(function(sname){ return sameSchool(t, sname) || sameSchool(sname, t); });
+  return hit.length === 1 ? hit[0] : t;
+}
+/* 두 제목에 공통 2글자 조각이 있는가(학교명·흔한 말은 뺀 뒤) */
+function titleOverlap(a, b, school){
+  var strip = function(t){ var x = String(t || '').replace(/\s+/g, ''); schoolAliases(school).forEach(function(al){ x = x.split(al).join(''); }); return x.replace(/대회|한마당|행사|축제|의날|의\s*날|학교|학년|전체|실시|기간|및|과|와/g, ''); };
+  var A = strip(a), B = strip(b), grams = {};
+  for(var i = 0; i + 1 < A.length; i++) if(/^[가-힣A-Za-z0-9]{2}$/.test(A.substr(i, 2))) grams[A.substr(i, 2)] = 1;
+  for(var j = 0; j + 1 < B.length; j++) if(grams[B.substr(j, 2)]) return true;
+  return false;
+}
+/* 시험 제목의 뜻: 학기(1/2) + 종류(중간=1차, 기말=2차). 없으면 null */
+function examKey(title){
+  var t = String(title || '').replace(/\s+/g, '');
+  var term = /1학기|일학기/.test(t) ? 1 : /2학기|이학기/.test(t) ? 2 : 0;
+  var kind = /중간|1차|일차/.test(t) ? 'mid' : /기말|2차|이차|학년말/.test(t) ? 'final' : '';
+  if(!/고사|시험|평가/.test(t) || !kind) return null;
+  return (term || '?') + ':' + kind;
+}
 function neisSchoolName(){ var full = _neisSchool.SCHUL_NM, short = shortSchool(full); return _schools.indexOf(short) >= 0 ? short : (_schools.indexOf(full) >= 0 ? full : short); }
 var _neisGone = [], _siteNote = '';
 /* 학교 홈페이지 학사일정 — /api/school-cal (경기 goegm.kr · 서울 sen.hs.kr/ms.kr · 인천 icehs.kr/icems.kr). 실패해도 나이스 결과는 그대로 */
@@ -1139,7 +1210,7 @@ async function neisSave(){
   var ins = picks.filter(function(r){ return r.action !== 'changed'; }), upd = picks.filter(function(r){ return r.action === 'changed'; });
   if(!picks.length && !gone.length){ $('neis-msg').textContent = '선택된 일정이 없습니다'; return; }
   var schoolName = neisSchoolName(), lvl = $('neis-level').value || null, brp = branchPatch(brChipsGet('neis-branch'));
-  if(!confirm(schoolName + ' 일정을 반영합니다.\n새로 ' + ins.length + '건 · 날짜 갱신 ' + upd.length + '건 · 삭제 ' + gone.length + '건\n계속할까요?')) return;
+  if(!confirm(schoolName + ' 일정을 반영합니다.\n새로 ' + ins.length + '건 · 갱신 ' + upd.length + '건(수기 등록 ' + upd.filter(function(r){ return r.manual; }).length + '건 포함) · 삭제 ' + gone.length + '건\n계속할까요?')) return;
   $('neis-save').disabled = true;
   try {
     if(ins.length){
@@ -1150,6 +1221,7 @@ async function neisSave(){
       var r = upd[i];
       var patch = { starts_on:r.start, ends_on:r.end, title:neisTitle(r), category:r.category, updated_at:new Date().toISOString() };
       if(lvl) patch.school_level = lvl;
+      if(r.manual){ patch.school = schoolName; patch.source = (r.src === 'site' ? 'site' : 'neis'); patch.memo = (r.exist.memo ? r.exist.memo + '\n' : '') + '수기 등록 「' + r.exist.title + '」을 ' + (r.src === 'site' ? '홈페이지' : '나이스') + ' 일정으로 갱신'; }
       var u = await db.from('cal_events').update(patch).eq('id', r.exist.id); if(u.error) throw u.error;
     }
     if(gone.length){ var d = await db.from('cal_events').delete().in('id', gone.map(function(e){ return e.id; })); if(d.error) throw d.error; }
