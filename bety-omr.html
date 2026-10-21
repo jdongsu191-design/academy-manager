@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 베티 OMR [v1.5-ink]</title>
+<title>BMAPS · 베티 OMR [v1.6-scan]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -252,9 +252,26 @@
 .in-ttl{font-size:17px;font-weight:900;color:#1e293b;margin-bottom:10px}
 .in-list{margin:0 0 14px;padding-left:20px;font-size:13px;color:#475569;line-height:1.85}
 .in-list b{color:#b91c1c}
+/* ── 종이 OMR 사진 제출 ── */
+.sc-steps li{margin:2px 0}
+.sc-wrap{background:#0f172a;border-radius:10px;overflow:auto;max-height:52vh;margin:10px 0}
+.sc-wrap canvas{display:block;width:100%;height:auto}
+.sc-warn{display:none;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:8px;padding:8px 10px;font-size:12.5px;margin:8px 0}
+.sc-warn.on{display:block}
+.sc-sum{display:flex;gap:6px;flex-wrap:wrap;font-size:12px;margin:6px 0 8px}
+.sc-sum span{background:#f1f5f9;border-radius:999px;padding:3px 10px;font-weight:700;color:#334155}
+.sc-sum span.b{background:#fee2e2;color:#991b1b} .sc-sum span.a{background:#fef3c7;color:#92400e} .sc-sum span.g{background:#dcfce7;color:#166534}
+.sc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-bottom:10px}
+.sc-q{display:flex;align-items:center;gap:6px;border:1.5px solid #e2e8f0;border-radius:9px;padding:5px 8px;background:#fff}
+.sc-q.a{border-color:#f59e0b;background:#fffbeb} .sc-q.b{border-color:#ef4444;background:#fef2f2} .sc-q.m{border-color:#ef4444;background:#fef2f2} .sc-q.e{border-color:#2563eb;background:#eff6ff}
+.sc-q b{width:26px;font-size:13px;color:#1e293b} .sc-q select,.sc-q input{flex:1;min-width:0;padding:5px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;background:#fff}
+.sc-q small{font-size:10px;color:#64748b;white-space:nowrap}
+.sc-btn2{width:100%;margin-top:8px;padding:12px;font-size:14px;border:1.5px dashed #94a3b8;background:#f8fafc;color:#1e293b;border-radius:10px;cursor:pointer;font-weight:800}
+.sc-busy{display:none;text-align:center;padding:16px;font-weight:700;color:#334155} .sc-busy.on{display:block}
 </style>
 <!-- 매일 새벽 5시 자동 새로고침 (공용) -->
 <script src="/auto-reload.js"></script>
+<script src="assets/omr-engine.js?v=1"></script>
 </head>
 <body>
 <div class="bo-top">
@@ -292,7 +309,9 @@
       </ul>
       <div class="hint" id="in-resume" style="display:none;margin-bottom:10px"></div>
       <button class="btn btn-primary" style="width:100%;padding:14px;font-size:16px"
-              id="in-go" onclick="boStartExam()">시험 시작</button>
+              id="in-go" onclick="boStartExam()">시험 시작 (화면으로 풀기)</button>
+      <button class="sc-btn2" id="in-scan" onclick="boScanOpen()">📷 종이 OMR 답안지를 사진으로 제출</button>
+      <div class="hint" style="margin-top:6px">종이 시험지로 푼 뒤 OMR 답안지를 찍어 올리면 자동으로 읽어 채점합니다.</div>
       <button class="btn" style="width:100%;margin-top:8px" onclick="boShowHome()">← 회차 목록으로</button>
     </div>
   </div>
@@ -307,6 +326,7 @@
       </div>
       <div class="omr-timer" id="omr-timer" style="display:none">--:--</div>
       <button class="omr-sub" id="omr-sub" onclick="boSubmit()" style="display:none">제출</button>
+      <button class="pg-zoom" id="omr-scan-btn" onclick="boScanOpen()" style="display:none" title="종이 OMR 답안지를 찍어 자동 인식">📷 OMR 사진</button>
     </div>
     <div id="bo-questions"></div>
     <div id="bo-paged" style="display:none">
@@ -354,6 +374,32 @@
           <button class="pg-nav" id="pg-next" onclick="boGo(1)" aria-label="다음 문항">›</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- 종이 OMR 사진 제출 -->
+  <div id="view-scan" style="display:none">
+    <div class="card">
+      <div class="in-ttl" id="sc-title">-</div>
+      <div class="hint" id="sc-form" style="margin-bottom:8px"></div>
+      <ul class="in-list sc-steps" id="sc-steps">
+        <li>종이 OMR 답안지에 마킹을 끝냅니다. (컴퓨터용 사인펜 권장, 연필은 진하게)</li>
+        <li>밝은 곳에서 <b>네 모서리의 검은 표식이 모두 보이게</b> 정면에서 찍습니다.</li>
+        <li>인식 결과를 확인하고, 주황·빨강 칸은 직접 고친 뒤 제출합니다.</li>
+      </ul>
+      <input type="file" id="sc-file" accept="image/*" capture="environment" style="display:none" onchange="boScanFile(this)">
+      <button class="btn btn-primary" id="sc-shoot" style="width:100%;padding:14px;font-size:16px" onclick="document.getElementById('sc-file').click()">📷 답안지 촬영 / 사진 고르기</button>
+      <div class="sc-busy" id="sc-busy">답안지를 읽는 중...</div>
+      <div class="hint" id="sc-msg" style="margin-top:8px"></div>
+      <div id="sc-result" style="display:none">
+        <div class="sc-warn" id="sc-warn"></div>
+        <div class="sc-wrap"><canvas id="sc-cv"></canvas></div>
+        <div class="sc-sum" id="sc-sum"></div>
+        <div class="hint" style="margin-bottom:6px">초록 = 확실 · 주황 = 흐리거나 애매함 · 빨강 = 무응답/중복. 아래 칸에서 바로 고칠 수 있습니다.</div>
+        <div class="sc-grid" id="sc-grid"></div>
+        <div class="btns"><button class="btn btn-full" onclick="document.getElementById('sc-file').click()">다시 찍기</button><button class="btn btn-primary btn-full" id="sc-go" onclick="boScanSubmit()">이 답으로 제출</button></div>
+      </div>
+      <button class="btn" style="width:100%;margin-top:10px" onclick="boScanBack()">← 돌아가기</button>
     </div>
   </div>
 
@@ -481,7 +527,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v1.5-ink';
+window.BETY_OMR_VERSION = 'v1.6-scan';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -526,7 +572,7 @@ function boEsc(v){ return String(v==null?'':v)
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function boView(name){
   if(name !== 'omr') document.body.classList.remove('ko-wide');
-  ['home','intro','omr','result','code','done'].forEach(function(v){
+  ['home','intro','omr','result','code','done','scan'].forEach(function(v){
     document.getElementById('view-'+v).style.display = (v===name) ? '' : 'none';
   });
   /* 화면 응시는 아래쪽이 '이동 바', 종이 응시는 '제출 바' */
@@ -534,6 +580,7 @@ function boView(name){
   document.getElementById('bo-nav-bar').style.display    = (name==='omr' &&  _bo.paged) ? 'flex' : 'none';
   document.getElementById('omr-timer').style.display     = (name==='omr' &&  _bo.paged) ? '' : 'none';
   document.getElementById('omr-sub').style.display        = (name==='omr' &&  _bo.paged) ? '' : 'none';
+  document.getElementById('omr-scan-btn').style.display   = (name==='omr' && !_bo.paged && !_bo.guest && _bo.subject !== 'korean') ? '' : 'none';
   window.scrollTo(0,0);
 }
 function boBlock(msg){
@@ -981,6 +1028,7 @@ function boShowIntro(){
     + ' · ' + (ex.question_count || _bo.questions.length) + '문항';
   document.getElementById('in-min').textContent = ex.time_limit_min || 100;
   document.getElementById('in-yt').style.display = (_bo.subject === 'korean') ? 'none' : '';
+  document.getElementById('in-scan').style.display = (_bo.subject === 'korean') ? 'none' : '';
   var rs = document.getElementById('in-resume'), go = document.getElementById('in-go');
   if(_bo.listStatus === 'in_progress'){
     rs.style.display = '';
@@ -1652,6 +1700,131 @@ async function boSubmit(auto){
     _bo.submitting = false;
     btn.disabled = false; btn.textContent = '제출하기';
   }
+}
+
+/* ── 종이 OMR 사진 제출 ─────────────────────────────────────
+   양식(고1·2용 g12 / 고3용 g3)은 회차의 문항 구성으로 고른다: 16번이 주관식이면 고3용.
+   인식은 assets/omr-engine.js, 칸 좌표는 assets/omr-forms.json. 제출은 기존 start → submit RPC 그대로. */
+var _scan = { forms:null, formKey:null, res:null, img:null };
+function boScanFormKey(){
+  var q16 = (_bo.questions || []).find(function(q){ return q.q_no === 16; });
+  return (q16 && q16.q_type === 'short') ? 'g3' : 'g12';
+}
+async function boScanForms(){
+  if(_scan.forms) return _scan.forms;
+  var r = await fetch('assets/omr-forms.json?v=1'); if(!r.ok) throw new Error('양식 정보를 불러오지 못했습니다');
+  _scan.forms = await r.json(); return _scan.forms;
+}
+async function boScanOpen(){
+  if(_bo.subject === 'korean'){ alert('국어 시험은 화면 응시만 지원합니다.'); return; }
+  if(!_bo.exam || _bo.guest) return;
+  try { await boScanForms(); } catch(e){ alert(e.message || e); return; }
+  _scan.formKey = boScanFormKey(); _scan.res = null;
+  var ex = _bo.exam, f = _scan.forms[_scan.formKey];
+  document.getElementById('sc-title').textContent = ex.session_date + ' · ' + ex.level + (ex.elective ? (' · ' + ex.elective) : '') + ' · OMR 사진 제출';
+  document.getElementById('sc-form').textContent = '답안지 양식: ' + f.label + ' (객관식 ' + Object.keys(f.choice).length + '문항 · 주관식 ' + Object.keys(f.short).length + '문항) — 다른 양식에 마킹했다면 인식이 어긋납니다.';
+  document.getElementById('sc-result').style.display = 'none'; document.getElementById('sc-msg').textContent = ''; document.getElementById('sc-file').value = '';
+  document.getElementById('sc-steps').style.display = '';
+  boView('scan');
+}
+function boScanBack(){ if(_bo.paged) boShowIntro(); else boView('omr'); }
+function boScanFile(input){
+  var file = input.files && input.files[0]; if(!file) return;
+  var url = URL.createObjectURL(file), img = new Image();
+  document.getElementById('sc-busy').classList.add('on'); document.getElementById('sc-msg').textContent = ''; document.getElementById('sc-result').style.display = 'none';
+  img.onload = function(){
+    setTimeout(function(){
+      try {
+        var res = OmrEngine.analyze(img, _scan.forms[_scan.formKey], { pxPerMm: 4 });
+        URL.revokeObjectURL(url);
+        document.getElementById('sc-busy').classList.remove('on');
+        if(!res.ok){ document.getElementById('sc-msg').innerHTML = '<b style="color:#b91c1c">다시 찍어 주세요.</b> ' + boEsc(res.message || '') ; return; }
+        _scan.res = res; boScanRender(res);
+      } catch(e){ document.getElementById('sc-busy').classList.remove('on'); document.getElementById('sc-msg').textContent = '인식 중 오류: ' + (e.message || e); }
+    }, 30);
+  };
+  img.onerror = function(){ document.getElementById('sc-busy').classList.remove('on'); document.getElementById('sc-msg').textContent = '사진을 열 수 없습니다. 다른 사진으로 시도해 주세요.'; };
+  img.src = url;
+}
+function boScanRender(res){
+  var form = _scan.forms[_scan.formKey];
+  /* 겹쳐 보기: 펼친 답안지 위에 칸 상태를 색으로 */
+  var cv = document.getElementById('sc-cv'), W = res.warped.width, H = res.warped.height; cv.width = W; cv.height = H;
+  var ctx = cv.getContext('2d'); ctx.drawImage(res.warped, 0, 0);
+  var k = W / form.page_mm[0], r = form.r_mm * k * 1.7;
+  res.cells.forEach(function(c){
+    var p = OmrEngine._internal.apply(res.Hinv, c.px, c.py), x = p[0] * k, y = p[1] * k;
+    if(!c.on && !c.amb) return;
+    var a = res.answers[String(c.q)], col = c.on ? (a && a.status === 'multi' ? '#ef4444' : '#16a34a') : '#f59e0b';
+    ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+  });
+  /* 무응답 문항은 번호 자리 근처에 빨간 테두리 */
+  Object.keys(res.answers).forEach(function(qn){
+    var a = res.answers[qn]; if(a.status !== 'blank') return;
+    var cells = a.kind === 'choice' ? form.choice[qn] : (form.short[qn]['백'] || []);
+    if(!cells || !cells.length) return;
+    var x0 = Math.min.apply(null, cells.map(function(c){ return c.x; })) * k - r * 1.4, y0 = Math.min.apply(null, cells.map(function(c){ return c.y; })) * k - r * 1.4;
+    var x1 = Math.max.apply(null, cells.map(function(c){ return c.x; })) * k + r * 1.4, y1 = Math.max.apply(null, cells.map(function(c){ return c.y; })) * k + r * 1.4;
+    if(a.kind === 'short'){ var all = [].concat(form.short[qn]['백'], form.short[qn]['십'], form.short[qn]['일']); x1 = Math.max.apply(null, all.map(function(c){ return c.x; })) * k + r * 1.4; y1 = Math.max.apply(null, all.map(function(c){ return c.y; })) * k + r * 1.4; }
+    ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 3; ctx.setLineDash([8, 6]); ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.setLineDash([]);
+  });
+  /* 경고·요약 */
+  var warn = document.getElementById('sc-warn'), ws = (res.quality.warnings || []);
+  warn.classList.toggle('on', ws.length > 0); warn.innerHTML = ws.map(function(x){ return '⚠ ' + boEsc(x.text); }).join('<br>');
+  var c = res.counts;
+  document.getElementById('sc-sum').innerHTML = '<span class="g">확실 ' + c.ok + '</span><span class="a">애매 ' + c.ambiguous + '</span><span class="b">무응답 ' + c.blank + '</span><span class="b">중복 ' + c.multi + '</span><span>처리 ' + (res.quality.ms || 0) + 'ms</span>';
+  /* 문항별 답(수정 가능) — 회차 문항 순서 */
+  var grid = document.getElementById('sc-grid');
+  grid.innerHTML = (_bo.questions || []).filter(function(q){ return !q.is_excluded; }).map(function(q){
+    var a = res.answers[String(q.q_no)]; if(!a) return '';
+    var cls = a.status === 'ambiguous' ? ' a' : a.status === 'blank' ? ' b' : a.status === 'multi' ? ' m' : '';
+    var tag = a.status === 'ambiguous' ? '애매' : a.status === 'blank' ? '무응답' : a.status === 'multi' ? '중복' : '';
+    var ctrl;
+    if(q.q_type === 'short') ctrl = '<input type="tel" inputmode="numeric" maxlength="3" data-q="' + q.q_no + '" value="' + (a.value != null ? boEsc(a.value) : '') + '" placeholder="답" oninput="boScanEdited(this)">';
+    else ctrl = '<select data-q="' + q.q_no + '" onchange="boScanEdited(this)"><option value="">무응답</option>' + [1,2,3,4,5].map(function(n){ return '<option value="' + n + '"' + (String(a.value) === String(n) ? ' selected' : '') + '>' + ['①','②','③','④','⑤'][n-1] + '</option>'; }).join('') + '</select>';
+    return '<div class="sc-q' + cls + '" id="scq-' + q.q_no + '"><b>' + q.q_no + '</b>' + ctrl + (tag ? '<small>' + tag + '</small>' : '') + '</div>';
+  }).join('');
+  document.getElementById('sc-result').style.display = ''; document.getElementById('sc-steps').style.display = 'none';
+  document.getElementById('sc-msg').textContent = '';
+  document.getElementById('sc-result').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+function boScanEdited(el){ var box = el.closest('.sc-q'); box.className = 'sc-q e'; var sm = box.querySelector('small'); if(sm) sm.textContent = '수정'; else box.insertAdjacentHTML('beforeend', '<small>수정</small>'); }
+function boScanCollect(){
+  var payload = {}, blanks = [], edited = 0;
+  document.querySelectorAll('#sc-grid [data-q]').forEach(function(el){
+    var q = +el.dataset.q, v = String(el.value || '').trim();
+    if(el.closest('.sc-q').classList.contains('e')) edited++;
+    if(v === ''){ blanks.push(q); return; }
+    if(el.tagName === 'INPUT'){ if(!/^\d{1,3}$/.test(v)){ throw new Error(q + '번 주관식 답은 0~999 숫자여야 합니다'); } v = String(parseInt(v, 10)); }
+    payload[q] = v;
+  });
+  return { payload: payload, blanks: blanks, edited: edited };
+}
+async function boScanSubmit(){
+  if(!_scan.res || _bo.submitting) return;
+  var col; try { col = boScanCollect(); } catch(e){ alert(e.message); return; }
+  var unresolved = Object.keys(_scan.res.answers).filter(function(q){ var st = _scan.res.answers[q].status; var box = document.getElementById('scq-' + q); return (st === 'multi' || st === 'ambiguous') && box && !box.classList.contains('e'); });
+  var msg = '사진에서 읽은 답으로 제출합니다.\n답 ' + Object.keys(col.payload).length + '문항 · 무응답 ' + col.blanks.length + '문항' + (col.edited ? ' · 직접 고침 ' + col.edited : '')
+          + (unresolved.length ? '\n\n⚠ 애매하거나 중복으로 읽힌 문항(' + unresolved.join(', ') + '번)을 확인하지 않았습니다. 그대로 제출할까요?' : '') + '\n\n제출하면 수정할 수 없습니다.';
+  if(!confirm(msg)) return;
+  var btn = document.getElementById('sc-go'); btn.disabled = true; btn.textContent = '제출 중...';
+  try {
+    /* 응시 행 만들기(이미 시작한 경우도 ok) → 답 제출 */
+    var r = await db.rpc(boRpcName('start'), { p_student_id:_bo.user.id, p_exam_id:_bo.exam.id });
+    if(r.error) throw r.error;
+    var d = r.data || {};
+    if(!d.ok){
+      if(d.reason === 'time_over'){ alert('응시 시간이 끝나 제출할 수 없습니다.'); if(d.result){ boRenderResult(d.result, _bo.date); boView('result'); } return; }
+      if(d.reason === 'already_submitted'){ await boOpenResult(_bo.exam.id, _bo.date); return; }
+      alert(d.reason === 'not_open' ? ('아직 응시 기간이 아닙니다.' + (d.opens_at ? ('\n열리는 시각: ' + boWhen(d.opens_at)) : '')) : d.reason === 'not_eligible' ? '이 시험지의 응시 대상이 아닙니다.' : '제출할 수 없습니다: ' + (d.reason || ''));
+      return;
+    }
+    _bo.answers = {}; Object.keys(col.payload).forEach(function(k){ _bo.answers[+k] = col.payload[k]; });
+    if(_bo.timer){ clearInterval(_bo.timer); _bo.timer = null; }
+    _bo.paged = false; _bo.expires = 0;
+    await boSubmit(true);                      /* 확인 창 없이 기존 제출 경로(채점·결과·출석부) */
+  } catch(e){ alert('제출 오류: ' + (e.message || e)); }
+  finally { btn.disabled = false; btn.textContent = '이 답으로 제출'; }
 }
 
 /* ── 결과 ───────────────────────────────────────────────── */
