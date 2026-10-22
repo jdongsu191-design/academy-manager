@@ -2386,17 +2386,23 @@
         <div id="acct-panel-class" style="display:none">
           <div class="card">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-              <div class="card-title" style="margin:0">🏫 반 관리</div>
-              <div style="display:flex;gap:6px;align-items:center">
-                <select id="adm-class-teacher-filter" onchange="admRenderClasses()"
-                  style="padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#fff">
-                  <option value="">전체 선생님</option>
-                </select>
-                <button class="btn btn-primary btn-sm" onclick="openAdmAddClassModal()">+ 반 추가</button>
-              </div>
+              <div class="card-title" style="margin:0">🏫 반 관리 <span id="adm-class-count" style="font-size:12px;font-weight:600;color:#6b7280"></span></div>
+              <button class="btn btn-primary btn-sm" onclick="openAdmAddClassModal()">+ 반 추가</button>
             </div>
-            <div id="adm-class-list" style="max-height:580px;overflow-y:auto">
-              <div class="empty-state"><p>선생님을 선택하면 반 목록이 표시됩니다</p></div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+              <select id="adm-class-branch-filter" onchange="admRenderClasses()" style="padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#fff"><option value="">전체 분원</option></select>
+              <select id="adm-class-teacher-filter" onchange="admRenderClasses()" style="padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#fff"><option value="">전체 선생님</option></select>
+              <select id="adm-class-level-filter" onchange="admRenderClasses()" style="padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#fff">
+                <option value="">전체 구분</option><option value="elem">🧒 초등</option><option value="middle">📚 중등</option><option value="high">🎓 고등</option><option value="both">🏫 중고등</option>
+              </select>
+              <input id="adm-class-q" type="text" placeholder="🔍 반 이름 검색" oninput="admRenderClasses()" style="flex:1;min-width:140px;padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#fff">
+              <select id="adm-class-sort" onchange="admRenderClasses()" style="padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#fff">
+                <option value="teacher">담당순</option><option value="name">반 이름순</option><option value="count">학생 많은 순</option>
+              </select>
+              <label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer;white-space:nowrap"><input type="checkbox" id="adm-class-empty" onchange="admRenderClasses()" style="width:14px;height:14px;accent-color:var(--navy)">학생 없는 반만</label>
+            </div>
+            <div id="adm-class-list" style="max-height:600px;overflow-y:auto">
+              <div class="empty-state"><p>불러오는 중...</p></div>
             </div>
           </div>
         </div>
@@ -16402,74 +16408,148 @@ async function saveAssignBranch() {
   } catch(e) { alert('오류: ' + (e.message||e)); }
 }
 
-/* ── 반 관리 탭 ─────────────────────────────────────────── */
-function admRenderTeacherSelect() {
-  var sel = document.getElementById('adm-class-teacher-filter');
-  if (!sel) return;
-  var cur = sel.value;
-  sel.innerHTML = '<option value="">전체 선생님</option>';
+/* ── 반 관리 탭 ───────────────────────────────────────────
+   2026-10-22 2단계 보강: 표 + 필터(분원·선생님·구분·검색·빈 반) + 정렬,
+   추가/수정에 반 구분·요일/시간 저장(선생님용 renderDayTimeWrap 재사용),
+   삭제 확인창에 미배정 인원, 마스터는 반 이름 클릭 → 학생 관리 모달(csm*) */
+var ADM_LEVEL_LABEL = { elem: '🧒 초등', middle: '📚 중등', high: '🎓 고등', both: '🏫 중고등' };
+function _admClassTeachers() {
   var teachers = (allUsers||[]).filter(function(u){ return u.role==='teacher' && u.status==='active' && !u.deleted_at; });
   if (currentUser && currentUser.role === 'desk') {
     var allowedB = getDeskAllowedBranchIds ? getDeskAllowedBranchIds() : [];
     teachers = teachers.filter(function(t){ return t.branch_id && allowedB.indexOf(t.branch_id) !== -1; });
   }
-  teachers.sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); })
-    .forEach(function(t){ sel.innerHTML += '<option value="' + t.id + '">' + t.name + ' 선생님</option>'; });
-  if (cur) sel.value = cur;
+  return teachers.sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); });
 }
-
+function admRenderTeacherSelect() {
+  var sel = document.getElementById('adm-class-teacher-filter');
+  if (!sel) return;
+  var cur = sel.value;
+  var bsel = document.getElementById('adm-class-branch-filter');
+  if (bsel && !bsel.dataset.filled) {
+    bsel.innerHTML = '<option value="">전체 분원</option>' + (_allBranches||[]).filter(function(b){ return b.active !== false; })
+      .map(function(b){ return '<option value="' + b.id + '">' + _esc(b.name) + '</option>'; }).join('');
+    bsel.dataset.filled = '1';
+  }
+  var bid = bsel ? bsel.value : '';
+  sel.innerHTML = '<option value="">전체 선생님</option>';
+  _admClassTeachers().filter(function(t){ return !bid || t.branch_id === bid; })
+    .forEach(function(t){ sel.innerHTML += '<option value="' + t.id + '">' + _esc(t.name) + ' 선생님</option>'; });
+  sel.value = cur; if (sel.value !== cur) sel.value = '';
+}
+/* 반별 재원 학생 수: 주반(class_id) / 부반(class_id2~6) — 관리자 전역 allUsers 기준 */
+function _admClassCounts() {
+  var main = {}, sub = {};
+  (allUsers||[]).forEach(function(u){
+    if (!isAcademyStudent(u) || u.status !== 'active') return;
+    CLASS_SLOTS.forEach(function(f, i){ var cid = u[f]; if (!cid) return; var m = i === 0 ? main : sub; m[cid] = (m[cid]||0) + 1; });
+  });
+  return { main: main, sub: sub };
+}
+function _admClassTime(c) {
+  var days = c.class_days || '', time = c.class_time || '';
+  if (!days && !time) return '<span style="color:#cbd5e1">미설정</span>';
+  var out = days ? '📅 ' + _esc(days) : '';
+  if (time) {
+    var parts = String(time).split('|');
+    out += (out ? ' ' : '') + '⏰ ' + (parts.length > 1 ? '요일별 ' + _esc(parts[0]) + ' 외' : _esc(time));
+  }
+  return out;
+}
 function admRenderClasses() {
   admRenderTeacherSelect();
-  var teacherId = document.getElementById('adm-class-teacher-filter')?.value || '';
   var el = document.getElementById('adm-class-list');
   if (!el) return;
-  var cls = (allClasses||[]).filter(function(c){ return c.active !== false; });
-  if (teacherId) cls = cls.filter(function(c){ return c.teacher_id === teacherId; });
-  cls.sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); });
-  if (!cls.length) {
-    el.innerHTML = '<div class="empty-state"><p>반이 없습니다</p></div>'; return;
-  }
-  el.innerHTML = '<div style="display:grid;gap:8px">' + cls.map(function(c) {
-    var teacher = (allUsers||[]).find(function(u){ return u.id === c.teacher_id; });
-    var tName   = teacher ? teacher.name + ' T' : '미배정';
-    var safe    = function(s){ return (s||'').replace(/'/g,"&#39;"); };
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:#fff">'
-      + '<div style="flex:1;min-width:0">'
-        + '<div style="font-size:14px;font-weight:600;color:#1e293b">' + (c.name||'') + '</div>'
-        + '<div style="font-size:12px;color:#6b7280;margin-top:2px">' + tName
-          + (c.class_days ? ' · ' + c.class_days : '')
-          + (c.class_time ? ' ' + c.class_time : '')
-        + '</div>'
-      + '</div>'
-      + '<div style="display:flex;gap:6px;flex-shrink:0">'
-        + '<button class="btn btn-sm" onclick="openAdmEditClassModal(\'' + c.id + '\')" style="background:#f0f7ff;border-color:#93c5fd;color:#1d4ed8;font-size:11px">✏️ 수정</button>'
-        + '<button class="btn btn-danger btn-sm" onclick="deleteClass(\'' + c.id + '\',\'' + safe(c.name) + '\')" style="font-size:11px">삭제</button>'
-      + '</div>'
-    + '</div>';
-  }).join('') + '</div>';
+  var bid   = document.getElementById('adm-class-branch-filter')?.value || '';
+  var tid   = document.getElementById('adm-class-teacher-filter')?.value || '';
+  var lvl   = document.getElementById('adm-class-level-filter')?.value || '';
+  var q     = (document.getElementById('adm-class-q')?.value || '').trim().toLowerCase();
+  var sort  = document.getElementById('adm-class-sort')?.value || 'teacher';
+  var empty = !!document.getElementById('adm-class-empty')?.checked;
+  var counts = _admClassCounts();
+  var tMap = {}; _admClassTeachers().forEach(function(t){ tMap[t.id] = t; });
+  var bMap = {}; (_allBranches||[]).forEach(function(b){ bMap[b.id] = b.name; });
+  var isDesk = currentUser && currentUser.role === 'desk';
+  var cls = (allClasses||[]).filter(function(c){ return c.active !== false; }).map(function(c){
+    var t = (allUsers||[]).find(function(u){ return u.id === c.teacher_id; }) || null;
+    return { c: c, t: t, tName: t ? t.name : '', branchId: t ? (t.branch_id || '') : '', nMain: counts.main[c.id] || 0, nSub: counts.sub[c.id] || 0 };
+  }).filter(function(r){
+    if (isDesk && !(r.t && tMap[r.t.id])) return false;        /* 데스크는 허용 분원 선생님의 반만 */
+    if (bid && r.branchId !== bid) return false;
+    if (tid && r.c.teacher_id !== tid) return false;
+    if (lvl && (r.c.school_level || '') !== lvl) return false;
+    if (q && (r.c.name||'').toLowerCase().indexOf(q) < 0 && r.tName.toLowerCase().indexOf(q) < 0) return false;
+    if (empty && (r.nMain + r.nSub) > 0) return false;
+    return true;
+  });
+  cls.sort(function(a, b){
+    if (sort === 'count') return (b.nMain + b.nSub) - (a.nMain + a.nSub) || (a.c.name||'').localeCompare(b.c.name||'','ko');
+    if (sort === 'name')  return (a.c.name||'').localeCompare(b.c.name||'','ko');
+    return (a.tName||'힣').localeCompare(b.tName||'힣','ko') || (a.c.name||'').localeCompare(b.c.name||'','ko');
+  });
+  var cnt = document.getElementById('adm-class-count');
+  if (cnt) cnt.textContent = '— ' + cls.length + '개 반 · 재원 ' + cls.reduce(function(a, r){ return a + r.nMain; }, 0) + '명(주반 기준)';
+  if (!cls.length) { el.innerHTML = '<div class="empty-state"><p>조건에 맞는 반이 없습니다</p></div>'; return; }
+  var master = (typeof _isMaster === 'function') && _isMaster();
+  var th = 'padding:8px 10px;border-bottom:1.5px solid var(--border);background:#f8fafc;font-size:11.5px;font-weight:700;color:#64748b;text-align:left;white-space:nowrap;position:sticky;top:0';
+  var td = 'padding:9px 10px;border-bottom:1px solid #f1f5f9;font-size:13px;vertical-align:middle';
+  var safe = function(x){ return (x||'').replace(/'/g,"&#39;"); };
+  el.innerHTML = '<table style="width:100%;border-collapse:collapse"><thead><tr>'
+    + '<th style="' + th + '">반 이름</th><th style="' + th + '">담당 · 분원</th><th style="' + th + '">구분</th><th style="' + th + '">요일 · 시간</th><th style="' + th + ';text-align:center">재원</th><th style="' + th + ';text-align:right"></th>'
+    + '</tr></thead><tbody>'
+    + cls.map(function(r){
+      var c = r.c, total = r.nMain + r.nSub;
+      var nameCell = master
+        ? '<span onclick="admOpenClassStudents(\'' + c.id + '\',\'' + safe(c.name) + '\')" title="학생 관리" style="cursor:pointer;font-weight:700;color:var(--navy);border-bottom:1px dotted #94a3b8">' + _esc(c.name||'') + '</span>'
+        : '<span style="font-weight:700;color:#1e293b">' + _esc(c.name||'') + '</span>';
+      return '<tr>'
+        + '<td style="' + td + ';word-break:keep-all">' + nameCell + '</td>'
+        + '<td style="' + td + ';white-space:nowrap">' + (r.t ? _esc(r.tName) + 'T' : '<span style="color:#dc2626">미배정</span>') + (r.branchId ? ' <span style="font-size:11px;color:#7c3aed">' + _esc(bMap[r.branchId]||'') + '</span>' : '') + '</td>'
+        + '<td style="' + td + ';white-space:nowrap">' + (ADM_LEVEL_LABEL[c.school_level] || '<span style="color:#cbd5e1">—</span>') + '</td>'
+        + '<td style="' + td + ';font-size:12px;color:#475569">' + _admClassTime(c) + '</td>'
+        + '<td style="' + td + ';text-align:center;white-space:nowrap"><span style="padding:2px 9px;border-radius:100px;font-size:12px;font-weight:700;background:' + (total ? '#dbeafe' : '#f3f4f6') + ';color:' + (total ? '#1d4ed8' : '#9ca3af') + '">' + r.nMain + '명</span>' + (r.nSub ? ' <span style="font-size:11px;color:#6b7280">+부반 ' + r.nSub + '</span>' : '') + '</td>'
+        + '<td style="' + td + ';text-align:right;white-space:nowrap">'
+          + (master ? '<button class="btn btn-sm" onclick="admOpenClassStudents(\'' + c.id + '\',\'' + safe(c.name) + '\')" style="background:#f0fdf4;border-color:#86efac;color:#16a34a;font-size:11px">👥 학생</button> ' : '')
+          + '<button class="btn btn-sm" onclick="openAdmEditClassModal(\'' + c.id + '\')" style="background:#f0f7ff;border-color:#93c5fd;color:#1d4ed8;font-size:11px">✏️ 수정</button> '
+          + '<button class="btn btn-danger btn-sm" onclick="deleteClass(\'' + c.id + '\',\'' + safe(c.name) + '\')" style="font-size:11px">삭제</button>'
+        + '</td></tr>';
+    }).join('')
+    + '</tbody></table>';
 }
-
+/* 반 구분 버튼 (관리자 모달용 — 선생님용 classLevelSelect 와 id 가 겹치지 않게 따로) */
+function admClassLevelSet(mode, level) {
+  ['elem','high','middle','both'].forEach(function(l){
+    var btn = document.getElementById('adm-' + mode + '-level-' + l); if (!btn) return;
+    var on = l === level;
+    btn.style.borderColor = on ? '#2563eb' : '#d1d5db'; btn.style.background = on ? '#eff6ff' : '#f9fafb'; btn.style.color = on ? '#1d4ed8' : '#6b7280';
+  });
+  var v = document.getElementById('adm-' + mode + '-level-val'); if (v) v.value = level;
+}
+function _admTeacherOptsHtml(selId) {
+  return '<option value="">선생님 선택...</option>' + _admClassTeachers().map(function(t){
+    var b = (_allBranches||[]).find(function(x){ return x.id === t.branch_id; });
+    return '<option value="' + t.id + '"' + (t.id === selId ? ' selected' : '') + '>' + _esc(t.name) + ' 선생님' + (b ? ' · ' + _esc(b.name) : '') + '</option>';
+  }).join('');
+}
 function openAdmAddClassModal() {
   var sel = document.getElementById('adm-inp-class-teacher');
-  if (sel) {
-    sel.innerHTML = '<option value="">선생님 선택...</option>';
-    (allUsers||[]).filter(function(u){ return u.role==='teacher' && u.status==='active' && !u.deleted_at; })
-      .sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); })
-      .forEach(function(t){ sel.innerHTML += '<option value="' + t.id + '">' + t.name + ' 선생님</option>'; });
-  }
+  if (sel) sel.innerHTML = _admTeacherOptsHtml(document.getElementById('adm-class-teacher-filter')?.value || '');
   var inp = document.getElementById('adm-inp-class-name'); if (inp) inp.value = '';
-  var wrap = document.getElementById('adm-inp-day-time-wrap'); if (wrap) wrap.innerHTML = '';
+  admClassLevelSet('inp', 'high');
+  if (typeof renderDayTimeWrap === 'function') renderDayTimeWrap('adm-inp-day-time-wrap', '', '');
   openModal('admAddClass');
 }
-
 async function admSaveAddClass() {
   var teacherId = document.getElementById('adm-inp-class-teacher')?.value;
   var name      = (document.getElementById('adm-inp-class-name')?.value || '').trim();
   if (!teacherId) { alert('선생님을 선택하세요'); return; }
   if (!name) { alert('반 이름을 입력하세요'); return; }
+  var dt = (typeof getDayTimeFromWrap === 'function') ? getDayTimeFromWrap('adm-inp-day-time-wrap') : { days: '', time: '' };
   try {
     var {error} = await db.from('classes').insert({
-      name, teacher_id: teacherId, active: true
+      name, teacher_id: teacherId, active: true,
+      school_level: document.getElementById('adm-inp-level-val')?.value || 'high',
+      class_days: dt.days || null, class_time: dt.time || null
     });
     if (error) throw error;
     closeModal('admAddClass');
@@ -16477,40 +16557,41 @@ async function admSaveAddClass() {
     admRenderClasses();
   } catch(e) { alert('오류: ' + (e.message||e)); }
 }
-
 function openAdmEditClassModal(classId) {
   var cls = (allClasses||[]).find(function(c){ return c.id === classId; });
   if (!cls) return;
   document.getElementById('adm-edit-class-id').value   = classId;
   document.getElementById('adm-edit-class-name').value = cls.name || '';
   var tSel = document.getElementById('adm-edit-class-teacher');
-  if (tSel) {
-    tSel.innerHTML = '<option value="">선생님 선택...</option>';
-    (allUsers||[]).filter(function(u){ return u.role==='teacher' && u.status==='active' && !u.deleted_at; })
-      .sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','ko'); })
-      .forEach(function(t){ tSel.innerHTML += '<option value="' + t.id + '">' + t.name + ' 선생님</option>'; });
-    tSel.value = cls.teacher_id || '';
-  }
+  if (tSel) { tSel.innerHTML = _admTeacherOptsHtml(cls.teacher_id || ''); tSel.value = cls.teacher_id || ''; }
+  admClassLevelSet('edit', cls.school_level || 'high');
+  if (typeof renderDayTimeWrap === 'function') renderDayTimeWrap('adm-edit-day-time-wrap', cls.class_days || '', cls.class_time || '');
   openModal('admEditClass');
 }
-
 async function admSaveEditClass() {
   var id        = document.getElementById('adm-edit-class-id').value;
   var name      = (document.getElementById('adm-edit-class-name')?.value || '').trim();
   var teacherId = document.getElementById('adm-edit-class-teacher')?.value;
   if (!name)     { alert('반 이름을 입력하세요'); return; }
   if (!teacherId){ alert('담당 선생님을 선택하세요'); return; }
+  var dt = (typeof getDayTimeFromWrap === 'function') ? getDayTimeFromWrap('adm-edit-day-time-wrap') : { days: '', time: '' };
   try {
-    var {error} = await db.from('classes').update({name, teacher_id: teacherId}).eq('id', id);
+    var {error} = await db.from('classes').update({
+      name, teacher_id: teacherId,
+      school_level: document.getElementById('adm-edit-level-val')?.value || 'high',
+      class_days: dt.days || null, class_time: dt.time || null
+    }).eq('id', id);
     if (error) throw error;
     closeModal('admEditClass');
     await loadAdminData();
     admRenderClasses();
   } catch(e) { alert('오류: ' + (e.message||e)); }
 }
-
 async function deleteClass(id, name) {
-  if (!confirm('반 "' + name + '"을 삭제하시겠습니까?\n소속 학생의 반은 미배정 상태가 됩니다.')) return;
+  var counts = _admClassCounts(), nMain = counts.main[id] || 0, nSub = counts.sub[id] || 0;
+  var msg = '반 "' + name + '"을 삭제하시겠습니까?\n'
+    + (nMain + nSub ? '주반 학생 ' + nMain + '명은 미배정이 되고' + (nSub ? ', 부반으로 듣던 ' + nSub + '명은 이 반에서 빠집니다' : '') + '.\n담당 선생님은 그대로 남습니다.' : '소속 학생이 없습니다.');
+  if (!confirm(msg)) return;
   try {
     // 주반뿐 아니라 부반 슬롯에 들어 있는 경우까지 모두 정리
     for (var _si = 0; _si < CLASS_SLOTS.length; _si++) {
@@ -16522,6 +16603,12 @@ async function deleteClass(id, name) {
     await loadAdminData();
     admRenderClasses();
   } catch(e) { alert('오류: ' + (e.message||e)); }
+}
+/* 마스터: 반 학생 관리 모달 — 선생님 '내 반 관리' 의 csm* 모달을 전체 학생 범위로 연다.
+   명단 등록(붙여넣기) 탭은 담당=로그인 계정으로 넣는 구조라 마스터에겐 숨긴다 */
+async function admOpenClassStudents(classId, className) {
+  if (!(typeof _isMaster === 'function' && _isMaster())) return;
+  await openClassStudentModal(classId, className);
 }
 
 /* ── 관리자 계정 탭 ─────────────────────────────────────── */
@@ -26043,13 +26130,18 @@ async function saveEditClass(){
 var _csmClassId = null, _csmClassName = '', _csmClassLevel = 'high', _csmAllCandidates = [];
 var _csmCandTeacherMap = {}, _csmCandBranchMap = {};
 var _csmCurrent = {};   // 현재 반 소속 학생 캐시 (반 제거 시 슬롯 판정용)
+/* 마스터(관리자)가 열면 전체 반(allClasses)·관리자 재조회, 선생님이면 내 반(classes)·선생님 재조회 */
+function _csmIsAdminMode(){ return (typeof _isMaster === 'function') && _isMaster(); }
+function _csmClassList(){ return _csmIsAdminMode() ? (allClasses||[]) : classes; }
+async function _csmReload(){ if (_csmIsAdminMode()) { await loadAdminData(); if (typeof admRenderClasses === 'function') admRenderClasses(); } else await loadTeacherData(); }
 
 async function openClassStudentModal(classId, className){
   _csmClassId = classId;
   _csmClassName = className;
-  var cls = classes.find(function(c){ return c.id === classId; });
+  var cls = _csmClassList().find(function(c){ return c.id === classId; });
   _csmClassLevel = cls ? (cls.school_level || 'high') : 'high';
   document.getElementById('csm-title').textContent = '👥 ' + className + ' 학생 관리';
+  var _xt = document.getElementById('csm-tab-xlsx'); if (_xt) _xt.style.display = _csmIsAdminMode() ? 'none' : '';
   csmSwitchTab('current');
   openModal('classStudents');
   await csmLoadCurrentStudents();
@@ -26135,7 +26227,7 @@ async function csmRemoveStudent(studentId, studentName){
   if(!Object.keys(updateObj).length){ alert('이 학생은 이 반에 배정되어 있지 않습니다.'); return; }
   var {error} = await db.from('users').update(updateObj).eq('id', studentId);
   if(error){ alert('오류: '+error.message); return; }
-  await loadTeacherData();
+  await _csmReload();
   await csmLoadCurrentStudents();
 }
 
@@ -26190,7 +26282,7 @@ function csmFilterStudents(){
   listEl.innerHTML = filtered.map(function(s){
     var sg = [s.school, s.grade].filter(Boolean).join(' ');
     var clsLabel = stuClassIds(s).map(function(cid){
-      var _c = classes.find(function(c){ return c.id===cid; });
+      var _c = _csmClassList().find(function(c){ return c.id===cid; });
       return _c ? _c.name : '';
     }).filter(Boolean).join(', ');
     // [타 선생님 학생 표시] 담당 선생님·분원 배지 (내 담당이 아니면)
@@ -26248,7 +26340,7 @@ async function csmAddSelected(){
     else ok++;
   }
   if(btn){ btn.disabled = false; }
-  await loadTeacherData();
+  await _csmReload();
   if(fail.length) alert('⚠️ '+ok+'명 추가 완료, 실패: '+fail.join(', '));
   else alert('✅ '+ok+'명이 ['+_csmClassName+']에 추가됐습니다!');
   csmSwitchTab('current');
@@ -34555,6 +34647,16 @@ tryAutoLogin();
       </select>
     </div>
     <div class="form-group"><label>반 이름 <span style="color:#dc2626">*</span></label><input type="text" id="adm-inp-class-name" placeholder="예: 희라T_화2목2_고3미적"></div>
+    <div class="form-group">
+      <label>반 구분</label>
+      <div style="display:flex;gap:6px">
+        <button type="button" id="adm-inp-level-elem" onclick="admClassLevelSet('inp','elem')" style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">🧒 초등부</button>
+        <button type="button" id="adm-inp-level-high" onclick="admClassLevelSet('inp','high')" style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">🎓 고등부</button>
+        <button type="button" id="adm-inp-level-middle" onclick="admClassLevelSet('inp','middle')" style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">📚 중등부</button>
+        <button type="button" id="adm-inp-level-both" onclick="admClassLevelSet('inp','both')" style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">🏫 중고등</button>
+        <input type="hidden" id="adm-inp-level-val" value="high">
+      </div>
+    </div>
     <div style="margin-bottom:12px">
       <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px">수업 요일 및 시간</label>
       <div id="adm-inp-day-time-wrap"></div>
@@ -34579,6 +34681,16 @@ tryAutoLogin();
       </select>
     </div>
     <div class="form-group"><label>반 이름 <span style="color:#dc2626">*</span></label><input type="text" id="adm-edit-class-name" placeholder="반 이름"></div>
+    <div class="form-group">
+      <label>반 구분</label>
+      <div style="display:flex;gap:6px">
+        <button type="button" id="adm-edit-level-elem" onclick="admClassLevelSet('edit','elem')" style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">🧒 초등부</button>
+        <button type="button" id="adm-edit-level-high" onclick="admClassLevelSet('edit','high')" style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">🎓 고등부</button>
+        <button type="button" id="adm-edit-level-middle" onclick="admClassLevelSet('edit','middle')" style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">📚 중등부</button>
+        <button type="button" id="adm-edit-level-both" onclick="admClassLevelSet('edit','both')" style="flex:1;padding:9px 0;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f9fafb;color:#6b7280">🏫 중고등</button>
+        <input type="hidden" id="adm-edit-level-val" value="high">
+      </div>
+    </div>
     <div style="margin-bottom:12px">
       <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px">수업 요일 및 시간</label>
       <div id="adm-edit-day-time-wrap"></div>
