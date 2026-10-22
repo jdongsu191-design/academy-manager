@@ -28597,7 +28597,52 @@ function eaSum(items) {
   return Math.round(n * 10) / 10;   /* 0.1점 단위 배점까지만. 부동소수점 꼬리 제거 */
 }
 function eaHasReview(rv) {
-  return !!(rv && (rv.difficulty || rv.discrimination || rv.strategy));
+  return !!(rv && (rv.difficulty || rv.discrimination || rv.strategy || eaHasTeacher(rv)));
+}
+/* ── 선생님 분석 의견 (review.teacher) ──
+   AI 총평과 별도로, 담당 선생님들이 모여 정리한 시험 분석(등급컷·체감 난이도·학교 프린트·매칭율·전략·특이사항).
+   출력물(이미지·PDF·프린트)에는 표로 들어가고, 보기 모달에만 안내 문구가 붙는다. */
+var EA_TEACHER_FIELDS = [
+  ['cut1', '1등급컷'], ['cut2', '2등급컷'], ['feel', '체감 난이도'], ['materials', '학교 프린트(교재)'], ['match', '매칭율'],
+  ['strategy_top', '상위권 전략'], ['strategy_mid', '중위권 전략'], ['note', '특이사항']
+];
+function eaHasTeacher(rv) {
+  var t = rv && rv.teacher; if (!t || typeof t !== 'object') return false;
+  return EA_TEACHER_FIELDS.some(function(f) { var v = t[f[0]]; return v != null && String(v).trim() !== ''; });
+}
+function eaTeacherFeel(t) {
+  var n = Number(t && t.feel);
+  var star = (n >= 1 && n <= 3) ? EA_STARS[n] : '';
+  var note = t && t.feel_note ? String(t.feel_note).trim() : '';
+  return star ? star + (note ? ' (' + note + ')' : '') : note;
+}
+/* 표 HTML. sz = { title, th, td, pad, line, gap, forPrint } — 출력물과 모달이 같은 함수를 쓴다 */
+function eaTeacherHTML(t, sz) {
+  if (!t) return '';
+  var line = sz.line || '1px solid #cbd5e1';
+  var th = 'padding:' + sz.pad + ';border:' + line + ';background:#f1f5f9;font-weight:700;font-size:' + sz.th + 'px;text-align:center;white-space:nowrap';
+  var td = 'padding:' + sz.pad + ';border:' + line + ';font-size:' + sz.td + 'px;text-align:center;word-break:keep-all';
+  var tdl = td + ';text-align:left';
+  var v = function(k) { return _esc(t[k] == null ? '' : String(t[k])); };
+  var html = '<div style="margin-top:' + sz.gap + 'px' + (sz.forPrint ? ';page-break-inside:avoid' : '') + '">'
+    + '<div style="font-size:' + sz.title + 'px;font-weight:800;margin-bottom:5px">선생님 분석 의견</div>'
+    + '<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
+    + '<colgroup><col style="width:11%"><col style="width:11%"><col style="width:16%"><col><col style="width:22%"></colgroup>'
+    + '<thead><tr>' + ['1등급컷', '2등급컷', '체감 난이도', '학교 프린트(교재)', '매칭율'].map(function(h) { return '<th style="' + th + '">' + h + '</th>'; }).join('') + '</tr></thead>'
+    + '<tbody><tr>'
+    +   '<td style="' + td + '">' + v('cut1') + '</td><td style="' + td + '">' + v('cut2') + '</td>'
+    +   '<td style="' + td + ';color:#b45309">' + _esc(eaTeacherFeel(t)) + '</td>'
+    +   '<td style="' + tdl + '">' + v('materials') + '</td><td style="' + tdl + '">' + v('match') + '</td>'
+    + '</tr></tbody></table>';
+  var rows = [['strategy_top', '상위권 전략'], ['strategy_mid', '중위권 전략'], ['note', '특이사항']]
+    .filter(function(p) { return t[p[0]] != null && String(t[p[0]]).trim() !== ''; });
+  if (rows.length) {
+    html += '<table style="width:100%;border-collapse:collapse;table-layout:fixed;border-top:none">'
+      + '<colgroup><col style="width:16%"><col></colgroup><tbody>'
+      + rows.map(function(p) { return '<tr><th style="' + th + ';border-top:none">' + p[1] + '</th><td style="' + tdl + ';border-top:none">' + v(p[0]) + '</td></tr>'; }).join('')
+      + '</tbody></table>';
+  }
+  return html + '</div>';
 }
 /* 총평의 문항 표기를 우리말로 통일한다 (2026-08 요청).
    프롬프트로도 막지만 이미 저장된 글과 AI 의 실수까지 화면에서 바로잡는다.
@@ -28697,6 +28742,12 @@ function eaView(idx) {
       });
   }
 
+  if (eaHasTeacher(r.review)) {
+    html += '<div style="margin-top:12px">'
+      + eaTeacherHTML(r.review.teacher, { title: 12, th: 12, td: 12, pad: '6px 8px', line: '1px solid #ede9fe', gap: 0, forPrint: false })
+      + '<div style="margin-top:8px;font-size:11.5px;color:#6d28d9;font-style:italic">*해당 분석표는 선생님의 추가 의견이 반영된 분석표입니다*</div>'
+      + '</div>';
+  }
   document.getElementById('eav-body').innerHTML = html;
   openModal('eaView');
 }
@@ -28759,6 +28810,9 @@ function eaOutputHTML(r, forPrint, part) {
              +  '<div style="font-size:' + F.rvT + 'px;font-weight:800;margin-bottom:5px">' + p[1] + '</div>'
              +  '<div style="font-size:' + F.rvB + 'px;line-height:' + F.lh + ';color:#1e293b">' + _esc(eaRvText(r.review[p[0]])) + '</div></div>';
       });
+  }
+  if (part !== 'table' && eaHasTeacher(r.review)) {
+    html += eaTeacherHTML(r.review.teacher, { title: F.rvT, th: F.th - 1.5, td: F.td - 1.5, pad: F.pad, line: line, gap: F.rvGap, forPrint: forPrint });
   }
   return html + '</div>';
 }
@@ -29497,7 +29551,16 @@ function eaSumSet(field, val) {
 }
 function eaHasSummary() {
   var r = _eaMake && _eaMake.review;
-  return !!(r && (String(r.difficulty || '').trim() || String(r.discrimination || '').trim() || String(r.strategy || '').trim()));
+  return !!(r && (String(r.difficulty || '').trim() || String(r.discrimination || '').trim() || String(r.strategy || '').trim() || eaHasTeacher(r)));
+}
+function eaTeacherSet(field, val) {
+  if (!_eaMake.review) _eaMake.review = { difficulty: '', discrimination: '', strategy: '' };
+  if (!_eaMake.review.teacher || typeof _eaMake.review.teacher !== 'object') _eaMake.review.teacher = {};
+  var t = _eaMake.review.teacher;
+  if (field === 'feel') { val = String(val || '').trim(); t.feel = val ? Number(val) : null; }
+  else t[field] = val;
+  if (!t.source) t.source = '선생님 의견';
+  if (!t.date) t.date = _localYMD(new Date());
 }
 
 /* \ucd1d\ud3c9 \uce78\ub9cc \ub2e4\uc2dc \uadf8\ub9b0\ub2e4 \u2014 \ubb38\ud56d\ud45c \uc785\ub825\uc5d0 \uc190\ub300\uc9c0 \uc54a\ub294\ub2e4 */
@@ -29512,6 +29575,27 @@ function eaSumRender() {
       + ' style="width:100%;padding:8px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:12.5px;line-height:1.75;outline:none;resize:vertical;font-family:inherit">'
       + _esc(eaRvText(r[f[0]] || '')) + '</textarea></div>';
   }).join('');
+  /* 선생님 분석 의견 — 비어 있어도 칸은 보여 준다(선생님이 직접 적을 수 있게) */
+  var t = (r.teacher && typeof r.teacher === 'object') ? r.teacher : {};
+  var inp = 'width:100%;padding:6px 8px;border:1.5px solid #e5e7eb;border-radius:6px;font-size:12px;outline:none;font-family:inherit';
+  var cell = function(k, label, extra) {
+    return '<div><div style="font-size:11px;color:#9ca3af;margin-bottom:3px">' + label + '</div>'
+      + '<input value="' + eaAttr(t[k] == null ? '' : t[k]) + '" oninput="eaTeacherSet(\'' + k + '\',this.value)" style="' + inp + (extra || '') + '"></div>';
+  };
+  box.innerHTML += '<div style="margin-top:12px;padding-top:10px;border-top:1px dashed #ddd6fe">'
+    + '<div style="font-size:11.5px;font-weight:800;color:#4b5563;margin-bottom:6px">\ud83d\udc69\u200d\ud83c\udfeb 선생님 분석 의견 <span style="font-weight:600;color:#9ca3af">— 출력물에 표로 들어갑니다</span></div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px">'
+    +   cell('cut1', '1등급컷') + cell('cut2', '2등급컷')
+    +   '<div><div style="font-size:11px;color:#9ca3af;margin-bottom:3px">체감 난이도</div>'
+    +     '<select onchange="eaTeacherSet(\'feel\',this.value)" style="' + inp + ';color:#b45309;text-align-last:center">'
+    +       '<option value="">—</option>' + [1, 2, 3].map(function(d) { return '<option value="' + d + '"' + (Number(t.feel) === d ? ' selected' : '') + '>' + EA_STARS[d] + '</option>'; }).join('')
+    +     '</select></div>'
+    +   cell('feel_note', '난이도 메모')
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">' + cell('materials', '학교 프린트(교재)') + cell('match', '매칭율') + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">' + cell('strategy_top', '상위권 전략') + cell('strategy_mid', '중위권 전략') + '</div>'
+    + cell('note', '특이사항')
+    + '</div>';
 }
 
 /* \uac80\uc0b0 \u2014 hard \ub294 \uace0\uccd0\uc57c \ud560 \uac83, soft \ub294 \ubcf4\uace0 \ud310\ub2e8\ud560 \uac83 */
