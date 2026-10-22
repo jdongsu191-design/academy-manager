@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BMAPS 입학 상담 관리 v1.10</title>
+  <title>BMAPS 입학 상담 관리 v1.11</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -137,6 +137,7 @@
     td.actions .btn-view,td.actions .btn-edit{margin-right:6px;}
 
     .badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11.5px;font-weight:700;white-space:nowrap;}
+    .stat-row.stat-sub{padding-left:14px;font-size:12px;color:#64748b} .stat-row.stat-sub .stat-label{font-weight:500}
     .badge.reg{background:#dcfce7;color:#15803d;}
     .badge.hold{background:#fef3c7;color:#b45309;}
     .badge.reject{background:#fee2e2;color:#b91c1c;}
@@ -360,6 +361,7 @@
           <div class="fg">
             <label for="f-status">등록여부</label>
             <select id="f-status" onchange="onStatusChange()"></select>
+            <select id="f-status-sub" class="hidden" onchange="onStatusChange()" style="margin-top:6px"></select>
             <input id="f-status-manual" class="manual hidden" type="text" placeholder="직접 입력" />
           </div>
           <div class="fg">
@@ -522,14 +524,43 @@
        - 별도 페이지 / index.html 과 동일 anon 클라이언트 + savedUserId 공유
        - 접근: admin 또는 (vice_director && permissions.consult_manage)
        ========================================================= */
-    window.CONSULT_VERSION = 'v1.10';
+    window.CONSULT_VERSION = 'v1.11';
 
     const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
     const { createClient } = supabase;
     const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    const REG_STATUS_OPTIONS = ['등록','상담중','보류','거절','미등록','연락없음','취소'];
+    /* 등록여부: 대분류 → 소분류. 저장값은 소분류 문구(소분류를 안 고르면 대분류 문구). 직접입력은 그대로 */
+    const REG_GROUPS = [
+      { label:'등록', subs:['신입등록','재입학 등록'] },
+      { label:'취소', subs:['방문상담 및 테스트 취소','시범수업 취소','시범수업 후 취소','상담 예약 관련 연락 없음'] }
+    ];
+    const REG_PLAIN_OPTIONS = ['상담중','보류'];                          // 진행 중 상태(소분류 없음)
+    const REG_LEGACY_MAP = { '미등록':'취소', '거절':'취소', '연락없음':'취소', '재등록':'등록', '재입학':'등록', '등원':'등록' };   // 옛 표준값 → 대분류
+    const REG_STATUS_OPTIONS = REG_GROUPS.map(function(g){ return g.label; }).concat(REG_PLAIN_OPTIONS)
+      .concat(REG_GROUPS.reduce(function(a, g){ return a.concat(g.subs); }, []));
+    function _regGroup(label){ return REG_GROUPS.filter(function(g){ return g.label === label; })[0] || null; }
+    /* 저장값 → { group, sub } 또는 { manual:true, text } */
+    function _regParse(v){
+      var t = String(v == null ? '' : v).trim();
+      if(!t) return { group:'' };
+      for(var i = 0; i < REG_GROUPS.length; i++){
+        var g = REG_GROUPS[i];
+        if(t === g.label) return { group:g.label, sub:'' };
+        if(g.subs.indexOf(t) >= 0) return { group:g.label, sub:t };
+      }
+      if(REG_PLAIN_OPTIONS.indexOf(t) >= 0) return { group:t };
+      if(REG_LEGACY_MAP[t]) return { group:REG_LEGACY_MAP[t], sub:_stRegSub(t), legacy:t };
+      return { manual:true, text:t };
+    }
+    /* 보기용: '등록 · 신입등록' 처럼 대분류를 앞에 붙인다 */
+    function _regLabel(v){
+      var p = _regParse(v); if(!v) return '';
+      if(p.manual) return p.text;
+      if(p.legacy) return p.legacy + ' (' + p.group + (p.sub ? ' · ' + p.sub : '') + ')';
+      return p.sub ? p.group + ' · ' + p.sub : p.group;
+    }
     // 입학 경로 · 퇴원 사유 (복수 선택). index.html 퇴원처리 모달과 같은 목록을 쓴다 — 바꾸면 같이 바꿀 것
     const ADMISSION_PATHS = ['친구 소개','지인 추천','형제','광고 및 온라인 검색','간담회','학원프로그램(시험대비, 입시)','기타'];
     const WITHDRAW_REASONS = ['성적 및 학습효과 불만','강사 수업 불만족','학습관리 불만족','타학원 이동',
@@ -579,12 +610,7 @@
     }
     function statusBadge(s){
       if(!s) return '<span class="badge none">미입력</span>';
-      var cls='none';
-      if(s==='등록') cls='reg';
-      else if(s==='상담중') cls='talk';
-      else if(s==='보류') cls='hold';
-      else if(s==='거절'||s==='취소') cls='reject';
-      else if(s==='미등록') cls='none';
+      var k = _stRegKind(s), cls = k==='yes' ? 'reg' : k==='no' ? 'reject' : s==='상담중' ? 'talk' : k==='pending' ? 'hold' : 'none';
       return '<span class="badge '+cls+'">'+esc(s)+'</span>';
     }
 
@@ -1093,9 +1119,23 @@
     function buildStatusOptions(){
       var sel = $('f-status');
       var opts = ['<option value="">선택 안 함</option>'];
-      REG_STATUS_OPTIONS.forEach(function(s){ opts.push('<option value="'+esc(s)+'">'+esc(s)+'</option>'); });
+      REG_GROUPS.forEach(function(g){ opts.push('<option value="'+esc(g.label)+'">'+esc(g.label)+'</option>'); });
+      REG_PLAIN_OPTIONS.forEach(function(s){ opts.push('<option value="'+esc(s)+'">'+esc(s)+'</option>'); });
       opts.push('<option value="__manual__">직접입력…</option>');
       sel.innerHTML = opts.join('');
+      $('f-status-sub').innerHTML = '';
+      $('f-status-sub').dataset.group = '';
+    }
+    /* 대분류에 맞는 소분류 목록을 채운다(대분류가 바뀐 경우만 새로 그림) */
+    function _regFillSub(groupLabel){
+      var sub = $('f-status-sub'), g = _regGroup(groupLabel);
+      if(!g){ sub.classList.add('hidden'); sub.dataset.group = ''; sub.innerHTML = ''; return; }
+      if(sub.dataset.group !== g.label){
+        sub.innerHTML = '<option value="">' + esc(g.label) + ' 소분류 선택</option>'
+          + g.subs.map(function(x){ return '<option value="'+esc(x)+'">'+esc(x)+'</option>'; }).join('');
+        sub.dataset.group = g.label;
+      }
+      sub.classList.remove('hidden');
     }
     function buildTeacherOptions(){
       var sel = $('f-teacher');
@@ -1108,7 +1148,9 @@
       sel.innerHTML = opts.join('');
     }
     function onStatusChange(){
-      $('f-status-manual').classList.toggle('hidden', val('f-status')!=='__manual__');
+      var v = val('f-status');
+      $('f-status-manual').classList.toggle('hidden', v!=='__manual__');
+      _regFillSub(v);
     }
     function onTeacherChange(){
       $('f-teacher-manual').classList.toggle('hidden', val('f-teacher')!=='__manual__');
@@ -1119,7 +1161,7 @@
       ['f-inquiry','f-school','f-name','f-content','f-testdate','f-testscore',
        'f-demodate','f-demofollow','f-regdate','f-note','f-status-manual','f-teacher-manual'
       ].forEach(function(id){ if($(id)) $(id).value=''; });
-      $('f-status').value='';
+      $('f-status').value=''; onStatusChange();
       $('f-teacher').value='';
       setChecked('f-paths', []);
       onStatusChange(); onTeacherChange();
@@ -1184,14 +1226,17 @@
       $('f-note').value      = r.note || '';
       setChecked('f-paths', r.admission_paths);
 
-      // 등록여부: 표준값이면 select, 아니면 직접입력
-      if(r.reg_status && REG_STATUS_OPTIONS.indexOf(r.reg_status)===-1){
+      // 등록여부: 표준값이면 대분류(+소분류), 옛 표준값(미등록·거절·연락없음…)은 대분류로 옮겨 보여주고, 그 밖은 직접입력
+      var pr = _regParse(r.reg_status);
+      if(pr.manual){
         $('f-status').value='__manual__';
-        $('f-status-manual').value=r.reg_status;
+        $('f-status-manual').value=pr.text;
+        onStatusChange();
       } else {
-        $('f-status').value = r.reg_status || '';
+        $('f-status').value = pr.group || '';
+        onStatusChange();
+        if(pr.sub) $('f-status-sub').value = pr.sub;
       }
-      onStatusChange();
 
       // 담당T: id 매칭되면 select, 이름만 있으면 직접입력
       if(r.demo_teacher_id && _teachers.some(function(t){return t.id===r.demo_teacher_id;})){
@@ -1233,7 +1278,7 @@
       }
       var html='';
       html+=vrow('최초 접수일', fmtKDateRaw(r.inquiry_date));
-      html+=vrow('등록여부', r.reg_status);
+      html+=vrow('등록여부', _regLabel(r.reg_status));
       html+=vrow('학교/학년', r.school_grade);
       html+=vrow('이름', r.student_name);
       html+=vrow('입학 경로', (r.admission_paths||[]).join(', '));
@@ -1262,6 +1307,7 @@
     function getRegStatus(){
       var v = val('f-status');
       if(v==='__manual__') return val('f-status-manual').trim();
+      if(_regGroup(v)) return val('f-status-sub') || v;
       return v;
     }
 
@@ -1605,13 +1651,29 @@
     function _stRegKind(v){
       var t = String(v == null ? '' : v).replace(/\s/g, '');
       if(!t || t === '-') return 'none';                                  // 미입력
-      if(t === '등록' || t === '재등록' || t === '재입학' || t === '등원') return 'yes';
+      if(t === '등록' || t === '재등록' || t === '재입학' || t === '등원' || t === '신입등록' || t === '재입학등록') return 'yes';
       if(t === '상담중' || t === '고민중' || t.indexOf('보류') === 0) return 'pending';
-      return 'no';                                                        // 거절·미등록·연락없음 등
+      return 'no';                                                        // 취소(옛 거절·미등록·연락없음 포함)
+    }
+    /* 소분류 판정 — 새 표준값은 그대로, 옛 값은 뜻이 분명한 것만 옮기고 나머지는 ''(구분 없음) */
+    function _stRegSub(v){
+      var raw = String(v == null ? '' : v).trim(), t = raw.replace(/\s/g, '');
+      for(var i = 0; i < REG_GROUPS.length; i++) if(REG_GROUPS[i].subs.indexOf(raw) >= 0) return raw;
+      var k = _stRegKind(raw);
+      if(k === 'yes') return (t === '재입학' || t === '재등록' || t === '재입학등록') ? '재입학 등록' : (t === '신입등록' ? '신입등록' : '');
+      if(k === 'no'){
+        if(t.indexOf('연락') >= 0) return '상담 예약 관련 연락 없음';
+        if(t.indexOf('시범수업후') >= 0 || t.indexOf('시범후') >= 0) return '시범수업 후 취소';
+        if(t.indexOf('시범') >= 0) return '시범수업 취소';
+      }
+      return '';
     }
     function _stRegTally(rows){
-      var t = { yes:0, no:0, pending:0, none:0 };
-      rows.forEach(function(r){ t[_stRegKind(r.reg_status)]++; });
+      var t = { yes:0, no:0, pending:0, none:0, yesSub:{}, noSub:{} };
+      rows.forEach(function(r){
+        var k = _stRegKind(r.reg_status); t[k]++;
+        if(k === 'yes' || k === 'no'){ var m = k === 'yes' ? t.yesSub : t.noSub, sb = _stRegSub(r.reg_status); m[sb] = (m[sb] || 0) + 1; }
+      });
       return t;
     }
 
@@ -1704,7 +1766,9 @@
         html += '<div class="st-sec">등록 여부 <span style="font-weight:600;color:#99a">— '
           + cons.length + '건 기준</span></div>'
           + _stRegRow('등록',     reg.yes,     cons.length, '#1e3a6e')
-          + _stRegRow('미등록',   reg.no,      cons.length, '#dc2626')
+          + _stRegSubRows(REG_GROUPS[0].subs, reg.yesSub, cons.length, '#6b86b3')
+          + _stRegRow('취소',     reg.no,      cons.length, '#dc2626')
+          + _stRegSubRows(REG_GROUPS[1].subs, reg.noSub, cons.length, '#ef8a8a')
           + _stRegRow('진행·보류', reg.pending, cons.length, '#d97706')
           + _stRegRow('미입력',   reg.none,    cons.length, '#94a3b8');
         html += _stBars('입학 경로별', ADMISSION_PATHS, cons, function(r){ return r.admission_paths; }, true);
@@ -1724,6 +1788,16 @@
     }
 
     // 등록 여부 한 줄 — _stBars 와 같은 모양이되 색을 갈래마다 달리 준다
+    /* 소분류 줄: 정의된 소분류는 0건이어도 보여주고, 옛 기록처럼 소분류가 없는 건은 '구분 없음'으로 */
+    function _stRegSubRows(subs, counts, total, color){
+      var list = subs.slice(); if(counts['']) list.push('');
+      return list.map(function(sb){
+        var n = counts[sb] || 0, pct = total ? Math.round(n*1000/total)/10 : 0;
+        return '<div class="stat-row stat-sub"><div class="stat-label">└ '+esc(sb || '구분 없음(이전 기록)')+'</div>'
+          + '<div class="stat-bar"><i style="width:'+(n?Math.max(3, n*100/total):0)+'%;background:'+color+'"></i></div>'
+          + '<div class="stat-num">'+n+'건 ('+pct+'%)</div></div>';
+      }).join('');
+    }
     function _stRegRow(label, n, total, color){
       var pct = total ? Math.round(n*1000/total)/10 : 0;
       return '<div class="stat-row"><div class="stat-label">'+esc(label)+'</div>'
