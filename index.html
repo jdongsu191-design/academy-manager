@@ -8573,23 +8573,14 @@ function wsFillRoundSelect(program){
   var curDate = (document.getElementById(pfx + '-date') || {}).value || '';
   var html = '<option value="">회차 선택</option>';
   if (program === 'bety') {
-    /* 베티: 저장된 행 하나가 항목 하나 — 공통 행 + 현재 분원 행(휴강 제외). 분원·학년 지정 행은 '청라관 · 3학년 29회차' 처럼 접두 */
-    var bName = {}; ((typeof _allBranches !== 'undefined' && _allBranches) || []).forEach(function(b){ bName[b.id] = b.name; });
-    var all = []; Object.keys(_wsRowsByDate.bety || {}).forEach(function(d){ all = all.concat(_wsRowsByDate.bety[d]); });
-    all.filter(function(r){ return !r.is_closed && (r.round_no != null || r.title) && (!r.branch_id || r.branch_id === branchId); })
-      .sort(function(a,b){ return String(a.session_date).localeCompare(String(b.session_date)) || (a.branch_id ? 1 : 0) - (b.branch_id ? 1 : 0) || String(a.grade || '').localeCompare(String(b.grade || '')); })
-      .forEach(function(r){
-        var pre = [r.branch_id ? (bName[r.branch_id] || '분원') : '', r.grade ? _wsGradeLabel(r.grade) : ''].filter(Boolean).join(' · ');
-        var md = String(r.session_date).slice(5).replace('-', '/');
-        html += '<option value="' + r.session_date + '|' + (r.branch_id || '') + '|' + (r.grade || '') + '">'
-              + (pre ? pre + ' ' : '') + wsRoundLabel('bety', r) + ' (' + md + ')</option>';
-      });
+    /* 베티: 같은 날짜는 항목 하나 — 현재 분원 기준으로 학년별 요약 라벨('1·2학년 25회차 · 3학년 휴강'). 전부 휴강인 날은 뺀다 */
+    Object.keys(_wsRowsByDate.bety || {}).sort().forEach(function(d){
+      var sm = _wsDateSummary('bety', d, branchId);
+      if (!sm.label || sm.allClosed) return;
+      var md = String(d).slice(5).replace('-', '/');
+      html += '<option value="' + d + '"' + (d === curDate ? ' selected' : '') + '>' + sm.label + ' (' + md + ')</option>';
+    });
     sel.innerHTML = html;
-    /* 현재 날짜·학년 필터에 맞는 항목을 선택 상태로 (같은 날짜가 여러 항목이라 값만으로는 못 고름) */
-    var curG = (document.getElementById('by-grade-filter') || {}).value || '';
-    var opts = Array.prototype.slice.call(sel.options), hit = null;
-    opts.forEach(function(o){ var p = o.value.split('|'); if (p[0] !== curDate) return; if (!hit || (curG && p[2] === curG)) hit = o; });
-    if (hit) sel.value = hit.value;
     return;
   }
   var rows = Object.keys(merged).map(function(k){ return merged[k]; })
@@ -8605,31 +8596,14 @@ function wsFillRoundSelect(program){
 }
 
 /* 회차 드롭다운 선택 → 해당 날짜로 이동 + 로드 */
-async function wsOnRoundSelect(program){
+function wsOnRoundSelect(program){
   var pfx = (program === 'potential') ? 'pt' : 'by';
   var sel = document.getElementById(pfx + '-round-select');
   var dateEl = document.getElementById(pfx + '-date');
   if (!sel || !dateEl || !sel.value) return;
-  if (program === 'potential') { dateEl.value = sel.value; ptLoad(); return; }
-  /* 베티: '날짜|분원|학년' — 분원 전용 행이면 분원 선택을, 학년 전용 행이면 학년 필터를 그 값으로 맞춰 목록이 그 회차 대상만 보이게 */
-  var p = sel.value.split('|'), date = p[0], brId = p[1] || '', grade = p[2] || '';
-  dateEl.value = date;
-  var bs = document.getElementById('by-branch-select');
-  if (brId && bs && bs.value !== brId && Array.prototype.some.call(bs.options, function(o){ return o.value === brId; })) {
-    bs.value = brId;
-    var setupBranch = document.getElementById('by-setup-branch'); if (setupBranch) setupBranch.value = brId;
-    if (typeof bySetupLoadTeachers === 'function') bySetupLoadTeachers(brId);
-    await byLoadFilters(brId);          /* 끝에서 byLoad 까지 한다 */
-  } else {
-    await byLoad();
-  }
-  var grSel = document.getElementById('by-grade-filter'), scSel = document.getElementById('by-school-filter');
-  if (grSel) {
-    if (grade === 'pre') { grSel.value = ''; if (scSel && Array.prototype.some.call(scSel.options, function(o){ return o.value === '예비고'; })) scSel.value = '예비고'; }
-    else { grSel.value = grade; if (grSel.value !== grade) grSel.value = ''; if (scSel && scSel.value === '예비고' && grade) scSel.value = ''; }
-    if (typeof byApplyFilter === 'function') byApplyFilter();
-  }
-  wsFillRoundSelect('bety');
+  dateEl.value = sel.value;
+  if (program === 'potential') { ptLoad(); }
+  else { byLoad(); }
 }
 
 function wsRenderBadge(program){
