@@ -8581,10 +8581,15 @@ function wsFillRoundSelect(program){
       .forEach(function(r){
         var pre = [r.branch_id ? (bName[r.branch_id] || '분원') : '', r.grade ? _wsGradeLabel(r.grade) : ''].filter(Boolean).join(' · ');
         var md = String(r.session_date).slice(5).replace('-', '/');
-        html += '<option value="' + r.session_date + '"' + (r.session_date === curDate ? ' selected' : '') + '>'
+        html += '<option value="' + r.session_date + '|' + (r.branch_id || '') + '|' + (r.grade || '') + '">'
               + (pre ? pre + ' ' : '') + wsRoundLabel('bety', r) + ' (' + md + ')</option>';
       });
     sel.innerHTML = html;
+    /* 현재 날짜·학년 필터에 맞는 항목을 선택 상태로 (같은 날짜가 여러 항목이라 값만으로는 못 고름) */
+    var curG = (document.getElementById('by-grade-filter') || {}).value || '';
+    var opts = Array.prototype.slice.call(sel.options), hit = null;
+    opts.forEach(function(o){ var p = o.value.split('|'); if (p[0] !== curDate) return; if (!hit || (curG && p[2] === curG)) hit = o; });
+    if (hit) sel.value = hit.value;
     return;
   }
   var rows = Object.keys(merged).map(function(k){ return merged[k]; })
@@ -8600,14 +8605,31 @@ function wsFillRoundSelect(program){
 }
 
 /* 회차 드롭다운 선택 → 해당 날짜로 이동 + 로드 */
-function wsOnRoundSelect(program){
+async function wsOnRoundSelect(program){
   var pfx = (program === 'potential') ? 'pt' : 'by';
   var sel = document.getElementById(pfx + '-round-select');
   var dateEl = document.getElementById(pfx + '-date');
   if (!sel || !dateEl || !sel.value) return;
-  dateEl.value = sel.value;
-  if (program === 'potential') { ptLoad(); }
-  else { byLoad(); }
+  if (program === 'potential') { dateEl.value = sel.value; ptLoad(); return; }
+  /* 베티: '날짜|분원|학년' — 분원 전용 행이면 분원 선택을, 학년 전용 행이면 학년 필터를 그 값으로 맞춰 목록이 그 회차 대상만 보이게 */
+  var p = sel.value.split('|'), date = p[0], brId = p[1] || '', grade = p[2] || '';
+  dateEl.value = date;
+  var bs = document.getElementById('by-branch-select');
+  if (brId && bs && bs.value !== brId && Array.prototype.some.call(bs.options, function(o){ return o.value === brId; })) {
+    bs.value = brId;
+    var setupBranch = document.getElementById('by-setup-branch'); if (setupBranch) setupBranch.value = brId;
+    if (typeof bySetupLoadTeachers === 'function') bySetupLoadTeachers(brId);
+    await byLoadFilters(brId);          /* 끝에서 byLoad 까지 한다 */
+  } else {
+    await byLoad();
+  }
+  var grSel = document.getElementById('by-grade-filter'), scSel = document.getElementById('by-school-filter');
+  if (grSel) {
+    if (grade === 'pre') { grSel.value = ''; if (scSel && Array.prototype.some.call(scSel.options, function(o){ return o.value === '예비고'; })) scSel.value = '예비고'; }
+    else { grSel.value = grade; if (grSel.value !== grade) grSel.value = ''; if (scSel && scSel.value === '예비고' && grade) scSel.value = ''; }
+    if (typeof byApplyFilter === 'function') byApplyFilter();
+  }
+  wsFillRoundSelect('bety');
 }
 
 function wsRenderBadge(program){
