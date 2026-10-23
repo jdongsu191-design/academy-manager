@@ -516,10 +516,13 @@ async function loadEvents(){
    · cal_events 에 복사하지 않으므로 회차를 고치면 달력도 바로 따라간다. 달력에서는 수정·삭제·복제 불가 */
 var WS_PROGRAMS = { potential:{ label:'포텐셜', icon:'📘' }, bety:{ label:'베티', icon:'📙' } };
 var WS_GRADES = [['1','1학년'],['2','2학년'],['3','3학년'],['pre','예비고']];
+var _wsProgBranches = {};   /* 불러온 기간에 그 프로그램 회차가 있는 분원들 (중등 분원처럼 베티가 없는 분원은 '전 분원'에서 뺀다) */
 async function loadWeekendSessions(from, to){
   var r = await db.from('weekend_sessions').select('id,program,session_date,round_no,round_month,quarter,is_closed,note,branch_id,grade,title')
     .in('program', Object.keys(WS_PROGRAMS)).gte('session_date', from).lte('session_date', to).order('session_date');
   if(r.error){ console.warn('weekend_sessions', r.error.message); return []; }
+  _wsProgBranches = {};
+  (r.data || []).forEach(function(x){ if(!x.branch_id) return; var a = (_wsProgBranches[x.program] = _wsProgBranches[x.program] || []); if(a.indexOf(x.branch_id) < 0) a.push(x.branch_id); });
   var g = {};
   (r.data || []).forEach(function(x){ var k = x.program + ':' + String(x.session_date).slice(0,10); (g[k] = g[k] || []).push(x); });
   return Object.keys(g).map(function(k){
@@ -561,14 +564,21 @@ function wsSummary(ev, branchId){
     return parts.join('·') + ' ' + txt;
   }).join(' · ');
 }
-/* 달력 글자: '포텐셜 10월 3회차' / 전체 분원 보기에서 분원 전용 행이 있으면 '베티 25회차 · 청라관 26회차' */
+/* 달력 글자: '포텐셜 10월 3회차'. 전체 분원 보기에서는 분원별 요약이 같은 분원끼리 묶어 '베티 22회차 (철산관·개봉 고등) · 23회차 (청라관)'.
+   그 프로그램을 하는 분원 전부(또는 공통 행)가 같은 내용이면 분원명을 붙이지 않는다 */
 function wsTitle(ev, branchId){
   var pg = WS_PROGRAMS[ev._ws.program] || { label:ev._ws.program };
   if(branchId) return pg.label + ' ' + wsSummary(ev, branchId);
   var brs = []; ev._ws.rows.forEach(function(x){ if(x.branch_id && brs.indexOf(x.branch_id) < 0) brs.push(x.branch_id); });
-  var common = wsSummary(ev, ''), parts = common ? [common] : [];
-  brs.forEach(function(b){ var t = wsSummary(ev, b); if(t && t !== common) parts.push(branchNames([b]) + ' ' + t); });
-  return pg.label + ' ' + parts.join(' · ');
+  var common = wsSummary(ev, '');
+  if(!brs.length) return pg.label + ' ' + common;
+  var groups = {}, order = [];
+  brs.forEach(function(b){ var t = wsSummary(ev, b); if(!t) return; if(!groups[t]){ groups[t] = []; order.push(t); } groups[t].push(b); });
+  var all = _wsProgBranches[ev._ws.program] || [];
+  var coversAll = common || all.every(function(id){ return brs.indexOf(id) >= 0; });
+  if(order.length === 1 && coversAll) return pg.label + ' ' + order[0];
+  var nm = function(ids){ return ids.map(function(id){ var b = _branches.find(function(x){ return x.id === id; }); return b ? b.name : '?'; }).join('·'); };
+  return pg.label + ' ' + order.map(function(t){ return t + ' (' + nm(groups[t]) + ')'; }).join(' · ');
 }
 /* 일정 칸 색 클래스: 회차는 프로그램 대표색, 그 외는 종류색 */
 function evCls(ev){ return ev._ws ? 'academy ws-' + ev._ws.program : ev.category; }
