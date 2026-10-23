@@ -207,9 +207,21 @@
   }
 
   /* ── 본 처리 ─────────────────────────────────────────── */
+  /* 세로로 찍힌 사진(폰을 세워 찍었거나 카메라가 세로 기준으로 저장)을 양식 방향(가로)으로 돌린다.
+     180° 는 뒤의 방향 판정(오른쪽 위 마크만 점 없음)이 처리하므로 90° 만 맞추면 된다.
+     2026-10-23 갤럭시 앱 촬영이 전부 '표식 배치가 맞지 않아요' 로 떨어지던 원인 */
+  function toFormOrientation(src, form){
+    var w = src.naturalWidth || src.videoWidth || src.width, h = src.naturalHeight || src.videoHeight || src.height;
+    var wantLandscape = !form.page_mm || form.page_mm[0] >= form.page_mm[1];
+    if((w >= h) === wantLandscape) return src;
+    var c = document.createElement('canvas'); c.width = h; c.height = w;
+    var ctx = c.getContext('2d'); ctx.translate(h, 0); ctx.rotate(Math.PI / 2); ctx.drawImage(src, 0, 0);
+    return c;
+  }
   function analyze(src, form, opts){
     opts = opts || {};
     var t0 = performance.now();
+    src = toFormOrientation(src, form);
     var full = toGray(src, 2400);                                   /* 측정용(세밀) */
     var small = toGray(src, 1400);                                  /* 마크 찾기용 */
     var q = { longSide: Math.max(src.naturalWidth || src.width, src.naturalHeight || src.height), warnings: [] };
