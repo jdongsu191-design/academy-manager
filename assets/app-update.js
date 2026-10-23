@@ -8,6 +8,8 @@
 (function () {
   var cap = window.Capacitor;
   if (!cap || typeof cap.isNativePlatform !== 'function' || !cap.isNativePlatform()) return;
+  /* 앱(Capacitor)으로 열렸다는 표시 — 앱에서만 다르게 보일 CSS 는 html.bmaps-app 아래에 쓴다 (PC·웹앱 무영향) */
+  try { document.documentElement.classList.add('bmaps-app'); } catch (e) {}
   var App = cap.Plugins && cap.Plugins.App;
   if (!App || !App.getInfo) return;
 
