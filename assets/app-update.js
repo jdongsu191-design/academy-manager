@@ -13,6 +13,27 @@
   var App = cap.Plugins && cap.Plugins.App;
   if (!App || !App.getInfo) return;
 
+  /* 안드로이드 뒤로가기: 리스너가 없으면 Capacitor 가 앱을 바로 닫는다.
+     이전 화면(예: 베티 OMR → BMAPS 홈)이 있으면 돌아가고, 열린 모달이 있으면 닫고, 첫 화면이면 종료 대신 홈 화면으로 내린다(실수 종료 방지) */
+  if (App.addListener) {
+    App.addListener('backButton', function (ev) {
+      var openModal = document.querySelector('.modal-backdrop.open, [id^="modal-"][style*="display: flex"], [id^="modal-"][style*="display:flex"]');
+      if (openModal) {
+        var closeBtn = openModal.querySelector('[onclick*="closeModal"], [onclick*="close"], button[aria-label="닫기"]');
+        if (closeBtn) { closeBtn.click(); return; }
+        openModal.style.display = 'none'; openModal.classList.remove('open'); return;
+      }
+      if (ev && ev.canGoBack) { window.history.back(); return; }
+      /* 학생 화면에서 질문 탭이 아닌 탭(N제 등)에 있으면 먼저 질문 탭으로 */
+      var ss = document.getElementById('studentScreen');
+      if (ss && ss.classList.contains('active')) {
+        var home = document.getElementById('snav-question');
+        if (home && !home.classList.contains('active')) { home.click(); return; }
+      }
+      if (App.minimizeApp) App.minimizeApp(); else if (App.exitApp) App.exitApp();
+    });
+  }
+
   function flavorOf(pkg) { return /\.preview$/.test(pkg || '') ? 'preview' : 'prod'; }
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
