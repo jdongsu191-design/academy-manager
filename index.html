@@ -3672,7 +3672,7 @@
               <input type="radio" name="ws-scope" value="branch" onchange="wsOnScopeChange()" style="cursor:pointer">
               <span>분원별</span>
             </label>
-            <select id="ws-scope-branch" style="display:none;padding:6px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none"></select>
+            <div id="ws-scope-branch-wrap" style="display:none;flex-basis:100%;flex-wrap:wrap;gap:6px;align-items:center"></div>
           </div>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
@@ -3684,15 +3684,9 @@
             <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">월</div>
             <input type="number" id="ws-input-month" min="1" max="12" placeholder="예: 7" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
           </div>
-          <div id="ws-input-grade-wrap" style="flex:0 0 110px;display:none">
-            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">학년</div>
-            <select id="ws-input-grade" style="width:100%;padding:8px 6px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;background:#fff;cursor:pointer">
-              <option value="">전학년</option>
-              <option value="1">1학년</option>
-              <option value="2">2학년</option>
-              <option value="3">3학년</option>
-              <option value="pre">예비고</option>
-            </select>
+          <div id="ws-input-grade-wrap" style="flex-basis:100%;display:none">
+            <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">학년 <span style="font-weight:500;color:#9ca3af">— 여러 개 고르면 학년마다 한 행씩 저장</span></div>
+            <div id="ws-grade-checks" style="display:flex;flex-wrap:wrap;gap:6px"></div>
           </div>
           <div style="flex:0 0 90px">
             <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px" id="ws-input-round-label">회차 번호</div>
@@ -8672,15 +8666,15 @@ async function wsOpenManage(program){
   if (_sw) _sw.style.display = '';                               /* 2026-10-23 베티도 분원별 범위 사용 */
   var _gw = document.getElementById('ws-input-grade-wrap');
   if (_gw) _gw.style.display = (program === 'bety') ? '' : 'none';
-  var _gs = document.getElementById('ws-input-grade'); if (_gs) _gs.value = '';
+  wsFillGradeChecks([]);
   if (program === 'potential' || program === 'bety') {
-    var _sb = document.getElementById('ws-scope-branch');
-    if (_sb) {
+    var _sbw = document.getElementById('ws-scope-branch-wrap');
+    if (_sbw) {
       var _brs = (typeof _allBranches !== 'undefined' && _allBranches) ? _allBranches : [];
-      _sb.innerHTML = '<option value="">분원 선택</option>' + _brs.map(function(b){
-        return '<option value="' + b.id + '">' + _esc(b.name) + '</option>';
-      }).join('');
-      _sb.style.display = 'none';
+      _sbw.innerHTML = _brs.map(function(b){
+        return '<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border:1.5px solid var(--border);border-radius:999px;background:#fff;font-size:12px;cursor:pointer"><input type="checkbox" class="ws-br" value="' + b.id + '" onchange="wsRenderList()" style="accent-color:var(--navy)">' + _esc(b.name) + '</label>';
+      }).join('') + '<span style="font-size:11px;color:#9ca3af">여러 분원을 고르면 분원마다 한 행씩 저장</span>';
+      _sbw.style.display = 'none';
     }
     var _rc = document.querySelector('input[name="ws-scope"][value="common"]');
     if (_rc) _rc.checked = true;
@@ -8705,26 +8699,14 @@ function wsRenderList(){
   // [분원별 회차] 현재 선택 범위 기준 목록 (포텐셜·베티 모두 범위 구분, 베티는 학년 지정 행도 함께)
   var _isPt = (_wsManageProgram === 'potential');
   var _isBy = (_wsManageProgram === 'bety');
-  var _bId = _wsManageBranchId();
+  var _bIds = _wsManageBranchIds();
   var _scope = (document.querySelector('input[name="ws-scope"]:checked') || {}).value || 'common';
-  var rows;
-  if (_isBy) {
-    var all = []; Object.keys(_wsRowsByDate.bety || {}).forEach(function(d){ all = all.concat(_wsRowsByDate.bety[d]); });
-    rows = all.filter(function(r){ return _scope === 'branch' ? (!!_bId && r.branch_id === _bId) : !r.branch_id; })
-      .sort(function(a,b){ return String(a.session_date).localeCompare(String(b.session_date)) || String(a.grade || '').localeCompare(String(b.grade || '')); });
-  } else {
-    var cache = _wsCacheBranch[_wsManageProgram] || { common: {}, byBranch: {} };
-    var map;
-    if (_scope === 'branch') {
-      map = (_bId && cache.byBranch[_bId]) ? cache.byBranch[_bId] : {};
-    } else {
-      map = cache.common || {};
-    }
-    rows = Object.keys(map).map(function(k){ return map[k]; })
-      .sort(function(a,b){ return String(a.session_date).localeCompare(String(b.session_date)); });
-  }
+  var _bName = {}; ((typeof _allBranches !== 'undefined' && _allBranches) || []).forEach(function(b){ _bName[b.id] = b.name; });
+  var all = []; Object.keys(_wsRowsByDate[_wsManageProgram] || {}).forEach(function(d){ all = all.concat(_wsRowsByDate[_wsManageProgram][d]); });
+  var rows = all.filter(function(r){ return _scope === 'branch' ? (_bIds.indexOf(r.branch_id) >= 0) : !r.branch_id; })
+    .sort(function(a,b){ return String(a.session_date).localeCompare(String(b.session_date)) || String(_bName[a.branch_id] || '').localeCompare(String(_bName[b.branch_id] || ''), 'ko') || String(a.grade || '').localeCompare(String(b.grade || '')); });
   var _scopeLabel = (_scope === 'branch')
-    ? (_bId ? '선택 분원 전용' : '분원을 선택하세요')
+    ? (_bIds.length ? _bIds.map(function(id){ return _bName[id] || '?'; }).join('·') + ' 전용' : '분원을 선택하세요')
     : '전분원 공통';
   if (!rows.length) {
     wrap.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;font-size:13px">[' + _esc(_scopeLabel) + '] 등록된 회차가 없습니다.</div>';
@@ -8734,6 +8716,7 @@ function wsRenderList(){
     + '<thead><tr style="background:#f8fafc;color:#6b7280">'
     + '<th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e5e7eb">날짜</th>'
     + '<th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e5e7eb">회차</th>'
+    + (_scope === 'branch' ? '<th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e5e7eb">분원</th>' : '')
     + (_isBy ? '<th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e5e7eb">학년</th>' : '')
     + (_isPt ? '<th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e5e7eb">분기</th>' : '')
     + '<th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e5e7eb">비고</th>'
@@ -8743,14 +8726,15 @@ function wsRenderList(){
     var _lbl = wsRoundLabel(_wsManageProgram, r);
     var label = r.is_closed ? '<span style="color:#dc2626;font-weight:700">휴강</span>'
               : (_lbl ? '<span style="font-weight:700">' + _esc(_lbl) + '</span>' : '-');
-    html += '<tr style="border-bottom:1px solid #f1f5f9;cursor:pointer" onclick="' + (_isBy ? 'wsEditSessionRowId(\'' + _esc(r.id) + '\')' : 'wsEditSessionRow(\'' + _esc(r.session_date) + '\')') + '" title="클릭하면 위 입력칸에 불러옵니다">'
+    html += '<tr style="border-bottom:1px solid #f1f5f9;cursor:pointer" onclick="wsEditSessionRowId(\'' + _esc(r.id) + '\')" title="클릭하면 위 입력칸에 불러옵니다">'
       + '<td style="padding:7px 8px">' + _esc(r.session_date) + '</td>'
       + '<td style="padding:7px 8px;text-align:center">' + label + '</td>'
+      + (_scope === 'branch' ? ('<td style="padding:7px 8px;text-align:center;font-size:12px;color:#7c3aed;font-weight:700">' + _esc(_bName[r.branch_id] || '?') + '</td>') : '')
       + (_isBy ? ('<td style="padding:7px 8px;text-align:center;font-size:12px;color:' + (r.grade ? '#c2410c;font-weight:700' : '#9ca3af') + '">' + _esc(_wsGradeLabel(r.grade || '')) + '</td>') : '')
       + (_isPt ? ('<td style="padding:7px 8px;text-align:center;font-size:12px;color:#059669">'
           + (r.quarter ? _esc(ptQuarterLabel(r.quarter)) : '<span style="color:#cbd5e1">자동 ' + _esc(ptQuarterLabel(ptQuarterOf(r.session_date))) + '</span>') + '</td>') : '')
       + '<td style="padding:7px 8px;text-align:center;color:#6b7280">' + _esc(r.note || '') + '</td>'
-      + '<td style="padding:7px 8px;text-align:center"><button onclick="event.stopPropagation();' + (_isBy ? 'wsDeleteSessionId(\'' + _esc(r.id) + '\',\'' + _esc(r.session_date) + '\',\'' + _esc(r.grade || '') + '\')' : 'wsDeleteSession(\'' + _esc(r.session_date) + '\')') + '" style="font-size:11px;padding:3px 8px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;cursor:pointer">삭제</button></td>'
+      + '<td style="padding:7px 8px;text-align:center"><button onclick="event.stopPropagation();wsDeleteSessionId(\'' + _esc(r.id) + '\',\'' + _esc(r.session_date) + '\',\'' + _esc(r.grade || '') + '\')" style="font-size:11px;padding:3px 8px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;cursor:pointer">삭제</button></td>'
       + '</tr>';
   });
   html += '</tbody></table>';
@@ -8760,16 +8744,39 @@ function wsRenderList(){
 /* [분원별 회차] 적용 범위 변경 → 분원 드롭다운 표시/숨김 + 목록/드롭다운 갱신 */
 function wsOnScopeChange(){
   var scope = (document.querySelector('input[name="ws-scope"]:checked') || {}).value || 'common';
-  var sb = document.getElementById('ws-scope-branch');
-  if (sb) sb.style.display = (scope === 'branch') ? '' : 'none';
+  var sbw = document.getElementById('ws-scope-branch-wrap');
+  if (sbw) sbw.style.display = (scope === 'branch') ? 'flex' : 'none';
   wsRenderList();
 }
-/* 현재 회차관리 모달에서 선택된 범위의 branch_id (공통이면 null) */
-function _wsManageBranchId(){
+/* 선택된 분원 id 목록 (공통 범위면 []) */
+function _wsManageBranchIds(){
   var scope = (document.querySelector('input[name="ws-scope"]:checked') || {}).value || 'common';
-  if (scope !== 'branch') return null;
-  var sb = document.getElementById('ws-scope-branch');
-  return (sb && sb.value) ? sb.value : null;
+  if (scope !== 'branch') return [];
+  return Array.prototype.map.call(document.querySelectorAll('#ws-scope-branch-wrap input.ws-br:checked'), function(c){ return c.value; });
+}
+/* 하위호환: 첫 번째 선택 분원 (없으면 null) */
+function _wsManageBranchId(){ var ids = _wsManageBranchIds(); return ids.length ? ids[0] : null; }
+/* 학년 체크박스 (베티): '' = 전학년. 전학년을 고르면 나머지가 풀리고, 학년을 고르면 전학년이 풀린다 */
+function wsFillGradeChecks(selected){
+  var box = document.getElementById('ws-grade-checks'); if (!box) return;
+  var sel = selected && selected.length ? selected : [''];
+  var items = [['', '전학년']].concat(WS_GRADES);
+  box.innerHTML = items.map(function(g){
+    var on = sel.indexOf(g[0]) >= 0;
+    return '<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border:1.5px solid ' + (on ? '#f59e0b' : 'var(--border)') + ';border-radius:999px;background:' + (on ? '#fffbeb' : '#fff') + ';font-size:12px;cursor:pointer"><input type="checkbox" class="ws-gr" value="' + g[0] + '"' + (on ? ' checked' : '') + ' onchange="wsOnGradeCheck(this)" style="accent-color:#d97706">' + g[1] + '</label>';
+  }).join('');
+}
+function wsOnGradeCheck(cb){
+  var all = Array.prototype.slice.call(document.querySelectorAll('#ws-grade-checks input.ws-gr'));
+  if (cb.value === '' && cb.checked) all.forEach(function(c){ if (c.value !== '') c.checked = false; });
+  else if (cb.value !== '' && cb.checked) all.forEach(function(c){ if (c.value === '') c.checked = false; });
+  if (!all.some(function(c){ return c.checked; })) all[0].checked = true;   /* 아무것도 없으면 전학년 */
+  wsFillGradeChecks(all.filter(function(c){ return c.checked; }).map(function(c){ return c.value; }));
+}
+function _wsSelectedGrades(){
+  if (_wsManageProgram !== 'bety') return [null];
+  var v = Array.prototype.map.call(document.querySelectorAll('#ws-grade-checks input.ws-gr:checked'), function(c){ return c.value || null; });
+  return v.length ? v : [null];
 }
 
 /* 베티: 행 id 로 입력칸에 불러오기 (같은 날짜에 학년별 행이 여러 개라 날짜만으로는 모자람) */
@@ -8779,12 +8786,24 @@ function wsEditSessionRowId(id){
   if (!row) return;
   var dEl = document.getElementById('ws-input-date'); if (dEl) dEl.value = row.session_date;
   var rEl = document.getElementById('ws-input-round'); if (rEl) rEl.value = (row.round_no != null ? row.round_no : '');
+  var mEl = document.getElementById('ws-input-month'); if (mEl) mEl.value = (row.round_month != null ? row.round_month : '');
   var cEl = document.getElementById('ws-input-closed'); if (cEl) cEl.checked = !!row.is_closed;
-  var gEl = document.getElementById('ws-input-grade'); if (gEl) gEl.value = row.grade || '';
+  var qEl = document.getElementById('ws-input-quarter');
+  if (qEl) { var _qm = /-Q([1-4])$/.exec(String(row.quarter || '')); qEl.value = _qm ? _qm[1] : ''; }
+  /* 분원 체크는 그 행의 분원 하나만, 학년 체크는 그 행의 학년 하나만 — 저장하면 그 행만 덮어쓴다 */
+  if (row.branch_id) {
+    var _rb = document.querySelector('input[name="ws-scope"][value="branch"]'); if (_rb && !_rb.checked) { _rb.checked = true; }
+    var sbw = document.getElementById('ws-scope-branch-wrap'); if (sbw) sbw.style.display = 'flex';
+    document.querySelectorAll('#ws-scope-branch-wrap input.ws-br').forEach(function(c){ c.checked = (c.value === row.branch_id); });
+  }
+  wsFillGradeChecks([row.grade || '']);
 }
 async function wsDeleteSessionId(id, date, grade){
   if (!_wsIsAdmin()) { alert('관리자만 가능합니다.'); return; }
-  if (!confirm(date + ' [' + _wsGradeLabel(grade || '') + '] 회차 정보를 삭제할까요?')) return;
+  var _row = null; Object.keys(_wsRowsByDate[_wsManageProgram] || {}).forEach(function(d){ (_wsRowsByDate[_wsManageProgram][d] || []).forEach(function(r){ if (String(r.id) === String(id)) _row = r; }); });
+  var _bn = ''; if (_row && _row.branch_id) { var _b = ((typeof _allBranches !== 'undefined' && _allBranches) || []).filter(function(x){ return x.id === _row.branch_id; })[0]; _bn = _b ? _b.name : '분원'; }
+  var _tag = [_bn || '전분원 공통'].concat(_wsManageProgram === 'bety' ? [_wsGradeLabel(grade || '')] : []).join(' · ');
+  if (!confirm(date + ' [' + _tag + '] 회차 정보를 삭제할까요?')) return;
   try {
     var r = await db.from('weekend_sessions').delete().eq('id', id);
     if (r.error) { alert('삭제 실패: ' + r.error.message); return; }
@@ -8816,55 +8835,60 @@ async function wsSaveSession(){
   if (!date) { alert('날짜를 선택하세요.'); return; }
   if (!closed && (roundV === '' || roundV == null)) { alert('회차 번호를 입력하거나 휴강을 선택하세요.'); return; }
   if (!closed && _isPotential && (monthV === '' || monthV == null)) { alert('월을 입력하세요.'); return; }
-  // [분원별 회차] 범위: 공통(null) 또는 분원별(branch_id) — 포텐셜·베티 공통
-  var _branchId = _wsManageBranchId();
+  // [분원별 회차] 범위: 공통([null]) 또는 선택한 분원들 — 포텐셜·베티 공통. 분원×학년 조합마다 한 행
   var _scope = (document.querySelector('input[name="ws-scope"]:checked') || {}).value || 'common';
-  if (_scope === 'branch' && !_branchId) { alert('분원을 선택하세요.'); return; }
-  var _isBety = (_wsManageProgram === 'bety');
-  var _grade = _isBety ? ((document.getElementById('ws-input-grade') || {}).value || null) : null;
+  var _branchIds = (_scope === 'branch') ? _wsManageBranchIds() : [null];
+  if (_scope === 'branch' && !_branchIds.length) { alert('분원을 하나 이상 선택하세요.'); return; }
+  var _grades = _wsSelectedGrades();
   // [분기] 빈 값이면 null → 조회 시 날짜로 자동 판정
   var _qv = (document.getElementById('ws-input-quarter') || {}).value || '';
-  var payload = {
+  var _base = {
     program: _wsManageProgram,
     session_date: date,
     round_no: closed ? null : parseInt(roundV, 10),
     round_month: (closed || !_isPotential) ? null : parseInt(monthV, 10),
     is_closed: closed,
-    branch_id: _branchId,
-    grade: _grade,
     quarter: (_isPotential && _qv) ? (String(date).slice(0, 4) + '-Q' + _qv) : null
   };
+  var combos = [];
+  _branchIds.forEach(function(b){ _grades.forEach(function(g){ combos.push({ branch_id: b, grade: g }); }); });
   try {
-    // UNIQUE 인덱스가 (program, session_date, COALESCE(branch_id,...)) 이므로 수동 조회 후 insert/update
-    var _existQ = db.from('weekend_sessions').select('id').eq('program', _wsManageProgram).eq('session_date', date);
-    _existQ = _branchId ? _existQ.eq('branch_id', _branchId) : _existQ.is('branch_id', null);
-    _existQ = _grade ? _existQ.eq('grade', _grade) : _existQ.is('grade', null);
-    var _existR = await _existQ;
-    var _existRow = (_existR.data || [])[0];
-    var _write = function(){
-      return _existRow
-        ? db.from('weekend_sessions').update(payload).eq('id', _existRow.id)
-        : db.from('weekend_sessions').insert(payload);
-    };
-    var r = await _write();
-    // quarter 컬럼이 아직 없는 환경 — 분기만 빼고 다시 저장해 기존 기능은 막지 않는다
-    if (r.error && /quarter/.test(String(r.error.message || ''))) {
-      delete payload.quarter;
-      r = await _write();
-      if (!r.error) alert('회차는 저장했습니다.\n분기 저장에는 weekend_sessions.quarter 컬럼 추가(SQL)가 필요합니다.');
+    var saved = 0, quarterWarned = false;
+    for (var ci = 0; ci < combos.length; ci++) {
+      var payload = Object.assign({}, _base, combos[ci]);
+      // UNIQUE 인덱스가 (program, session_date, 분원, 학년) 이므로 수동 조회 후 insert/update
+      var _existQ = db.from('weekend_sessions').select('id').eq('program', _wsManageProgram).eq('session_date', date);
+      _existQ = payload.branch_id ? _existQ.eq('branch_id', payload.branch_id) : _existQ.is('branch_id', null);
+      _existQ = payload.grade ? _existQ.eq('grade', payload.grade) : _existQ.is('grade', null);
+      var _existR = await _existQ;
+      var _existRow = (_existR.data || [])[0];
+      var _write = function(p){
+        return _existRow
+          ? db.from('weekend_sessions').update(p).eq('id', _existRow.id)
+          : db.from('weekend_sessions').insert(p);
+      };
+      var r = await _write(payload);
+      // quarter 컬럼이 아직 없는 환경 — 분기만 빼고 다시 저장해 기존 기능은 막지 않는다
+      if (r.error && /quarter/.test(String(r.error.message || ''))) {
+        var p2 = Object.assign({}, payload); delete p2.quarter;
+        r = await _write(p2); quarterWarned = !r.error;
+      }
+      if (r.error && /grade/.test(String(r.error.message || ''))) {
+        alert('학년별 회차를 저장하려면 weekend_sessions.grade 컬럼 추가(SQL, migrations/20261023_weekend_sessions_grade.sql)가 먼저 필요합니다.');
+        return;
+      }
+      if (r.error) { alert('저장 실패(' + (ci + 1) + '/' + combos.length + '): ' + r.error.message); break; }
+      saved++;
     }
-    if (r.error && /grade/.test(String(r.error.message || ''))) {
-      alert('학년별 회차를 저장하려면 weekend_sessions.grade 컬럼 추가(SQL, migrations/20261023_weekend_sessions_grade.sql)가 먼저 필요합니다.');
-      return;
-    }
-    if (r.error) { alert('저장 실패: ' + r.error.message); return; }
+    if (quarterWarned) alert('회차는 저장했습니다.\n분기 저장에는 weekend_sessions.quarter 컬럼 추가(SQL)가 필요합니다.');
+    if (combos.length > 1 && saved) { var _msgEl = document.getElementById('ws-manage-title'); if (_msgEl) { var _t0 = _msgEl.textContent.replace(/ · \d+건 저장됨$/, ''); _msgEl.textContent = _t0 + ' · ' + saved + '건 저장됨'; setTimeout(function(){ _msgEl.textContent = _t0; }, 2500); } }
     await wsLoadSessions(_wsManageProgram);
     wsRenderList();
     wsRenderBadge(_wsManageProgram);
     var rEl = document.getElementById('ws-input-round'); if (rEl) rEl.value = '';
     var mEl = document.getElementById('ws-input-month'); if (mEl) mEl.value = '';
     var cEl = document.getElementById('ws-input-closed'); if (cEl) cEl.checked = false;
-    var gEl2 = document.getElementById('ws-input-grade'); if (gEl2) gEl2.value = '';
+    wsFillGradeChecks([]);
     wsFillRoundSelect(_wsManageProgram);
   } catch(e) { alert('오류: ' + (e.message || e)); }
 }
