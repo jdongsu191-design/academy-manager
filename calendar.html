@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="BMAPS">
   <link rel="apple-touch-icon" href="/icon-192.png">
-  <title>BMAPS 운영 일정 v1.12</title>
+  <title>BMAPS 운영 일정 v1.13</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -18,7 +18,7 @@
       --navy:#1F3A51; --navy-dark:#162c3e; --navy-light:#2a4f6e;
       --bg:#f4f6f9; --surface:#fff; --border:#e2e8f0;
       --text:#1e293b; --text-sub:#64748b; --red:#dc2626; --blue:#2563eb;
-      --c-academy:#1F3A51; --c-exam:#7c3aed; --c-school:#0f766e; --c-personal:#b45309; --c-holiday:#dc2626;
+      --c-academy:#1F3A51; --c-exam:#7c3aed; --c-school:#0f766e; --c-personal:#b45309; --c-holiday:#dc2626; --c-ws-potential:#2563eb; --c-ws-bety:#ea580c;
       --radius:10px; --shadow:0 2px 10px rgba(0,0,0,.08);
     }
     *{box-sizing:border-box} html,body{margin:0;padding:0}
@@ -70,6 +70,11 @@
     .week .more{margin:2px 6px 4px;font-size:11px;font-weight:800;color:#b45309;cursor:pointer;z-index:2}
     .ev{grid-row:auto;margin:1px 3px 0;padding:2px 6px;font-size:11.5px;line-height:1.5;border-radius:4px;background:#eef1f6;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border-left:3px solid var(--c-academy);z-index:2;pointer-events:auto}
     .ev.exam{border-left-color:var(--c-exam);background:#f3effd} .ev.school{border-left-color:var(--c-school);background:#ecfaf7} .ev.personal{border-left-color:var(--c-personal);background:#fff6ea} .ev.academy{border-left-color:var(--c-academy);background:#e9eef5}
+    /* 주말 프로그램 회차(weekend_sessions, 조회 전용): 학원 운영 종류 안에서 색만 대표색 */
+    .ev.ws-potential{border-left-color:var(--c-ws-potential);background:#e8effd} .ev.ws-bety{border-left-color:var(--c-ws-bety);background:#fff0e6}
+    .tev.ws-potential{background:var(--c-ws-potential)} .tev.ws-bety{background:var(--c-ws-bety)}
+    .dl.ws-potential{border-left-color:var(--c-ws-potential)} .dl.ws-bety{border-left-color:var(--c-ws-bety)}
+    .evtag.cat.ws-potential{background:#e8effd;color:var(--c-ws-potential)} .evtag.cat.ws-bety{background:#fff0e6;color:var(--c-ws-bety)}
     .ev.shared{font-weight:700} .ev .t{opacity:.7;margin-right:3px;font-size:10.5px} .ev .sc{font-weight:700;margin-right:3px}
     .ev.cont-l{border-top-left-radius:0;border-bottom-left-radius:0;border-left-width:0;margin-left:0} .ev.cont-r{border-top-right-radius:0;border-bottom-right-radius:0;margin-right:0}
     .ev:hover{filter:brightness(.96)}
@@ -343,7 +348,7 @@
    · 반복: rrule {freq, interval, byday[], until} + exdates / 공개: all·shared·private + share_user_ids
    · 공휴일은 코드 내장(2025~2027) — 해마다 아래 HOLIDAYS 에 추가
 ============================================================ */
-window.CALENDAR_VERSION = 'v1.12';
+window.CALENDAR_VERSION = 'v1.13';
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -500,9 +505,73 @@ async function loadEvents(){
   var map = {};
   (res[0].data || []).concat(res[1].data || []).forEach(function(e){ map[e.id] = e; });
   _events = Object.keys(map).map(function(k){ return map[k]; });
+  _events = _events.concat(await loadWeekendSessions(from, to));
   refreshSchoolFilter();
   return true;
 }
+
+/* ── 주말 프로그램 회차(weekend_sessions) → 조회 전용 가상 일정 (v1.13) ──
+   · 포텐셜·베티만. 날짜·프로그램당 일정 하나(분원·학년별 행은 그 안에 묶어 라벨로 요약)
+   · 종류는 '학원 운영'(칩 공유), 색만 프로그램 대표색(.ws-potential / .ws-bety)
+   · cal_events 에 복사하지 않으므로 회차를 고치면 달력도 바로 따라간다. 달력에서는 수정·삭제·복제 불가 */
+var WS_PROGRAMS = { potential:{ label:'포텐셜', icon:'📘' }, bety:{ label:'베티', icon:'📙' } };
+var WS_GRADES = [['1','1학년'],['2','2학년'],['3','3학년'],['pre','예비고']];
+async function loadWeekendSessions(from, to){
+  var r = await db.from('weekend_sessions').select('id,program,session_date,round_no,round_month,quarter,is_closed,note,branch_id,grade,title')
+    .in('program', Object.keys(WS_PROGRAMS)).gte('session_date', from).lte('session_date', to).order('session_date');
+  if(r.error){ console.warn('weekend_sessions', r.error.message); return []; }
+  var g = {};
+  (r.data || []).forEach(function(x){ var k = x.program + ':' + String(x.session_date).slice(0,10); (g[k] = g[k] || []).push(x); });
+  return Object.keys(g).map(function(k){
+    var rows = g[k], d = String(rows[0].session_date).slice(0,10), pg = rows[0].program;
+    var brs = []; rows.forEach(function(x){ if(x.branch_id && brs.indexOf(x.branch_id) < 0) brs.push(x.branch_id); });
+    var common = rows.some(function(x){ return !x.branch_id; });
+    var ev = { id:'ws:' + k, _ws:{ program:pg, rows:rows }, category:'academy', school:null, school_level:null,
+      branch_id:null, branch_ids:common ? null : brs,            /* 공통 행이 하나라도 있으면 전 분원에 보임 */
+      starts_on:d, ends_on:d, all_day:true, start_time:null, end_time:null, rrule:null, exdates:[],
+      visibility:'all', share_user_ids:[], owner_id:null, memo:null, remind:null, source:'weekend_sessions' };
+    ev.title = wsTitle(ev, '');
+    return ev;
+  });
+}
+/* 행 하나의 회차 글자 (index.html wsRoundLabel 과 같은 규칙) */
+function wsRowLabel(program, row){
+  if(!row) return '';
+  if(row.is_closed) return '휴강';
+  if(row.title) return String(row.title);
+  if(row.round_no == null) return '';
+  if(program === 'potential' && row.round_month != null) return row.round_month + '월 ' + row.round_no + '회차';
+  return row.round_no + '회차';
+}
+/* 분원 하나 기준 학년별 요약: 분원+학년 → 분원 → 학년 → 공통 순으로 적용 행을 찾고, 학년별로 다르면 '1·2학년 25회차 · 3학년 휴강' */
+function wsSummary(ev, branchId){
+  var pg = ev._ws.program, rows = ev._ws.rows;
+  var find = function(br, gr){ return rows.filter(function(x){ return (x.branch_id || '') === (br || '') && (x.grade || '') === (gr || ''); })[0] || null; };
+  var get = function(gr){ return (branchId && find(branchId, gr)) || (branchId && find(branchId, '')) || find('', gr) || find('', ''); };
+  var base = get(''), distinct = {}, order = [];
+  var keyOf = function(r){ return r.is_closed ? 'X' : (r.title ? 'T:' + r.title : 'N:' + r.round_no); };
+  WS_GRADES.forEach(function(gd){ var r = get(gd[0]); if(!r) return; var k = keyOf(r); if(!distinct[k]){ distinct[k] = []; order.push(k); } distinct[k].push(gd[0]); });
+  if(!order.length) return '';
+  if(order.length === 1 && base) return wsRowLabel(pg, base);
+  return order.map(function(k){
+    var gl = distinct[k], nums = gl.filter(function(x){ return x !== 'pre'; }), parts = [];
+    if(nums.length) parts.push(nums.join('·') + '학년');
+    if(gl.indexOf('pre') >= 0) parts.push('예비고');
+    var txt = k === 'X' ? '휴강' : (k.indexOf('T:') === 0 ? k.slice(2) : (pg === 'potential' ? wsRowLabel(pg, rows.filter(function(x){ return keyOf(x) === k; })[0]) : k.slice(2) + '회차'));
+    return parts.join('·') + ' ' + txt;
+  }).join(' · ');
+}
+/* 달력 글자: '포텐셜 10월 3회차' / 전체 분원 보기에서 분원 전용 행이 있으면 '베티 25회차 · 청라관 26회차' */
+function wsTitle(ev, branchId){
+  var pg = WS_PROGRAMS[ev._ws.program] || { label:ev._ws.program };
+  if(branchId) return pg.label + ' ' + wsSummary(ev, branchId);
+  var brs = []; ev._ws.rows.forEach(function(x){ if(x.branch_id && brs.indexOf(x.branch_id) < 0) brs.push(x.branch_id); });
+  var common = wsSummary(ev, ''), parts = common ? [common] : [];
+  brs.forEach(function(b){ var t = wsSummary(ev, b); if(t && t !== common) parts.push(branchNames([b]) + ' ' + t); });
+  return pg.label + ' ' + parts.join(' · ');
+}
+/* 일정 칸 색 클래스: 회차는 프로그램 대표색, 그 외는 종류색 */
+function evCls(ev){ return ev._ws ? 'academy ws-' + ev._ws.program : ev.category; }
 
 /* ── 반복 전개: 범위 안 발생분 [{ev, start:'YYYY-MM-DD', end, occ}] ── */
 function expand(ev, from, to){
@@ -534,6 +603,7 @@ function expand(ev, from, to){
 }
 function visible(ev){
   if(!_cats[ev.category]) return false;
+  if(ev._ws){ ev.title = wsTitle(ev, _branch); if(_branch && !wsSummary(ev, _branch)) return false; }
   var bl = evBranches(ev); if(_branch && bl.length && bl.indexOf(_branch) < 0) return false;
   var sc = $('f-school').value; if(sc && ev.school !== sc) return false;
   var lv = $('f-level').value; if(lv && (ev.category === 'exam' || ev.category === 'school') && (ev.school_level || guessLevel(ev.school)) !== lv) return false;
@@ -599,7 +669,7 @@ function renderMonth(){
     }
     for(var d4 = 0; d4 < 7; d4++){ if(hiddenPerDay[d4]) html += '<div class="more" style="grid-column:' + (d4+1) + ';grid-row:' + (MAX_LANES+2) + '" onclick="event.stopPropagation();openDay(\'' + ymd(addDays(ws, d4)) + '\')">+' + hiddenPerDay[d4] + '건</div>'; }
     segs.filter(function(s){ return s.lane < MAX_LANES; }).forEach(function(s){
-      html += '<div class="ev ' + s.o.ev.category + (isShared(s.o.ev) ? ' shared' : '') + (s.contL ? ' cont-l' : '') + (s.contR ? ' cont-r' : '') + '" style="grid-column:' + (s.a+1) + ' / ' + (s.b+2) + ';grid-row:' + (s.lane+2) + '" title="' + esc(s.o.ev.title) + '" onclick="event.stopPropagation();openEvent(\'' + s.o.ev.id + '\',\'' + s.o.occ + '\')">' + evLabel(s.o) + '</div>';
+      html += '<div class="ev ' + evCls(s.o.ev) + (isShared(s.o.ev) ? ' shared' : '') + (s.contL ? ' cont-l' : '') + (s.contR ? ' cont-r' : '') + '" style="grid-column:' + (s.a+1) + ' / ' + (s.b+2) + ';grid-row:' + (s.lane+2) + '" title="' + esc(s.o.ev.title) + '" onclick="event.stopPropagation();openEvent(\'' + s.o.ev.id + '\',\'' + s.o.occ + '\')">' + evLabel(s.o) + '</div>';
     });
     html += '</div>';
   }
@@ -615,7 +685,7 @@ function renderWeek(){
   var all = occ.filter(function(o){ return o.ev.all_day || !o.ev.start_time; });
   for(var d2 = 0; d2 < 7; d2++){
     var dy2 = ymd(addDays(r.from, d2));
-    html += '<div style="padding:3px 2px;min-height:28px;border-right:1px solid #eef2f7;cursor:pointer" onclick="newEventAt(\'' + dy2 + '\')" title="이날 종일 일정 등록">' + all.filter(function(o){ return o.start <= dy2 && o.end >= dy2; }).map(function(o){ return '<div class="ev ' + o.ev.category + (isShared(o.ev) ? ' shared' : '') + '" onclick="event.stopPropagation();openEvent(\'' + o.ev.id + '\',\'' + o.occ + '\')">' + evLabel(o) + '</div>'; }).join('') + '</div>';
+    html += '<div style="padding:3px 2px;min-height:28px;border-right:1px solid #eef2f7;cursor:pointer" onclick="newEventAt(\'' + dy2 + '\')" title="이날 종일 일정 등록">' + all.filter(function(o){ return o.start <= dy2 && o.end >= dy2; }).map(function(o){ return '<div class="ev ' + evCls(o.ev) + (isShared(o.ev) ? ' shared' : '') + '" onclick="event.stopPropagation();openEvent(\'' + o.ev.id + '\',\'' + o.occ + '\')">' + evLabel(o) + '</div>'; }).join('') + '</div>';
   }
   html += '</div><div class="wk-grid">';
   var H0 = 7, H1 = 23;
@@ -626,7 +696,7 @@ function renderWeek(){
       var dy3 = ymd(addDays(r.from, d3)); if(o.start > dy3 || o.end < dy3) continue;
       var st = toMin(o.ev.start_time), et = o.ev.end_time ? toMin(o.ev.end_time) : st + 60;
       var top = (Math.max(st, H0*60) - H0*60) / 60 * 44, hgt = Math.max(18, (Math.min(et, (H1+1)*60) - Math.max(st, H0*60)) / 60 * 44);
-      html += '<div class="tev ' + o.ev.category + '" style="top:' + top + 'px;height:' + hgt + 'px;left:calc(60px + (100% - 60px) * ' + d3 + ' / 7 + 2px);width:calc((100% - 60px) / 7 - 4px)" onclick="event.stopPropagation();openEvent(\'' + o.ev.id + '\',\'' + o.occ + '\')">' + hm(o.ev.start_time) + (o.ev.end_time ? '~' + hm(o.ev.end_time) : '') + ' ' + esc(o.ev.title) + '</div>';
+      html += '<div class="tev ' + evCls(o.ev) + '" style="top:' + top + 'px;height:' + hgt + 'px;left:calc(60px + (100% - 60px) * ' + d3 + ' / 7 + 2px);width:calc((100% - 60px) / 7 - 4px)" onclick="event.stopPropagation();openEvent(\'' + o.ev.id + '\',\'' + o.occ + '\')">' + hm(o.ev.start_time) + (o.ev.end_time ? '~' + hm(o.ev.end_time) : '') + ' ' + esc(o.ev.title) + '</div>';
     }
   });
   $('cal-body').innerHTML = html + '</div></div>';
@@ -649,7 +719,7 @@ function dayItems(dy){
   html += occ.map(function(o){
     var ev = o.ev, tm = ev.all_day || !ev.start_time ? '종일' : hm(ev.start_time) + (ev.end_time ? '~' + hm(ev.end_time) : '');
     var span = o.start !== o.end ? ' · ' + o.start.slice(5).replace('-', '/') + '~' + o.end.slice(5).replace('-', '/') : '';
-    return '<div class="dl ' + ev.category + '" onclick="openEvent(\'' + ev.id + '\',\'' + o.occ + '\')"><div class="tm">' + tm + '</div><div><div class="tt">' + (ev.school ? esc(ev.school) + ' · ' : '') + esc(ev.title) + (isShared(ev) ? ' <span style="font-size:11px;color:#b45309">참조</span>' : '') + '</div><div class="sb">' + CAT[ev.category].icon + ' ' + CAT[ev.category].label + (ev.school_level ? ' · ' + levelLabel(ev.school_level) : '') + span + (ev.rrule ? ' · ' + rruleText(ev.rrule) : '') + (ev.remind ? ' · ' + remindText(ev.remind) : '') + (ev.memo ? ' · ' + esc(ev.memo) : '') + '</div></div></div>';
+    return '<div class="dl ' + evCls(ev) + '" onclick="openEvent(\'' + ev.id + '\',\'' + o.occ + '\')"><div class="tm">' + tm + '</div><div><div class="tt">' + (ev.school ? esc(ev.school) + ' · ' : '') + esc(ev.title) + (isShared(ev) ? ' <span style="font-size:11px;color:#b45309">참조</span>' : '') + '</div><div class="sb">' + (ev._ws ? WS_PROGRAMS[ev._ws.program].icon + ' 주말 프로그램 회차' : CAT[ev.category].icon + ' ' + CAT[ev.category].label) + (ev.school_level ? ' · ' + levelLabel(ev.school_level) : '') + span + (ev.rrule ? ' · ' + rruleText(ev.rrule) : '') + (ev.remind ? ' · ' + remindText(ev.remind) : '') + (ev.memo ? ' · ' + esc(ev.memo) : '') + '</div></div></div>';
   }).join('');
   return html || '<div class="msg" style="padding:14px">일정이 없습니다</div>';
 }
@@ -791,12 +861,26 @@ function shareCount(){
   var names = ids.map(function(id){ var u = _staff.find(function(x){ return x.id === id; }); return u ? u.name : null; }).filter(Boolean).sort(function(a, b){ return a.localeCompare(b, 'ko'); });
   box.style.display = ''; box.innerHTML = '<b>참조</b> ' + names.map(esc).join(', ');
 }
-function canEdit(ev){ return isAdmin() || !ev || !ev.id || ev.owner_id === currentUser.id; }
+function canEdit(ev){ if(ev && ev._ws) return false; return isAdmin() || !ev || !ev.id || ev.owner_id === currentUser.id; }
 /* 조회 전용 카드: 제목·종류·날짜·참조자·메모가 한눈에 보이게 */
 function kdate(s, withYear){ var d = pd(s); return (withYear ? d.getFullYear() + '년 ' : '') + (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + WD[d.getDay()] + ')'; }
 function staffName(id){ if(id === currentUser.id) return currentUser.name || '나'; var u = _staff.find(function(x){ return x.id === id; }); return u ? u.name : null; }
+function renderWsView(ev){
+  var box = $('ev-view'), pg = WS_PROGRAMS[ev._ws.program] || { label:ev._ws.program, icon:'' };
+  var tags = '<span class="evtag cat ws-' + esc(ev._ws.program) + '">' + pg.icon + ' ' + esc(pg.label) + ' 회차</span><span class="evtag cat academy">' + CAT.academy.icon + ' ' + CAT.academy.label + '</span>';
+  var when = '<div class="evv-when"><div class="d">📅 ' + kdate(ev.starts_on, true) + '</div><div class="t">종일</div></div>';
+  var rows = ev._ws.rows.slice().sort(function(a, b){ return (a.branch_id ? 1 : 0) - (b.branch_id ? 1 : 0) || String(a.grade || '').localeCompare(String(b.grade || '')); });
+  var list = rows.map(function(x){
+    var who = [x.branch_id ? branchNames([x.branch_id]) : '전 분원', x.grade ? ((WS_GRADES.filter(function(g){ return g[0] === x.grade; })[0] || [])[1] || x.grade) : '전학년'].join(' · ');
+    return '<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px dashed #e5e7eb"><span style="min-width:120px;font-size:12px;color:#6b7280;font-weight:700">' + esc(who) + '</span><b style="color:' + (x.is_closed ? '#dc2626' : '#111827') + '">' + esc(wsRowLabel(ev._ws.program, x) || '-') + '</b>' + (x.quarter ? '<span style="font-size:11.5px;color:#6b7280">' + esc(x.quarter) + '</span>' : '') + (x.note ? '<span style="font-size:12px;color:#374151">' + esc(x.note) + '</span>' : '') + '</div>';
+  }).join('');
+  var small = '<div class="evv-small"><b>출처</b> 주말 프로그램 회차 관리 &nbsp;·&nbsp; 달력에서는 고칠 수 없습니다. BMAPS 포털 → ' + esc(pg.label) + ' → 회차 관리에서 바꾸면 여기에도 바로 반영됩니다.</div>';
+  box.innerHTML = '<div class="evv-tags">' + tags + '</div><div class="evv-name">' + esc(ev.title) + '</div>' + when + '<div><div class="evv-lbl">등록된 회차</div><div style="padding:4px 14px;border:1.5px solid var(--border);border-radius:10px;background:#f8fafc">' + list + '</div></div>' + small;
+  box.style.display = '';
+}
 function renderEventView(ev, occ){
   var box = $('ev-view'); if(!ev){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  if(ev._ws){ renderWsView(ev); return; }
   var c = CAT[ev.category] || { icon:'', label:ev.category };
   var tags = '<span class="evtag cat ' + esc(ev.category) + '">' + c.icon + ' ' + esc(c.label) + '</span>';
   if(ev.school) tags += '<span class="evtag">🏫 ' + esc(ev.school) + (ev.school_level ? ' · ' + levelLabel(ev.school_level) : '') + '</span>';
@@ -852,7 +936,7 @@ function openEvent(id, occ){
   $('ev-save').style.display = editable ? '' : 'none';
   $('ev-del').style.display = ev && editable ? '' : 'none';
   $('ev-skip').style.display = ev && editable && ev.rrule && occ ? '' : 'none';
-  $('ev-dup').style.display = ev ? '' : 'none'; $('ev-dup').disabled = false;
+  $('ev-dup').style.display = ev && !ev._ws ? '' : 'none'; $('ev-dup').disabled = false;
   document.querySelectorAll('#ev-ov input, #ev-ov select, #ev-ov textarea, #ev-ov button.btn-sm').forEach(function(el){ if(el.id !== 'ev-share-q' && el.id !== 'ev-share-br') el.disabled = !editable; });
   $('ev-ov').classList.add('open');
   if(editable) setTimeout(function(){ $('ev-name').focus(); }, 50);
