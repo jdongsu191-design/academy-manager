@@ -3575,7 +3575,7 @@
           </div>
           <div style="flex:0 0 90px">
             <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px" id="ws-input-round-label">회차 번호</div>
-            <input type="number" id="ws-input-round" min="1" placeholder="예: 14" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
+            <input type="text" id="ws-input-round" placeholder="예: 14 또는 이름" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none">
           </div>
           <div id="ws-input-quarter-wrap" style="flex:0 0 110px;display:none">
             <div style="font-size:11px;color:var(--text-sub);font-weight:600;margin-bottom:4px">분기</div>
@@ -8305,17 +8305,19 @@ function _wsDateSummary(program, date, branchId){
   var base = _wsGetRow(program, date, branchId, '');
   var per = WS_GRADES.map(function(g){ return { grade: g[0], row: _wsGetRow(program, date, branchId, g[0]) }; });
   var distinct = {};
-  per.forEach(function(p){ var r = p.row; var k = r ? (r.is_closed ? 'X' : String(r.round_no)) : (base ? (base.is_closed ? 'X' : String(base.round_no)) : '-'); (distinct[k] = distinct[k] || []).push(p.grade); });
+  var keyOf = function(r){ return r.is_closed ? 'X' : (r.title ? 'T:' + r.title : 'N:' + r.round_no); };
+  per.forEach(function(p){ var r = p.row || base; if (!r) return; var k = keyOf(r); (distinct[k] = distinct[k] || []).push(p.grade); });   /* 등록된 학년만 (공통 행이 있으면 전학년이 등록된 셈) */
   var keys = Object.keys(distinct);
   var mixed = keys.length > 1;
   var label;
-  if (!mixed) { label = wsRoundLabel(program, base || (per[0] && per[0].row)); }
-  else {
+  if (!keys.length) { label = ''; }
+  else if (!mixed && base) { label = wsRoundLabel(program, base); }          /* 전학년 공통 한 가지 */
+  else {                                                                       /* 학년별로 다르거나, 일부 학년만 등록된 날 → 학년을 앞에 붙인다 */
     label = keys.map(function(k){
       var gl = distinct[k], nums = gl.filter(function(g){ return g !== 'pre'; }), parts = [];
       if (nums.length) parts.push(nums.join('·') + '학년');
       if (gl.indexOf('pre') >= 0) parts.push('예비고');
-      var txt = k === 'X' ? '휴강' : (k === '-' ? '미등록' : k + '회차');
+      var txt = k === 'X' ? '휴강' : (k.indexOf('T:') === 0 ? k.slice(2) : k.slice(2) + '회차');
       return parts.join('·') + ' ' + txt;
     }).join(' · ');
   }
@@ -8468,6 +8470,7 @@ async function wsLoadSessions(program){
 function wsRoundLabel(program, row){
   if (!row) return '';
   if (row.is_closed) return '휴강';
+  if (row.title) return String(row.title);                         /* 회차 번호 대신 이름을 쓴 행 */
   if (row.round_no == null) return '';
   if (program === 'potential' && row.round_month != null) return row.round_month + '월 ' + row.round_no + '회차';
   return row.round_no + '회차';
@@ -8486,20 +8489,28 @@ function wsFillRoundSelect(program){
   if (branchId && cache.byBranch[branchId]) {
     Object.keys(cache.byBranch[branchId]).forEach(function(d){ merged[d] = cache.byBranch[branchId][d]; });
   }
-  if (program === 'bety') {
-    /* 학년 지정 행만 있는 날짜도 목록에 넣고, 학년별로 다르면 요약 라벨로 */
-    Object.keys(_wsRowsByDate.bety || {}).forEach(function(d){ if (!merged[d]) merged[d] = { session_date: d, _gradeOnly: true }; });
-  }
-  var rows = Object.keys(merged).map(function(k){ return merged[k]; })
-    .filter(function(r){
-      if (program === 'bety') { var sm = _wsDateSummary('bety', r.session_date, branchId); return !sm.allClosed && sm.label; }
-      return !r.is_closed && r.round_no != null;
-    })
-    .sort(function(a,b){ return String(a.session_date).localeCompare(String(b.session_date)); });
   var curDate = (document.getElementById(pfx + '-date') || {}).value || '';
   var html = '<option value="">회차 선택</option>';
+  if (program === 'bety') {
+    /* 베티: 저장된 행 하나가 항목 하나 — 공통 행 + 현재 분원 행(휴강 제외). 분원·학년 지정 행은 '청라관 · 3학년 29회차' 처럼 접두 */
+    var bName = {}; ((typeof _allBranches !== 'undefined' && _allBranches) || []).forEach(function(b){ bName[b.id] = b.name; });
+    var all = []; Object.keys(_wsRowsByDate.bety || {}).forEach(function(d){ all = all.concat(_wsRowsByDate.bety[d]); });
+    all.filter(function(r){ return !r.is_closed && (r.round_no != null || r.title) && (!r.branch_id || r.branch_id === branchId); })
+      .sort(function(a,b){ return String(a.session_date).localeCompare(String(b.session_date)) || (a.branch_id ? 1 : 0) - (b.branch_id ? 1 : 0) || String(a.grade || '').localeCompare(String(b.grade || '')); })
+      .forEach(function(r){
+        var pre = [r.branch_id ? (bName[r.branch_id] || '분원') : '', r.grade ? _wsGradeLabel(r.grade) : ''].filter(Boolean).join(' · ');
+        var md = String(r.session_date).slice(5).replace('-', '/');
+        html += '<option value="' + r.session_date + '"' + (r.session_date === curDate ? ' selected' : '') + '>'
+              + (pre ? pre + ' ' : '') + wsRoundLabel('bety', r) + ' (' + md + ')</option>';
+      });
+    sel.innerHTML = html;
+    return;
+  }
+  var rows = Object.keys(merged).map(function(k){ return merged[k]; })
+    .filter(function(r){ return !r.is_closed && (r.round_no != null || r.title); })
+    .sort(function(a,b){ return String(a.session_date).localeCompare(String(b.session_date)); });
   rows.forEach(function(r){
-    var label = (program === 'bety') ? _wsDateSummary('bety', r.session_date, branchId).label : wsRoundLabel(program, r);
+    var label = wsRoundLabel(program, r);
     var md = String(r.session_date).slice(5).replace('-', '/');   // MM/DD
     html += '<option value="' + r.session_date + '"' + (r.session_date === curDate ? ' selected' : '') + '>'
           + label + ' (' + md + ')</option>';
@@ -8546,10 +8557,8 @@ function wsRenderBadge(program){
     badge.textContent = '휴강';
     badge.style.background = '#fee2e2';
     badge.style.color = '#dc2626';
-  } else if (row.round_no != null) {
-    badge.textContent = (program === 'potential' && row.round_month != null)
-      ? (row.round_month + '월 ' + row.round_no + '회차')
-      : (row.round_no + '회차');
+  } else if (row.round_no != null || row.title) {
+    badge.textContent = wsRoundLabel(program, row);
     badge.style.background = (program === 'potential') ? '#ede9fe' : '#fef3c7';
     badge.style.color = (program === 'potential') ? '#5b21b6' : '#92400e';
   } else {
@@ -8704,7 +8713,7 @@ function wsEditSessionRowId(id){
   Object.keys(_wsRowsByDate[_wsManageProgram] || {}).forEach(function(d){ (_wsRowsByDate[_wsManageProgram][d] || []).forEach(function(r){ if (String(r.id) === String(id)) row = r; }); });
   if (!row) return;
   var dEl = document.getElementById('ws-input-date'); if (dEl) dEl.value = row.session_date;
-  var rEl = document.getElementById('ws-input-round'); if (rEl) rEl.value = (row.round_no != null ? row.round_no : '');
+  var rEl = document.getElementById('ws-input-round'); if (rEl) rEl.value = row.title ? row.title : (row.round_no != null ? row.round_no : '');
   var mEl = document.getElementById('ws-input-month'); if (mEl) mEl.value = (row.round_month != null ? row.round_month : '');
   var cEl = document.getElementById('ws-input-closed'); if (cEl) cEl.checked = !!row.is_closed;
   var qEl = document.getElementById('ws-input-quarter');
@@ -8737,7 +8746,7 @@ function wsEditSessionRow(date){
   var row = (_wsCache[_wsManageProgram] || {})[date];
   if (!row) return;
   var dEl = document.getElementById('ws-input-date'); if (dEl) dEl.value = date;
-  var rEl = document.getElementById('ws-input-round'); if (rEl) rEl.value = (row.round_no != null ? row.round_no : '');
+  var rEl = document.getElementById('ws-input-round'); if (rEl) rEl.value = row.title ? row.title : (row.round_no != null ? row.round_no : '');
   var mEl = document.getElementById('ws-input-month'); if (mEl) mEl.value = (row.round_month != null ? row.round_month : '');
   var cEl = document.getElementById('ws-input-closed'); if (cEl) cEl.checked = !!row.is_closed;
   var qEl = document.getElementById('ws-input-quarter');
@@ -8752,7 +8761,10 @@ async function wsSaveSession(){
   var closed = !!(document.getElementById('ws-input-closed') || {}).checked;
   var _isPotential = (_wsManageProgram === 'potential');
   if (!date) { alert('날짜를 선택하세요.'); return; }
-  if (!closed && (roundV === '' || roundV == null)) { alert('회차 번호를 입력하거나 휴강을 선택하세요.'); return; }
+  roundV = String(roundV == null ? '' : roundV).trim();
+  var _isNum = /^\d+$/.test(roundV);
+  if (!closed && roundV === '') { alert('회차 번호(또는 이름)를 입력하거나 휴강을 선택하세요.'); return; }
+  if (!closed && _isPotential && !_isNum) { alert('포텐셜 회차는 숫자로 입력하세요 (성적 현황 집계가 회차 번호를 씁니다).'); return; }
   if (!closed && _isPotential && (monthV === '' || monthV == null)) { alert('월을 입력하세요.'); return; }
   // [분원별 회차] 범위: 공통([null]) 또는 선택한 분원들 — 포텐셜·베티 공통. 분원×학년 조합마다 한 행
   var _scope = (document.querySelector('input[name="ws-scope"]:checked') || {}).value || 'common';
@@ -8764,7 +8776,8 @@ async function wsSaveSession(){
   var _base = {
     program: _wsManageProgram,
     session_date: date,
-    round_no: closed ? null : parseInt(roundV, 10),
+    round_no: (closed || !_isNum) ? null : parseInt(roundV, 10),
+    title: (closed || _isNum) ? null : roundV,
     round_month: (closed || !_isPotential) ? null : parseInt(monthV, 10),
     is_closed: closed,
     quarter: (_isPotential && _qv) ? (String(date).slice(0, 4) + '-Q' + _qv) : null
@@ -8794,6 +8807,10 @@ async function wsSaveSession(){
       }
       if (r.error && /grade/.test(String(r.error.message || ''))) {
         alert('학년별 회차를 저장하려면 weekend_sessions.grade 컬럼 추가(SQL, migrations/20261023_weekend_sessions_grade.sql)가 먼저 필요합니다.');
+        return;
+      }
+      if (r.error && /title/.test(String(r.error.message || ''))) {
+        alert('회차 이름(텍스트)을 저장하려면 weekend_sessions.title 컬럼 추가(SQL, migrations/20261023_weekend_sessions_title.sql)가 먼저 필요합니다.');
         return;
       }
       if (r.error) { alert('저장 실패(' + (ci + 1) + '/' + combos.length + '): ' + r.error.message); break; }
@@ -12094,6 +12111,15 @@ function byRenderTable() {
   var ATT_OPTS  = [{v:'',l:''},{v:'present',l:'출석'},{v:'late',l:'지각'},{v:'absent',l:'결석'}];
   var RES_OPTS  = [{v:'',l:''},{v:'A',l:'A'},{v:'C',l:'C'},{v:'F',l:'F'}];
   var WRG_OPTS  = [{v:'',l:''},{v:'true',l:'완료'},{v:'false',l:'미완료'}];
+  /* 학생별 회차 뱃지 — 그 학생의 분원·학년에 적용되는 회차(휴강이면 빨강). 전학년 공통만 있는 날은 전원 같은 뱃지 */
+  var _byBr = (typeof _wsCurrentBranch === 'function') ? _wsCurrentBranch('bety') : '';
+  var _byRoundBadge = function(stu){
+    if (!date || typeof _wsGetRow !== 'function') return '';
+    var r = _wsGetRow('bety', date, _byBr, _byGradeKey(stu)); if (!r) return '';
+    var lbl = wsRoundLabel('bety', r); if (!lbl) return '';
+    var closed = !!r.is_closed, spec = !!(r.grade || r.branch_id);
+    return '<span title="' + (spec ? '이 학생의 ' + (r.branch_id ? '분원' : '') + (r.branch_id && r.grade ? '·' : '') + (r.grade ? '학년' : '') + ' 전용 회차' : '전학년 공통 회차') + '" style="margin-left:5px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;vertical-align:middle;background:' + (closed ? '#fee2e2' : (spec ? '#ffedd5' : '#fef3c7')) + ';color:' + (closed ? '#dc2626' : (spec ? '#c2410c' : '#92400e')) + '">' + _esc(lbl) + '</span>';
+  };
   // 베티 전용: 레벨 고정 select
   var LV_OPTS   = [{v:'',l:''}].concat(BY_LEVELS.map(function(v){ return {v:v, l:v}; }));
 
@@ -12155,7 +12181,7 @@ function byRenderTable() {
       <td style="color:#9ca3af;font-size:11px;text-align:center">${_byPg.page*WK_PAGE_SIZE + i + 1}</td>
       <td style="text-align:left;padding-left:8px;color:#6b7280;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.school||''}</td>
       <td style="color:#6b7280;white-space:nowrap">${s.grade||''}</td>
-      <td style="text-align:left;padding-left:6px;font-weight:700;color:#1e293b;white-space:nowrap">${_esc(s.name)}</td>
+      <td style="text-align:left;padding-left:6px;font-weight:700;color:#1e293b;white-space:nowrap">${_esc(s.name)}${_byRoundBadge(s)}</td>
       <td><select class="by-sel by-focusable" data-sid="${s.id}" data-field="level">${lvSel}</select></td>
       <td${_byWdAlt?' class="wd-alt"':''}><select class="by-sel${_byWdAlt?' wd-alt':''}" data-sid="${s.id}" data-field="weekday">${weekendDayOptions(_byWdCur)}</select></td>
       <td><input class="by-inp by-focusable" data-sid="${s.id}" data-field="attend_time" value="${curTime}" placeholder="14:00"></td>
