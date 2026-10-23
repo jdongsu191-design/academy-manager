@@ -27,7 +27,11 @@
     document.body.appendChild(box);
     var url = location.origin + latest.file + '?v=' + latest.versionCode;
     document.getElementById('bmaps-app-update-go').onclick = function () {
-      if (App.openUrl) App.openUrl({ url: url }); else window.open(url, '_system');
+      /* 안드로이드의 App.openUrl 은 구현이 없어(iOS 전용) Browser 플러그인(크롬 탭)으로 연다. 크롬이 APK 를 내려받고 설치 창을 띄운다 */
+      var Browser = cap.Plugins && cap.Plugins.Browser;
+      var p = Browser && Browser.open ? Browser.open({ url: url }) : Promise.reject(new Error('no Browser plugin'));
+      p.catch(function () { return App.openUrl ? App.openUrl({ url: url }) : Promise.reject(); })
+       .catch(function () { window.open(url, '_system'); });
     };
     document.getElementById('bmaps-app-update-later').onclick = function () {
       try { localStorage.setItem('bmaps_app_update_skip', String(latest.versionCode)); } catch (e) {}
