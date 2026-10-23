@@ -598,7 +598,7 @@ async function boBoot(){
   try { savedId = localStorage.getItem('savedUserId'); } catch(e){}
   if(!savedId){ boBlock('로그인 정보가 없습니다.<br>BMAPS에서 <b>학생 코드로 로그인</b>한 뒤 다시 들어와주세요.'); return; }
   try {
-    var r = await db.from('users').select('id,name,role,bety_yn,school,grade').eq('id', savedId).maybeSingle();
+    var r = await db.from('users').select('id,name,role,bety_yn,school,grade,branch_id').eq('id', savedId).maybeSingle();
     if(r.error || !r.data){ boBlock('계정을 확인할 수 없습니다.'); return; }
     if(r.data.role !== 'student'){
       boBlock('학생 전용 화면입니다.<br>관리는 <b>bety-admin.html</b>을 이용해주세요.'); return;
@@ -708,9 +708,16 @@ async function boLoadRounds(){
     if(!_bo.roundNo){
       _bo.roundNo = {};
       try {
-        var sr = await db.from('weekend_sessions').select('session_date,round_no').eq('program','bety');
+        var sr = await db.from('weekend_sessions').select('session_date,round_no,is_closed,branch_id,grade').eq('program','bety');
+        /* 학생의 분원·학년에 맞는 행 우선 (분원+학년 4 → 분원 3 → 학년 2 → 공통 1). grade 컬럼이 없는 환경이면 전부 공통으로 처리 */
+        var u = _bo.user || {}, gKey = (String(u.school || '').replace(/\s/g, '') === '예비고') ? 'pre' : ((String(u.grade == null ? '' : u.grade).match(/\d+/) || [''])[0]);
+        var rank = {};
         (sr.data || []).forEach(function(s){
-          if(s.round_no != null) _bo.roundNo[s.session_date] = s.round_no;
+          if(s.round_no == null || s.is_closed) return;
+          var bOk = !s.branch_id || s.branch_id === u.branch_id, gOk = !s.grade || s.grade === gKey;
+          if(!bOk || !gOk) return;
+          var sc = 1 + (s.branch_id ? 2 : 0) + (s.grade ? 1 : 0);
+          if(!(rank[s.session_date] > sc)){ rank[s.session_date] = sc; _bo.roundNo[s.session_date] = s.round_no; }
         });
       } catch(e){ /* 회차번호 없으면 날짜만 표시 */ }
     }
