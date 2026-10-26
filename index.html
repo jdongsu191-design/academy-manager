@@ -559,6 +559,18 @@
 
       /* 상태 필터 버튼(전체/활성/비활성) 줄바꿈 방지 */
       button[data-status] { white-space: nowrap; }
+
+      /* ── 베티 출석부 폰 모드 ──
+         표에는 No·이름·레벨·요일·시간·[상세] 만. 학교(2)·학년(3)·출결(8)~전송여부(15) 열은 숨김(DOM 유지 → 저장 그대로).
+         ⚠ nth-child 는 byRenderTable 의 열 순서에 묶여 있다. 열을 넣거나 빼면 여기 번호도 고칠 것. */
+      html .by-tbl { min-width: 0 !important; }
+      html .by-tbl th:nth-child(2), html .by-tbl td:nth-child(2),
+      html .by-tbl th:nth-child(3), html .by-tbl td:nth-child(3),
+      html .by-tbl th:nth-child(n+8):not(.by-detail), html .by-tbl td:nth-child(n+8):not(.by-detail) { display: none; }
+      html .by-tbl .by-detail { display: table-cell; }
+      html .by-sel[data-field="level"] { min-width: 76px; }
+      html .by-tbl td { padding: 5px 2px; }
+      html .by-tbl th { padding: 7px 2px; }
     }
 
     /* ============================================================
@@ -731,6 +743,23 @@
 <!-- 매일 새벽 5시 자동 새로고침 (공용) -->
 <script src="/auto-reload.js"></script>
 <script src="/assets/app-update.js?v=1"></script>
+<script>
+/* [ENV] 화면 환경 표시 — <html> 에 env-phone(≤768) / env-tablet(769~1024) / env-pc(>1024) / env-touch(손가락) 를 붙인다.
+   앱 여부는 app-update.js 가 붙이는 html.bmaps-app. CSS 는 `html.env-phone .pc-only{display:none}` 식으로, JS 는 _envIs('phone') 로 가른다.
+   기준 폭은 기존 미디어 쿼리(768·1024)와 같다. */
+(function(){
+  var h = document.documentElement;
+  function apply(){
+    var w = window.innerWidth;
+    h.classList.toggle('env-phone',  w <= 768);
+    h.classList.toggle('env-tablet', w > 768 && w <= 1024);
+    h.classList.toggle('env-pc',     w > 1024);
+    h.classList.toggle('env-touch',  !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches));
+  }
+  apply(); window.addEventListener('resize', apply);
+  window._envIs = function(n){ return h.classList.contains(n === 'app' ? 'bmaps-app' : 'env-' + n); };
+})();
+</script>
 </head>
 <body>
 
@@ -12085,6 +12114,72 @@ function byToggleMakeup(sel){
   } catch(e) { console.warn('[byToggleMakeup]', e); }
 }
 
+/* ── 베티 폰 모드 [상세] 모달 ─────────────────────────────────
+   표에서 숨긴 칸(출결·오답·점수·결과·비고·예정응시)을 모달로 편집한다.
+   모달 컨트롤은 그 행의 숨은 input/select 를 "거울"처럼 비추기만 한다:
+   값을 바꾸면 행 칸에 써 넣고 change 이벤트를 쏘므로 저장·변경감지·byToggleMakeup 은 그대로 돈다. */
+var _byDetailSid = null;
+function byDetailLabel(att){ return att === 'present' ? '출석' : att === 'late' ? '지각' : att === 'absent' ? '결석' : '상세'; }
+function _byRowEl(sid, field){ return document.querySelector('#by-table-wrap [data-sid="' + sid + '"][data-field="' + field + '"]'); }
+function _byDetailRows(){   /* 화면에 보이는 행(필터 적용) 순서 */
+  return Array.prototype.filter.call(document.querySelectorAll('#by-table-wrap tbody tr[id^="by-row-"]'), function(tr){ return tr.style.display !== 'none'; });
+}
+function byOpenDetail(sid){
+  var stu = (_byPageStudents || []).find(function(x){ return x.id === sid; }); if (!stu) return;
+  _byDetailSid = sid;
+  var m = document.getElementById('by-detail-modal');
+  if (!m) {
+    m = document.createElement('div'); m.id = 'by-detail-modal';
+    m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:3000;align-items:flex-end;justify-content:center';
+    m.addEventListener('click', function(e){ if (e.target === m) byCloseDetail(); });
+    document.body.appendChild(m);
+  }
+  var F = function(field){ return _byRowEl(sid, field); };
+  var optHtml = function(field){ var el = F(field); return el ? el.innerHTML : ''; };
+  var val = function(field){ var el = F(field); return el ? (el.value || '') : ''; };
+  var rows = _byDetailRows(), idx = rows.findIndex(function(tr){ return tr.id === 'by-row-' + sid; });
+  var att = val('attendance');
+  var lab = 'display:block;font-size:11.5px;font-weight:700;color:#92400e;margin:10px 0 4px';
+  var ctl = 'width:100%;min-height:44px;padding:8px 10px;border:1.5px solid #fde68a;border-radius:8px;font-size:15px;background:#fff;box-sizing:border-box';
+  m.innerHTML = '<div style="background:#fff;width:100%;max-width:520px;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px 18px 20px;box-sizing:border-box">'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+    +   '<button type="button" onclick="byDetailMove(-1)" ' + (idx <= 0 ? 'disabled style="opacity:.3;' : 'style="') + 'min-width:40px;min-height:40px;border:1.5px solid #e5e7eb;border-radius:8px;background:#fff;font-size:18px">‹</button>'
+    +   '<div style="flex:1;min-width:0"><div style="font-size:17px;font-weight:800;color:#1e293b">' + _esc(stu.name) + ' <span style="font-size:12px;font-weight:600;color:#6b7280">' + _esc(stu.school || '') + ' ' + _esc(stu.grade || '') + '</span></div>'
+    +     '<div style="font-size:11.5px;color:#9ca3af">' + (idx + 1) + ' / ' + rows.length + ' · ' + _esc(val('level') || '레벨 미정') + ' · ' + _esc(val('attend_time') || '') + '</div></div>'
+    +   '<button type="button" onclick="byDetailMove(1)" ' + (idx >= rows.length - 1 ? 'disabled style="opacity:.3;' : 'style="') + 'min-width:40px;min-height:40px;border:1.5px solid #e5e7eb;border-radius:8px;background:#fff;font-size:18px">›</button>'
+    + '</div>'
+    + '<label style="' + lab + '">출결</label><select style="' + ctl + '" data-dfield="attendance" onchange="byDetailSet(this)">' + optHtml('attendance') + '</select>'
+    + '<div id="by-detail-mk" style="display:' + (att === 'absent' ? 'block' : 'none') + '"><label style="' + lab + '">예정 응시 (결석 시)</label><div style="display:flex;gap:8px">'
+    +   '<select style="' + ctl + ';flex:0 0 40%" data-dfield="makeup_weekday" onchange="byDetailSet(this)">' + optHtml('makeup_weekday') + '</select>'
+    +   '<input style="' + ctl + ';flex:1" data-dfield="makeup_time" placeholder="14:00" value="' + _esc(val('makeup_time')) + '" oninput="byDetailSet(this)"></div></div>'
+    + '<div style="display:flex;gap:8px"><div style="flex:1"><label style="' + lab + '">오답</label><select style="' + ctl + '" data-dfield="wrong_done" onchange="byDetailSet(this)">' + optHtml('wrong_done') + '</select></div>'
+    +   '<div style="flex:1"><label style="' + lab + '">결과</label><select style="' + ctl + '" data-dfield="result" onchange="byDetailSet(this)">' + optHtml('result') + '</select></div></div>'
+    + '<label style="' + lab + '">점수</label><input style="' + ctl + '" data-dfield="score" inputmode="decimal" placeholder="0.00" value="' + _esc(val('score')) + '" oninput="byDetailSet(this)">'
+    + '<label style="' + lab + '">비고</label><input style="' + ctl + '" data-dfield="note" placeholder="비고" value="' + _esc(val('note')) + '" oninput="byDetailSet(this)">'
+    + '<div style="font-size:11px;color:#9ca3af;margin-top:12px">여기서 고친 값은 표에 들어갑니다. 표 위의 <b>전체 저장</b>을 눌러야 저장됩니다.</div>'
+    + '<button type="button" onclick="byCloseDetail()" style="width:100%;min-height:46px;margin-top:12px;border:none;border-radius:10px;background:#92400e;color:#fef9c3;font-size:15px;font-weight:700">닫기</button>'
+    + '</div>';
+  ['attendance','wrong_done','result','makeup_weekday'].forEach(function(f){ var el = m.querySelector('[data-dfield="' + f + '"]'); if (el) el.value = val(f); });
+  m.style.display = 'flex';
+}
+function byDetailSet(ctl){
+  if (!_byDetailSid) return;
+  var field = ctl.getAttribute('data-dfield'), el = _byRowEl(_byDetailSid, field); if (!el) return;
+  el.value = ctl.value;
+  el.dispatchEvent(new Event('change', { bubbles: true }));   /* 행의 onchange(byToggleMakeup 등)·변경감지가 똑같이 돈다 */
+  if (field === 'attendance') {
+    var mk = document.getElementById('by-detail-mk'); if (mk) mk.style.display = (ctl.value === 'absent') ? 'block' : 'none';
+    var btn = document.querySelector('#by-table-wrap .by-detail-btn[data-sid="' + _byDetailSid + '"]');
+    if (btn) { btn.textContent = byDetailLabel(ctl.value); btn.classList.toggle('set', !!ctl.value); }
+  }
+}
+function byDetailMove(d){
+  var rows = _byDetailRows(), idx = rows.findIndex(function(tr){ return tr.id === 'by-row-' + _byDetailSid; });
+  var nxt = rows[idx + d]; if (!nxt) return;
+  byOpenDetail(nxt.id.replace('by-row-', ''));
+}
+function byCloseDetail(){ var m = document.getElementById('by-detail-modal'); if (m) m.style.display = 'none'; _byDetailSid = null; }
+
 function byUpdateTeacherLabel() {
   var all    = document.querySelectorAll('.by-teacher-chk');
   var checked= Array.from(all).filter(c => c.checked);
@@ -12271,6 +12366,9 @@ function byRenderTable() {
     .by-inp:focus{border-color:#d97706;box-shadow:0 0 0 2px rgba(217,119,6,0.15)}
     .by-sel{width:100%;padding:6px 8px;border:1.5px solid #fde68a;border-radius:5px;font-size:12px;outline:none;background:#fff;cursor:pointer;min-width:60px}
     .by-sel[data-field="level"]{min-width:92px;padding-right:4px}
+    .by-tbl .by-detail{display:none}   /* 폰(≤768)에서만 보임 — 전역 CSS 참고 */
+    .by-detail-btn{padding:6px 8px;border:1.5px solid #fde68a;border-radius:6px;background:#fffbeb;color:#92400e;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;min-height:36px}
+    .by-detail-btn.set{background:#92400e;color:#fef9c3;border-color:#92400e}
     .by-sel:focus{border-color:#d97706}
   </style>
   <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
@@ -12291,6 +12389,7 @@ function byRenderTable() {
       <th style="min-width:92px" title="결석일 때만 입력칸이 나타납니다">예정 응시</th>
       <th style="min-width:48px">📋멘트</th>
       <th style="min-width:44px">📬전송여부</th>
+      <th class="by-detail" style="min-width:52px">상세</th>
     </tr></thead><tbody>`;
 
   var _bySorted = weekendSortStudents(_byStudents, 'bety', _byCarry, _bySortMode);
@@ -12339,6 +12438,7 @@ function byRenderTable() {
       <td style="text-align:center"><input type="checkbox" data-sid="${s.id}" class="by-sent-chk"
         ${isSent?' checked':''} onchange="byToggleSent(this)"
         style="width:18px;height:18px;cursor:pointer;accent-color:#16a34a"></td>
+      <td class="by-detail"><button type="button" class="by-detail-btn${curAtt?' set':''}" data-sid="${s.id}" onclick="byOpenDetail(this.dataset.sid)">${byDetailLabel(curAtt)}</button></td>
     </tr>`;
   });
 
