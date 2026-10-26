@@ -590,6 +590,10 @@
       #wn-table-wrap [data-field="attend_time"], #pt-table-wrap [data-field="attend_time"], #by-table-wrap [data-field="attend_time"], #ns-table-wrap [data-field="attend_time"] { width: 52px !important; padding: 6px 1px !important; font-size: 12px !important; }
       #ns-table-wrap [data-field="attendance"] { min-width: 0 !important; width: 62px !important; padding: 6px 0 !important; }
       .wk-detail-btn { padding: 6px 7px !important; min-height: 36px; }
+      /* 업무일지 출결표: 출석 셀렉트 터치 크기, 칸 여백 */
+      #wl-student-tbody [data-field="attendance"] { min-height: 38px; font-size: 13px !important; padding: 6px 4px !important; }
+      #wl-student-tbody td, #panel-worklog thead th { padding: 6px 4px !important; }
+      #panel-worklog .card-title > span { display: none; }   /* '헤더 클릭 → 일괄 처리' 안내: 폰은 [일괄처리] 버튼 */
     }
 
     /* [학생 목록 폰 보조 글자] 📋·🔄 아이콘 버튼의 설명 글자 — 폰(≤768)에서만 보임 */
@@ -12179,34 +12183,58 @@ var WK_PH = {
   ns: { panel:'panel-weekend-naesin', label:'내신대비', keep:['attend_time','attendance'], color:'#0f766e', bg:'#f0fdfa', bd:'#99f6e4',
         fields:[['attendance','출결','sel'],['result','결과','sel'],['note','비고','inp']],
         bulk:[['result','결과']], bulkFn:'nsBulkModal', bulkApply:'nsBulkApply',
-        more:['#ns-deleg-btn','#ns-img-btn',"button[onclick=\"weekendPrintAttendance('naesin')\"]",'#ns-extramsg-card'] }
+        more:['#ns-deleg-btn','#ns-img-btn',"button[onclick=\"weekendPrintAttendance('naesin')\"]",'#ns-extramsg-card'] },
+  /* 선생님 업무일지 출결표 — 표 구조가 달라 selector 를 명시(scope·tableSel·rowSel·sidOf·students·barBefore) */
+  wl: { panel:'panel-worklog', label:'업무일지', keep:['attendance'], keepHead:['이름'], color:'#1F3A51', bg:'#eef3f8', bd:'#cbd5e1',
+        scope:'#wl-student-tbody', tableSel:'#wl-student-tbody', rowSel:'tbody tr[data-sid]', sidOf:function(tr){ return tr.getAttribute('data-sid'); },
+        students:function(){ return (typeof _wlStudents !== 'undefined' && _wlStudents) || []; }, barBefore:'#wl-student-tbody',
+        fields:[['n_count','N제','inp'],['homework_done','숙제','sel'],['test_score','TEST','inp'],['note','특이사항','inp']],
+        extra:{ label:'🗑 이 학생 행 삭제', fn:'removeWlStudentRow' },
+        bulk:[['attendance','출석'],['n_count','N제'],['homework_done','숙제']], bulkFn:'wlBulkModal', bulkApply:'wlBulkApply', more:[] }
 };
 var _wkPhCur = null;   /* {p, sid} 열려 있는 상세 */
-function wkPhLabel(att){ return att === 'present' ? '출석' : att === 'late' ? '지각' : att === 'absent' ? '결석' : '상세'; }
-function _wkPhRow(p, sid, field){ return document.querySelector('#' + p + '-table-wrap [data-sid="' + sid + '"][data-field="' + field + '"]'); }
-function _wkPhRows(p){ return Array.prototype.filter.call(document.querySelectorAll('#' + p + '-table-wrap tbody tr[id^="' + p + '-row-"]'), function(tr){ return tr.style.display !== 'none'; }); }
-function _wkPhStudents(p){ return (p === 'wn' ? _wnPageStudents : p === 'pt' ? _ptPageStudents : p === 'by' ? _byPageStudents : _nsPageStudents) || []; }
+function wkPhLabel(att){ return att === 'present' ? '출석' : att === 'late' ? '지각' : att === 'absent' ? '결석' : att === 'early' ? '조퇴' : '상세'; }
+/* [상세] 버튼 글자·완료색: 기본은 출결 값. 출결이 표에 남아 있는 표(업무일지 — 기본값 '정시')는 세부 칸(N제·숙제·TEST·특이사항) 중 하나라도 입력됐을 때만 '입력됨' */
+function _wkPhBtnState(p, tr){
+  var cfg = WK_PH[p];
+  if (cfg.keep.indexOf('attendance') >= 0 && cfg.fields) {
+    var any = cfg.fields.some(function(fd){ var el = tr.querySelector('[data-field="' + fd[0] + '"]'); return el && String(el.value || '').trim() !== ''; });
+    return { text: any ? '입력됨' : '상세', set: any };
+  }
+  var attEl = tr.querySelector('[data-field="attendance"]'), att = attEl ? (attEl.value || '') : '';
+  return { text: wkPhLabel(att), set: !!att };
+}
+function _wkPhScope(p){ return (WK_PH[p] && WK_PH[p].scope) || ('#' + p + '-table-wrap'); }
+function _wkPhTable(p){ var c = WK_PH[p]; var el = document.querySelector(c.tableSel || ('#' + p + '-table-wrap table.' + p + '-tbl')); return el ? (el.tagName === 'TABLE' ? el : el.closest('table')) : null; }
+function _wkPhSid(p, tr){ var c = WK_PH[p]; if (c.sidOf) return c.sidOf(tr); return tr.id.indexOf(p + '-row-') === 0 ? tr.id.slice(p.length + 5) : null; }
+function _wkPhRow(p, sid, field){ return document.querySelector(_wkPhScope(p) + ' [data-sid="' + sid + '"][data-field="' + field + '"]'); }
+function _wkPhRows(p){ var c = WK_PH[p], tbl = _wkPhTable(p); if (!tbl) return []; return Array.prototype.filter.call(tbl.querySelectorAll(c.rowSel || ('tbody tr[id^="' + p + '-row-"]')), function(tr){ return tr.style.display !== 'none'; }); }
+function _wkPhStudents(p){ var c = WK_PH[p]; if (c.students) return c.students() || []; return (p === 'wn' ? _wnPageStudents : p === 'pt' ? _ptPageStudents : p === 'by' ? _byPageStudents : _nsPageStudents) || []; }
 
 /* 표 장식: 숨길 열 판정 + [상세] 열 */
 function wkPhDecorate(p){
-  var cfg = WK_PH[p], tbl = document.querySelector('#' + p + '-table-wrap table.' + p + '-tbl');
-  if (!cfg || !tbl || tbl.dataset.wkPh) return;
-  tbl.dataset.wkPh = '1';
-  var ths = Array.prototype.slice.call(tbl.querySelectorAll('thead th'));
+  var cfg = WK_PH[p], tbl = _wkPhTable(p);
+  if (!cfg || !tbl) return;
+  var ths = Array.prototype.slice.call(tbl.querySelectorAll('thead th')).filter(function(th){ return !th.classList.contains('wk-detail'); });
   var rows = Array.prototype.slice.call(tbl.querySelectorAll('tbody tr'));
-  var keep = { 0: true };
-  ths.forEach(function(th, i){ if ((th.getAttribute('onclick') || '').indexOf('SortByName') >= 0) keep[i] = true; });
-  var sample = rows.filter(function(tr){ return tr.id.indexOf(p + '-row-') === 0; })[0];
-  if (sample) Array.prototype.forEach.call(sample.cells, function(td, i){ var f = td.querySelector('[data-field]'); if (f && cfg.keep.indexOf(f.getAttribute('data-field')) >= 0) keep[i] = true; });
-  ths.forEach(function(th, i){ if (!keep[i]) th.classList.add('wk-ph-hide'); });
-  Array.prototype.forEach.call(tbl.querySelectorAll('colgroup col'), function(c, i){ if (!keep[i]) c.classList.add('wk-ph-hide'); });   /* 포텐셜 colgroup */
-  rows.forEach(function(tr){ Array.prototype.forEach.call(tr.cells, function(td, i){ if (!keep[i]) td.classList.add('wk-ph-hide'); }); });
-  if (ths.length) { var th = document.createElement('th'); th.className = 'wk-detail'; th.textContent = '상세'; ths[0].parentNode.appendChild(th); }
+  var keep = { 0: cfg.keepHead ? false : true };   /* 기본은 첫 열(No.) 유지, keepHead 가 있으면 헤더 글자로만 판정 */
+  ths.forEach(function(th, i){
+    if ((th.getAttribute('onclick') || '').indexOf('SortByName') >= 0) keep[i] = true;
+    if (cfg.keepHead && cfg.keepHead.indexOf(th.textContent.trim()) >= 0) keep[i] = true;
+  });
+  var sample = rows.filter(function(tr){ return _wkPhSid(p, tr); })[0];
+  if (sample) Array.prototype.forEach.call(sample.cells, function(td, i){ if (td.classList.contains('wk-detail')) return; var f = td.querySelector('[data-field]'); if (f && cfg.keep.indexOf(f.getAttribute('data-field')) >= 0) keep[i] = true; });
+  ths.forEach(function(th, i){ th.classList.toggle('wk-ph-hide', !keep[i]); });
+  Array.prototype.forEach.call(tbl.querySelectorAll('colgroup col'), function(c, i){ c.classList.toggle('wk-ph-hide', !keep[i]); });   /* 포텐셜 colgroup */
+  if (ths.length && !tbl.querySelector('thead th.wk-detail')) { var th = document.createElement('th'); th.className = 'wk-detail'; th.textContent = '상세'; ths[0].parentNode.appendChild(th); }
   rows.forEach(function(tr){
+    if (tr.querySelector(':scope > td.wk-detail')) return;   /* 이미 장식된 행 */
+    Array.prototype.forEach.call(tr.cells, function(td, i){ if (!keep[i]) td.classList.add('wk-ph-hide'); });
     var td = document.createElement('td'); td.className = 'wk-detail';
-    if (tr.id.indexOf(p + '-row-') === 0) {
-      var sid = tr.id.slice(p.length + 5), attEl = tr.querySelector('[data-field="attendance"]'), att = attEl ? (attEl.value || '') : '';
-      td.innerHTML = '<button type="button" class="wk-detail-btn' + (att ? ' set' : '') + '" data-sid="' + sid + '" onclick="wkPhOpen(\'' + p + '\', this.dataset.sid)">' + wkPhLabel(att) + '</button>';
+    var sid = _wkPhSid(p, tr);
+    if (sid) {
+      var st = _wkPhBtnState(p, tr);
+      td.innerHTML = '<button type="button" class="wk-detail-btn' + (st.set ? ' set' : '') + '" data-sid="' + sid + '" onclick="wkPhOpen(\'' + p + '\', this.dataset.sid)">' + st.text + '</button>';
     }
     tr.appendChild(td);
   });
@@ -12214,9 +12242,10 @@ function wkPhDecorate(p){
 }
 /* 표가 폰 폭을 넘으면(열을 숨겨도 남는 경우) 표 위에 ◀ ▶ 이동 버튼 — 넘치지 않으면 숨김 */
 function wkPhArrows(p){
-  var wrap = document.getElementById(p + '-table-wrap'); if (!wrap) return;
-  var sc = wrap.querySelector(':scope > div[style*="overflow-x"]'); if (!sc) return;
-  var bar = wrap.querySelector(':scope > .wk-ph-arrows');
+  var tbl = _wkPhTable(p); if (!tbl) return;
+  var sc = tbl.closest('div[style*="overflow-x"]'); if (!sc) return;
+  var wrap = sc.parentNode;
+  var bar = sc.previousElementSibling && sc.previousElementSibling.classList.contains('wk-ph-arrows') ? sc.previousElementSibling : null;
   var over = document.documentElement.classList.contains('env-phone') && sc.scrollWidth > sc.clientWidth + 4;
   if (!over) { if (bar) bar.style.display = 'none'; return; }
   if (!bar) {
@@ -12231,9 +12260,9 @@ function wkPhArrows(p){
   bar.querySelector('[data-d="1"]').disabled = sc.scrollLeft + sc.clientWidth >= sc.scrollWidth - 2;
 }
 function wkPhRefreshLabels(p){
-  document.querySelectorAll('#' + p + '-table-wrap .wk-detail-btn').forEach(function(btn){
-    var el = _wkPhRow(p, btn.dataset.sid, 'attendance'), att = el ? (el.value || '') : '';
-    btn.textContent = wkPhLabel(att); btn.classList.toggle('set', !!att);
+  document.querySelectorAll(_wkPhScope(p) + ' .wk-detail-btn').forEach(function(btn){
+    var tr = btn.closest('tr'); if (!tr) return;
+    var st = _wkPhBtnState(p, tr); btn.textContent = st.text; btn.classList.toggle('set', st.set);
   });
 }
 
@@ -12251,7 +12280,7 @@ function wkPhOpen(p, sid){
   }
   var F = function(f){ return _wkPhRow(p, sid, f); };
   var val = function(f){ var el = F(f); return el ? (el.value || '') : ''; };
-  var rows = _wkPhRows(p), idx = rows.findIndex(function(tr){ return tr.id === p + '-row-' + sid; });
+  var rows = _wkPhRows(p), idx = rows.findIndex(function(tr){ return _wkPhSid(p, tr) === sid; });
   var lab = 'display:block;font-size:11.5px;font-weight:700;color:' + cfg.color + ';margin:10px 0 4px';
   var ctl = 'width:100%;min-height:44px;padding:8px 10px;border:1.5px solid ' + cfg.bd + ';border-radius:8px;font-size:15px;background:#fff;box-sizing:border-box';
   var sub = [val('level') ? 'Lv ' + val('level') : '', val('attend_time')].filter(Boolean).join(' · ');
@@ -12288,17 +12317,15 @@ function wkPhSet(ctl){
   el.value = ctl.value;
   el.dispatchEvent(new Event('change', { bubbles: true }));
   el.dispatchEvent(new Event('input',  { bubbles: true }));
-  if (field === 'attendance') {
-    var mk = document.getElementById('wk-detail-mk'); if (mk) mk.style.display = (ctl.value === 'absent') ? 'block' : 'none';
-    var btn = document.querySelector('#' + p + '-table-wrap .wk-detail-btn[data-sid="' + sid + '"]');
-    if (btn) { btn.textContent = wkPhLabel(ctl.value); btn.classList.toggle('set', !!ctl.value); }
-  }
+  if (field === 'attendance') { var mk = document.getElementById('wk-detail-mk'); if (mk) mk.style.display = (ctl.value === 'absent') ? 'block' : 'none'; }
+  var btn = document.querySelector(_wkPhScope(p) + ' .wk-detail-btn[data-sid="' + sid + '"]'), tr = el.closest('tr');
+  if (btn && tr) { var st = _wkPhBtnState(p, tr); btn.textContent = st.text; btn.classList.toggle('set', st.set); }
 }
 function wkPhMove(d){
   if (!_wkPhCur) return;
-  var rows = _wkPhRows(_wkPhCur.p), idx = rows.findIndex(function(tr){ return tr.id === _wkPhCur.p + '-row-' + _wkPhCur.sid; });
+  var rows = _wkPhRows(_wkPhCur.p), idx = rows.findIndex(function(tr){ return _wkPhSid(_wkPhCur.p, tr) === _wkPhCur.sid; });
   var nxt = rows[idx + d]; if (!nxt) return;
-  wkPhOpen(_wkPhCur.p, nxt.id.slice(_wkPhCur.p.length + 5));
+  wkPhOpen(_wkPhCur.p, _wkPhSid(_wkPhCur.p, nxt));
 }
 function wkPhClose(){ var m = document.getElementById('wk-detail-modal'); if (m) m.style.display = 'none'; _wkPhCur = null; }
 
@@ -12352,12 +12379,15 @@ function wkPhBulk(p){
 }
 function wkPhInit(){
   Object.keys(WK_PH).forEach(function(p){
-    var cfg = WK_PH[p], wrap = document.getElementById(p + '-table-wrap'), panel = document.getElementById(cfg.panel);
+    var cfg = WK_PH[p], wrap = document.querySelector(cfg.scope || ('#' + p + '-table-wrap')), panel = document.getElementById(cfg.panel);
     if (!wrap || !panel) return;
     _wkMoreEls(p).forEach(function(el){ el.setAttribute('data-wk-more', p); });
     var bar = document.createElement('div'); bar.className = 'wk-ph-bar';
-    bar.innerHTML = '<button type="button" onclick="wkPhMore(\'' + p + '\')">⚙ 필터·도구</button><button type="button" onclick="wkPhBulk(\'' + p + '\')">⚡ 일괄처리</button>';
-    panel.insertBefore(bar, panel.firstChild);
+    bar.innerHTML = ((cfg.more || []).length ? '<button type="button" onclick="wkPhMore(\'' + p + '\')">⚙ 필터·도구</button>' : '')
+      + ((cfg.bulk || []).length ? '<button type="button" onclick="wkPhBulk(\'' + p + '\')">⚡ 일괄처리</button>' : '');
+    var anchor = cfg.barBefore ? document.querySelector(cfg.barBefore) : null;
+    if (anchor) { var tb = anchor.closest('table'); var sc = tb && tb.closest('div[style*="overflow-x"]'); (sc || tb).parentNode.insertBefore(bar, sc || tb); }
+    else panel.insertBefore(bar, panel.firstChild);
     new MutationObserver(function(){ wkPhDecorate(p); }).observe(wrap, { childList: true });
     wkPhDecorate(p);
     /* 일괄 적용 뒤 [상세] 버튼 글자(출결) 갱신 */
