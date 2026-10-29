@@ -17641,6 +17641,17 @@ function openAdmEditClassModal(classId) {
   if (typeof renderDayTimeWrap === 'function') renderDayTimeWrap('adm-edit-day-time-wrap', cls.class_days || '', cls.class_time || '');
   openModal('admEditClass');
 }
+/* ── [반 이름 변경 기록] class_name_history ─────────────────────────
+   진도계획서가 "바뀐 달부터 새 이름, 그 전 달은 옛 이름"을 판정하는 근거.
+   이름이 실제로 바뀔 때만 한 줄 넣고, 실패해도 반 수정 자체는 막지 않는다(콘솔 경고만). */
+async function logClassRename(classId, oldName, newName) {
+  oldName = String(oldName || '').trim(); newName = String(newName || '').trim();
+  if (!classId || !newName || oldName === newName) return;
+  try {
+    var r = await db.from('class_name_history').insert({ class_id: classId, old_name: oldName || null, new_name: newName, changed_by: currentUser ? currentUser.id : null });
+    if (r.error) console.warn('[class_name_history]', r.error.message);
+  } catch(e) { console.warn('[class_name_history]', e); }
+}
 async function admSaveEditClass() {
   var id        = document.getElementById('adm-edit-class-id').value;
   var name      = (document.getElementById('adm-edit-class-name')?.value || '').trim();
@@ -17649,12 +17660,14 @@ async function admSaveEditClass() {
   if (!teacherId){ alert('담당 선생님을 선택하세요'); return; }
   var dt = (typeof getDayTimeFromWrap === 'function') ? getDayTimeFromWrap('adm-edit-day-time-wrap') : { days: '', time: '' };
   try {
+    var prevName = ((allClasses||[]).find(function(c){ return c.id === id; }) || {}).name;
     var {error} = await db.from('classes').update({
       name, teacher_id: teacherId,
       school_level: document.getElementById('adm-edit-level-val')?.value || 'high',
       class_days: dt.days || null, class_time: dt.time || null
     }).eq('id', id);
     if (error) throw error;
+    await logClassRename(id, prevName, name);
     closeModal('admEditClass');
     await loadAdminData();
     admRenderClasses();
@@ -27625,11 +27638,13 @@ async function saveEditClass(){
   const btn = document.querySelector('#modal-editClass .btn-primary');
   if(btn){ btn.textContent='저장 중...'; btn.disabled=true; }
   const school_level = document.getElementById('edit-class-level-val').value||'high';
+  const prevName = (classes.find(function(x){ return x.id===id; })||{}).name;
   const {error} = await db.from('classes').update({
     name, class_days:class_days||null, class_time:class_time||null, school_level
   }).eq('id',id);
   if(btn){ btn.textContent='저장'; btn.disabled=false; }
   if(error){ alert('오류: '+error.message); return; }
+  await logClassRename(id, prevName, name);
   closeModal('editClass');
   await loadTeacherData();   // 선생님 화면만 갱신
 }
