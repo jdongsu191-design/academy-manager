@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 진도계획서 제작 [v2.17-embed]</title>
+<title>BMAPS · 진도계획서 제작 [v2.18-engine]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -388,6 +388,8 @@
   .syl-lch-target { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; color: #334155; }
   .syl-lch-target b { color: #6e2b3d; font-size: 15px; }
   .tb-target { font-size: 12px; font-weight: 700; color: #6e2b3d; background: #fef6f8; border: 1px solid #ecd3db; border-radius: 999px; padding: 3px 10px; margin-left: 8px; white-space: nowrap; }
+  /* [v2.18] 캡처 엔진 모드: 화면은 쓰지 않으므로 전부 숨김(레이아웃은 유지) */
+  .syl-engine #syl-topbar, .syl-engine #syl-launcher, .syl-engine #syl-blocker { visibility: hidden; }
   /* [v2.17] 임베드(메인 계정관리 모달 안): 로그아웃·제목 줄 감추고 여백 축소 */
   .syl-embed #syl-logout-btn { display: none !important; }
   .syl-embed .syl-lch-wrap { padding: 10px 12px 30px; }
@@ -525,7 +527,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v2.17-embed</span>
+    <span class="tb-ver" id="syl-ver">v2.18-engine</span>
     <span class="tb-spacer"></span>
     <span id="syl-editor-actions" style="display:none">
       <span class="exp-status" id="syl-exp-status-tb"></span>
@@ -918,7 +920,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v2.17-embed';
+  window.SYLLABUS_VERSION = 'v2.18-engine';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -4350,7 +4352,45 @@
       }
     } catch(e){ console.warn('[embed]', e); }
   }
-  window.addEventListener('DOMContentLoaded', function(){ if(SYL_EMBED) document.body.classList.add('syl-embed'); syllabusInitAuth(); });
+  /* [v2.18] 캡처 엔진 — 메인 📑 모달이 숨은 iframe(?engine=1&embed=1)으로 띄워 두고 postMessage 로 A4 이미지를 받아 간다.
+     요청 {type:'syl-capture', reqId, recId, idx} → 응답 {type:'syl-capture-result', reqId, pages:[png dataURL…], name} 또는 {error}.
+     같은 origin 만 받고, 초기화(로그인) 전에 온 요청은 큐에 두었다가 처리. 요청은 순차. */
+  var SYL_ENGINE = /[?&]engine=1/.test(location.search), _sylReady = false, _sylMsgQ = [], _sylEngineChain = Promise.resolve();
+  function sylEngineReply(d, payload){ try { window.parent.postMessage(Object.assign({ type: 'syl-capture-result', reqId: d.reqId }, payload), location.origin); } catch(e){ console.warn('[engine reply]', e); } }
+  async function sylEngineHandle(d){
+    var pages = [], name = '', tok = null;
+    try {
+      var res = await db.from('bmaps_syllabuses').select('*').eq('id', d.recId).maybeSingle();
+      if(res.error) throw res.error;
+      var rec = res.data; if(!rec || !Array.isArray(rec.courses) || !rec.courses[d.idx]) throw new Error('계획서를 찾지 못했습니다');
+      sylDoc = { courses: sylNormalizeCourses(rec.courses, rec.period), active: 0 }; window._sylCurrentRecordId = rec.id;
+      if(rec.period) sylSelectedPeriod = rec.period;
+      sylSetActive(Math.min(d.idx, sylDoc.courses.length - 1)); sylRenderTabs(); rebindAndRender();
+      await sylLoadScript(SYL_LIBS.h2c); if(typeof html2canvas === 'undefined') throw new Error('html2canvas 로드 실패');
+      tok = sylBeginCaptureLayout();
+      await sylActivateForCapture(sylDoc.active);
+      var nodes = sylGetPageNodes();
+      for(var p = 0; p < nodes.length; p++){ var cv = await sylCaptureNode(nodes[p]); pages.push(cv.toDataURL('image/png')); }
+      name = sylExportNameForCourse(sylDoc.active);
+    } catch(e){ sylEndCaptureLayout(tok); tok = null; sylEngineReply(d, { error: String(e && e.message ? e.message : e) }); return; }
+    sylEndCaptureLayout(tok);
+    sylEngineReply(d, { pages: pages, name: name });
+  }
+  window.addEventListener('message', function(e){
+    if(e.origin !== location.origin) return;
+    var d = e.data || {}; if(d.type !== 'syl-capture' || !d.recId) return;
+    if(!_sylReady){ _sylMsgQ.push(d); return; }
+    _sylEngineChain = _sylEngineChain.then(function(){ return sylEngineHandle(d); });
+  });
+  window.addEventListener('DOMContentLoaded', function(){
+    if(SYL_EMBED) document.body.classList.add('syl-embed');
+    if(SYL_ENGINE){ document.body.classList.add('syl-engine'); window.alert = function(m){ console.warn('[engine alert]', m); }; window.confirm = function(){ return true; }; }
+    Promise.resolve(syllabusInitAuth()).catch(function(e){ console.warn(e); }).then(function(){
+      _sylReady = true;
+      if(SYL_ENGINE && window.parent !== window){ try { window.parent.postMessage({ type: 'syl-engine-ready', ok: !!currentUser }, location.origin); } catch(e){} }
+      _sylMsgQ.splice(0).forEach(function(d){ _sylEngineChain = _sylEngineChain.then(function(){ return sylEngineHandle(d); }); });
+    });
+  });
 </script>
 </body>
 </html>

@@ -897,6 +897,9 @@
   #modal-sylView .sylv-flag.h { background: #fee2e2; color: #b91c1c; }
   #modal-sylView .sylv-feat { white-space: pre-wrap; word-break: break-all; font-size: 12.5px; line-height: 1.7; color: #334155; background: #f8fafc; border-radius: 10px; padding: 10px 12px; }
   #modal-sylView .sylv-foot { margin-top: 14px; font-size: 10.5px; color: #94a3b8; text-align: right; }
+  /* A4 이미지(진도계획서 페이지 엔진이 찍은 것) */
+  #modal-sylView .sylv-a4 { display: block; width: 100%; max-width: 760px; margin: 0 auto 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.12); border-radius: 4px; background: #fff; }
+  #modal-sylView .sylv-note { max-width: 760px; margin: 0 auto 8px; font-size: 11.5px; color: #64748b; text-align: right; }
   @media (max-width: 768px) {
     #modal-sylView .modal { width: 100vw; height: 94vh; max-height: 94vh; border-radius: 16px 16px 0 0; }
     #modal-sylView .sylv-head { padding: 10px 12px; }
@@ -31439,9 +31442,57 @@ function sylvRenderList() {
 function sylvShow(i) {
   _sylv.sel = i; sylvRenderList();
   var s = _sylv.sheets[i], st = document.getElementById('sylv-stage');
-  st.innerHTML = s ? sylvSheetHtml(s.c, s.rec) : ''; st.scrollTop = 0;
-  ['sylv-save', 'sylv-copy'].forEach(function(id){ document.getElementById(id).disabled = !s; });
+  ['sylv-save', 'sylv-copy'].forEach(function(id){ document.getElementById(id).disabled = true; });
+  if (!s) { st.innerHTML = ''; return; }
+  var key = s.rec.id + ':' + s.idx, cached = _sylv.cache && _sylv.cache[key];
+  if (cached) { sylvShowPages(cached); return; }
+  st.innerHTML = '<div class="empty-state"><div class="ico">🖨️</div>진도계획서 페이지에서 A4 이미지를 만드는 중…<br><span style="font-size:12px">(처음 한 번은 10초쯤 걸릴 수 있습니다)</span></div>'; st.scrollTop = 0;
+  var myTok = _sylv.token, mySel = i;
+  sylvCapture(s.rec.id, s.idx).then(function(d){
+    if (_sylv.token !== myTok) return;
+    _sylv.cache = _sylv.cache || {}; _sylv.cache[key] = { pages: d.pages || [], name: d.name || '' };
+    if (_sylv.sel === mySel) sylvShowPages(_sylv.cache[key]);
+  }).catch(function(e){
+    if (_sylv.token !== myTok || _sylv.sel !== mySel) return;
+    // 엔진 실패 → 요약판으로 대체(저장·복사는 요약판 캡처)
+    st.innerHTML = '<div class="sylv-note">⚠️ A4 이미지를 만들지 못해 요약으로 보여 줍니다 (' + _esc(e && e.message ? e.message : e) + ')</div>' + sylvSheetHtml(s.c, s.rec); st.scrollTop = 0;
+    ['sylv-save', 'sylv-copy'].forEach(function(id){ document.getElementById(id).disabled = false; });
+  });
 }
+function sylvShowPages(c) {
+  var st = document.getElementById('sylv-stage');
+  st.innerHTML = (c.pages || []).map(function(p, k){ return '<img class="sylv-a4" src="' + p + '" alt="진도계획서 ' + (k + 1) + '쪽">'; }).join('') + (c.pages && c.pages.length > 1 ? '<div class="sylv-note">2쪽 계획서 — 이미지 복사는 1쪽만, 저장은 쪽마다 파일로</div>' : '');
+  st.scrollTop = 0;
+  ['sylv-save', 'sylv-copy'].forEach(function(id){ document.getElementById(id).disabled = !(c.pages && c.pages.length); });
+}
+/* 숨은 진도계획서 페이지(엔진) — 같은 로그인으로 뜨고, postMessage 로 A4 PNG 를 받아 온다 */
+var _sylvEngine = { frame: null, ready: false, reqs: {}, seq: 0, listening: false };
+function sylvEngineInit() {
+  if (!_sylvEngine.listening) { window.addEventListener('message', sylvEngineOnMsg); _sylvEngine.listening = true; }
+  if (_sylvEngine.frame) return;
+  var f = document.createElement('iframe'); f.id = 'sylv-engine'; f.title = 'syllabus engine';
+  f.style.cssText = 'position:fixed;left:-30000px;top:0;width:1200px;height:900px;border:none;opacity:0;pointer-events:none';
+  f.src = '/syllabus.html?engine=1&embed=1';
+  document.body.appendChild(f); _sylvEngine.frame = f;
+}
+function sylvEngineOnMsg(e) {
+  if (e.origin !== location.origin) return;
+  var d = e.data || {};
+  if (d.type === 'syl-engine-ready') { _sylvEngine.ready = true; return; }
+  if (d.type === 'syl-capture-result') { var cb = _sylvEngine.reqs[d.reqId]; if (cb) { delete _sylvEngine.reqs[d.reqId]; cb(d); } }
+}
+function sylvCapture(recId, idx) {
+  return new Promise(function(resolve, reject) {
+    sylvEngineInit();
+    var id = ++_sylvEngine.seq, done = false;
+    var timer = setTimeout(function(){ if (done) return; done = true; delete _sylvEngine.reqs[id]; reject(new Error('A4 이미지 응답이 없습니다 (30초)')); }, 30000);
+    _sylvEngine.reqs[id] = function(d){ if (done) return; done = true; clearTimeout(timer); if (d.error) reject(new Error(d.error)); else resolve(d); };
+    var send = function(){ try { _sylvEngine.frame.contentWindow.postMessage({ type: 'syl-capture', reqId: id, recId: recId, idx: idx }, location.origin); } catch (err) { if (!done) { done = true; clearTimeout(timer); reject(err); } } };
+    if (_sylvEngine.ready) send();
+    else { var n = 0, iv = setInterval(function(){ if (_sylvEngine.ready) { clearInterval(iv); send(); } else if (++n > 150 || done) { clearInterval(iv); } }, 200); }
+  });
+}
+function _sylvDataUrlToBlob(u) { return fetch(u).then(function(r){ return r.blob(); }); }
 /* page2: {on, sched2} 객체이거나 파이썬식 문자열("{'on': True, ...}")로 저장된 경우가 있어 둘 다 읽는다 */
 function _sylvPage2(c) {
   var p = c.page2; if (!p) return null;
@@ -31471,8 +31522,20 @@ function sylvSheetHtml(c, rec) {
     + '<div class="sylv-foot">' + _esc(rec.teacher_name || c.teacher || '') + (rec.updated_at ? ' · 저장 ' + String(rec.updated_at).slice(0, 10) : '') + '</div></div>';
 }
 async function sylvImage(mode) {
-  var node = document.getElementById('sylv-sheet'), s = _sylv.sheets[_sylv.sel]; if (!node || !s) return;
+  var s = _sylv.sheets[_sylv.sel]; if (!s) return;
   var btns = ['sylv-save', 'sylv-copy'].map(function(id){ return document.getElementById(id); }); btns.forEach(function(b){ b.disabled = true; });
+  var key = s.rec.id + ':' + s.idx, cached = _sylv.cache && _sylv.cache[key];
+  if (cached && cached.pages && cached.pages.length) {
+    // 진도계획서 페이지 엔진이 찍은 A4 그대로 (페이지의 '이미지 복사'와 같은 결과물)
+    try {
+      var base = cached.name || ((_sylv.name || '반') + '_진도계획서_' + String(s.rec.period || '').replace(/\s/g, ''));
+      if (mode === 'copy') { var blob = await _sylvDataUrlToBlob(cached.pages[0]); var res = await shareOrCopyImage(blob, base + '.png'); if (res && res.method === 'clipboard') alert('✅ 이미지가 클립보드에 복사됐습니다' + (cached.pages.length > 1 ? ' (1쪽)' : '')); }
+      else { for (var k = 0; k < cached.pages.length; k++) { var a = document.createElement('a'); a.href = cached.pages[k]; a.download = base + (cached.pages.length > 1 ? '_' + (k + 1) + '쪽' : '') + '.png'; document.body.appendChild(a); a.click(); a.remove(); await new Promise(function(r){ setTimeout(r, 300); }); } }
+    } catch (e) { alert('이미지 처리 실패: ' + (e.message || e)); }
+    finally { btns.forEach(function(b){ b.disabled = false; }); }
+    return;
+  }
+  var node = document.getElementById('sylv-sheet'); if (!node) { btns.forEach(function(b){ b.disabled = false; }); return; }
   var wrap = null;
   try {
     if (typeof html2canvas === 'undefined') throw new Error('html2canvas 미로드');
