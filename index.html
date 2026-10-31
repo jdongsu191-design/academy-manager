@@ -18454,6 +18454,24 @@ function _mrCountable(s){
   return !!s && s.status !== 'cancelled' && !s.is_test;   /* 테스트 계정은 어느 달에도 세지 않는다 */
 }
 
+/* ── [입원 주인] 이 달에 입원한 학생이 같은 달에 전반까지 되면 ─────────
+   입원은 '입원 당시 담당' 에게 붙는다. 현재 담당(s.teacher_id)으로 보면
+   받은 선생님은 입원+전반IN 으로 두 번, 보낸 선생님은 전반OUT 만 남아 한 명씩 어긋난다.
+   ⚠ 개봉 중등 2026-10: 10/30 입원 학생이 10/31 서경환→허연주 전반에 끼어
+      허연주 1명 초과·서경환 1명 부족.
+   입원일 이후 '첫 전반'(이 달이든 조회월 이후든)의 전출 선생님이 입원 주인, 전반이 없으면 현재 담당.
+   d.transfers 는 조회월 1일 이후 전부를 담고 있어 이 달 입원생의 전반은 빠짐없이 보인다. */
+function _mrEnrollOwner(d, s){
+  if(!s) return null;
+  var ea = s.enrolled_at || '', first = null;
+  (d.transfers || []).forEach(function(t){
+    if(!t.student || t.student.id !== s.id) return;
+    if(ea && t.transfer_date < ea) return;
+    if(!first || t.transfer_date < first.transfer_date) first = t;
+  });
+  return (first && first.from_teacher) ? first.from_teacher.id : s.teacher_id;
+}
+
 /* 조회월 '이후' 에 전반이 여러 번 일어난 학생의 그 달 소속.
    '나중에 내보냈으니 그 달엔 내 학생' 으로 복원할 때, 되돌아간 경우에는 양쪽이
    다 복원되어 총원이 부푼다.
@@ -18665,7 +18683,7 @@ function mrGetTeacherReportFromData(tid, d) {
     return false;
   });
 
-  var _newAll  = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid && !afterInIds.has(s.id); });
+  var _newAll  = (d.newStudents || []).filter(function(s){ return _mrEnrollOwner(d, s) === tid; });   /* 입원 당시 담당 기준 */
   var myNew    = _newAll.filter(function(s){ return !mrIsReturning(s); });   // 순수 신입
   var myReturn = _newAll.filter(function(s){ return  mrIsReturning(s); });   // 재입학
   var myWithdrawn = (d.allStudents || []).filter(function(s) {
@@ -18694,7 +18712,13 @@ function mrGetTeacherReportFromData(tid, d) {
     var _own = _mrStartOwner(d, s.id);
     if(activeAtStart(s) && (!_own || _own === tid)) startStudents.push(sc);
     if(activeAtEnd(s)) endStudents.push(sc);
-    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) (mrIsReturning(s) ? myReturn : myNew).push(sc);
+    /* 이 달 입원은 '입원 당시 담당'(_mrEnrollOwner) 에게만. 위 _newAll 이 이미 넣었으면
+       지난 반 이름이 붙은 복원본(sc)으로 바꿔 끼우고, 없을 때만 추가한다 — 두 번 세지 않는다 */
+    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd && _mrEnrollOwner(d, s) === tid){
+      var _arr = mrIsReturning(s) ? myReturn : myNew, _k = -1;
+      _arr.forEach(function(x, i){ if(x && x.id === s.id) _k = i; });
+      if(_k >= 0) _arr[_k] = sc; else _arr.push(sc);
+    }
   });
   startStudents = _mrUniqById(startStudents);
   endStudents   = _mrUniqById(endStudents);
@@ -18998,7 +19022,7 @@ function mrGetTeacherReport(tid) {
   });
   var startStudents = _mrUniqById(startBase.concat(startFromOut.map(function(t){ return t.student; })));
 
-  var _newAll  = (d.newStudents || []).filter(function(s){ return s.teacher_id === tid && !afterInIds.has(s.id); });
+  var _newAll  = (d.newStudents || []).filter(function(s){ return _mrEnrollOwner(d, s) === tid; });   /* 입원 당시 담당 기준 */
   var myNew    = _newAll.filter(function(s){ return !mrIsReturning(s); });   // 순수 신입
   var myReturn = _newAll.filter(function(s){ return  mrIsReturning(s); });   // 재입학
   var myWithdrawn = myStudents.filter(function(s){
@@ -19032,7 +19056,13 @@ function mrGetTeacherReport(tid) {
     var _own = _mrStartOwner(d, s.id);
     if(_activeAtStart(s) && (!_own || _own === tid)) startStudents.push(sc);
     if(_activeAtEnd(s)) endStudents.push(sc);
-    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd) (mrIsReturning(s) ? myReturn : myNew).push(sc);
+    /* 이 달 입원은 '입원 당시 담당'(_mrEnrollOwner) 에게만. 위 _newAll 이 이미 넣었으면
+       지난 반 이름이 붙은 복원본(sc)으로 바꿔 끼우고, 없을 때만 추가한다 — 두 번 세지 않는다 */
+    if(s.enrolled_at && s.enrolled_at >= d.monthStart && s.enrolled_at <= d.monthEnd && _mrEnrollOwner(d, s) === tid){
+      var _arr = mrIsReturning(s) ? myReturn : myNew, _k = -1;
+      _arr.forEach(function(x, i){ if(x && x.id === s.id) _k = i; });
+      if(_k >= 0) _arr[_k] = sc; else _arr.push(sc);
+    }
   });
   startStudents = _mrUniqById(startStudents);
   endStudents   = _mrUniqById(endStudents);
@@ -19426,7 +19456,7 @@ function mrBuildBranchSummaryTable(results, d, bName) {
   var as = [], ae = [], an = [], aw = [];
   var xIn = [], xOut = [];          /* 분원 간 이동 */
   results.forEach(function(r) {
-    var nf = (d.newStudents || []).filter(function(s){ return s.teacher_id === r.teacher.id; });
+    var nf = (d.newStudents || []).filter(function(s){ return _mrEnrollOwner(d, s) === r.teacher.id; });
     r.startStudents.forEach(function(s){ as.push(s); });
     r.endStudents.forEach(function(s){ ae.push(s); });
     nf.forEach(function(s){ an.push(s); });
@@ -19581,7 +19611,7 @@ function mrBuildTeacherDetailTable(results, d, bName) {
 
   results.forEach(function(r, idx) {
     var col = COLORS[idx % COLORS.length];
-    var nf  = (d.newStudents || []).filter(function(s){ return s.teacher_id === r.teacher.id; });
+    var nf  = (d.newStudents || []).filter(function(s){ return _mrEnrollOwner(d, s) === r.teacher.id; });
     var nc = nf.length, sc = r.startStudents.length, ic = r.myIn.length;
     var oc = r.myOut.length, wc = r.myWithdrawn.length, ec = r.endStudents.length;
 
