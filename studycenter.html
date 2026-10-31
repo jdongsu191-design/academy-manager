@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 독서실 출결 [v1.07-expfix]</title>
+<title>BMAPS · 독서실 출결 [v1.08-inreq]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -879,7 +879,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v1.07-expfix</span>
+    <span class="tb-ver" id="sc-ver">v1.08-inreq</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1240,7 +1240,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v1.07-expfix';
+  window.STUDYCENTER_VERSION = 'v1.08-inreq';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -5451,7 +5451,8 @@
       scAptAward(_scKioskStudent && _scKioskStudent.id, scRrToday(), "in",
                  scAptLateIn(_scActionRow && _scActionRow.expected_check_in,
                              _scActionRow && _scActionRow.check_in_time));
-      scActDone("입실", scNowTime());
+      scActDone("입실", scNowTime(), 5000);   // 의무시간을 읽을 시간
+      scLeaveRemain("in");                     // 기다리지 않는다 — 확인 문구가 먼저 뜬다
     } catch(e){ scActError(e); }
     finally { _scActBusy = false; }
   }
@@ -5523,12 +5524,14 @@
       }
       scKioskMark("out");
       scActDone("하원", now, 5000);   // 의무시간을 읽을 시간
-      scLeaveRemain();                // 기다리지 않는다 — 확인 문구가 먼저 뜬다
+      scLeaveRemain("out");           // 기다리지 않는다 — 확인 문구가 먼저 뜬다
     } catch(e){ scActError(e); }
     finally { _scActBusy = false; }
   }
 
-  /* ── [하원] 이번 주 남은 의무시간 ────────────────────────────────
+  /* ── [입실·하원] 이번 주 남은 의무시간 ───────────────────────────
+     mode "in"(입실) / "out"(하원). 입실 때는 오늘 행이 아직 열려 있어
+     scWkCalcDaily 가 null 을 주므로 누적엔 어제까지만 들어간다(오늘 공부 전 기준).
      근무자 이행현황과 숫자가 갈리면 안 되므로 계산 함수를 그대로 쓴다.
      ⚠ _wkStudents · _wkReqHistory · _lateWaivers 는 관리자 화면의 공유 상태라
        한 학생분으로 덮으면 관리자 주간출결이 틀어진다 → 지역 변수로 넘긴다.
@@ -5539,10 +5542,11 @@
     return h ? (m ? (h + "시간 " + m + "분") : (h + "시간")) : (m + "분");
   }
 
-  async function scLeaveRemain(){
+  async function scLeaveRemain(mode){
     var el = document.getElementById("ac-req");
     var stu = _scKioskStudent;
     if(!el || !stu) return;
+    var isIn = (mode === "in");
     var mpSave = _mentorPeriods;
     try{
       var monday = scWkMonday(scRrToday());   // 영업일 기준(00:00~01:09 는 전날)
@@ -5590,9 +5594,10 @@
       week.forEach(function(d){ done += (scWkCalcDaily(rowsByDate[d]) || 0); });
       var left = Math.max(0, total - done);
 
+      if(_scKioskStudent !== stu) return;   // 그 사이 화면이 넘어갔으면 다음 학생 칸에 쓰지 않는다
       el.innerHTML = (left === 0)
         ? '<div class="req-ok">✅ 이번 주 의무시간을 다 채웠습니다</div>'
-        : '<div class="req-lab">이번 주 남은 의무시간</div>'
+        : '<div class="req-lab">이번 주 남은 의무시간' + (isIn ? ' (오늘 공부 전)' : '') + '</div>'
           + '<div class="req-big">' + scReqHM(left) + '</div>'
           + '<div class="req-sub">' + scReqHM(done) + ' / ' + scReqHM(total) + ' 완료</div>';
     }catch(e){
