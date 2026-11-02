@@ -18931,18 +18931,27 @@ async function generateMonthlyReport() {
       _qHist     = _qHist.or('from_teacher_id.in.('+_idCsv+'),to_teacher_id.in.('+_idCsv+')');
     }
 
-    var [classRes, studentRes, newStudentRes, transferRes, histRes] = await Promise.all([
-      _qClasses, _qStudents, _qNew, _qTransfer, _qHist
+    /* ⚠ Supabase 는 한 조회에 최대 1000행만 준다. 전체 학생(재원 + 이달 퇴원)이 1000명을
+       넘으면 뒷부분이 소리 없이 잘려 그 학생들의 시작·퇴원이 빠진다.
+       (2026-10 청라관: 1019명 중 19명 누락 → 전웅진T 고3 퇴원 4명이 시작 15→11, 퇴원 4→0 으로 찍힘)
+       행 수가 자라는 네 조회는 fetchAllRows 로 끝까지 받는다. 페이지가 흔들리지 않게 정렬 고정
+       (학생은 이름순 — 반 안의 명단 순서가 이름순이 된다) */
+    var [classRes, _stRows, _newRows, _trRows, _hsRows] = await Promise.all([
+      _qClasses,
+      fetchAllRows(_qStudents.order('name').order('id')),
+      fetchAllRows(_qNew.order('name').order('id')),
+      fetchAllRows(_qTransfer.order('id')),
+      fetchAllRows(_qHist.order('id'))
     ]);
 
     _mrData = {
       year, month, monthStart, monthEnd,
       teachers:    teachers,
-      classes:     classRes.data     || [],
-      allStudents: studentRes.data   || [],
-      newStudents: newStudentRes.data || [],
-      transfers:   transferRes.data  || [],
-      history:     histRes.data      || []
+      classes:     classRes.data || [],
+      allStudents: _stRows  || [],
+      newStudents: _newRows || [],
+      transfers:   _trRows  || [],
+      history:     _hsRows  || []
     };
     /* 비활성 선생님은 그 달에 움직임이 있을 때만 탭·상세에 남긴다
        (현재 달 보고서는 지금까지와 똑같이 보이고, 과거 달에만 줄이 늘어난다) */
