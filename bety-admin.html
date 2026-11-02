@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 베티 OMR 관리 [v0.10-korean]</title>
+<title>BMAPS · 베티 OMR 관리 [v0.11-open]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -95,6 +95,7 @@
   .bg-pub { background: #dcfce7; color: #15803d; }
   .bg-draft { background: #fef3c7; color: #92400e; }
   .bg-warn { background: #fee2e2; color: #dc2626; }
+  .bg-open { background: #fef3c7; color: #b45309; }
 
   /* ===== 탭 ===== */
   .tabs { display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 10px; margin-bottom: 12px; }
@@ -333,7 +334,7 @@
 
 <div class="ba-top">
   <span class="ba-title">📝 베티 OMR 관리</span>
-  <span class="ba-ver" id="ba-ver">v0.10-korean</span>
+  <span class="ba-ver" id="ba-ver">v0.11-open</span>
   <span class="ba-who" id="ba-who"></span>
   <button class="ba-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -726,6 +727,8 @@
     <div class="frow"><label>만점</label><input type="number" class="inp" id="ba-ex-total" min="1"></div>
     <div class="frow"><label>가산점</label><input type="number" class="inp" id="ba-ex-bonus" min="0"></div>
     <div class="frow"><label>제한시간(분)</label><input type="number" class="inp" id="ba-ex-tmin" min="1" max="300"></div>
+    <div class="frow"><label>오픈 시각</label><input type="datetime-local" class="inp" id="ba-ex-open" step="60"></div>
+    <div class="hint" style="margin:-4px 0 9px 88px;font-size:11.5px;color:#64748b">비우면 회차 날짜 00:00 에 열립니다. 발행 + 오픈 시각(미래) = 예약 공개 — 학생에겐 "오픈 예정" 으로 보이고 그 시각부터 풀 수 있습니다.</div>
     <div class="frow"><label>발행</label>
       <select class="inp" id="ba-ex-pub">
         <option value="false">미발행 (학생 응시 불가)</option>
@@ -891,7 +894,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_ADMIN_VERSION = 'v0.10-korean';
+window.BETY_ADMIN_VERSION = 'v0.11-open';
 console.log('BETY-ADMIN build:', window.BETY_ADMIN_VERSION);
 
 /* 레벨별 기본값 */
@@ -901,7 +904,7 @@ const LV_DEFAULTS = {
   '80점':     { qcnt:30, total:80,  bonus:0,  slevel:'middle', excluded:[20,21,28,29,30], tmin:100 }
 };
 
-var _ba = { user:null, date:'', exams:[], exam:null, questions:[], tab:'q',
+var _ba = { meta:{}, user:null, date:'', exams:[], exam:null, questions:[], tab:'q',
             sessions:[], copyExams:[] };
 
 function baEsc(v){ return String(v==null?'':v)
@@ -969,9 +972,42 @@ async function baLoadExams(){
     if(r.error) throw r.error;
     _ba.exams = r.data || [];
     baRenderExams();
+    /* 오픈 시각은 list_exams 가 모르는 컬럼 — 시험지마다 메타를 따로 읽어 카드 뱃지에 쓴다 (실패해도 목록은 그대로) */
+    try {
+      await Promise.all(_ba.exams.map(async function(e){
+        var mr = await db.rpc('bety_omr_get_exam_meta', { p_actor_id:_ba.user.id, p_exam_id:e.id });
+        if(!mr.error && mr.data && mr.data.ok) _ba.meta[e.id] = mr.data;
+      }));
+      if(_ba.date === date){ baRenderExams(); if(_ba.exam) baEditorBadge(); }
+    } catch(e){ console.warn('[exam meta]', e); }
   } catch(e){
     box.innerHTML = '<div class="empty" style="color:#dc2626">불러오기 실패: '+baEsc(e.message||e)+'</div>';
   }
+}
+/* 오픈 시각 뱃지 — 미래면 '오픈 예정', 지났거나 비었으면 없음 */
+function baOpenBadge(examId){
+  var m = _ba.meta[examId]; if(!m || !m.opens_at) return '';
+  var t = Date.parse(m.opens_at); if(isNaN(t) || t <= Date.now()) return '';
+  return ' <span class="ex-badge bg-open">⏰ ' + baWhen(m.opens_at) + ' 오픈 예정</span>';
+}
+function baEditorBadge(){
+  var ex = _ba.exam; if(!ex) return;
+  document.getElementById('ba-editor-badge').innerHTML = (ex.is_published
+    ? '<span class="ex-badge bg-pub">발행</span>' : '<span class="ex-badge bg-draft">미발행</span>') + baOpenBadge(ex.id);
+}
+/* 시각 표기 — 기기(한국) 시각으로 MM/DD HH:MM */
+function baWhen(iso){
+  if(!iso) return '';
+  var t = new Date(iso); if(isNaN(t)) return '';
+  var p = function(n){ return String(n).padStart(2,'0'); };
+  return p(t.getMonth()+1) + '/' + p(t.getDate()) + ' ' + p(t.getHours()) + ':' + p(t.getMinutes());
+}
+/* ISO → datetime-local 입력값(기기 시각) */
+function baLocalInput(iso){
+  if(!iso) return '';
+  var t = new Date(iso); if(isNaN(t)) return '';
+  var p = function(n){ return String(n).padStart(2,'0'); };
+  return t.getFullYear() + '-' + p(t.getMonth()+1) + '-' + p(t.getDate()) + 'T' + p(t.getHours()) + ':' + p(t.getMinutes());
 }
 function baExamName(e){
   var g = (e.grade==null) ? '전학년' : (e.grade + '학년');
@@ -994,7 +1030,7 @@ function baRenderExams(){
     var warn = ok ? '' : ' <span class="ex-badge bg-warn">배점 확인</span>';
     return '<div class="ex-card '+(_ba.exam && _ba.exam.id===e.id?'on':'')+'" onclick="baOpenExam(\''+e.id+'\')">'
       + '<div class="ex-name">'+baEsc(baExamName(e))+'</div>'
-      + '<div class="ex-meta">'+badge+warn+'</div>'
+      + '<div class="ex-meta">'+badge+warn+baOpenBadge(e.id)+'</div>'
       + '<div class="ex-meta">문항 '+e.saved_q+'/'+e.question_count+' · 배점합 '+e.points_sum
         + (e.bonus_points?(' + 가산 '+e.bonus_points):'') + ' / 만점 '+e.total_score+'</div>'
       + '<div class="ex-meta">해설 '+e.youtube_cnt+'개 · 응시 '+e.submit_cnt+'명</div>'
@@ -1043,12 +1079,17 @@ async function baOpenExamModal(exam){
         { p_actor_id:_ba.user.id, p_exam_id:exam.id });
       if(!mr.error && mr.data && mr.data.ok && mr.data.time_limit_min)
         document.getElementById('ba-ex-tmin').value = mr.data.time_limit_min;
+      if(!mr.error && mr.data && mr.data.ok){
+        document.getElementById('ba-ex-open').value = baLocalInput(mr.data.opens_at);
+        _ba.meta[exam.id] = mr.data;
+      }
     } catch(e){ console.error('[get_exam_meta]', e); }
     document.getElementById('ba-ex-pub').value    = exam.is_published ? 'true' : 'false';
   } else {
     document.getElementById('ba-ex-level').value = '실전모고';
     document.getElementById('ba-ex-grade').value = '1';
     document.getElementById('ba-ex-pub').value   = 'false';
+    document.getElementById('ba-ex-open').value  = '';
     baLevelDefaults();
   }
   document.getElementById('ba-ex-ov').classList.add('open');
@@ -1064,6 +1105,13 @@ async function baSaveExam(){
   var bonus = parseInt(document.getElementById('ba-ex-bonus').value, 10);
   var pub   = document.getElementById('ba-ex-pub').value === 'true';
   var tmin  = parseInt(document.getElementById('ba-ex-tmin').value, 10);
+  var openV = document.getElementById('ba-ex-open').value;
+  var openIso = '';
+  if(openV){
+    var od = new Date(openV);                       /* datetime-local 은 기기(한국) 시각으로 해석된다 */
+    if(isNaN(od)){ baMsg('ba-ex-msg','오픈 시각 형식이 올바르지 않습니다', true); return; }
+    openIso = od.toISOString();
+  }
   var elec  = (gRaw === '3') ? document.getElementById('ba-ex-elective').value : '';
   if(!qcnt || qcnt < 1){ baMsg('ba-ex-msg','문항 수를 입력하세요', true); return; }
   if(!total || total < 1){ baMsg('ba-ex-msg','만점을 입력하세요', true); return; }
@@ -1085,8 +1133,9 @@ async function baSaveExam(){
     if(r.error) throw r.error;
     /* 제한시간은 upsert_exam 이 모르는 값이라 따로 넣는다 (기존 RPC 를 건드리지 않으려고) */
     var m = await db.rpc('bety_omr_set_exam_meta',
-      { p_actor_id:_ba.user.id, p_exam_id:r.data, p_patch:{ time_limit_min: tmin } });
+      { p_actor_id:_ba.user.id, p_exam_id:r.data, p_patch:{ time_limit_min: tmin, opens_at: openIso } });
     if(m.error) throw m.error;
+    if(m.data && m.data.ok) _ba.meta[r.data] = m.data;
     baCloseExamModal();
     await baLoadExams();
     await baOpenExam(r.data);
@@ -1123,8 +1172,7 @@ async function baOpenExam(examId){
   baRenderExams();
   document.getElementById('ba-editor').style.display = '';
   document.getElementById('ba-editor-title').textContent = baExamName(ex) + ' 세팅';
-  document.getElementById('ba-editor-badge').innerHTML = ex.is_published
-    ? '<span class="ex-badge bg-pub">발행</span>' : '<span class="ex-badge bg-draft">미발행</span>';
+  baEditorBadge();
   baMsg('ba-msg-q',''); baMsg('ba-msg-y','');
   await baLoadQuestions();
   baTab('q');
@@ -1572,14 +1620,23 @@ async function baLoadSubs(){
     var r = await db.rpc('bety_omr_list_submissions', { p_actor_id:_ba.user.id, p_exam_id:_ba.exam.id });
     if(r.error) throw r.error;
     var rows = r.data || [];
-    document.getElementById('ba-sub-sum').textContent = '응시 ' + rows.length + '명';
-    if(!rows.length){ t.innerHTML = '<tbody><tr><td class="empty">아직 제출한 학생이 없습니다</td></tr></tbody>'; return; }
-    t.innerHTML = '<thead><tr><th>이름</th><th>학년</th><th>점수</th><th>맞은 문항</th><th>제출 시각</th><th>리포트</th><th>초기화</th></tr></thead>'
+    /* status 는 새 RPC 가 준다 (옛 RPC 는 제출분만 주므로 submitted 로 본다) */
+    var ing = rows.filter(function(s){ return s.status === 'in_progress'; }).length;
+    document.getElementById('ba-sub-sum').textContent = '제출 ' + (rows.length - ing) + '명' + (ing ? ' · 응시 중 ' + ing + '명' : '');
+    if(!rows.length){ t.innerHTML = '<tbody><tr><td class="empty">아직 시작한 학생이 없습니다</td></tr></tbody>'; return; }
+    t.innerHTML = '<thead><tr><th>이름</th><th>학년</th><th>상태</th><th>시작 시각</th><th>제출 시각</th><th>점수</th><th>맞은 문항</th><th>리포트</th><th>초기화</th></tr></thead>'
       + '<tbody>' + rows.map(function(s){
-        var at = s.submitted_at ? String(s.submitted_at).replace('T',' ').slice(0,16) : '';
+        var st = s.status || 'submitted';
+        var stHtml = st === 'in_progress' ? '<b style="color:#b91c1c">응시 중</b>'
+                   : st === 'expired'     ? '<span style="color:#b45309">시간 만료' + (s.auto_submitted ? '(자동 제출)' : '') + '</span>'
+                   : (s.auto_submitted ? '제출(자동)' : '제출');
+        var at  = baWhen(s.submitted_at);
+        var sat = s.started_at ? baWhen(s.started_at) : '<span style="color:#94a3b8">—</span>';
+        var done = st !== 'in_progress';
         return '<tr><td><b>'+baEsc(s.name)+'</b></td><td>'+baEsc(s.grade||'')+'</td>'
-          + '<td><b>'+s.score+'</b></td><td>'+s.correct_count+'</td><td>'+baEsc(at)+'</td>'
-          + '<td><button class="btn btn-sm" onclick="baReport(\''+s.student_id+'\')">📄 리포트</button></td>'
+          + '<td>'+stHtml+'</td><td>'+sat+'</td><td>'+baEsc(at)+'</td>'
+          + '<td><b>'+(done ? s.score : '')+'</b></td><td>'+(done ? s.correct_count : '')+'</td>'
+          + '<td>'+(done ? '<button class="btn btn-sm" onclick="baReport(\''+s.student_id+'\')">📄 리포트</button>' : '')+'</td>'
           + '<td><button class="btn btn-sm btn-danger" onclick="baReset(\''+s.student_id+'\',\''
             + baEsc(s.name).replace(/'/g,"\\'")+'\')">초기화</button></td></tr>';
       }).join('') + '</tbody>';

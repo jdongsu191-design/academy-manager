@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 베티 OMR [v1.8-scan]</title>
+<title>BMAPS · 베티 OMR [v1.9-open]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -277,7 +277,7 @@
 <body>
 <div class="bo-top">
   <span class="bo-title">📝 베티 OMR</span>
-  <span class="bo-ver" id="bo-ver">v1.8-scan</span>
+  <span class="bo-ver" id="bo-ver">v1.9-open</span>
   <span class="bo-who" id="bo-who"></span>
   <button class="bo-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -528,7 +528,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_OMR_VERSION = 'v1.8-scan';
+window.BETY_OMR_VERSION = 'v1.9-open';
 console.log('BETY-OMR build:', window.BETY_OMR_VERSION);
 
 var _bo = { user:null, rounds:[], date:'', exam:null, questions:[], answers:{},
@@ -685,6 +685,7 @@ async function boLoadRounds(){
     var r = await db.rpc('bety_omr_list_for_student', { p_student_id: _bo.user.id });
     if(r.error) throw r.error;
     var d = r.data || {};
+    if(d.server_now){ var _sk = Date.parse(d.server_now) - Date.now(); if(!isNaN(_sk)) _bo.skew = _sk; }   /* 오픈 판정도 서버 시각으로 */
     var rounds = d.ok ? (d.rounds || []).map(function(rd){ rd.subject = 'bety'; return rd; }) : [];
     /* 국어 회차 — 같은 목록에 섞는다 (날짜 내림차순). 실패해도 수학 회차는 보인다 */
     try {
@@ -748,12 +749,16 @@ function boRoundDetail(){
   } else if(c.mode === 'auto'){
     /* 응시 중에 새로고침하면 목록으로 돌아온다 — 다시 시작하는 게 아님을 알려 준다 */
     var _ing = (c.exam.status === 'in_progress');
+    var _wait = boOpenWait(c.exam);
     det.innerHTML = '<div class="rd-box">'
       + '<div class="rd-exam">' + boEsc(boExamLabel(c.exam)) + '</div>'
       + '<div class="rd-meta">' + (c.exam.question_count ? (c.exam.question_count + '문항 · ') : '') + c.exam.total_score + '점 만점'
         + (_ing ? ' · <b style="color:#b91c1c">응시 중</b>' : '') + '</div>'
-      + '<button class="rd-go" onclick="boOpenExam(\''+c.exam.id+'\',\''+rd.session_date+'\',\''+(rd.subject||'bety')+'\')">'
-        + (_ing ? '이어서 응시' : '응시하기') + '</button>'
+      + (_wait
+          ? '<button class="rd-go" disabled style="background:#cbd5e1;color:#334155">⏰ ' + boWhen(c.exam.opens_at) + ' 오픈 예정</button>'
+            + '<div class="rd-meta" style="margin-top:8px">오픈 시각이 되면 자동으로 응시 버튼이 나타납니다</div>'
+          : '<button class="rd-go" onclick="boOpenExam(\''+c.exam.id+'\',\''+rd.session_date+'\',\''+(rd.subject||'bety')+'\')">'
+            + (_ing ? '이어서 응시' : '응시하기') + '</button>')
       + '</div>';
   } else {
     _bo.pickExams = c.exams;
@@ -761,17 +766,39 @@ function boRoundDetail(){
       + '<div class="rd-meta" style="margin-bottom:8px">본인이 <b>실제로 푼 시험지 표지</b>와 같은 것을 골라주세요</div>'
       + '<select class="rd-sel" id="rd-exam-sel" style="margin-bottom:12px">'
       + c.exams.map(function(e, j){
-          return '<option value="'+j+'">' + boEsc(boExamLabel(e) + ' · ' + e.total_score + '점 만점') + '</option>';
+          return '<option value="'+j+'">' + boEsc(boExamLabel(e) + ' · ' + e.total_score + '점 만점'
+            + (boOpenWait(e) ? (' · ⏰ ' + boWhen(e.opens_at) + ' 오픈 예정') : '')) + '</option>';
         }).join('')
       + '</select>'
       + '<button class="rd-go" onclick="boPickFromSel(' + i + ')">응시하기</button>'
       + '</div>';
   }
+  boOpenWatch();
+}
+/* 오픈 전인가 — 서버 시각(skew 보정) 기준. 응시 중·제출된 시험은 해당 없음 */
+function boOpenWait(e){
+  if(!e || !e.opens_at || e.submitted || e.status === 'in_progress') return false;
+  var t = Date.parse(e.opens_at);
+  return !isNaN(t) && t > boNow();
+}
+/* 오픈 대기 중인 시험지가 있으면 30초마다 보고, 시각이 되면 상세를 다시 그린다 (재조회 없음) */
+function boOpenWatch(){
+  var pending = [];
+  (_bo.rounds || []).forEach(function(rd){ (rd.exams || []).forEach(function(e){ if(boOpenWait(e)) pending.push(e); }); });
+  if(_bo.openTimer){ clearInterval(_bo.openTimer); _bo.openTimer = null; }
+  if(!pending.length) return;
+  _bo.openTimer = setInterval(function(){
+    var flipped = pending.some(function(e){ return !boOpenWait(e); });
+    if(!flipped) return;
+    clearInterval(_bo.openTimer); _bo.openTimer = null;
+    var _vh = document.getElementById('view-home'); if(_vh && _vh.style.display !== 'none') boRoundDetail();
+  }, 30000);
 }
 async function boPickFromSel(roundIdx){
   var rd = _bo.rounds[roundIdx]; if(!rd) return;
   var j = parseInt((document.getElementById('rd-exam-sel')||{}).value, 10);
   var e = (_bo.pickExams || [])[j]; if(!e) return;
+  if(boOpenWait(e)){ alert('아직 응시 기간이 아닙니다.\n열리는 시각: ' + boWhen(e.opens_at)); return; }
   if(rd.subject === 'korean'){ await boOpenExam(e.id, rd.session_date, 'korean'); return; }   /* 국어는 선택과목 저장이 없다 */
   await boPickExam(e.id, rd.session_date, e.elective || '');
 }
@@ -800,6 +827,7 @@ async function boOpenExam(examId, date, subject){
     if(!d.ok){
       alert(d.reason === 'not_eligible' ? '이 시험지의 응시 대상이 아닙니다.'
           : d.reason === 'no_exam'      ? '시험지가 없거나 아직 발행되지 않았습니다.'
+          : d.reason === 'not_open'     ? ('아직 응시 기간이 아닙니다.' + (d.opens_at ? ('\n열리는 시각: ' + boWhen(d.opens_at)) : ''))
           : '시험지를 불러올 수 없습니다.');
       return;
     }
