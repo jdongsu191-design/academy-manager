@@ -17551,7 +17551,7 @@ async function loadTestAccounts() {
   if (!testIsMaster()) { el.innerHTML = '<div style="padding:16px;color:#9ca3af;font-size:12px">마스터 관리자만 볼 수 있습니다</div>'; return; }
   el.innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
   try {
-    var r = await db.from('users').select('id,username,name,role,status,branch_id,branch_ids,teacher_id,class_id,school,grade,school_level,created_at')
+    var r = await db.from('users').select('id,username,name,role,status,branch_id,branch_ids,teacher_id,class_id,school,grade,school_level,created_at,student_code')
       .eq('is_test', true).order('created_at');
     if (r.error) throw r.error;
     var rows = r.data || [];
@@ -17574,7 +17574,11 @@ async function loadTestAccounts() {
           + '<div style="display:flex;align-items:center;gap:10px">'
             + '<div style="width:38px;height:38px;border-radius:50%;background:#ede9fe;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🧪</div>'
             + '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700;color:#1e293b">' + _esc(a.name) + '</div>'
-            + '<div style="font-size:12px;color:#64748b;margin-top:1px">@' + _esc(a.username||'') + '</div></div>'
+            + '<div style="font-size:12px;color:#64748b;margin-top:1px">' + (a.role === 'student'
+                ? (a.student_code
+                    ? '🔑 <span style="font-family:monospace;font-weight:700;color:var(--navy)">' + _esc(a.student_code) + '</span> <button class="btn btn-sm" onclick="copyStudentCode(\'' + _esc(a.student_code) + '\',\'' + _esc(a.name) + '\')" style="font-size:10px;padding:1px 6px">📋 복사</button>'
+                    : '<span style="color:#b45309">학생 코드 없음</span> <button class="btn btn-sm" onclick="testIssueCode(\'' + a.id + '\',\'' + _esc(a.name) + '\')" style="font-size:10px;padding:1px 6px;background:#fffbeb;border-color:#fde68a;color:#92400e">🔑 코드 발급</button>')
+                : '@' + _esc(a.username||'')) + '</div></div>'
             + '<span style="font-size:10px;padding:2px 8px;border-radius:100px;background:#f5f3ff;color:' + testRoleColor(a.role) + ';font-weight:700">' + testRoleLabel(a.role) + '</span>'
           + '</div>'
           + (bn ? '<div style="font-size:12px;color:#5b21b6;background:#faf5ff;padding:5px 10px;border-radius:7px">🏢 ' + _esc(bn) + (sub ? ' · ' + _esc(sub) : '') + '</div>' : (sub ? '<div style="font-size:12px;color:#5b21b6">' + _esc(sub) + '</div>' : ''))
@@ -17592,6 +17596,11 @@ function testAcctRoleChange(){
   var role = (document.getElementById('inp-test-role')||{}).value || 'student';
   var sf = document.getElementById('test-student-fields'), tf = document.getElementById('test-staff-fields'), dn = document.getElementById('test-desk-note');
   if (sf) sf.style.display = role === 'student' ? 'grid' : 'none';
+  /* 학생은 코드 로그인 — 아이디·비밀번호 칸을 숨기고 학생 코드 칸을 보인다 */
+  var ug = document.getElementById('test-username-group'), pg = document.getElementById('test-pwd-group'), cg = document.getElementById('test-code-group');
+  if (ug) ug.style.display = role === 'student' ? 'none' : '';
+  if (pg) pg.style.display = role === 'student' ? 'none' : '';
+  if (cg) cg.style.display = role === 'student' ? '' : 'none';
   if (tf) tf.style.display = (role === 'teacher' || role === 'vice_director') ? 'block' : 'none';
   if (dn) dn.style.display = role === 'desk' ? 'block' : 'none';
 }
@@ -17637,8 +17646,33 @@ async function openTestAccountModal(editId) {
   tsel.value = (ex && ex.teacher_id) || '';
   testAcctTeacherChange();
   if (ex && ex.class_id) $('inp-test-class').value = ex.class_id;
+  _testCodeReissue = false;
+  $('inp-test-code').value = (ex && ex.student_code) || '';
+  $('inp-test-code').placeholder = isEdit ? '코드 없음 — 저장하면 발급됩니다' : '저장하면 자동으로 발급됩니다';
+  var rb = $('test-code-reissue'); rb.style.display = (ex && ex.student_code) ? '' : 'none'; rb.textContent = '🔄 재발급';
+  $('test-code-hint').textContent = '학생 로그인 화면에 이 8자리 숫자를 입력하면 들어갑니다.';
   testAcctRoleChange();
   openModal('testAccount');
+}
+/* 수정 모달에서 [재발급] 을 누르면 저장 때 새 코드를 받는다 (누르기 전엔 기존 코드 유지) */
+var _testCodeReissue = false;
+function testCodeReissueToggle(){
+  _testCodeReissue = !_testCodeReissue;
+  var rb = document.getElementById('test-code-reissue'), h = document.getElementById('test-code-hint');
+  if (rb) rb.textContent = _testCodeReissue ? '↩ 재발급 취소' : '🔄 재발급';
+  if (h) h.textContent = _testCodeReissue ? '저장하면 새 코드가 발급되고 기존 코드로는 로그인할 수 없습니다.' : '학생 로그인 화면에 이 8자리 숫자를 입력하면 들어갑니다.';
+}
+/* 목록 카드의 [코드 발급] — 코드 없이 만들어진 테스트 학생용 */
+async function testIssueCode(id, name){
+  if (!testIsMaster()) return;
+  try {
+    var code = await generateStudentCode();
+    var r = await db.from('users').update({ student_code: code }).eq('id', id);
+    if (r.error) throw r.error;
+    var u = (allUsers||[]).find(function(x){ return x.id === id; }); if (u) u.student_code = code;
+    alert('🔑 ' + name + ' 학생 코드 발급: ' + code);
+    loadTestAccounts();
+  } catch(e) { alert('발급 실패: ' + (e.message||e)); }
 }
 
 async function saveTestAccount() {
@@ -17651,12 +17685,13 @@ async function saveTestAccount() {
   var password = $('inp-test-password').value || '';
   var branch = $('inp-test-branch').value || '';
   if (!rawName) { alert('이름을 입력하세요'); return; }
-  if (!username) { alert('아이디를 입력하세요'); return; }
-  if (!isEdit && !password) { alert('비밀번호를 입력하세요'); return; }
+  /* 학생은 8자리 학생 코드로 로그인하므로 아이디·비밀번호를 받지 않는다 (일반 학생 등록과 같은 규약) */
+  if (role !== 'student' && !username) { alert('아이디를 입력하세요'); return; }
+  if (role !== 'student' && !isEdit && !password) { alert('비밀번호를 입력하세요'); return; }
   if (!branch) { alert('분원을 선택하세요'); return; }
   var name = TEST_NAME_PREFIX + rawName;
-  var patch = { name: name, username: username, is_test: true, status: 'active' };
-  if (password) patch.password = password;
+  var patch = { name: name, is_test: true, status: 'active' };
+  if (role !== 'student') { patch.username = username; if (password) patch.password = password; }
   if (role === 'student') {
     patch.school_level = $('inp-test-level').value || 'high';
     patch.grade = ($('inp-test-grade').value || '').trim() || null;
@@ -17675,9 +17710,16 @@ async function saveTestAccount() {
   }
   var btn = $('test-modal-save-btn'); if (btn) { btn.disabled = true; btn.textContent = '저장 중...'; }
   try {
-    var dup = await db.from('users').select('id').eq('username', username).limit(2);
-    if (dup.error) throw dup.error;
-    if ((dup.data||[]).some(function(u){ return u.id !== id; })) { alert('이미 사용 중인 아이디입니다'); return; }
+    if (role !== 'student') {
+      var dup = await db.from('users').select('id').eq('username', username).limit(2);
+      if (dup.error) throw dup.error;
+      if ((dup.data||[]).some(function(u){ return u.id !== id; })) { alert('이미 사용 중인 아이디입니다'); return; }
+    }
+    var issued = '';
+    if (role === 'student') {
+      var hasCode = !!($('inp-test-code').value || '');
+      if (!isEdit || !hasCode || _testCodeReissue) { issued = await generateStudentCode(); patch.student_code = issued; }
+    }
     if (isEdit) {
       var r1 = await db.from('users').update(patch).eq('id', id);
       if (r1.error) throw r1.error;
@@ -17690,7 +17732,8 @@ async function saveTestAccount() {
     closeModal('testAccount');
     await loadAdminData();
     loadTestAccounts();
-    alert('✅ 테스트 계정이 ' + (isEdit ? '수정' : '추가') + '됐습니다 (' + name + ')');
+    alert('✅ 테스트 계정이 ' + (isEdit ? '수정' : '추가') + '됐습니다 (' + name + ')'
+      + (issued ? '\n\n🔑 학생 코드: ' + issued + '\n학생 로그인 화면에 이 코드를 입력하면 들어갑니다.' : ''));
   } catch(e) { alert('오류: ' + (e.message||e) + (String(e.message||'').indexOf('is_test') >= 0 ? '\n\nmigrations/20261015_test_accounts.sql 을 먼저 실행해야 합니다' : '')); }
   finally { if (btn) { btn.disabled = false; btn.textContent = '저장'; } }
 }
@@ -36260,12 +36303,21 @@ tryAutoLogin();
         </select></div>
       <div class="form-group" style="margin:0"><label>분원 <span style="color:#dc2626">*</span></label><select id="inp-test-branch"></select></div>
       <div class="form-group" style="margin:0"><label>이름 <span style="color:#dc2626">*</span></label><input type="text" id="inp-test-name" placeholder="예: 학생A (앞에 '테스트 ' 자동)"></div>
-      <div class="form-group" style="margin:0"><label>아이디 <span style="color:#dc2626">*</span></label><input type="text" id="inp-test-username" placeholder="예: test_stu1" autocomplete="off"></div>
+      <div class="form-group" style="margin:0" id="test-username-group"><label>아이디 <span style="color:#dc2626">*</span></label><input type="text" id="inp-test-username" placeholder="예: test_stu1" autocomplete="off"></div>
     </div>
-    <div class="form-group" style="margin-top:10px">
+    <div class="form-group" style="margin-top:10px" id="test-pwd-group">
       <label>비밀번호 <span style="color:#dc2626" id="test-pwd-req">*</span></label>
       <input type="password" id="inp-test-password" placeholder="비밀번호" autocomplete="new-password">
       <div id="test-pwd-hint" style="font-size:11px;color:#9ca3af;margin-top:4px;display:none">비워두면 비밀번호 변경 안 함</div>
+    </div>
+    <!-- 학생은 아이디·비밀번호가 아니라 8자리 학생 코드로 로그인한다 → 저장 때 자동 발급 -->
+    <div class="form-group" style="margin-top:10px;display:none" id="test-code-group">
+      <label>학생 코드 <span style="font-size:11px;color:#9ca3af;font-weight:400">(학생 로그인용 · 아이디·비밀번호 없음)</span></label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="text" id="inp-test-code" readonly placeholder="저장하면 자동으로 발급됩니다" style="font-family:monospace;font-weight:700;background:#f9fafb">
+        <button type="button" class="btn btn-sm" id="test-code-reissue" onclick="testCodeReissueToggle()" style="white-space:nowrap;display:none">🔄 재발급</button>
+      </div>
+      <div id="test-code-hint" style="font-size:11px;color:#9ca3af;margin-top:4px">학생 로그인 화면에 이 8자리 숫자를 입력하면 들어갑니다.</div>
     </div>
     <div id="test-student-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="form-group" style="margin:0"><label>학교급</label>
