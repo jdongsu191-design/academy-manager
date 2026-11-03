@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 베티 OMR 관리 [v0.11-open]</title>
+<title>BMAPS · 베티 OMR 관리 [v0.12-sess]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -334,7 +334,7 @@
 
 <div class="ba-top">
   <span class="ba-title">📝 베티 OMR 관리</span>
-  <span class="ba-ver" id="ba-ver">v0.11-open</span>
+  <span class="ba-ver" id="ba-ver">v0.12-sess</span>
   <span class="ba-who" id="ba-who"></span>
   <button class="ba-back" onclick="location.href='index.html'">← BMAPS</button>
 </div>
@@ -353,13 +353,15 @@
   <div class="card">
     <div class="card-t">1️⃣ 회차 선택</div>
     <div class="row">
-      <select class="inp" id="ba-session" onchange="baOnSessionPick()" style="min-width:220px">
+      <select class="inp" id="ba-session" onchange="baOnSessionPick()" style="min-width:300px">
         <option value="">회차를 선택하세요</option>
       </select>
       <span class="hint">또는 날짜 직접 입력</span>
       <input type="date" class="inp" id="ba-date" onchange="baLoadExams()">
       <button class="btn" onclick="baLoadExams()">🔄 불러오기</button>
     </div>
+    <!-- 같은 날짜에 분원별·학년별 회차가 따로 있으면 여기에 풀어 보여 준다 (시험지는 날짜 단위로 묶임) -->
+    <div id="ba-session-info" class="hint" style="margin-top:8px;display:none"></div>
   </div>
 
   <!-- 시험지 목록 -->
@@ -894,7 +896,7 @@ const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-window.BETY_ADMIN_VERSION = 'v0.11-open';
+window.BETY_ADMIN_VERSION = 'v0.12-sess';
 console.log('BETY-ADMIN build:', window.BETY_ADMIN_VERSION);
 
 /* 레벨별 기본값 */
@@ -939,24 +941,81 @@ function baBlock(msg){
 }
 
 /* ── 회차 목록 ──────────────────────────────────────────── */
+/* 회차는 weekend_sessions 에 분원별(branch_id)·학년별(grade: 1·2·3·pre, NULL=전학년) 행이
+   따로 있을 수 있다. 시험지(bety_omr_exams)는 날짜 단위라 드롭다운은 날짜당 한 줄로 묶고,
+   그 날의 분원·학년별 회차를 요약해 보여 준다. (예: 11/08 · 27회차 — 청라관 1·2학년 27회차 / 3학년 휴강) */
+var _baGradeLabel = { '1':'1학년', '2':'2학년', '3':'3학년', 'pre':'예비고' };
+function baSessRound(s){ return s.is_closed ? '휴강' : (s.title ? String(s.title) : (s.round_no != null ? s.round_no + '회차' : '회차 미정')); }
+function baSessScope(s){
+  var br = s.branch_id ? ((_ba.branchName || {})[s.branch_id] || '분원') : '';
+  var gr = s.grade ? (_baGradeLabel[String(s.grade)] || s.grade) : '';
+  return [br, gr].filter(Boolean).join(' ');
+}
+/* 같은 날짜의 행들을 회차별로 묶는다 → [{round, grades:[..], branches:[..], closed}]
+   분원이 그 날의 전체 분원과 같으면 분원은 생략하고 학년만 적는다 (예: "예비고 5회차 / 1·2학년 24회차") */
+function baSessGroups(list){
+  var allBr = {}; list.forEach(function(s){ if(s.branch_id) allBr[s.branch_id] = 1; });
+  var nAll = Object.keys(allBr).length;
+  var g = {}, order = [];
+  list.forEach(function(s){
+    var k = baSessRound(s); if(!g[k]){ g[k] = { round:k, closed:!!s.is_closed, grades:{}, branches:{} }; order.push(k); }
+    g[k].grades[s.grade ? String(s.grade) : ''] = 1;
+    if(s.branch_id) g[k].branches[s.branch_id] = 1;
+  });
+  return order.map(function(k){
+    var x = g[k];
+    var gr = Object.keys(x.grades).sort().map(function(v){ return v ? (_baGradeLabel[v] || v) : '전학년'; });
+    /* 1학년·2학년 → 1·2학년 */
+    var num = gr.filter(function(v){ return /^\d학년$/.test(v); }), rest = gr.filter(function(v){ return !/^\d학년$/.test(v); });
+    var gradeTxt = (num.length ? num.map(function(v){ return v.replace('학년',''); }).join('·') + '학년' : '');
+    gradeTxt = [gradeTxt].concat(rest).filter(Boolean).join('·');
+    var brIds = Object.keys(x.branches);
+    var brTxt = (!brIds.length || (nAll > 1 && brIds.length === nAll)) ? '' : brIds.map(function(b){ return (_ba.branchName||{})[b] || '분원'; }).join('·');
+    return { round:k, closed:x.closed, gradeTxt:gradeTxt, brTxt:brTxt, n:brIds.length };
+  });
+}
+function baSessSummary(list){
+  if(list.length === 1 && !list[0].branch_id && !list[0].grade) return baSessRound(list[0]);
+  return baSessGroups(list).map(function(x){
+    return [x.brTxt, x.gradeTxt, x.round].filter(Boolean).join(' ');
+  }).join(' / ');
+}
 async function baLoadSessions(){
   try {
+    var br = await db.from('branches').select('id,name');
+    _ba.branchName = {}; (br.data || []).forEach(function(b){ _ba.branchName[b.id] = b.name; });
     var r = await db.from('weekend_sessions').select('*').eq('program','bety');
     if(r.error) throw r.error;
     var rows = (r.data||[]).slice().sort(function(a,b){
       return String(b.session_date||'').localeCompare(String(a.session_date||''));
     });
     _ba.sessions = rows;
+    var byDate = {}, dates = [];
+    rows.forEach(function(s){ if(!byDate[s.session_date]){ byDate[s.session_date] = []; dates.push(s.session_date); } byDate[s.session_date].push(s); });
+    _ba.sessByDate = byDate;
     var sel = document.getElementById('ba-session');
-    sel.innerHTML = '<option value="">회차를 선택하세요</option>' + rows.map(function(s){
-      var label = s.session_date + (s.round_no ? ('  ·  ' + s.round_no + '회차') : '')
-                + (s.is_closed ? '  (휴강)' : '');
-      return '<option value="'+baEsc(s.session_date)+'">'+baEsc(label)+'</option>';
+    sel.innerHTML = '<option value="">회차를 선택하세요</option>' + dates.map(function(d){
+      var list = byDate[d], split = list.length > 1;
+      return '<option value="'+baEsc(d)+'">' + baEsc(d + '  ·  ' + baSessSummary(list) + (split ? '  (분원·학년별 ' + list.length + '건)' : '')) + '</option>';
     }).join('');
   } catch(e){ console.error('회차 로드 실패:', e); }
 }
+/* 고른 날짜의 분원·학년별 회차를 표로 풀어 보여 준다 */
+function baSessionInfo(date){
+  var box = document.getElementById('ba-session-info'); if(!box) return;
+  var list = (_ba.sessByDate || {})[date] || [];
+  if(list.length <= 1){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  var brNames = {}; list.forEach(function(s){ if(s.branch_id) brNames[(_ba.branchName||{})[s.branch_id] || '분원'] = 1; });
+  box.innerHTML = '📅 <b>' + baEsc(date) + '</b> 은 분원·학년별로 회차가 나뉘어 있습니다 (' + list.length + '건' + (Object.keys(brNames).length ? ' · ' + baEsc(Object.keys(brNames).sort().join('·')) : '') + ') — 시험지는 날짜 단위로 공통이고, 학생에겐 자기 분원·학년의 회차 번호가 보입니다.<br>'
+    + baSessGroups(list).map(function(x){
+        return '<span style="display:inline-block;margin:4px 6px 0 0;padding:2px 9px;border-radius:999px;background:' + (x.closed ? '#fee2e2;color:#b91c1c' : '#e0f2fe;color:#075985') + ';font-weight:700">'
+          + baEsc([x.gradeTxt || '전학년', x.round].join(' ') + (x.brTxt ? ' · ' + x.brTxt : (x.n > 1 ? ' · ' + x.n + '개 분원 공통' : ''))) + '</span>';
+      }).join('');
+  box.style.display = '';
+}
 function baOnSessionPick(){
   var v = document.getElementById('ba-session').value;
+  baSessionInfo(v);
   if(v){ document.getElementById('ba-date').value = v; baLoadExams(); }
 }
 
@@ -965,6 +1024,7 @@ async function baLoadExams(){
   var date = document.getElementById('ba-date').value;
   var box = document.getElementById('ba-exams');
   if(!date){ box.innerHTML='<div class="empty">회차를 먼저 선택해주세요</div>'; return; }
+  baSessionInfo(date);
   _ba.date = date;
   box.innerHTML = '<div class="empty">불러오는 중...</div>';
   try {
