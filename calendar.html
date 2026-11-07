@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="BMAPS">
   <link rel="apple-touch-icon" href="/icon-192.png">
-  <title>BMAPS 운영 일정 v1.13</title>
+  <title>BMAPS 운영 일정 v1.14</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -348,7 +348,7 @@
    · 반복: rrule {freq, interval, byday[], until} + exdates / 공개: all·shared·private + share_user_ids
    · 공휴일은 코드 내장(2025~2027) — 해마다 아래 HOLIDAYS 에 추가
 ============================================================ */
-window.CALENDAR_VERSION = 'v1.13';
+window.CALENDAR_VERSION = 'v1.14';
 const SUPABASE_URL = 'https://qtpftloyumtffvgurvqv.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_XGP9n-2fuBQFuJlAA5MJ8w_R8JYIi9O';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -1196,7 +1196,10 @@ async function neisFetch(){
     rows.forEach(function(r){
       var d = r.AA_YMD.slice(0,4) + '-' + r.AA_YMD.slice(4,6) + '-' + r.AA_YMD.slice(6,8), last = merged[merged.length-1];
       var grades = [r.ONE_GRADE_EVENT_YN, r.TW_GRADE_EVENT_YN, r.THREE_GRADE_EVENT_YN].map(function(x, i){ return x === 'Y' ? (i+1) : null; }).filter(Boolean);
-      if(last && last.title === r.EVENT_NM && daysBetween(last.end, d) === 1){ last.end = d; return; }
+      /* v1.14: 같은 날 다른 일정(토요휴업일 등)이 사이에 끼어도 같은 제목이 전날까지 이어져 있으면 그 묶음에 붙인다 */
+      var prev = null;
+      for(var k = merged.length - 1; k >= 0; k--){ var m = merged[k]; if(m.title === r.EVENT_NM && (m.end === d || daysBetween(m.end, d) === 1)){ prev = m; break; } }
+      if(prev){ if(d > prev.end) prev.end = d; return; }
       merged.push({ title:r.EVENT_NM, start:d, end:d, grades:grades, sbtr:r.SBTR_DD_SC_NM || '', category:neisCategory(r.EVENT_NM, r.SBTR_DD_SC_NM), memo:(r.EVENT_CNTNT || '').trim() });
     });
     /* ── 학교 홈페이지 보충: 나이스에 없는 일정만 덧붙인다(같은 제목·겹치는 날짜는 같은 일정으로 봄) ── */
@@ -1230,7 +1233,7 @@ async function neisFetch(){
     var base = function(t){ return String(t || '').replace(/\s*\((?:[1-3]학년(?:·)?)+\)\s*$/, '').trim(); };
     merged.forEach(function(r){
       r.action = 'new'; r.exist = null;
-      var exact = existing.find(function(e){ return !used[e.id] && base(e.title) === r.title && e.starts_on === r.start; });
+      var exact = existing.find(function(e){ return !used[e.id] && base(e.title) === r.title && e.starts_on === r.start && e.ends_on === r.end; });
       /* 홈페이지 '중간시험' ↔ 나이스 '중간고사' 처럼 이름만 다른 같은 기간 시험은 같은 일정으로 */
       if(!exact) exact = existing.find(function(e){ return !used[e.id] && e.starts_on === r.start && e.ends_on === r.end && /고사|시험|평가/.test(e.title) && /고사|시험|평가/.test(r.title); });
       if(exact){ r.action = 'same'; r.exist = exact; used[exact.id] = 1; return; }
@@ -1287,7 +1290,7 @@ function schoolAliases(nm){
   bases.forEach(function(b){
     out[b + suf] = 1;
     if(b.length >= 3) out[b[0] + b[b.length - 1] + suf] = 1;                     /* 광명북 → 광북 */
-    if(b.length >= 4) out[b.slice(0, 2) + suf] = 1;                                /* 네 글자 이상은 앞 두 글자(서울공연예술 → 서울…은 제외되게 길이 제한) */
+    if(b.length >= 4 && !SCHOOL_REGION.test(b)) out[b.slice(0, 2) + suf] = 1;      /* 네 글자 이상은 앞 두 글자 — 단 지역 접두(인천신현 → '인천고')는 남의 학교('서인천고')에 들어맞으므로 제외 (v1.14) */
     if(suf === '여고') out[b + '고'] = 1; if(suf === '여중') out[b + '중'] = 1;
   });
   return Object.keys(out).filter(function(a){ return a.length >= 3; });
