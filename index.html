@@ -3715,7 +3715,8 @@
           </div>
           <div id="tr-note" style="font-size:11.5px;color:#9ca3af;margin-top:10px;line-height:1.6">
             총원은 월별 수강인원의 <b>말일(종료)</b> 기준이고, 입학은 신입+재입학(분원별로 볼 때는 분원 간 이동 포함), 퇴원도 같은 기준입니다.
-            상담 수·등록 전환율은 입퇴원 상담의 상담일 기준이며 전환율 분모는 전체 상담입니다. ⚠ 2026년 9월 이전 상담·퇴원 기록은 정확하지 않을 수 있습니다.
+            상담 수·등록 전환율은 입퇴원 상담의 상담일 기준이며 전환율 분모는 전체 상담입니다.
+            ⚠ 통계는 <b>2026년 8월부터</b> 집계합니다. 그 전은 BMAPS 본격 도입 전이라 기록이 정확하지 않아 표시하지 않습니다(사용자 결정 2026-11-10).
           </div>
         </div>
         <div id="tr-result" style="display:none">
@@ -31701,6 +31702,9 @@ async function eaSave() {
    그래프 Chart.js · 엑셀 SheetJS · PDF jsPDF 는 쓸 때만 cdnjs 에서 받는다.
 ============================================================ */
 var _tr = { data:null, years:[], calc:null, chart:null, busy:false };
+/* ⭐ 자료 시작 달. BMAPS 본격 도입 전(2024~2026-07)은 users 에 퇴원·입원 기록이 없어 숫자가 맞지 않으므로
+   그 전 달은 '자료 없음' 으로 비운다(사용자 결정 2026-11-10). 전년 대비는 2027-08 부터 채워진다 */
+var TR_START = '2026-08';
 var TR_LIB = {
   chart: ['https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js', function(){ return typeof Chart !== 'undefined'; }],
   xlsx:  ['https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', function(){ return typeof XLSX !== 'undefined'; }],
@@ -31722,7 +31726,7 @@ function initAdminTrend(){
   var ySel = document.getElementById('tr-year');
   if (ySel && !ySel.options.length) {
     var cur = new Date().getFullYear();
-    for (var y = cur; y >= 2024; y--) ySel.innerHTML += '<option value="' + y + '">' + y + '년</option>';
+    for (var y = cur; y >= parseInt(TR_START.slice(0, 4)); y--) ySel.innerHTML += '<option value="' + y + '">' + y + '년</option>';
   }
   var bSel = document.getElementById('tr-branch');
   if (bSel) {
@@ -31752,6 +31756,7 @@ async function trLoad(){
   try {
     if (!_tr.data || _tr.years[0] !== years[0] || _tr.years[2] !== years[2]) {
       var rs = years[0] + '-01-01', re = years[2] + '-12-31';
+      if (rs < TR_START + '-01') rs = TR_START + '-01';   /* 자료 시작 전은 받지 않는다 */
       /* 월별 수강인원(generateMonthlyReport)과 같은 조회를 범위 전체로. 비활성 선생님도 포함(재직하던 달의 총원) */
       var qT = db.from('users').select('id,name,branch_id,status').in('role', ['teacher', 'vice_director'])
         .in('status', ['active', 'inactive']).eq('is_test', false).order('name');
@@ -31796,7 +31801,7 @@ function trCompute(data, years){
       for (var m = 1; m <= 12; m++) {
         var ms = _trYM(y, m) + '-01', me = _trMonthEnd(y, m);
         var key = _trYM(y, m);
-        if (ms > today) { months[key] = null; continue; }
+        if (ms > today || key < TR_START) { months[key] = null; continue; }
         var d = {
           year: y, month: m, monthStart: ms, monthEnd: me,
           teachers: data.teachers, classes: [],
@@ -31938,7 +31943,7 @@ function trRenderTable(){
     html = '<table style="width:100%;border-collapse:collapse"><thead><tr>'
       + ['연도', '총원(연말)', '전년비', '입학', '전년비', '퇴원', '전년비', '순증', '상담', '등록', '전환율', '전년비'].map(function(h){ return '<th style="' + TR_TH + '">' + h + '</th>'; }).join('')
       + '</tr></thead><tbody>';
-    _tr.years.forEach(function(yy, i){
+    _tr.years.filter(function(yy){ return yy >= parseInt(TR_START.slice(0, 4)); }).forEach(function(yy, i){
       var r = trYearRow(yy, bid), p = i ? trYearRow(yy - 1, bid) : null;
       if (!r) { html += '<tr><td style="' + TR_TD + '">' + yy + '년</td><td colspan="11" style="' + TR_TD + ';color:#9ca3af">자료 없음</td></tr>'; return; }
       html += '<tr' + (yy === y ? ' style="background:#eff6ff"' : '') + '>'
@@ -31960,7 +31965,7 @@ function trRenderTable(){
     var sum = { nw:0, wd:0, con:0, yes:0 }, psum = { nw:0, wd:0, con:0, yes:0 }, lastTotal = null, lastPy = null;
     for (var m = 1; m <= 12; m++) {
       var r = trRow(_trYM(y, m), bid), pm = trRow(trPrevKey(y, m), bid), py = trRow(_trYM(y - 1, m), bid);
-      if (!r) { html += '<tr><td style="' + TR_TD + ';color:#9ca3af">' + m + '월</td><td colspan="12" style="' + TR_TD + ';color:#cbd5e1">-</td></tr>'; continue; }
+      if (!r) { html += '<tr><td style="' + TR_TD + ';color:#9ca3af">' + m + '월</td><td colspan="12" style="' + TR_TD + ';color:#cbd5e1">' + (_trYM(y, m) < TR_START ? '자료 없음 (' + TR_START.replace('-', '년 ') + '월부터)' : '-') + '</td></tr>'; continue; }
       sum.nw += r.nw; sum.wd += r.wd; sum.con += r.con; sum.yes += r.yes; lastTotal = r.total;
       if (py) { psum.nw += py.nw; psum.wd += py.wd; psum.con += py.con; psum.yes += py.yes; lastPy = py.total; }
       html += '<tr>'
@@ -32081,7 +32086,7 @@ async function trExportExcel(){
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a1), '월별');
   var a2 = [['연도', '총원(연말)', '기준 월', '전년비', '입학', '퇴원', '순증', '상담', '등록', '전환율(%)']];
-  _tr.years.forEach(function(yy, i){
+  _tr.years.filter(function(yy){ return yy >= parseInt(TR_START.slice(0, 4)); }).forEach(function(yy, i){
     var r = trYearRow(yy, bid), p = i ? trYearRow(yy - 1, bid) : null; if (!r) return;
     a2.push([yy, r.total, r.totalMonth, p ? r.total - p.total : '', r.nw, r.wd, r.nw - r.wd, r.con, r.yes, r.rate == null ? '' : r.rate]);
   });
