@@ -23015,7 +23015,9 @@ function _nrRender(data, ids, opts){
           return '<td><span class="' + _nrCellClass(e) + '" onclick="najeCellPop(event,\'' + r.stu.id + '\',\'' + st.id + '\',' + k + ')">' + txt + (sm ? '<small>' + sm + '</small>' : '') + '</span></td>';
         }).join('');
         var pa2 = _nrPct(c, g);
-        html += '<tr><td class="stu"><a onclick="' + opts.detailFn + '(\'' + st.id + '\',\'' + r.stu.id + '\')">' + _esc(r.stu.name) + '</a><small>' + _esc((r.stu.school||'') + (r.stu.grade ? ' ' + r.stu.grade : '')) + '</small></td>' + cells
+        html += '<tr><td class="stu"><a onclick="' + opts.detailFn + '(\'' + st.id + '\',\'' + r.stu.id + '\')">' + _esc(r.stu.name) + '</a>'
+          + '<button class="nr-img" title="결과 이미지 복사 (카톡 전송용)" onclick="najeStuImage(\'' + st.id + '\',\'' + r.stu.id + '\')" style="margin-left:7px;border:1px solid #dbe4ee;background:#fff;border-radius:6px;font-size:11px;line-height:1;padding:3px 5px;cursor:pointer;vertical-align:middle">📋</button>'
+          + '<small>' + _esc((r.stu.school||'') + (r.stu.grade ? ' ' + r.stu.grade : '')) + '</small></td>' + cells
           + '<td class="sum"' + (done === 0 ? ' style="color:#b91c1c"' : '') + '>' + done + '/' + tot + '</td>'
           + '<td class="sum"' + (pa2 !== null && pa2 < 50 ? ' style="color:#b91c1c"' : '') + '>' + (pa2 !== null ? pa2 + '%' : '−') + (g ? '<small>' + c + '/' + g + '</small>' : '') + '</td></tr>';
       });
@@ -23085,6 +23087,130 @@ async function najePopReset(studentId, setId, stepNum, studentName){
   var p = document.getElementById('naje-step-pop'); if(p) p.remove();
   if(_nrView && _nrView.opts && _nrView.opts.reload) await _nrView.opts.reload();
   else { await _loadNajeResultData(); renderNajeResultList(); }
+}
+/* ── 학생 한 명의 N제 결과를 이미지(가로 1060px)로 — 카톡 전송용 클립보드 복사 (2026-11-11)
+   자료는 화면이 이미 들고 있는 것만 쓴다(_nrView.data: assignmentsByset·problemsBySet·subsMap, 추가 조회 없음).
+   시안: reports/N제_결과_리포트_시안_경도훈_가로.png — 왼쪽 요약(정답률·제출·오답·남은 단계·멘트), 오른쪽 단계별 표(문항별 ○×). */
+var NAJE_IMG_ICON = { '내신3점':'📘', '모고3점':'📗', '내신4점':'📙', '모고쉬사':'📕', '모고어사':'📒', '내신심화':'📔', '모고킬러':'🔥' };
+function najeStuImageHtml(setId, studentId){
+  var data = (_nrView && _nrView.data) || window._najeResultData; if(!data) return null;
+  var opts = (_nrView && _nrView.opts) || {};
+  var stu = (data.students || []).find(function(x){ return x.id === studentId; });
+  var st  = (data.sets || []).find(function(x){ return x.id === setId; });
+  var a   = ((data.assignmentsByset || {})[setId] || []).find(function(x){ return x.student_id === studentId; });
+  if(!stu || !st || !a) return null;
+  var excluded = new Set(Array.isArray(a.excluded_problems) ? a.excluded_problems : []);
+  var probs = (data.problemsBySet || {})[setId] || [];
+  var steps = najeLiveSteps(probs, Array.isArray(a.steps) ? a.steps : [], excluded);
+  var subs = (data.subsMap || {})[studentId + '|' + setId] || {};
+  var E = _esc, rows = '', done = 0, totC = 0, totG = 0, wrong = 0, lastSub = '';
+  steps.forEach(function(k){
+    var info = getLevelInfoByNum(najeStepRange(k).lo), nm = info.name || '', ic = NAJE_IMG_ICON[nm] || '📘', rg = najeStepRange(k);
+    var nums = najeStepProblems(probs, k, excluded).map(function(p){ return p.problem_number; }).sort(function(x, y){ return x - y; });
+    var lv = '<td class="lv">' + ic + ' ' + E(nm) + '<small>' + rg.lo + '~' + (k <= 10 ? rg.hi : '') + '번</small></td>';
+    var stTd = '<td class="st">' + (k <= 10 ? k : '킬러') + '<small>단계</small></td>';
+    var sub = subs[k];
+    if(sub && sub.status === 'submitted'){
+      var items = {}; ((sub.result || {}).items || []).forEach(function(it){ items[it.no] = it; });
+      var c = 0, g = 0, cells = '';
+      nums.forEach(function(n){
+        var it = items[n] || {};
+        if(it.graded){ g++; if(it.is_correct) c++; else wrong++; }
+        cells += '<span class="q ' + (it.graded ? (it.is_correct ? 'ok' : 'no') : 'na') + '">' + n + '</span>';
+      });
+      done++; totC += c; totG += g;
+      if(sub.submitted_at && sub.submitted_at > lastSub) lastSub = sub.submitted_at;
+      var pct = g ? Math.round(c * 100 / g) : 0, col = pct >= 75 ? '#16a34a' : pct >= 50 ? '#f59e0b' : '#dc2626';
+      rows += '<tr>' + stTd + lv + '<td class="sc" style="color:' + col + '">' + c + '<small>/' + g + '</small></td>'
+        + '<td class="bar"><i style="width:' + pct + '%;background:' + col + '"></i><b>' + pct + '%</b></td><td class="qs">' + cells + '</td></tr>';
+    } else if(sub && sub.status === 'in_progress'){
+      var ans = Object.keys(sub.answers || {}).filter(function(x){ return String(sub.answers[x] || '').trim(); }).length;
+      rows += '<tr class="ing">' + stTd + lv + '<td class="sc" colspan="3">⏳ 응시 중 (' + ans + '/' + nums.length + ' 저장)</td></tr>';
+    } else {
+      rows += '<tr class="todo">' + stTd + lv + '<td class="sc" colspan="3">− 아직 시작 전</td></tr>';
+    }
+  });
+  var pctAll = totG ? Math.round(totC * 100 / totG) : 0, pcol = pctAll >= 75 ? '#16a34a' : pctAll >= 50 ? '#f59e0b' : '#dc2626';
+  var left = steps.length - done;
+  var msg = stu.name + ' 학생, 이번 주 N제 ' + steps.length + '단계 중 ' + done + '단계를 제출했고 정답률은 ' + pctAll + '% 입니다. '
+    + (wrong ? '틀린 ' + wrong + '문항은 BMAPS 앱의 해설 영상으로 꼭 다시 확인해 주세요. ' : '')
+    + (left ? '남은 ' + left + '단계도 이번 주 안에 풀어 주세요.' : '전 단계를 모두 풀었어요. 수고했습니다!');
+  var classMap = opts.classMap || {}, cid = stuClassIds(stu)[0];
+  var clsName = classMap[cid] || '', clsShort = clsName.indexOf('T ') >= 0 ? clsName.split('T ').pop() : clsName;
+  var tName = (opts.teacherMap && opts.teacherMap[stu.teacher_id]) || (currentUser && currentUser.role === 'teacher' ? currentUser.name : '')
+    || (((typeof allUsers !== 'undefined' && allUsers) || []).find(function(u){ return u.id === stu.teacher_id; }) || {}).name || '';
+  var today = _localYMD(new Date()).replace(/-/g, '.');
+  var meta = [st.target_grade ? '<span>' + E(st.target_grade) + '</span>' : '', clsShort ? '<span>🏫 ' + E(clsShort) + '</span>' : '', tName ? '<span>담당 ' + E(tName) + ' T</span>' : ''].join('');
+  return '<div class="ni-card">'
+    + '<div class="ni-hd"><div><div class="brand">BESTIAN 수학학원 · BMAPS</div><h1>일일N제 결과 리포트</h1><div class="set">📘 ' + E(st.title || '') + '</div></div><div class="meta">' + meta + '</div></div>'
+    + '<div class="ni-body"><div class="ni-left">'
+    +   '<div class="who"><div class="av">' + E((stu.name || '?').charAt(0)) + '</div><div><div class="nm">' + E(stu.name || '') + '</div><div class="sg">' + E(((stu.school || '') + ' ' + (stu.grade || '')).trim()) + '</div></div></div>'
+    +   '<div class="big"><div class="n" style="color:' + pcol + '">' + pctAll + '<small>%</small></div><div class="t">정답률 · ' + totC + ' / ' + totG + ' 문항</div><div class="bar"><i style="width:' + pctAll + '%;background:' + pcol + '"></i></div></div>'
+    +   '<div class="kpi"><div class="n" style="color:#1d4ed8">' + done + '<small>/ ' + steps.length + '</small></div><div class="t">제출 단계</div></div>'
+    +   '<div class="kpi"><div class="n" style="color:#b91c1c">' + wrong + '<small>문항</small></div><div class="t">틀린 문항</div></div>'
+    +   '<div class="kpi"><div class="n" style="color:#64748b">' + left + '<small>단계</small></div><div class="t">남은 단계</div></div>'
+    +   '<div class="msg">💬 ' + E(msg) + '</div>'
+    +   '<div class="asof">기준 ' + today + ' · 마지막 제출 ' + (lastSub ? lastSub.slice(0, 10).replace(/-/g, '.') : '-') + '</div>'
+    + '</div><div class="ni-right"><h2>단계별 결과</h2>'
+    +   '<table><thead><tr><th class="c">단계</th><th>레벨 · 문항</th><th class="c">정답</th><th>정답률</th><th style="padding-left:26px">문항별 결과</th></tr></thead><tbody>' + rows + '</tbody></table>'
+    +   '<div class="leg"><span><i style="background:#dcfce7;border:1px solid #86efac"></i>정답</span><span><i style="background:#fee2e2;border:1px solid #fca5a5"></i>오답</span><span>− 시작 전</span></div>'
+    + '</div></div>'
+    + '<div class="ni-ft"><span>베스티안수학학원 포털 BMAPS</span><span>학생·학부모 공유용 · ' + today + ' 생성</span></div>'
+    + '</div>';
+}
+var NAJE_IMG_CSS = '#naje-img-render{position:fixed;left:-9999px;top:0;width:1060px;background:#fff;font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif;color:#1e293b;z-index:-1}'
+  + '#naje-img-render *{box-sizing:border-box}'
+  + '#naje-img-render .ni-hd{background:linear-gradient(135deg,#1e3a5f 0%,#1e4d7b 100%);color:#fff;padding:20px 32px 18px;display:flex;align-items:center;gap:20px}'
+  + '#naje-img-render .ni-hd .brand{font-size:11px;letter-spacing:3px;opacity:.55;font-weight:700}#naje-img-render .ni-hd h1{margin:4px 0 4px;font-size:25px;font-weight:900;letter-spacing:-.5px;color:#fff}'
+  + '#naje-img-render .ni-hd .set{font-size:15px;opacity:.92;font-weight:700}#naje-img-render .ni-hd .meta{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}'
+  + '#naje-img-render .ni-hd .meta span{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.3);border-radius:20px;padding:5px 13px;font-size:12.5px;font-weight:700;white-space:nowrap}'
+  + '#naje-img-render .ni-body{display:grid;grid-template-columns:320px 1fr}'
+  + '#naje-img-render .ni-left{border-right:1px solid #e2e8f0;padding:22px 24px;background:#f8fafc;display:flex;flex-direction:column;gap:14px}'
+  + '#naje-img-render .who{display:flex;align-items:center;gap:14px}#naje-img-render .who .av{width:58px;height:58px;border-radius:50%;background:#dbeafe;color:#1d4ed8;font-size:24px;font-weight:900;display:flex;align-items:center;justify-content:center;flex:none}'
+  + '#naje-img-render .who .nm{font-size:24px;font-weight:900;line-height:1.1}#naje-img-render .who .sg{font-size:13px;color:#64748b;margin-top:4px}'
+  + '#naje-img-render .asof{font-size:11.5px;color:#94a3b8;line-height:1.7;border-top:1px dashed #e2e8f0;padding-top:10px}'
+  + '#naje-img-render .kpi{background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;padding:12px 16px;display:flex;align-items:baseline;gap:10px}'
+  + '#naje-img-render .kpi .n{font-size:30px;font-weight:900;line-height:1.1}#naje-img-render .kpi .n small{font-size:13px;font-weight:700;color:#64748b;margin-left:2px}#naje-img-render .kpi .t{font-size:12px;color:#64748b;font-weight:700;margin-left:auto;text-align:right}'
+  + '#naje-img-render .big{background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;padding:14px 16px;text-align:center}#naje-img-render .big .n{font-size:46px;font-weight:900;line-height:1}#naje-img-render .big .n small{font-size:18px;margin-left:2px}'
+  + '#naje-img-render .big .t{font-size:12px;color:#64748b;font-weight:700;margin-top:6px}#naje-img-render .big .bar{height:10px;border-radius:5px;background:#e2e8f0;margin-top:10px;overflow:hidden}#naje-img-render .big .bar i{display:block;height:100%}'
+  + '#naje-img-render .msg{background:#eff6ff;border-left:4px solid #1d4ed8;border-radius:10px;padding:10px 14px;font-size:12.5px;line-height:1.7;margin-top:auto}'
+  + '#naje-img-render .ni-right{padding:18px 28px 14px}#naje-img-render .ni-right h2{font-size:14px;font-weight:900;margin:0 0 8px;color:#1e3a5f}'
+  + '#naje-img-render table{width:100%;border-collapse:collapse;font-size:13px}#naje-img-render th{font-size:11px;color:#64748b;font-weight:700;text-align:left;padding:4px 6px;border-bottom:1.5px solid #e2e8f0}#naje-img-render th.c{text-align:center}'
+  + '#naje-img-render td{padding:7px 6px;border-bottom:1px solid #f1f5f9;vertical-align:middle}'
+  + '#naje-img-render td.st{width:58px;font-size:18px;font-weight:900;text-align:center;color:#1e3a5f}#naje-img-render td.st small{display:block;font-size:10px;color:#94a3b8;font-weight:600}'
+  + '#naje-img-render td.lv{width:118px;font-weight:800;font-size:13px}#naje-img-render td.lv small{display:block;font-size:10.5px;color:#94a3b8;font-weight:500}'
+  + '#naje-img-render td.sc{width:64px;text-align:center;font-size:20px;font-weight:900}#naje-img-render td.sc small{font-size:11px;color:#94a3b8;font-weight:700}'
+  + '#naje-img-render td.bar{width:140px}#naje-img-render td.bar i{display:block;height:9px;border-radius:5px}#naje-img-render td.bar b{font-size:11px;color:#64748b;display:block;margin-top:3px}'
+  + '#naje-img-render td.qs{text-align:left;white-space:nowrap;padding-left:22px;width:300px}'
+  + '#naje-img-render .q{display:inline-flex;width:28px;height:28px;border-radius:7px;align-items:center;justify-content:center;font-size:11.5px;font-weight:800;margin-left:4px}'
+  + '#naje-img-render .q.ok{background:#dcfce7;color:#15803d}#naje-img-render .q.no{background:#fee2e2;color:#b91c1c;border:1.5px solid #fca5a5}#naje-img-render .q.na{background:#f1f5f9;color:#94a3b8}'
+  + '#naje-img-render tr.todo td,#naje-img-render tr.ing td{color:#94a3b8}#naje-img-render tr.todo td.sc,#naje-img-render tr.ing td.sc{font-size:13px;font-weight:700;text-align:left;padding-left:14px}#naje-img-render tr.ing td.sc{color:#2563eb}'
+  + '#naje-img-render .leg{display:flex;gap:14px;justify-content:flex-end;font-size:11px;color:#64748b;margin-top:8px}#naje-img-render .leg i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px}'
+  + '#naje-img-render .ni-ft{background:#f8fafc;border-top:1px solid #e2e8f0;padding:9px 32px;font-size:11px;color:#94a3b8;display:flex;justify-content:space-between}';
+async function najeStuImage(setId, studentId){
+  var html = najeStuImageHtml(setId, studentId);
+  if(!html){ alert('이미지를 만들 자료가 없습니다. 결과를 다시 조회해 주세요.'); return; }
+  var wrap = document.getElementById('naje-img-render');
+  if(!wrap){
+    var css = document.createElement('style'); css.textContent = NAJE_IMG_CSS; document.head.appendChild(css);
+    wrap = document.createElement('div'); wrap.id = 'naje-img-render'; document.body.appendChild(wrap);
+  }
+  wrap.innerHTML = html;
+  await new Promise(function(r){ setTimeout(r, 150); });
+  try {
+    if(typeof html2canvas === 'undefined') throw new Error('html2canvas 미로드');
+    var canvas = await html2canvas(wrap, { backgroundColor:'#fff', scale:2, useCORS:true, logging:false, width:1060, height:wrap.scrollHeight, windowWidth:1060 });
+    var stu = ((_nrView && _nrView.data) || window._najeResultData || { students:[] }).students.find(function(x){ return x.id === studentId; }) || {};
+    var st  = ((_nrView && _nrView.data) || window._najeResultData || { sets:[] }).sets.find(function(x){ return x.id === setId; }) || {};
+    var name = 'N제결과_' + (stu.name || '학생') + '_' + String(st.title || '').replace(/\s+/g, '') + '.png';
+    var res = await shareOrCopyCanvas(canvas, name);
+    if(res.method === 'clipboard') alert('✅ ' + (stu.name || '') + ' 학생 결과 이미지를 클립보드에 복사했습니다. 카톡에 붙여넣기 하세요.');
+    else if(res.method === 'download') alert('💾 이미지를 저장했습니다.');
+  } catch(e){
+    alert('이미지 생성 실패: ' + (e.message || e));
+  } finally {
+    wrap.innerHTML = '';
+  }
 }
 /* 미시작 학생에게 보낼 카톡 문구 — 클립보드로 */
 function najeNeedKakao(studentId, setId, steps){
