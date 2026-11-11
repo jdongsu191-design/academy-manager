@@ -23016,7 +23016,7 @@ function _nrRender(data, ids, opts){
         }).join('');
         var pa2 = _nrPct(c, g);
         html += '<tr><td class="stu"><a onclick="' + opts.detailFn + '(\'' + st.id + '\',\'' + r.stu.id + '\')">' + _esc(r.stu.name) + '</a>'
-          + '<button class="nr-img" title="결과 이미지 복사 (카톡 전송용)" onclick="najeStuImage(\'' + st.id + '\',\'' + r.stu.id + '\')" style="margin-left:7px;border:1px solid #dbe4ee;background:#fff;border-radius:6px;font-size:11px;line-height:1;padding:3px 5px;cursor:pointer;vertical-align:middle">📋</button>'
+          + '<button class="nr-img" title="결과 이미지 복사 (카톡 전송용)" onclick="najeStuImage(\'' + st.id + '\',\'' + r.stu.id + '\', this)" style="margin-left:7px;border:1px solid #dbe4ee;background:#fff;border-radius:6px;font-size:11px;line-height:1;padding:3px 5px;cursor:pointer;vertical-align:middle;transition:background .2s,border-color .2s">📋</button>'
           + '<small>' + _esc((r.stu.school||'') + (r.stu.grade ? ' ' + r.stu.grade : '')) + '</small></td>' + cells
           + '<td class="sum"' + (done === 0 ? ' style="color:#b91c1c"' : '') + '>' + done + '/' + tot + '</td>'
           + '<td class="sum"' + (pa2 !== null && pa2 < 50 ? ' style="color:#b91c1c"' : '') + '>' + (pa2 !== null ? pa2 + '%' : '−') + (g ? '<small>' + c + '/' + g + '</small>' : '') + '</td></tr>';
@@ -23187,9 +23187,19 @@ var NAJE_IMG_CSS = '#naje-img-render{position:fixed;left:-9999px;top:0;width:106
   + '#naje-img-render tr.todo td,#naje-img-render tr.ing td{color:#94a3b8}#naje-img-render tr.todo td.sc,#naje-img-render tr.ing td.sc{font-size:13px;font-weight:700;text-align:left;padding-left:14px}#naje-img-render tr.ing td.sc{color:#2563eb}'
   + '#naje-img-render .leg{display:flex;gap:14px;justify-content:flex-end;font-size:11px;color:#64748b;margin-top:8px}#naje-img-render .leg i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px}'
   + '#naje-img-render .ni-ft{background:#f8fafc;border-top:1px solid #e2e8f0;padding:9px 32px;font-size:11px;color:#94a3b8;display:flex;justify-content:space-between}';
-async function najeStuImage(setId, studentId){
+/* 버튼 상태: 만드는 동안 ⏳, 복사되면 초록 ✓ 2초(알림창 없음), 실패는 빨강 ✕ */
+function _najeImgBtn(btn, state){
+  if(!btn) return;
+  if(btn._t){ clearTimeout(btn._t); btn._t = null; }
+  var map = { busy:['⏳', '#f8fafc', '#dbe4ee', '#64748b'], ok:['✓ 복사됨', '#16a34a', '#16a34a', '#fff'], err:['✕', '#fee2e2', '#fca5a5', '#b91c1c'], idle:['📋', '#fff', '#dbe4ee', '#1e293b'] };
+  var m = map[state] || map.idle;
+  btn.textContent = m[0]; btn.style.background = m[1]; btn.style.borderColor = m[2]; btn.style.color = m[3]; btn.disabled = state === 'busy';
+  if(state === 'ok' || state === 'err') btn._t = setTimeout(function(){ _najeImgBtn(btn, 'idle'); }, state === 'ok' ? 2000 : 3000);
+}
+async function najeStuImage(setId, studentId, btn){
   var html = najeStuImageHtml(setId, studentId);
   if(!html){ alert('이미지를 만들 자료가 없습니다. 결과를 다시 조회해 주세요.'); return; }
+  _najeImgBtn(btn, 'busy');
   var wrap = document.getElementById('naje-img-render');
   if(!wrap){
     var css = document.createElement('style'); css.textContent = NAJE_IMG_CSS; document.head.appendChild(css);
@@ -23204,9 +23214,10 @@ async function najeStuImage(setId, studentId){
     var st  = ((_nrView && _nrView.data) || window._najeResultData || { sets:[] }).sets.find(function(x){ return x.id === setId; }) || {};
     var name = 'N제결과_' + (stu.name || '학생') + '_' + String(st.title || '').replace(/\s+/g, '') + '.png';
     var res = await shareOrCopyCanvas(canvas, name);
-    if(res.method === 'clipboard') alert('✅ ' + (stu.name || '') + ' 학생 결과 이미지를 클립보드에 복사했습니다. 카톡에 붙여넣기 하세요.');
-    else if(res.method === 'download') alert('💾 이미지를 저장했습니다.');
+    _najeImgBtn(btn, 'ok');                                   /* 클립보드·공유 모두 알림창 없이 버튼 색으로만 */
+    if(res.method === 'download') alert('클립보드 복사가 안 되는 환경이라 이미지를 파일로 저장했습니다.');
   } catch(e){
+    _najeImgBtn(btn, 'err');
     alert('이미지 생성 실패: ' + (e.message || e));
   } finally {
     wrap.innerHTML = '';
