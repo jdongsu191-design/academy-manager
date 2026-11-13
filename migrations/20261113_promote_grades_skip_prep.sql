@@ -117,7 +117,7 @@ begin
              when b.school is null or btrim(b.school) = ''   then '학교명 없음'
              when b.lv is null                                then '학교명으로 학교급을 못 읽음'
              when b.g is null                                 then '학년 숫자 없음'
-             when b.school ~ '^\s*\(예비[중고]\)'              then '지난 승급의 (예비중)/(예비고) 표시가 남아 있음 — 학교명·학년을 고치세요'
+             when b.school ~ '^\s*\(예비[중고]\)'              then '(예비중)/(예비고) 표시가 붙어 있어 이번 승급에서 제외 — 학교 배정 뒤 학교명·학년을 고치세요'
              else '학년이 범위 밖' end) order by b.school, b.name), '[]'::jsonb)
     into v_skip
     from _base b
