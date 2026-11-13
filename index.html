@@ -3397,6 +3397,7 @@
         </div>
 
         <div id="gp-result"></div>
+        <div id="gp-grad"></div>
         <div id="gp-runs" style="margin-top:16px"></div>
       </div>
 
@@ -16485,7 +16486,13 @@ function initGradePromote() {
     bsel.value = curB;   // 목록에 없으면 ''(전체)
   }
   document.getElementById('gp-result').innerHTML = '';
+  gpGradBanner();
   gpLoadRuns();
+}
+/* 승급 패널의 졸업자 일괄 퇴원 배너 — 승급 실행 뒤 같은 화면에서 퇴원까지 이어 가게 */
+function gpGradBanner() {
+  var el = document.getElementById('gp-grad');
+  if (el) el.innerHTML = gpIsAdmin() ? _admGradBanner() : '';
 }
 function gpBranchId() { var el = document.getElementById('gp-branch'); return (el && el.value) ? el.value : null; }
 function gpBranchName(bid) {
@@ -31817,7 +31824,7 @@ function openWithdrawModal(studentId, studentName) {
       _gn.style.display = '';
       _gn.innerHTML = '🎓 <b>졸업자 ' + _n + '명</b>을 한꺼번에 퇴원 처리합니다.<br>'
         + '퇴원 사유는 <b>' + WD_GRAD_REASON + '</b>로 남습니다 — 따로 고르지 않으셔도 됩니다.<br>'
-        + '퇴원일과 마지막 수업일만 확인해 주세요.';
+        + '퇴원일과 마지막 수업일만 확인해 주세요. 이 날짜 하나가 <b>' + _n + '명 전원</b>에게 적용됩니다.';
     }
     document.getElementById('withdraw-reason').value = WD_GRAD_REASON;
   } else if (_gn) {
@@ -32026,6 +32033,7 @@ async function confirmWithdraw() {
 
   await loadTeacherData();
   if (currentUser.role === 'admin' || currentUser.role === 'desk') await loadAdminData();
+  if (typeof gpGradBanner === 'function') gpGradBanner();   // 승급 패널의 졸업자 배너도 새 상태로
 }
 
 /* ============================================================
@@ -32967,6 +32975,45 @@ function bulkWithdrawGraduates() {
   openWithdrawModal('__bulk__', null);
 }
 
+/* ── [관리자] 졸업자 전원 일괄 퇴원 ──────────────────────
+   선생님 배너는 담당 학생만 모으므로 관리자 화면엔 뜨지 않았다. 전체 명단(allUsers)에서
+   졸업 표시가 있는 재원생을 모아 같은 퇴원 경로(_bulkWithdrawStudents + 졸업 깃발)로 보낸다.
+   withdrawals 의 담당·분원은 학생의 담당 선생님에서 가져오므로 관리자가 실행해도 선생님별로 남는다.
+   날짜는 퇴원 창의 값 하나가 전원에 적용된다. (사용자 결정 2026-11-13 — 선생님별 처리 대신 관리자 한 번에) */
+function _admGraduates() {
+  return (allUsers || []).filter(function(s) {
+    return s.role === 'student' && !s.is_test && !s.deleted_at && _isGraduated(s);
+  });
+}
+function _admGradBranchSummary(list) {
+  var cnt = {};
+  list.forEach(function(s) { var b = _admBranchOf(s); var n = gpBranchName(b); if (!b) n = '분원 미정'; cnt[n] = (cnt[n] || 0) + 1; });
+  return Object.keys(cnt).sort().map(function(n) { return n + ' ' + cnt[n]; }).join(' · ');
+}
+function _admGradBanner() {
+  var g = _admGraduates();
+  if (!g.length) return '';
+  return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;'
+    + 'background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;flex-wrap:wrap">'
+    + '<span style="font-size:12px;color:#5b21b6;font-weight:700">🎓 졸업 처리된 학생 ' + g.length + '명</span>'
+    + '<span style="font-size:11px;color:#6d28d9">' + _esc(_admGradBranchSummary(g)) + ' · 아직 재원 상태입니다</span>'
+    + '<button onclick="admBulkWithdrawGraduates()" style="margin-left:auto;padding:4px 12px;border:none;'
+    + 'border-radius:7px;background:#6d28d9;color:#fff;font-size:11.5px;font-weight:700;cursor:pointer">'
+    + '졸업자 ' + g.length + '명 전원 일괄 퇴원</button></div>';
+}
+function admBulkWithdrawGraduates() {
+  if (!gpIsAdmin()) { alert('관리자만 실행할 수 있습니다.'); return; }
+  var g = _admGraduates();
+  if (!g.length) { alert('졸업 처리된 학생이 없습니다.'); return; }
+  if (!confirm('졸업자 ' + g.length + '명을 전원 한꺼번에 퇴원 처리합니다.\n' + _admGradBranchSummary(g) + '\n\n' +
+    g.slice(0, 12).map(function(s) { return '· ' + (s.name || '') + ' (' + (s.school || '') + ')'; }).join('\n') +
+    (g.length > 12 ? '\n… 외 ' + (g.length - 12) + '명' : '') +
+    '\n\n다음 화면의 퇴원일·마지막 수업일 하나가 전원에게 적용됩니다.')) return;
+  window._bulkWithdrawStudents = g;
+  window._bulkWithdrawGraduation = true;
+  openWithdrawModal('__bulk__', null);
+}
+
 function _prepFilterTo(selId, val, renderFnName) {
   var el = document.getElementById(selId);
   if (el) el.value = val;
@@ -33092,6 +33139,7 @@ function renderAdminStudents() {
   // ── 재원 목록 상단 배너 (코드 미발급 경고 + 전체 복사/다운로드) ──
   let header = '';
   if (_admStudentStatusFilter !== 'inactive') {
+    if (gpIsAdmin()) header += _admGradBanner();
     header += _prepBanner(filtered, 'admSchoolFilter', 'renderAdminStudents');
     const noCode = filtered.filter(u => !u.student_code);
     if (noCode.length) {
