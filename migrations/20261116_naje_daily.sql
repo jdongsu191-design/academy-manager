@@ -44,10 +44,10 @@ language sql immutable as $$
   from jsonb_array_elements(coalesce(p_items, '[]'::jsonb)) it
   cross join lateral (
     select (x)::integer as n from jsonb_array_elements_text(it->'problems') x
-    where jsonb_typeof(it->'problems') = 'array' and jsonb_array_length(it->'problems') > 0
+    where coalesce(jsonb_typeof(it->'problems') = 'array' and jsonb_array_length(it->'problems') > 0, false)
     union all
     select generate_series(naje_step_lo((it->>'step')::integer), least(naje_step_hi((it->>'step')::integer), 200))
-    where it ? 'step' and not (jsonb_typeof(it->'problems') = 'array' and jsonb_array_length(it->'problems') > 0)
+    where it ? 'step' and not coalesce(jsonb_typeof(it->'problems') = 'array' and jsonb_array_length(it->'problems') > 0, false)
   ) q;
 $$;
 
@@ -255,7 +255,7 @@ begin
     for dj in select * from jsonb_array_elements(coalesce(row_->'days', '[]')) loop
       dn := (dj->>'day_no')::integer;
       if dn is null or dn < 1 or dn > 5 then raise exception 'day_no 오류'; end if;
-      if jsonb_typeof(dj->'items') <> 'array' or jsonb_array_length(dj->'items') = 0 then continue; end if;   -- 빈 날은 저장하지 않는다
+      if coalesce(jsonb_typeof(dj->'items') <> 'array', true) or jsonb_array_length(dj->'items') = 0 then continue; end if;   -- 빈 날은 저장하지 않는다
       keep := keep || dn;
       for it in select * from jsonb_array_elements(dj->'items') loop
         if not (it ? 'step') or (it->>'step')::integer < 1 or (it->>'step')::integer > 11 then raise exception 'step 오류'; end if;
