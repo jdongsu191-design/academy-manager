@@ -24540,6 +24540,26 @@ async function ndLoad(){
       return { day: d, stu: u, set: st, sub: sub, status: status, subDate: subDate, isLate: d.due_date < D, correct: correct, graded: graded, total: items.length || planned, wrong: wrong, answered: answered, planned: planned,
                items: items.slice().sort(function(a, b){ return a.no - b.no; }) };
     }).filter(function(r){ return r.stu.id && r.stu.status === 'active' && !r.stu.is_test; });
+    // 주간 누적: 같은 학생×세트의 일~목 줄 전부 + 응시 → r.week (기준일 D 이후 날은 '진행 전')
+    try {
+      var wk = await fetchRowsByIds(function(chunk){ return db.from('naje_daily').select('id,student_id,set_id,day_no,due_date,items').in('student_id', chunk).in('set_id', setIds); }, sids);
+      var wkIds = (wk || []).map(function(x){ return x.id; }).filter(function(id){ return dayIds.indexOf(id) === -1; });
+      var wkSubs = wkIds.length ? await fetchRowsByIds(function(chunk){ return db.from('naje_submissions').select('day_id,status,answers,result,submitted_at').in('day_id', chunk).eq('is_void', false); }, wkIds) : [];
+      (wkSubs || []).forEach(function(x){ subMap[x.day_id] = x; });
+      if(_nd.loadKey !== key) return;
+      _nd.rows.forEach(function(r){
+        r.week = (wk || []).filter(function(x){ return x.student_id === r.day.student_id && x.set_id === r.day.set_id; }).sort(function(a, b){ return a.day_no - b.day_no; }).map(function(d){
+          var sub = subMap[d.id] || null, st = 'none', sd = '';
+          if(sub && sub.status === 'submitted' && sub.submitted_at){ sd = ndYMD(new Date(sub.submitted_at)); st = (sd <= d.due_date) ? 'ontime' : 'late'; if(sd > D) st = (d.due_date > D ? 'future' : 'none'); }
+          else if(sub && sub.status === 'in_progress') st = (d.due_date > D) ? 'future' : 'ing';
+          else if(d.due_date > D) st = 'future';
+          var its = (st === 'ontime' || st === 'late') && sub.result && Array.isArray(sub.result.items) ? sub.result.items : [];
+          var c = 0, g = 0; its.forEach(function(it){ if(it.graded){ g++; if(it.is_correct) c++; } });
+          var planned = 0; (d.items || []).forEach(function(it){ if(!it || !it.step) return; var rg = najeStepRange(it.step); var all = (pMap[d.set_id] || []).filter(function(n){ return n >= rg.lo && n <= rg.hi; }); planned += (Array.isArray(it.problems) && it.problems.length) ? it.problems.filter(function(n){ return all.indexOf(n) !== -1; }).length : all.length; });
+          return { id: d.id, day_no: d.day_no, due_date: d.due_date, items: d.items, status: st, subDate: sd, correct: c, graded: g, planned: planned, focus: d.id === r.day.id };
+        });
+      });
+    } catch(e){ console.error('[ndLoad week]', e); }
     _nd.rows.sort(function(a, b){ return (a.isLate - b.isLate) || String(a.stu.name).localeCompare(String(b.stu.name), 'ko'); });
     ndRender();
   } catch(e){ console.error('[ndLoad]', e); wrap.innerHTML = '<div style="padding:30px;text-align:center;color:#dc2626">불러오지 못했습니다: ' + _esc(e.message || e) + '</div>'; }
@@ -24611,6 +24631,8 @@ var ND_IMG_CSS = '#nd-img-render{position:fixed;left:-9999px;top:0;width:800px;b
   + '#nd-img-render .res{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:12px 28px 0}#nd-img-render .kpi{border:1px solid #e2e8f0;border-radius:12px;padding:12px;text-align:center}#nd-img-render .kpi .n{font-size:30px;font-weight:900;line-height:1}#nd-img-render .kpi .n small{font-size:13px;color:#94a3b8;font-weight:700}#nd-img-render .kpi .t{font-size:11.5px;color:#64748b;margin-top:5px}'
   + '#nd-img-render .qs{margin:14px 28px 0}#nd-img-render .qs h3{margin:0 0 8px;font-size:13px;color:#475569}#nd-img-render .q{display:inline-flex;width:54px;height:54px;border-radius:10px;align-items:center;justify-content:center;font-size:15px;font-weight:800;margin:0 6px 6px 0;flex-direction:column;line-height:1.1}#nd-img-render .q small{font-size:10px;font-weight:700;opacity:.8}'
   + '#nd-img-render .q.ok{background:#dcfce7;color:#15803d}#nd-img-render .q.no{background:#fee2e2;color:#b91c1c;border:1.5px solid #fca5a5}#nd-img-render .q.na{background:#f1f5f9;color:#94a3b8}'
+  + '#nd-img-render .wk{margin:12px 28px 0}#nd-img-render .wk h3{margin:0 0 6px;font-size:13px;color:#475569}#nd-img-render .wk table{width:100%;border-collapse:collapse;font-size:13px}#nd-img-render .wk th{background:#eff6ff;color:#1e40af;font-weight:800;padding:7px 8px;border:1px solid #dbeafe;font-size:12px}#nd-img-render .wk td{padding:7px 8px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap}#nd-img-render .wk td.l{text-align:left}'
+  + '#nd-img-render .wk tr.focus td{background:#fffbeb;font-weight:800}#nd-img-render .wk tr.future td{color:#b0b7c3;background:#f8fafc}#nd-img-render .wk tr.sum td{background:#f1f5f9;font-weight:800;border-top:2px solid #94a3b8}#nd-img-render .wk .bar{position:relative;height:9px;background:#e5e7eb;border-radius:5px;overflow:hidden;width:110px;display:inline-block;vertical-align:middle;margin-right:6px}#nd-img-render .wk .bar i{position:absolute;left:0;top:0;bottom:0;border-radius:5px}'
   + '#nd-img-render .msg{margin:14px 28px 0;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:1.6;color:#1e3a5f}'
   + '#nd-img-render .ft{margin-top:16px;background:#f8fafc;border-top:1px solid #e2e8f0;padding:9px 28px;font-size:11px;color:#94a3b8;display:flex;justify-content:space-between}';
 function ndImageHtml(r){
@@ -24618,28 +24640,55 @@ function ndImageHtml(r){
   var pct = r.graded ? Math.round(r.correct * 100 / r.graded) : null, col = pct == null ? '#94a3b8' : pct >= 75 ? '#16a34a' : pct >= 50 ? '#f59e0b' : '#dc2626';
   var dueL = ndLabel(r.day.due_date), nm = r.stu.name || '';
   var stepNames = ndStepNames(r.day.items), parts = ndPartsText(r.day.items);
-  var resBox, chips = '', msg;
+  var week = (r.week && r.week.length) ? r.week : [{ id: r.day.id, day_no: r.day.day_no, due_date: r.day.due_date, items: r.day.items, status: r.status, subDate: r.subDate, correct: r.correct, graded: r.graded, planned: r.planned, focus: true }];
+  /* ── 주간 누적 표 (중등 주간 결과와 같은 식: 기준일까지 채우고 뒤는 진행 전) ── */
+  var sumC = 0, sumG = 0, doneDays = 0, onDays = 0, dueDays = 0, trs = '';
+  week.forEach(function(w){
+    var wp = w.graded ? Math.round(w.correct * 100 / w.graded) : null, wc = wp == null ? '#94a3b8' : wp >= 75 ? '#16a34a' : wp >= 50 ? '#f59e0b' : '#dc2626';
+    var res;
+    if(w.status === 'ontime'){ res = '<span style="color:#15803d">✓ 당일 제출</span>'; doneDays++; onDays++; }
+    else if(w.status === 'late'){ res = '<span style="color:#b45309">⏰ ' + ndLabel(w.subDate) + ' 제출</span>'; doneDays++; }
+    else if(w.status === 'ing'){ res = '<span style="color:#1d4ed8">응시 중</span>'; }
+    else if(w.status === 'future'){ res = '진행 전'; }
+    else { res = '<span style="color:#dc2626">− 미제출</span>'; }
+    if(w.status !== 'future') dueDays++;
+    if(w.status === 'ontime' || w.status === 'late'){ sumC += w.correct; sumG += w.graded; }
+    trs += '<tr class="' + (w.focus ? 'focus' : '') + (w.status === 'future' ? ' future' : '') + '">'
+      + '<td>' + ND_DAY[new Date(w.due_date + 'T00:00:00').getDay()] + '<br><small style="font-weight:600;color:#94a3b8">' + (+w.due_date.slice(5, 7)) + '/' + (+w.due_date.slice(8, 10)) + '</small></td>'
+      + '<td class="l">' + E(ndPartsText(w.items)) + ' <small style="color:#94a3b8">' + E(ndStepNames(w.items)) + ' · ' + w.planned + '문항</small></td>'
+      + '<td>' + res + '</td>'
+      + '<td>' + (w.graded ? w.correct + ' / ' + w.graded : '-') + '</td>'
+      + '<td class="l">' + (wp == null ? '<span style="color:#b0b7c3">-</span>' : '<span class="bar"><i style="width:' + wp + '%;background:' + wc + '"></i></span><b style="color:' + wc + '">' + wp + '%</b>') + '</td>'
+      + '</tr>';
+  });
+  var sumP = sumG ? Math.round(sumC * 100 / sumG) : null, sumCol = sumP == null ? '#94a3b8' : sumP >= 75 ? '#16a34a' : sumP >= 50 ? '#f59e0b' : '#dc2626';
+  trs += '<tr class="sum"><td>누적</td><td class="l">' + dueDays + '일 중 ' + doneDays + '일 제출' + (onDays < doneDays ? ' (당일 ' + onDays + '일)' : '') + '</td><td>' + (dueDays ? Math.round(doneDays * 100 / dueDays) + '% 제출' : '-') + '</td>'
+    + '<td>' + (sumG ? sumC + ' / ' + sumG : '-') + '</td><td class="l">' + (sumP == null ? '-' : '<span class="bar"><i style="width:' + sumP + '%;background:' + sumCol + '"></i></span><b style="color:' + sumCol + '">' + sumP + '%</b>') + '</td></tr>';
+  var weekBox = '<div class="wk"><h3>📆 이번 주 누적 (일~목)</h3><table><thead><tr><th style="width:56px">요일</th><th style="text-align:left">과제</th><th style="width:120px">결과</th><th style="width:70px">정답</th><th style="text-align:left;width:170px">정답률</th></tr></thead><tbody>' + trs + '</tbody></table></div>';
+  /* ── 기준일 결과 ── */
+  var resBox, chips = '', msg, cum = (sumG && dueDays > 1) ? ' 이번 주 누적은 ' + dueDays + '일 중 ' + doneDays + '일 제출, 정답률 ' + sumP + '% 입니다.' : '';
   if(r.status === 'ontime' || r.status === 'late'){
     chips = r.items.map(function(it){ var c = it.graded ? (it.is_correct ? 'ok' : 'no') : 'na'; return '<span class="q ' + c + '">' + it.no + '<small>' + (c === 'ok' ? '정답' : c === 'no' ? '오답' : '미채점') + '</small></span>'; }).join('');
-    resBox = '<div class="res"><div class="kpi"><div class="n" style="color:' + col + '">' + (pct == null ? '-' : pct) + '<small>%</small></div><div class="t">정답률</div></div>'
+    resBox = '<div class="res"><div class="kpi"><div class="n" style="color:' + col + '">' + (pct == null ? '-' : pct) + '<small>%</small></div><div class="t">' + dueL + ' 정답률</div></div>'
       + '<div class="kpi"><div class="n" style="color:#1d4ed8">' + r.correct + '<small>/ ' + r.graded + '</small></div><div class="t">맞은 문항</div></div>'
       + '<div class="kpi"><div class="n" style="color:' + (r.status === 'late' ? '#b45309' : '#16a34a') + ';font-size:20px;padding-top:6px">' + (r.status === 'late' ? '⏰ ' + ndLabel(r.subDate) : '✓ 당일') + '</div><div class="t">' + (r.status === 'late' ? '기한 ' + dueL + ' · 늦게 제출' : '제출') + '</div></div></div>';
     msg = nm + ' 학생, ' + dueL + ' 일일N제 ' + parts + ' ' + r.total + '문항 중 ' + r.correct + '문항을 맞혀 정답률 ' + (pct == null ? '-' : pct + '%') + ' 입니다. '
       + (r.wrong.length ? '틀린 ' + r.wrong.join(', ') + '번은 BMAPS 앱 결과 화면의 해설 영상으로 꼭 다시 확인해 주세요.' : '전 문항 정답이에요. 수고했습니다!')
-      + (r.status === 'late' ? ' (기한인 ' + dueL + ' 자정을 넘겨 ' + ndLabel(r.subDate) + '에 제출했어요. 다음엔 당일에 풀어 주세요.)' : '');
+      + (r.status === 'late' ? ' (기한인 ' + dueL + ' 자정을 넘겨 ' + ndLabel(r.subDate) + '에 제출했어요. 다음엔 당일에 풀어 주세요.)' : '') + cum;
   } else if(r.status === 'ing'){
     resBox = '<div class="res"><div class="kpi" style="grid-column:1/4"><div class="n" style="color:#1d4ed8;font-size:22px;padding-top:4px">응시 중 · ' + r.answered + ' / ' + r.planned + ' 문항 저장</div><div class="t">아직 제출하지 않았습니다</div></div></div>';
-    msg = nm + ' 학생, ' + dueL + ' 일일N제 ' + parts + '를 풀다가 제출하지 않았어요. BMAPS 앱 N제에서 [이어서 풀기]로 마저 풀고 꼭 제출해 주세요.';
+    msg = nm + ' 학생, ' + dueL + ' 일일N제 ' + parts + '를 풀다가 제출하지 않았어요. BMAPS 앱 N제에서 [이어서 풀기]로 마저 풀고 꼭 제출해 주세요.' + cum;
   } else {
     resBox = '<div class="res"><div class="kpi" style="grid-column:1/4"><div class="n" style="color:#dc2626;font-size:22px;padding-top:4px">− 미제출</div><div class="t">기한 ' + dueL + ' 자정까지 제출되지 않았습니다</div></div></div>';
-    msg = nm + ' 학생, ' + dueL + ' 일일N제 ' + parts + ' ' + r.planned + '문항이 제출되지 않았어요. 밀린 과제는 계속 풀 수 있으니 오늘 안에 BMAPS 앱 N제에서 꼭 풀어 주세요.';
+    msg = nm + ' 학생, ' + dueL + ' 일일N제 ' + parts + ' ' + r.planned + '문항이 제출되지 않았어요. 밀린 과제는 계속 풀 수 있으니 오늘 안에 BMAPS 앱 N제에서 꼭 풀어 주세요.' + cum;
   }
   var today = ndYMD(new Date()).replace(/-/g, '.');
   return '<div class="hd"><div><div class="brand">BESTIAN 수학학원 · BMAPS</div><h1>일일N제 결과 리포트</h1></div><div class="dt">📅 ' + dueL + ' 과제</div></div>'
     + '<div class="who"><div class="av">' + E(nm.charAt(0)) + '</div><div><div class="nm">' + E(nm) + '</div><div class="sg">' + E(((r.stu.school || '') + ' ' + (r.stu.grade || '')).trim()) + (tMap[r.stu.teacher_id] ? ' · 담당 ' + E(tMap[r.stu.teacher_id]) + ' T' : '') + '</div></div></div>'
     + '<div class="task">📘 <b>' + E(parts) + '</b><small>' + E(stepNames) + ' · ' + r.planned + '문항 · ' + E(r.set.title || '') + '</small></div>'
     + resBox
-    + (chips ? '<div class="qs"><h3>문항별 결과</h3>' + chips + '</div>' : '')
+    + (chips ? '<div class="qs"><h3>' + dueL + ' 문항별 결과</h3>' + chips + '</div>' : '')
+    + weekBox
     + '<div class="msg">💬 ' + E(msg) + '</div>'
     + '<div class="ft"><span>베스티안수학학원 포털 BMAPS</span><span>학생·학부모 공유용 · ' + today + ' 생성</span></div>';
 }
