@@ -2347,6 +2347,23 @@
             <div style="font-size:12px;color:#6b7280;margin-bottom:10px">
               기간별 추가메시지를 설정합니다. 해당 날짜에 맞는 메시지가 내신대비 멘트 아래에 자동 추가됩니다.
             </div>
+            <!-- 결과별 멘트 (A·C·F) — 선생님 본인 것만 편집 -->
+            <div id="ns-rm-wrap" style="display:none;background:#fff;border:1px solid #99f6e4;border-radius:10px;padding:10px;margin-bottom:12px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+                <div style="font-size:12px;font-weight:700;color:#0f766e">📝 결과별 멘트 (내 학생에게만 적용)</div>
+                <div style="font-size:10px;color:#6b7280">자리표시 <b>{이름}</b> → 학생 이름, <b>{날짜}</b> → 11월16일 · 기간별 추가메시지는 이 멘트 아래에 붙습니다</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr;gap:6px">
+                <div><div style="font-size:11px;color:#0f766e;font-weight:700;margin-bottom:2px">A · 테스트 완료 & 통과</div><textarea id="ns-rm-A" rows="2" style="width:100%;padding:6px 9px;border:1.5px solid #99f6e4;border-radius:7px;font-size:12px;outline:none;resize:vertical;box-sizing:border-box"></textarea></div>
+                <div><div style="font-size:11px;color:#b45309;font-weight:700;margin-bottom:2px">C · 테스트 완료 & 미통과</div><textarea id="ns-rm-C" rows="2" style="width:100%;padding:6px 9px;border:1.5px solid #99f6e4;border-radius:7px;font-size:12px;outline:none;resize:vertical;box-sizing:border-box"></textarea></div>
+                <div><div style="font-size:11px;color:#b91c1c;font-weight:700;margin-bottom:2px">F · 결석</div><textarea id="ns-rm-F" rows="2" style="width:100%;padding:6px 9px;border:1.5px solid #99f6e4;border-radius:7px;font-size:12px;outline:none;resize:vertical;box-sizing:border-box"></textarea></div>
+              </div>
+              <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+                <button onclick="nsSaveResultMsgs()" id="ns-rm-save-btn" style="padding:7px 14px;background:#0f766e;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">💾 멘트 저장</button>
+                <button onclick="nsResetResultMsgs()" style="padding:7px 12px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:8px;font-size:12px;cursor:pointer">↺ 기본 문구로</button>
+                <span id="ns-rm-status" style="font-size:11px;color:#6b7280"></span>
+              </div>
+            </div>
             <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">기간별 추가메시지</div>
             <div id="ns-extramsg-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
             <!-- 추가 폼 -->
@@ -14768,6 +14785,7 @@ async function nsLoadExtraMsgFromDB(targetTeacherId) {
       })
     };
     _nsExtraMsgLoaded = true;
+    await nsLoadResultMsgs([tid]);
     return _nsExtraMsgCache;
   } catch(e) {
     _nsExtraMsgCache = {periods:[]}; _nsExtraMsgLoaded = true;
@@ -14789,6 +14807,63 @@ async function nsLoadExtraMsgForTeachers(teacherIds) {
       _nsExtraMsgCacheByTeacher[tid] = {periods: byTeacher[tid]||[]};
     });
   } catch(e) { console.error('[nsLoadExtraMsgForTeachers]', e); }
+  await nsLoadResultMsgs(teacherIds);
+}
+
+/* ── 결과별 멘트 (A·C·F) — weekend_naesin_result_msgs, 선생님별 1행. 없으면 기본 문구 (2026-11-17) ── */
+var NS_RESULT_MSG_DEFAULT = {
+  A: '■ 일요 내신대비 {이름} 학생의 {날짜} 내신대비 결과는 "테스트 완료 & 통과"입니다.',
+  C: '■ 일요 내신대비 {이름} 학생의 {날짜} 내신대비 결과는 "테스트 완료 & 미통과"입니다.',
+  F: '■ 일요 내신대비 {이름} 학생의 {날짜} 내신대비 결과는 "결석"입니다.'
+};
+var _nsResultMsgByTeacher = {};   // { teacherId: {A,C,F} }  (빈 값은 기본 문구)
+async function nsLoadResultMsgs(teacherIds) {
+  var ids = (teacherIds || []).filter(Boolean); if (!ids.length) return;
+  try {
+    var r = await db.from('weekend_naesin_result_msgs').select('teacher_id,msg_a,msg_c,msg_f').in('teacher_id', ids);
+    if (r.error) throw r.error;
+    ids.forEach(function(t){ _nsResultMsgByTeacher[t] = {}; });
+    (r.data || []).forEach(function(row){ _nsResultMsgByTeacher[row.teacher_id] = { A: row.msg_a || '', C: row.msg_c || '', F: row.msg_f || '' }; });
+  } catch(e) { console.warn('[nsLoadResultMsgs]', e.message || e); }
+}
+/* 결과 한 줄: 선생님 문구(없으면 기본) 에 {이름}·{날짜} 치환. 결과가 A·C·F 가 아니면 예전 '미입력' 줄 */
+function nsResultMent(result, name, dateLabel, teacherId) {
+  var tpl = NS_RESULT_MSG_DEFAULT[result];
+  if (!tpl) return '■ 일요 내신대비 ' + name + ' 학생의 ' + dateLabel + ' 내신대비 결과는 "' + (result || '미입력') + '"입니다.';
+  var mine = _nsResultMsgByTeacher[teacherId || ''];
+  if (mine && mine[result] && mine[result].trim()) tpl = mine[result];
+  return tpl.split('{이름}').join(name).split('{날짜}').join(dateLabel).trim();
+}
+function nsRenderResultMsgForm() {
+  var wrap = document.getElementById('ns-rm-wrap'); if (!wrap) return;
+  var role = (currentUser && currentUser.role) || '';
+  if (role !== 'teacher') { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  var mine = _nsResultMsgByTeacher[currentUser.id] || {};
+  ['A','C','F'].forEach(function(k){ var ta = document.getElementById('ns-rm-' + k); if (ta) ta.value = (mine[k] && mine[k].trim()) ? mine[k] : NS_RESULT_MSG_DEFAULT[k]; });
+  var st = document.getElementById('ns-rm-status'); if (st) st.textContent = (mine.A || mine.C || mine.F) ? '내 문구 저장됨' : '기본 문구 사용 중';
+}
+function nsResetResultMsgs() {
+  ['A','C','F'].forEach(function(k){ var ta = document.getElementById('ns-rm-' + k); if (ta) ta.value = NS_RESULT_MSG_DEFAULT[k]; });
+  var st = document.getElementById('ns-rm-status'); if (st) st.textContent = '기본 문구로 채웠어요 — 저장을 눌러야 반영됩니다';
+}
+async function nsSaveResultMsgs() {
+  if (!currentUser || currentUser.role !== 'teacher') return;
+  var v = {}; ['A','C','F'].forEach(function(k){ var ta = document.getElementById('ns-rm-' + k); v[k] = ta ? ta.value.trim() : ''; });
+  var empty = ['A','C','F'].filter(function(k){ return !v[k]; });
+  if (empty.length) { alert(empty.join('·') + ' 멘트가 비어 있습니다. 기본 문구를 쓰려면 [↺ 기본 문구로]를 누르세요'); return; }
+  var btn = document.getElementById('ns-rm-save-btn'); if (btn) { btn.disabled = true; btn.textContent = '저장 중...'; }
+  try {
+    // 기본 문구와 같으면 비워 저장 → 기본 문구가 바뀌어도 따라간다
+    var row = { teacher_id: currentUser.id, updated_at: new Date().toISOString() };
+    ['A','C','F'].forEach(function(k){ row['msg_' + k.toLowerCase()] = v[k] === NS_RESULT_MSG_DEFAULT[k] ? null : v[k]; });
+    var r = await db.from('weekend_naesin_result_msgs').upsert(row, { onConflict: 'teacher_id' });
+    if (r.error) throw r.error;
+    _nsResultMsgByTeacher[currentUser.id] = { A: row.msg_a || '', C: row.msg_c || '', F: row.msg_f || '' };
+    nsRenderResultMsgForm();
+    var st = document.getElementById('ns-rm-status'); if (st) st.textContent = '✅ 저장했어요 — 다음 멘트 복사부터 적용';
+  } catch(e) { alert('멘트 저장 실패: ' + (e.message || e)); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '💾 멘트 저장'; } }
 }
 
 function nsGetExtraMsgSettings() {
@@ -14841,7 +14916,7 @@ function nsToggleExtraMsgSettings() {
   var isOpen = area.style.display !== 'none';
   area.style.display = isOpen ? 'none' : 'block';
   if (btn) btn.textContent = isOpen ? '편집' : '닫기';
-  if (!isOpen) { nsRenderExtraMsgList(); nsLoadClassesForExtraMsg(); }
+  if (!isOpen) { nsRenderResultMsgForm(); nsRenderExtraMsgList(); nsLoadClassesForExtraMsg(); }
 }
 
 async function nsEnsureStudentNamesForExtraMsg() {
@@ -15404,13 +15479,8 @@ function nsCopyMent(studentId) {
   var dp = date.split('-');
   var dateLabel = (parseInt(dp[1])) + '월' + (parseInt(dp[2])) + '일';
 
-  var resultText = result === 'A' ? '테스트 완료 & 통과'
-                 : result === 'C' ? '테스트 완료 & 미통과'
-                 : result === 'F' ? '결석'
-                 : '미입력';
-
   var lines2 = [];
-  lines2.push('■ 일요 내신대비 ' + s.name + ' 학생의 ' + dateLabel + ' 내신대비 결과는 "' + resultText + '"입니다.');
+  lines2.push(nsResultMent(result, s.name, dateLabel, s.teacher_id || (currentUser && currentUser.id)));   /* 선생님이 편집한 결과별 문구 */
 
   // 기간별 추가메시지 반영
   var nsExtra = typeof nsGetExtraMsg === 'function' ? nsGetExtraMsg(date, studentId) : null;
@@ -16003,12 +16073,9 @@ function wmsgBuildMent(stu, dateLabel, dateStr, useNaje, usePt, useBy, useNs, wn
   }
 
   if (useNs && nsRec && nsRec.result) {
-    var nsResultText = nsRec.result === 'A' ? '테스트 완료 & 통과'
-                     : nsRec.result === 'C' ? '테스트 완료 & 미통과'
-                     : nsRec.result === 'F' ? '결석' : nsRec.result;
     var nsDateShort = dateLabel.replace(/\([^)]+\)\s*$/, '').replace(/\s+/g, '');
     if ((useNaje && wnRec) || (usePt && ptRec) || (useBy && byRec)) lines.push('');
-    lines.push('■ 일요 내신대비 ' + stu.name + ' 학생의 ' + nsDateShort + ' 내신대비 결과는 "' + nsResultText + '"입니다.');
+    lines.push(nsResultMent(nsRec.result, stu.name, nsDateShort, stu.teacher_id || (currentUser && currentUser.id)));   /* 선생님이 편집한 결과별 문구 */
     // 내신 기간별 추가메시지 반영 (dateStr 인자 활용 — DOM 직접 접근 제거)
     var nsExtra = (typeof nsGetExtraMsg === 'function' && dateStr)
       ? nsGetExtraMsg(dateStr, stu.id) : null;
