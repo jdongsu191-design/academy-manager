@@ -28790,7 +28790,7 @@ async function loadViceReportRefs() {
   // 부원장: 선생님 데이터 외에 '월별 수강인원(분원 전체)'용 보조 데이터 적재
   // (allUsers/_allBranches만 채움 — classes/students 등 선생님 전역은 건드리지 않음)
   try {
-    var uRes = await fetchAllRows(db.from('users').select('*').in('role',['teacher','student','admin','desk','vice_director']).order('name'));
+    var uRes = await fetchAllRowsTwoPages(function(){ return db.from('users').select('*').in('role',['teacher','student','admin','desk','vice_director']).order('name').order('id'); });
     var bRes = await db.from('branches').select('*').order('name');
     allUsers     = uRes || [];
     _allBranches = bRes.data || [];
@@ -31067,6 +31067,27 @@ async function fetchAllRows(query) {
   return all;
 }
 
+/* [users 전체 로드 전용] 1,000행을 넘는 표는 1·2페이지를 동시에 요청해 왕복 한 번을 아낀다.
+   makeQuery 는 호출마다 새 쿼리 빌더를 돌려줘야 한다(같은 빌더에 range 를 두 번 걸면 URL 이 덮인다).
+   3페이지 이상이면 그 뒤는 fetchAllRows 와 같이 순차. 페이지 경계가 흔들리지 않게 호출 쪽에서 .order('id') 를 2차 정렬로 붙인다 */
+async function fetchAllRowsTwoPages(makeQuery) {
+  const PAGE = 1000;
+  const [r0, r1] = await Promise.all([ makeQuery().range(0, PAGE - 1), makeQuery().range(PAGE, PAGE * 2 - 1) ]);
+  if (r0.error) throw r0.error;
+  if (r1.error) throw r1.error;
+  let all  = (r0.data || []).concat(r1.data || []);
+  let from = PAGE * 2;
+  while ((r1.data || []).length === PAGE) {
+    const { data, error } = await makeQuery().range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
+
 /* [대량 IN 조회 분할] .in('student_id', [수백 개]) 는 URL 길이 한계로 400 Bad Request 발생.
    ID를 청크(기본 150)로 나눠 조회 후 합침. 한 학생의 행은 한 청크에 모두 들어가므로
    session_date 오름차순 carry 계산 등 기존 로직에 영향 없음. */
@@ -31127,7 +31148,7 @@ async function loadAdminData() {
   let rawUsers, cRes, bRes;
   try {
     [rawUsers, cRes, bRes] = await Promise.all([
-      fetchAllRows(db.from('users').select('*').in('role',['teacher','student','admin','desk','vice_director']).order('name')),
+      fetchAllRowsTwoPages(() => db.from('users').select('*').in('role',['teacher','student','admin','desk','vice_director']).order('name').order('id')),
       db.from('classes').select('*').eq('active',true).order('name'),
       db.from('branches').select('*').order('name')
     ]);
