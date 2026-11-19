@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v1.09-wd]</title>
+<title>BMAPS · 독서실 출결 [v1.10-wdlist]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="assets/boot-retry.js?v=1"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
@@ -873,7 +873,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v1.09-wd</span>
+    <span class="tb-ver" id="sc-ver">v1.10-wdlist</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1234,7 +1234,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v1.09-wd';
+  window.STUDYCENTER_VERSION = 'v1.10-wdlist';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -6324,20 +6324,44 @@
         .eq('reading_room_yn',true).order('name');
       if(res.error) throw res.error;
       _scListData=res.data||[];
+      _scListGone=null;
       scListRender();
+      if(_scListFilter==='withdrawn') scListGoneLoad();
       scWarnLoad();
     }catch(e){ console.error('명단 로드 실패:',e); if(el) el.innerHTML='<div style="padding:14px;color:#dc2626;font-size:13px">명단 로드 실패: '+scEsc(e.message||'')+'</div>'; }
+  }
+  /* [퇴원 탭 — 명단에서 내린 학생 2026-11-19]
+     [삭제]는 reading_room_yn=false 로 명단에서 내릴 뿐 퇴원 기록은 남는다. 퇴원 탭에서만 그 행을 함께 보여 준다(조회 전용).
+     ⚠ _scListData 에 섞지 않는다 — 현역 판정·코드 중복 검사·연결 점검이 모두 _scListData(yn=true) 기준이다.
+       버튼도 두지 않는다(yn 을 되살리는 경로를 만들지 않는다 — 재등록은 새 등록으로). */
+  var _scListGone = null;      // null = 아직 안 읽음
+  var _scListGoneBusy = false;
+  async function scListGoneLoad(){
+    if(_scListGone || _scListGoneBusy) return;
+    _scListGoneBusy = true;
+    try{
+      var res=await db.from('users')
+        .select('id,name,school,school_level,grade,enrolled_at,reading_room_class,reading_room_mentoring,reading_room_code,required_study_minutes,reading_room_withdrawn_at,reading_room_last_attend,reading_room_withdraw_reason,reading_room_cancelled')
+        .eq('role','student').eq('reading_room_yn',false).not('reading_room_withdrawn_at','is',null)
+        .order('reading_room_withdrawn_at',{ascending:false}).order('name').limit(1000);
+      if(res.error) throw res.error;
+      _scListGone=(res.data||[]).map(function(u){ u._gone=true; return u; });
+    }catch(e){ console.error('내려간 퇴원 학생 로드 실패:',e); _scListGone=[]; }
+    finally{ _scListGoneBusy=false; }
+    if(_scListFilter==='withdrawn') scListRender();
   }
   function scListSetFilter(f){
     _scListFilter=f;
     document.querySelectorAll('.rl-fbtn').forEach(function(b){ b.classList.toggle('active', b.getAttribute('data-filter')===f); });
     scListRender();
+    if(f==='withdrawn') scListGoneLoad();
   }
   function scListRender(){
     var el=document.getElementById('rl-list'); if(!el) return;
     var qEl=document.getElementById('rl-search');
     var q=(qEl?qEl.value:'').trim().toLowerCase().replace(/\s+/g,'');
-    var list=_scListData.filter(function(s){
+    var src=(_scListFilter==='withdrawn' && _scListGone) ? _scListData.concat(_scListGone) : _scListData;
+    var list=src.filter(function(s){
       if(_scListFilter==='active' && s.reading_room_withdrawn_at) return false;
       if(_scListFilter==='withdrawn' && !s.reading_room_withdrawn_at) return false;
       if(!q) return true;
@@ -6347,8 +6371,9 @@
       return hay.indexOf(q)!==-1;
     });
     var cntEl=document.getElementById('rl-count');
-    if(cntEl) cntEl.textContent = q ? ('검색 결과 '+list.length+'명 / 전체 '+_scListData.length+'명') : (list.length+'명');
-    if(!list.length){ el.innerHTML='<div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">'+(q?'검색 결과가 없습니다':'학생이 없습니다')+'</div>'; return; }
+    var goneN=list.filter(function(s){ return s._gone; }).length;
+    if(cntEl) cntEl.textContent = (q ? ('검색 결과 '+list.length+'명 / 전체 '+src.length+'명') : (list.length+'명')) + (goneN ? ' (명단에서 내림 '+goneN+'명 포함)' : '');
+    if(!list.length){ el.innerHTML='<div style="padding:14px;color:#94a3b8;text-align:center;font-size:13px">'+((_scListFilter==='withdrawn' && !_scListGone)?'불러오는 중…':(q?'검색 결과가 없습니다':'학생이 없습니다'))+'</div>'; return; }
     el.innerHTML=list.map(function(s){
       var lv=s.school_level==='middle'?'중등':(s.school_level==='high'?'고등':(s.school_level==='both'?'중고등':''));
       var cls=(s.reading_room_class||'').replace(/\s+/g,' ').trim();
@@ -6364,17 +6389,17 @@
       var nb=scNewBadge(s.id);
       var req=(s.required_study_minutes!=null)?(Math.floor(s.required_study_minutes/60)+'시간 '+(s.required_study_minutes%60)+'분'):'-';
       return '<div class="rl-item"><div style="flex:1;min-width:0">'
-        +'<div class="rl-name">'+scEsc(s.name||'')+nb+mt+wd+'</div>'
+        +'<div class="rl-name">'+scEsc(s.name||'')+nb+mt+wd+(s._gone?' <span class="rl-badge" style="background:#e2e8f0;color:#475569">명단에서 내림</span>':'')+'</div>'
         +'<div class="rl-meta">'+[lv,scEsc(s.school||''),scEsc(s.grade||''),cls].filter(Boolean).join(' · ')+'</div>'
         +'<div class="rl-meta">코드 '+scEsc(s.reading_room_code||'-')+' · 의무 '+req+'</div>'
         +wdInfo
       +'</div>'
-        +'<div class="rl-actions">'
+        +(s._gone ? '' : '<div class="rl-actions">'
           +'<button class="rl-edit" onclick="scFormLoad(\''+s.id+'\')">수정</button>'
           +(s.reading_room_withdrawn_at
             ? (canWd?'<button class="rl-restore" onclick="scRestore(\''+s.id+'\')">복원</button>':'')+'<button class="rl-del" onclick="scDelete(\''+s.id+'\')">삭제</button>'
             : (canWd?'<button class="rl-wd-btn" onclick="scWithdraw(\''+s.id+'\')">퇴원</button>':''))
-        +'</div>'
+        +'</div>')
       +'</div>';
     }).join('');
   }
