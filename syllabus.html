@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · 진도계획서 제작 [v2.22-nofeat]</title>
+<title>BMAPS · 진도계획서 제작 [v2.23-nofeat]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -548,7 +548,7 @@
   <!-- 상단바 -->
   <div class="topbar" id="syl-topbar" style="display:none">
     <span class="tb-title">📑 진도계획서 제작</span>
-    <span class="tb-ver" id="syl-ver">v2.22-nofeat</span>
+    <span class="tb-ver" id="syl-ver">v2.23-nofeat</span>
     <span class="tb-spacer"></span>
     <span id="syl-editor-actions" style="display:none">
       <span class="exp-status" id="syl-exp-status-tb"></span>
@@ -941,7 +941,7 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   /* [VERSION] 버전 박기 (혼동 방지 — 줄수 아닌 정의존재로 검증) */
-  window.SYLLABUS_VERSION = 'v2.22-nofeat';
+  window.SYLLABUS_VERSION = 'v2.23-nofeat';
   console.log('SYLLABUS build:', window.SYLLABUS_VERSION);
 
   let currentUser = null;
@@ -1037,6 +1037,22 @@
     if(idx > sylDoc.courses.length - 1) idx = sylDoc.courses.length - 1;
     sylDoc.active = idx;
     state = sylDoc.courses[idx];
+  }
+
+  /* [PHOTO SPLIT 2026-11-19] 사진(dataURL, 0.4~1MB)이 강좌마다 복사되어 courses 에 들어가 한 행이 수 MB 가 되고,
+     courses 를 여러 행 읽는 목록 조회가 DB 를 쓰러뜨렸다. → 사진은 행의 photo 칸에 한 번만 둔다.
+     · 읽기: 행을 통째로(select *) 읽은 곳에서 sylRowUnpack 으로 강좌에 다시 붙인다(화면·출력 코드는 그대로)
+     · 쓰기: sylRowPack 으로 강좌에서 떼어 { courses, photo } 로 저장한다
+     · 옛 모양(강좌 안에 photo, 행 photo 없음)은 그대로 읽히고, 다음 저장 때 새 모양이 된다 */
+  function sylRowUnpack(rec){
+    if(rec && rec.photo && Array.isArray(rec.courses)) rec.courses.forEach(function(c){ if(c && !c.photo) c.photo = rec.photo; });
+    return rec;
+  }
+  function sylRowPack(courses){
+    var photo = null;
+    (courses || []).forEach(function(c){ if(!photo && c && c.photo) photo = c.photo; });
+    var out = (courses || []).map(function(c){ if(!c || !c.photo) return c; var cc = Object.assign({}, c); cc.photo = null; return cc; });
+    return { courses: out, photo: photo };
   }
 
   // 공통 사진을 모든 강좌에 동기화
@@ -1780,7 +1796,7 @@
     if(!recordId){ sylViewShowEmpty(true); document.getElementById('svw-course-tabs').innerHTML=''; sylViewImgBtns(false); return; }
     try {
       var res = await db.from('bmaps_syllabuses').select('*').eq('id', recordId).maybeSingle();
-      var rec = res.data;
+      var rec = sylRowUnpack(res.data);
       if(!rec || !Array.isArray(rec.courses) || !rec.courses.length){ sylViewShowEmpty(true); return; }
       var courses = sylNormalizeCourses(rec.courses, rec.period);
       sylDoc = { courses: courses, active: 0 };
@@ -2340,7 +2356,7 @@
         .eq('period', period)
         .maybeSingle();
       if(res.error){ console.warn('저장본 조회 실패:', res.error); return null; }
-      var rec = res.data;
+      var rec = sylRowUnpack(res.data);
       if(!rec || !Array.isArray(rec.courses) || !rec.courses.length) return null;
       window._sylCurrentRecordId = rec.id;
       var _norm = sylNormalizeCourses(rec.courses, period);
@@ -3094,14 +3110,15 @@
         teacher_name: tgt.name || null,
         branch:       tgt.branch || null,
         period:       period,
-        courses:      cleanCourses,       // 전체 강좌
+        courses:      sylRowPack(cleanCourses).courses,   // 전체 강좌 (사진은 아래 photo 칸으로)
+        photo:        sylRowPack(cleanCourses).photo,
         updated_at:   new Date().toISOString()
       };
 
       // (teacher_id, period) 기준 upsert — 유니크 인덱스가 충돌 시 갱신 처리
       var res = await db.from('bmaps_syllabuses')
         .upsert(payload, { onConflict: 'teacher_id,period' })
-        .select().single();
+        .select('id').single();
       if(res.error) throw res.error;
 
       window._sylCurrentRecordId = res.data && res.data.id;   // 이후 불러오기/갱신용
@@ -3411,7 +3428,7 @@
     try {
       var res = await db.from('bmaps_syllabuses').select('*').eq('id', id).maybeSingle();
       if(res.error) throw res.error;
-      var rec = res.data;
+      var rec = sylRowUnpack(res.data);
       if(!rec || !Array.isArray(rec.courses) || !rec.courses.length){
         alert('불러올 내용이 없습니다.'); return;
       }
@@ -4135,10 +4152,16 @@
     try {
       var r = await db.from('bmaps_syllabuses').select('*').eq('teacher_id', _sylCls.teacherId).eq('period', period).maybeSingle();
       if(r.error) throw r.error;
+      sylRowUnpack(r.data);
       var courses = (r.data && Array.isArray(r.data.courses)) ? r.data.courses : [];
       if(courses.length && courses[0].photo) src.photo = courses[0].photo;
+      else if(!src.photo && _sylCopySrc.rec && _sylCopySrc.rec.id){
+        // 목록으로 읽은 원본에는 사진이 없다(행 photo 칸) → 원본 행에서 한 번 가져온다
+        try { var _ph = await db.from('bmaps_syllabuses').select('photo').eq('id', _sylCopySrc.rec.id).maybeSingle(); if(_ph.data && _ph.data.photo) src.photo = _ph.data.photo; } catch(_e){}
+      }
       courses.push(src);
-      var up = await db.from('bmaps_syllabuses').upsert({ teacher_id: _sylCls.teacherId, teacher_name: _sylCls.tname || null, branch: _sylCls.branch || null, period: period, courses: courses, updated_at: new Date().toISOString() }, { onConflict: 'teacher_id,period' });
+      var _pk = sylRowPack(courses);
+      var up = await db.from('bmaps_syllabuses').upsert({ teacher_id: _sylCls.teacherId, teacher_name: _sylCls.tname || null, branch: _sylCls.branch || null, period: period, courses: _pk.courses, photo: _pk.photo, updated_at: new Date().toISOString() }, { onConflict: 'teacher_id,period' });
       if(up.error) throw up.error;
       sylCopyClose(); alert('✅ ' + period + (cls ? ' · ' + src.class_name : '') + ' 에 복사됐습니다');
       var lch = document.getElementById('syl-launcher');
@@ -4444,7 +4467,7 @@
     try {
       var res = await db.from('bmaps_syllabuses').select('*').eq('id', d.recId).maybeSingle();
       if(res.error) throw res.error;
-      var rec = res.data; if(!rec || !Array.isArray(rec.courses) || !rec.courses[d.idx]) throw new Error('계획서를 찾지 못했습니다');
+      var rec = sylRowUnpack(res.data); if(!rec || !Array.isArray(rec.courses) || !rec.courses[d.idx]) throw new Error('계획서를 찾지 못했습니다');
       sylDoc = { courses: sylNormalizeCourses(rec.courses, rec.period), active: 0 }; window._sylCurrentRecordId = rec.id;
       if(rec.period) sylSelectedPeriod = rec.period;
       sylSetActive(Math.min(d.idx, sylDoc.courses.length - 1)); sylRenderTabs(); rebindAndRender();
