@@ -3615,6 +3615,7 @@
             </div>
             <div id="tr-table" style="margin-bottom:14px"></div>
             <div id="tr-branch-table"></div>
+            <div id="tr-rr-table" style="margin-top:14px"></div>
           </div>
         </div>
       </div>
@@ -31995,6 +31996,7 @@ function initAdminTrend(){
     (_allBranches || []).filter(function(b){ return b.active !== false; }).forEach(function(b){
       bSel.innerHTML += '<option value="' + b.id + '">' + _esc(b.name) + '</option>';
     });
+    bSel.innerHTML += '<option value="' + TR_RR_BID + '">📚 스터디센터</option>';   /* 독서실 — 분원이 아니라 따로 센다 */
     bSel.value = keep || '';
   }
 }
@@ -32037,6 +32039,12 @@ async function trLoad(){
       ]);
       if (r[0].error) throw r[0].error;
       _tr.data = { teachers: r[0].data || [], students: r[1] || [], newStudents: r[2] || [], transfers: r[3] || [], history: r[4] || [], consults: r[5] || [] };
+      try {
+        _tr.data.rr = await fetchAllRows(db.from('users')
+          .select('id,enrolled_at,created_at,reading_room_yn,reading_room_withdrawn_at,reading_room_last_attend,reading_room_withdraw_reasons,reading_room_cancelled,deleted_at,is_test')
+          .eq('role', 'student').eq('is_test', false)
+          .or('reading_room_yn.eq.true,reading_room_withdrawn_at.not.is.null').order('id'));
+      } catch (eRR) { console.warn('[인원추이현황] 독서실 조회 실패:', eRR); _tr.data.rr = null; }
       _tr.years = years;
       _tr.calc = trCompute(_tr.data, years);
     }
@@ -32101,6 +32109,10 @@ function trCompute(data, years){
 }
 /* 한 달·한 분원(''=전체)의 수치. 전체는 분원 간 이동을 빼고 순수 입학·퇴원만 */
 function trRow(key, bid){
+  if (bid === TR_RR_BID) {
+    var q = trRRRow(parseInt(key.slice(0, 4)), parseInt(key.slice(5, 7)));
+    return q ? { total: q.total, start: 0, nw: q.nw, wd: q.wd, cross: 0, con: 0, yes: 0, rate: null } : null;
+  }
   var mo = _tr.calc && _tr.calc[key];
   if (!mo) return null;
   var o = { total:0, start:0, nw:0, wd:0, cross:0, con:0, yes:0 };
@@ -32145,6 +32157,7 @@ function trDeltaText(cur, prev, pp){
   return (d > 0 ? '+' : '') + d + ' (' + (d > 0 ? '▲' : '▼') + pct + ')';
 }
 function trBranchName(bid){
+  if (bid === TR_RR_BID) return '스터디센터';
   if (bid === '__none__') return '분원 미지정';
   var b = (_allBranches || []).find(function(x){ return x.id === bid; });
   return b ? b.name : '?';
@@ -32187,8 +32200,10 @@ function trRender(){
     + card(y + '년 퇴원 누계', ty.wd, '전년 동기 ' + trDelta(ty.wd, tpy && tpy.wd) + '<br>' + last + '월 ' + cur.wd + '명', '#dc2626')
     + card(y + '년 상담 누계', ty.con, '전년 동기 ' + trDelta(ty.con, tpy && tpy.con) + '<br>등록 ' + ty.yes + '건', '#7c3aed')
     + card(y + '년 등록 전환율', (ty.rate == null ? '-' : ty.rate + '<small>%</small>'), '전년 동기 ' + trDelta(ty.rate, tpy && tpy.rate, true) + '<br>' + last + '월 ' + (cur.rate == null ? '-' : cur.rate + '%'), '#b45309');
+  if (bid === TR_RR_BID) { while (cards.children.length > 3) cards.removeChild(cards.lastElementChild); }   /* 독서실은 상담 통계가 없다 */
   trRenderTable();
   trRenderBranchTable();
+  trRenderRR();
   trRenderChart();
 }
 
@@ -32252,7 +32267,8 @@ function trRenderTable(){
       + '<td style="' + TR_TD + '">' + sum.con + '</td><td style="' + TR_TD + '">' + sum.yes + '</td>'
       + '<td style="' + TR_TD + ';color:#b45309">' + (srate == null ? '-' : srate + '%') + '</td><td style="' + TR_TD + '">' + trDelta(srate, prate, true) + '</td></tr>';
     html += '</tbody></table>';
-    if (bid) html += '<div style="font-size:11px;color:#9ca3af;padding:6px 10px">* 분원 간 이동(전반)이 분원 입학·퇴원에 포함된 달</div>';
+    if (bid === TR_RR_BID) html += '<div style="font-size:11px;color:#9ca3af;padding:6px 10px">스터디센터(독서실)는 입학 = 독서실 등록, 퇴원 = 마지막 등원일 기준입니다. 상담·전환율은 집계하지 않습니다.</div>';
+    else if (bid) html += '<div style="font-size:11px;color:#9ca3af;padding:6px 10px">* 분원 간 이동(전반)이 분원 입학·퇴원에 포함된 달</div>';
   }
   document.getElementById('tr-table').innerHTML =
     '<div style="background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06)">' + head + '<div style="overflow-x:auto">' + html + '</div></div>';
@@ -32286,6 +32302,83 @@ function trRenderBranchTable(){
   wrap.innerHTML = '<div style="background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06)">'
     + '<div style="background:linear-gradient(135deg,#1e3a5f,#1e4d7b);padding:10px 16px"><span style="font-size:14px;font-weight:800;color:#fff">' + y + '년 분원별 월말 총원</span>'
     + '<span style="font-size:11.5px;color:rgba(255,255,255,0.6);margin-left:10px">분원별 입학·퇴원은 분원 간 이동 포함</span></div><div style="overflow-x:auto">' + html + '</div></div>';
+}
+
+/* ── 독서실 (2026-11-19) — 학원 통계와 따로 센다. 독서실 계정은 분원이 없어 전체 분원일 때만 보인다 ──
+   · 대상: 독서실 계정(현역 + 퇴원 기록이 남은 행). 등록취소(reading_room_cancelled)·삭제·테스트 제외
+   · 등록일 = enrolled_at, 없으면 행 생성일 / 떠난 날 = 마지막 등원일, 없으면 퇴원일(BMAPS 퇴원과 같은 규칙)
+   · 사유 목록은 studycenter.html SC_WD_REASONS 와 같아야 한다. 사유는 2026-11-19 이후 처리분부터 남는다 */
+var TR_RR_BID = '__rr__';   /* 분원 필터의 '스터디센터' 값 */
+var TR_RR_REASONS = ['시설 불만족','비용문제','관리 불만족','일정 문제','학습의지 부족','경고 누적으로 인한 퇴원','단기퇴원(ex.윈터)','기타'];
+function _trRRList(){
+  if (!_tr.data || !_tr.data.rr) return null;
+  if (_tr.data._rrList) return _tr.data._rrList;
+  var out = [];
+  _tr.data.rr.forEach(function(u){
+    if (u.reading_room_cancelled || u.deleted_at || u.is_test) return;
+    var reg = u.enrolled_at ? String(u.enrolled_at).slice(0, 10) : (u.created_at ? _localYMD(new Date(u.created_at)) : '');
+    var wd = u.reading_room_withdrawn_at ? String(u.reading_room_withdrawn_at).slice(0, 10) : '';
+    var leave = wd ? (u.reading_room_last_attend ? String(u.reading_room_last_attend).slice(0, 10) : wd) : '';
+    if (!reg) return;
+    out.push({ reg: reg, leave: leave, reasons: Array.isArray(u.reading_room_withdraw_reasons) ? u.reading_room_withdraw_reasons : [] });
+  });
+  return (_tr.data._rrList = out);
+}
+/* 한 달 수치. reasons 는 사유별 건수(복수 선택은 각각 1건), none = 사유 미입력 */
+function trRRRow(y, m){
+  var list = _trRRList(); if (!list) return null;
+  var ms = _trYM(y, m) + '-01', me = _trMonthEnd(y, m), key = _trYM(y, m);
+  if (ms > _localYMD(new Date()) || key < TR_START) return null;
+  var o = { total:0, nw:0, wd:0, none:0, reasons:{} };
+  TR_RR_REASONS.forEach(function(r){ o.reasons[r] = 0; });
+  list.forEach(function(u){
+    if (u.reg <= me && (!u.leave || u.leave > me)) o.total++;
+    if (u.reg >= ms && u.reg <= me) o.nw++;
+    if (u.leave && u.leave >= ms && u.leave <= me) {
+      o.wd++;
+      if (!u.reasons.length) o.none++;
+      u.reasons.forEach(function(r){ o.reasons[TR_RR_REASONS.indexOf(r) >= 0 ? r : '기타']++; });
+    }
+  });
+  return o;
+}
+function trRenderRR(){
+  var wrap = document.getElementById('tr-rr-table'); if (!wrap) return;
+  var sc = trScope(), y = sc.year;
+  if ((sc.bid && sc.bid !== TR_RR_BID) || !_trRRList()) { wrap.innerHTML = ''; return; }
+  var RS = 'background:#fef2f2;color:#991b1b';
+  var html = '<table style="width:100%;border-collapse:collapse"><thead><tr>'
+    + ['월', '총원(말일)', '전월비', '등록', '퇴원', '순증'].map(function(h){ return '<th style="' + TR_TH + '">' + h + '</th>'; }).join('')
+    + TR_RR_REASONS.concat(['사유 미입력']).map(function(h){ return '<th style="' + TR_TH + ';' + RS + ';white-space:normal;min-width:54px;font-size:11px">' + h + '</th>'; }).join('')
+    + '</tr></thead><tbody>';
+  var sum = { nw:0, wd:0, none:0, reasons:{} }, lastTotal = null, any = false;
+  TR_RR_REASONS.forEach(function(r){ sum.reasons[r] = 0; });
+  for (var m = 1; m <= 12; m++) {
+    var r = trRRRow(y, m), p = (m === 1) ? trRRRow(y - 1, 12) : trRRRow(y, m - 1);
+    if (!r) { html += '<tr><td style="' + TR_TD + ';color:#9ca3af">' + m + '월</td><td colspan="' + (5 + TR_RR_REASONS.length + 1) + '" style="' + TR_TD + ';color:#cbd5e1">' + (_trYM(y, m) < TR_START ? '자료 없음 (' + TR_START.replace('-', '년 ') + '월부터)' : '-') + '</td></tr>'; continue; }
+    any = true; sum.nw += r.nw; sum.wd += r.wd; sum.none += r.none; lastTotal = r.total;
+    TR_RR_REASONS.forEach(function(k){ sum.reasons[k] += r.reasons[k]; });
+    html += '<tr><td style="' + TR_TD + ';font-weight:700">' + m + '월</td>'
+      + '<td style="' + TR_TD + ';font-weight:800;color:#0f766e;font-size:14px">' + r.total + '</td>'
+      + '<td style="' + TR_TD + '">' + trDelta(r.total, p && p.total) + '</td>'
+      + '<td style="' + TR_TD + ';color:#15803d;font-weight:700">' + r.nw + '</td>'
+      + '<td style="' + TR_TD + ';color:#dc2626;font-weight:700">' + r.wd + '</td>'
+      + '<td style="' + TR_TD + ';font-weight:700;color:' + (r.nw - r.wd < 0 ? '#dc2626' : '#15803d') + '">' + (r.nw - r.wd > 0 ? '+' : '') + (r.nw - r.wd) + '</td>'
+      + TR_RR_REASONS.map(function(k){ return '<td style="' + TR_TD + (r.reasons[k] ? '' : ';color:#cbd5e1') + '">' + (r.reasons[k] || '-') + '</td>'; }).join('')
+      + '<td style="' + TR_TD + ';color:#9ca3af">' + (r.none || '-') + '</td></tr>';
+  }
+  if (!any) { wrap.innerHTML = ''; return; }
+  html += '<tr style="background:#ccfbf1;border-top:2px solid #5eead4;font-weight:800">'
+    + '<td style="' + TR_TD + '">합계</td><td style="' + TR_TD + ';color:#0f766e">' + _trNum(lastTotal) + '</td><td style="' + TR_TD + '"></td>'
+    + '<td style="' + TR_TD + ';color:#15803d">' + sum.nw + '</td><td style="' + TR_TD + ';color:#dc2626">' + sum.wd + '</td>'
+    + '<td style="' + TR_TD + '">' + (sum.nw - sum.wd > 0 ? '+' : '') + (sum.nw - sum.wd) + '</td>'
+    + TR_RR_REASONS.map(function(k){ return '<td style="' + TR_TD + '">' + (sum.reasons[k] || '-') + '</td>'; }).join('')
+    + '<td style="' + TR_TD + ';color:#9ca3af">' + (sum.none || '-') + '</td></tr></tbody></table>';
+  wrap.innerHTML = '<div style="background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06)">'
+    + '<div style="background:linear-gradient(135deg,#0f766e,#115e59);padding:10px 16px"><span style="font-size:14px;font-weight:800;color:#fff">📚 ' + y + '년 독서실 월별 추이</span>'
+    + '<span style="font-size:11.5px;color:rgba(255,255,255,0.7);margin-left:10px">학원 총원과 별도 · 등록취소 제외 · 퇴원 달은 마지막 등원일 기준</span></div>'
+    + '<div style="overflow-x:auto">' + html + '</div>'
+    + '<div style="font-size:11px;color:#9ca3af;padding:6px 10px;line-height:1.6">퇴원 사유는 2026-11-19 이후 처리분부터 기록됩니다(그 전은 사유 미입력). 사유는 복수 선택이라 합이 퇴원 수보다 클 수 있습니다. 등록일이 없는 계정은 계정 생성일로 셉니다.</div></div>';
 }
 
 /* ── 그래프 (Chart.js, 쓸 때 로드) ── */
@@ -32331,7 +32424,8 @@ async function trRenderChart(){
     ttl = y + '년 분원별 월말 총원';
     var pal = ['#1d4ed8', '#16a34a', '#dc2626', '#7c3aed', '#b45309', '#0891b2', '#db2777', '#64748b'];
     trBranchTable(y).forEach(function(r, k){ ds.push({ label: r.name, data: r.months, borderColor: pal[k % pal.length], backgroundColor: pal[k % pal.length], tension: 0.3, pointRadius: 3 }); });
-    if (bid) ds = ds.filter(function(d){ return d.label === sc.name; });
+    if (bid === TR_RR_BID) ds = [{ label: '스터디센터', data: pick(cur, function(r){ return r.total; }), borderColor: '#0f766e', backgroundColor: '#0f766e', tension: 0.3, pointRadius: 3 }];
+    else if (bid) ds = ds.filter(function(d){ return d.label === sc.name; });
     opts.scales.y = totalAxis(ds);
   }
   if (title) title.textContent = ttl;
@@ -32364,6 +32458,16 @@ async function trExportExcel(){
   var a3 = [['분원'].concat(labels12('월')).concat(['연 입학', '연 퇴원', '상담', '등록', '전환율(%)'])];
   trBranchTable(y).forEach(function(r){ a3.push([r.name].concat(r.months.map(function(v){ return v == null ? '' : v; })).concat([r.yr ? r.yr.nw : '', r.yr ? r.yr.wd : '', r.yr ? r.yr.con : '', r.yr ? r.yr.yes : '', (r.yr && r.yr.rate != null) ? r.yr.rate : ''])); });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a3), y + '년 분원별');
+  if ((!bid || bid === TR_RR_BID) && _trRRList()) {
+    var a4 = [['연도', '월', '총원(말일)', '등록', '퇴원', '순증'].concat(TR_RR_REASONS).concat(['사유 미입력'])];
+    [y - 1, y].forEach(function(yy){
+      for (var m = 1; m <= 12; m++) {
+        var q = trRRRow(yy, m); if (!q) continue;
+        a4.push([yy, m, q.total, q.nw, q.wd, q.nw - q.wd].concat(TR_RR_REASONS.map(function(k){ return q.reasons[k]; })).concat([q.none]));
+      }
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a4), '독서실');
+  }
   XLSX.writeFile(wb, '인원추이현황_' + y + '_' + sc.name.replace(/\s+/g, '') + '.xlsx');
   function labels12(sfx){ var o = []; for (var i = 1; i <= 12; i++) o.push(i + sfx); return o; }
 }

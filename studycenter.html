@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>BMAPS · 독서실 출결 [v1.08-inreq]</title>
+<title>BMAPS · 독서실 출결 [v1.09-wd]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="assets/boot-retry.js?v=1"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
@@ -873,7 +873,7 @@
   <!-- 상단 바 -->
   <div class="sc-topbar">
     <span class="tb-title">🏫 독서실 출결</span>
-    <span class="tb-ver" id="sc-ver">v1.08-inreq</span>
+    <span class="tb-ver" id="sc-ver">v1.09-wd</span>
     <span class="tb-spacer"></span>
     <button class="tb-mode-btn" id="sc-mode-kiosk" onclick="scShowKiosk()" style="display:none">📱 키오스크</button>
     <button class="tb-mode-btn" id="sc-mode-admin" onclick="scRequestAdmin()">⚙️ 관리</button>
@@ -1234,7 +1234,7 @@
   const { createClient } = supabase;
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  window.STUDYCENTER_VERSION = 'v1.08-inreq';
+  window.STUDYCENTER_VERSION = 'v1.09-wd';
   console.log('STUDYCENTER build:', window.STUDYCENTER_VERSION);
 
   /* ============================================================
@@ -6320,7 +6320,7 @@
     var el=document.getElementById('rl-list');
     try{
       var res=await db.from('users')
-        .select('id,name,school,school_level,grade,phone,enrolled_at,reading_room_class,reading_room_mentoring,reading_room_code,required_study_minutes,reading_room_withdrawn_at,linked_student_id')
+        .select('id,name,school,school_level,grade,phone,enrolled_at,reading_room_class,reading_room_mentoring,reading_room_code,required_study_minutes,reading_room_withdrawn_at,linked_student_id,reading_room_last_attend,reading_room_withdraw_reason,reading_room_cancelled')
         .eq('reading_room_yn',true).order('name');
       if(res.error) throw res.error;
       _scListData=res.data||[];
@@ -6353,42 +6353,107 @@
       var lv=s.school_level==='middle'?'중등':(s.school_level==='high'?'고등':(s.school_level==='both'?'중고등':''));
       var cls=(s.reading_room_class||'').replace(/\s+/g,' ').trim();
       var mt=s.reading_room_mentoring?' <span class="rl-badge" style="background:#ede9fe;color:#6d28d9">멘토링</span>':'';
-      var wd=s.reading_room_withdrawn_at?' <span class="rl-badge rl-wd">퇴원</span>':'';
+      var wd=s.reading_room_withdrawn_at?(s.reading_room_cancelled?' <span class="rl-badge" style="background:#ffedd5;color:#c2410c">등록취소</span>':' <span class="rl-badge rl-wd">퇴원</span>'):'';
+      var canWd=scCanWithdraw();
+      /* 퇴원 정보 줄 — 퇴원일 · 마지막 등원일 · 사유 (2026-11-19 이전 처리분은 날짜만 있다) */
+      var wdInfo=s.reading_room_withdrawn_at
+        ? '<div class="rl-meta" style="color:#b91c1c">'+(s.reading_room_cancelled?'취소 ':'퇴원 ')+scEsc(s.reading_room_withdrawn_at)
+          +(s.reading_room_last_attend?' · 마지막 등원 '+scEsc(s.reading_room_last_attend):'')
+          +(s.reading_room_withdraw_reason?' · '+scEsc(s.reading_room_withdraw_reason):'')+'</div>'
+        : '';
       var nb=scNewBadge(s.id);
       var req=(s.required_study_minutes!=null)?(Math.floor(s.required_study_minutes/60)+'시간 '+(s.required_study_minutes%60)+'분'):'-';
       return '<div class="rl-item"><div style="flex:1;min-width:0">'
         +'<div class="rl-name">'+scEsc(s.name||'')+nb+mt+wd+'</div>'
         +'<div class="rl-meta">'+[lv,scEsc(s.school||''),scEsc(s.grade||''),cls].filter(Boolean).join(' · ')+'</div>'
         +'<div class="rl-meta">코드 '+scEsc(s.reading_room_code||'-')+' · 의무 '+req+'</div>'
+        +wdInfo
       +'</div>'
         +'<div class="rl-actions">'
           +'<button class="rl-edit" onclick="scFormLoad(\''+s.id+'\')">수정</button>'
           +(s.reading_room_withdrawn_at
-            ? '<button class="rl-restore" onclick="scRestore(\''+s.id+'\')">복원</button><button class="rl-del" onclick="scDelete(\''+s.id+'\')">삭제</button>'
-            : '<button class="rl-wd-btn" onclick="scWithdraw(\''+s.id+'\')">퇴원</button>')
+            ? (canWd?'<button class="rl-restore" onclick="scRestore(\''+s.id+'\')">복원</button>':'')+'<button class="rl-del" onclick="scDelete(\''+s.id+'\')">삭제</button>'
+            : (canWd?'<button class="rl-wd-btn" onclick="scWithdraw(\''+s.id+'\')">퇴원</button>':''))
         +'</div>'
       +'</div>';
     }).join('');
   }
 
   // [B-4] 퇴원/복원/삭제
+  /* [퇴원 창 2026-11-19] BMAPS 퇴원처럼 퇴원일·마지막 등원일·사유·등록취소를 남긴다.
+     · 퇴원·복원은 관리자와 부원장만(데스크는 버튼이 없고 함수에서도 막는다). 삭제(명단에서 내리기)는 그대로
+     · 사유 목록은 index.html 인원추이현황(TR_RR_REASONS)과 같아야 한다
+     · 등록취소 = reading_room_cancelled true. 퇴원일은 같이 채우므로 현역 판정(withdrawn_at 유무)은 그대로 통한다 */
+  var SC_WD_REASONS = ['시설 불만족','비용문제','관리 불만족','일정 문제','학습의지 부족','경고 누적으로 인한 퇴원','단기퇴원(ex.윈터)','기타'];
+  function scCanWithdraw(){
+    var u=scCurrentUser;
+    return !!(u && (u.role==='admin' || u.role==='vice_director'));
+  }
+  var _scWdId=null;
   async function scWithdraw(id){
+    if(!scCanWithdraw()){ alert('퇴원 처리는 관리자·부원장만 할 수 있습니다.'); return; }
     var s=_scListData.find(function(x){ return x.id===id; });
     if(!s) return;
-    if(!confirm((s.name||'')+' 학생을 퇴원 처리할까요?\n([퇴원] 필터에서 계속 보이며, 복원할 수 있습니다.)')) return;
+    _scWdId=id;
+    document.getElementById('sc-wd-name').textContent=(s.name||'')+([s.school,s.grade].filter(Boolean).length?' · '+[s.school,s.grade].filter(Boolean).join(' '):'');
+    document.getElementById('sc-wd-date').value=scRrToday();
+    var lastEl=document.getElementById('sc-wd-last'); lastEl.value='';
+    document.getElementById('sc-wd-reasons').innerHTML=SC_WD_REASONS.map(function(r){
+      return '<label><input type="checkbox" class="sc-wd-reason" value="'+scEsc(r)+'">'+scEsc(r)+'</label>';
+    }).join('');
+    document.getElementById('sc-wd-text').value='';
+    document.getElementById('sc-wd-cancelled').checked=false;
+    document.getElementById('sc-wd-err').textContent='';
+    var btn=document.getElementById('sc-wd-save'); btn.disabled=false; btn.textContent='퇴원 처리';
+    document.getElementById('sc-wd-overlay').classList.add('open');
+    /* 마지막 등원일: 입실 기록이 있는 가장 최근 날짜를 채워 준다(고칠 수 있다) */
     try{
-      var res=await db.from('users').update({ reading_room_withdrawn_at: scRrToday() }).eq('id',id);
+      var r=await db.from('reading_room_attendance').select('attend_date').eq('student_id',id)
+        .not('check_in_time','is',null).order('attend_date',{ascending:false}).limit(1);
+      if(_scWdId===id && !lastEl.value && r.data && r.data[0]) lastEl.value=r.data[0].attend_date;
+    }catch(e){}
+  }
+  function scWdClose(){ _scWdId=null; document.getElementById('sc-wd-overlay').classList.remove('open'); }
+  async function scWdConfirm(){
+    if(!scCanWithdraw()){ alert('퇴원 처리는 관리자·부원장만 할 수 있습니다.'); return; }
+    var id=_scWdId; if(!id) return;
+    var err=document.getElementById('sc-wd-err');
+    var date=document.getElementById('sc-wd-date').value;
+    var last=document.getElementById('sc-wd-last').value;
+    var text=(document.getElementById('sc-wd-text').value||'').trim();
+    var cancelled=document.getElementById('sc-wd-cancelled').checked;
+    var sel=Array.prototype.slice.call(document.querySelectorAll('#sc-wd-reasons .sc-wd-reason:checked')).map(function(c){ return c.value; });
+    if(!date){ err.textContent='퇴원일을 입력하세요.'; return; }
+    if(!cancelled && !last){ err.textContent='마지막 등원일을 입력하세요.'; return; }
+    if(last && last>date){ err.textContent='마지막 등원일이 퇴원일보다 늦습니다.'; return; }
+    if(!cancelled && !sel.length){ err.textContent='퇴원 사유를 1개 이상 선택하세요.'; return; }
+    if(sel.indexOf('기타')!==-1 && !text){ err.textContent='기타를 선택한 경우 상세 사유를 입력하세요.'; return; }
+    err.textContent='';
+    var btn=document.getElementById('sc-wd-save'); btn.disabled=true; btn.textContent='처리 중...';
+    try{
+      var res=await db.from('users').update({
+        reading_room_withdrawn_at: date,
+        reading_room_last_attend: last || null,
+        reading_room_withdraw_reasons: sel.length ? sel : null,
+        reading_room_withdraw_reason: (sel.join(' · ') + (text ? (sel.length ? ' — ' : '') + text : '')) || null,
+        reading_room_cancelled: cancelled
+      }).eq('id',id);
       scNewReset();
       if(res.error) throw res.error;
+      scWdClose();
       await scListLoad();
-    }catch(e){ console.error('퇴원 실패:',e); alert('퇴원 처리 실패: '+(e.message||e)); }
+    }catch(e){
+      console.error('퇴원 실패:',e); err.textContent='퇴원 처리 실패: '+(e.message||e);
+      btn.disabled=false; btn.textContent='퇴원 처리';
+    }
   }
   async function scRestore(id){
+    if(!scCanWithdraw()){ alert('퇴원 복원은 관리자·부원장만 할 수 있습니다.'); return; }
     var s=_scListData.find(function(x){ return x.id===id; });
     if(!s) return;
-    if(!confirm((s.name||'')+' 학생의 퇴원을 취소(복원)할까요?')) return;
+    if(!confirm((s.name||'')+' 학생의 퇴원을 취소(복원)할까요?\n퇴원일·마지막 등원일·사유 기록이 지워집니다.')) return;
     try{
-      var res=await db.from('users').update({ reading_room_withdrawn_at: null }).eq('id',id);
+      var res=await db.from('users').update({ reading_room_withdrawn_at: null, reading_room_last_attend: null, reading_room_withdraw_reasons: null, reading_room_withdraw_reason: null, reading_room_cancelled: false }).eq('id',id);
       scNewReset();
       if(res.error) throw res.error;
       await scListLoad();
@@ -6801,7 +6866,7 @@
       var d = new Date();
       if(d.getHours() < 3) return;                       // 새벽 3시 이전 대기
       if(scRrToday() === _scAutoReloadBizDay) return;    // 영업일 안 바뀌면 대기
-      var modalOpen = ['wk-xout-overlay','wk-exp-overlay','tp-exp-overlay','sc-mentor-overlay','sc-compliance-overlay','sc-pt-overlay','sc-ptkk-overlay','sc-ptpreset-overlay','sc-ptedit-overlay'].some(function(id){
+      var modalOpen = ['wk-xout-overlay','wk-exp-overlay','tp-exp-overlay','sc-mentor-overlay','sc-compliance-overlay','sc-pt-overlay','sc-ptkk-overlay','sc-ptpreset-overlay','sc-ptedit-overlay','sc-wd-overlay'].some(function(id){
         var e=document.getElementById(id); return e && e.classList.contains('open');
       });
       if(modalOpen) return;                              // 모달 편집 중이면 보류
@@ -6915,6 +6980,34 @@
         <button type="button" class="wk-xout-add" id="pt-kk-copy" onclick="scPtKakaoCopy()">📋 복사</button>
       </div>
       <div style="font-size:11.5px;color:#94a3b8;margin-top:8px">※ 복사 후 카카오톡에 붙여넣어 전송하세요. 내용은 직접 수정 가능합니다.</div>
+    </div>
+  </div>
+  <!-- [학생 명단] 퇴원 처리 (관리자·부원장) -->
+  <div class="wk-xout-overlay" id="sc-wd-overlay" onclick="if(event.target===this)scWdClose()">
+    <div class="wk-xout-card" style="width:440px;max-width:94vw;max-height:92vh;overflow-y:auto;box-sizing:border-box">
+      <h3>📋 독서실 퇴원 처리</h3>
+      <div class="wk-xout-sub" id="sc-wd-name">학생</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div><div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:4px">퇴원일</div>
+          <input type="date" id="sc-wd-date" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:13.5px;font-family:inherit"></div>
+        <div><div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:4px">마지막 등원일 *</div>
+          <input type="date" id="sc-wd-last" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:13.5px;font-family:inherit"></div>
+      </div>
+      <div style="font-size:11.5px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;padding:6px 10px;margin-bottom:12px;line-height:1.5">📊 마지막 등원일이 <b>인원추이현황</b>의 독서실 퇴원 달로 집계됩니다.</div>
+      <div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:4px">퇴원 사유 (복수 선택) *</div>
+      <style>#sc-wd-reasons label{display:flex;align-items:center;gap:6px;font-size:12.5px;color:#0f172a;cursor:pointer;margin:0}#sc-wd-reasons input{width:14px;height:14px;accent-color:#dc2626;cursor:pointer;flex:none}</style>
+      <div id="sc-wd-reasons" style="display:grid;grid-template-columns:1fr 1fr;gap:7px 10px;border:1.5px solid #cbd5e1;border-radius:8px;padding:10px 12px;background:#fafbfd;margin-bottom:12px"></div>
+      <div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:4px">상세 사유 <span style="color:#dc2626">(기타 선택 시 필수)</span></div>
+      <textarea id="sc-wd-text" rows="3" placeholder="상세 사유를 입력하세요" style="width:100%;box-sizing:border-box;padding:9px 11px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;margin-bottom:12px"></textarea>
+      <label style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;background:#fff7ed;border:1.5px solid #fed7aa;border-radius:8px;cursor:pointer;margin-bottom:12px">
+        <input type="checkbox" id="sc-wd-cancelled" style="margin-top:2px;width:15px;height:15px;accent-color:#ea580c;cursor:pointer;flex:none">
+        <span style="font-size:12px;color:#9a3412;line-height:1.5"><b>등록 취소 (실제 미등원)</b><br><span style="color:#c2632a">등록했으나 실제로 다니지 않은 경우 체크. 인원추이현황 통계에서 제외됩니다.</span></span>
+      </label>
+      <div id="sc-wd-err" style="font-size:12.5px;color:#dc2626;font-weight:600;min-height:18px;margin-bottom:6px"></div>
+      <div class="wk-xout-btns">
+        <button type="button" class="wk-xout-cancel" onclick="scWdClose()">취소</button>
+        <button type="button" class="wk-xout-add" id="sc-wd-save" style="background:#dc2626" onclick="scWdConfirm()">퇴원 처리</button>
+      </div>
     </div>
   </div>
   <!-- [상벌점] 프리셋 항목 설정 -->
