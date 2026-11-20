@@ -6472,7 +6472,7 @@ async function initQuestionAlert(){
 var NAJE_STAGE_START = [1, 9, 17, 25, 33, 41, 49, 57, 65, 73, 81];
 var NAJE_STAGE_END   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 999];
 
-var _sn = { sets:[], set:null, step:null, dayId:null, day:null, problems:[], answers:{}, status:'', cur:0,
+var _sn = { sets:[], set:null, step:null, dayId:null, dayStep:null, day:null, problems:[], answers:{}, status:'', cur:0,
             dirty:false, saveT:null, away:0, submitting:false, hooked:false, zCard:null, zFull:null };
 var SN_CH = ['①','②','③','④','⑤'];
 
@@ -6561,7 +6561,7 @@ async function snOpenStep(setId, step){
       alert(d.reason === 'not_eligible' ? '이 단계는 부여되지 않았습니다. 선생님께 문의하세요.' : 'N제를 불러올 수 없습니다.');
       return;
     }
-    _sn.set = d.set; _sn.step = step; _sn.dayId = null; _sn.day = null; _sn.stepInfo = d.step || {};
+    _sn.set = d.set; _sn.step = step; _sn.dayId = null; _sn.dayStep = null; _sn.day = null; _sn.stepInfo = d.step || {};
     _sn.problems = d.problems || [];
     _sn.status = d.status || 'todo';
     if(d.submitted){ await snOpenResult(setId, step); return; }
@@ -6584,6 +6584,10 @@ function snDayCard(s){
   var done = days.filter(function(x){ return x.status === 'submitted'; }).length;
   var meta = [s.target_grade, s.week_number ? (s.week_number + '주차') : '', s.folder_name].filter(Boolean).join(' · ');
   var rows = days.map(function(x){
+    /* [단계별 제출 2026-11-20] 한 날에 단계가 여럿이면 단계마다 따로 풀고 제출한다(사용자 결정).
+       서버가 parts 에 단계별 상태(status·nums)를 실어 줄 때만 — 옛 서버면 아래 하루 통째 줄 그대로 */
+    var live = (x.parts || []).filter(function(p){ return p && p.status !== undefined && Array.isArray(p.nums) && p.total > 0; });
+    if(live.length >= 2) return snDayParts(x, live);
     var cls = x.status === 'submitted' ? 'done' : x.status === 'in_progress' ? 'ing' : '';
     var sub, btn, dis = '';
     if(x.status === 'submitted'){
@@ -6612,7 +6616,42 @@ function snDayCard(s){
     + '<div style="margin-top:8px">' + rows + '</div>'
     + '</div>';
 }
-async function snOpenDay(dayId){
+/* 단계가 여럿인 날 — 요일 머리줄 + 단계마다 한 줄(각자 시작·이어서·결과) */
+function snDayParts(x, parts){
+  var doneN = parts.filter(function(p){ return p.status === 'submitted'; }).length;
+  var all = doneN === parts.length, any = doneN > 0 || parts.some(function(p){ return p.status === 'in_progress'; });
+  var html = '<div class="sn-step">'
+    + '<div class="sn-stno ' + (all ? 'done' : any ? 'ing' : '') + '"><b>' + snEsc(x.label) + '</b>' + snDayMD(x.due_date) + '</div>'
+    + '<div style="flex:1;min-width:0"><div class="sn-stname">' + snEsc(snDayText(x.parts) || '오늘 과제') + '</div>'
+    + '<div class="sn-stsub">' + (all ? '✅ ' : '') + '단계별로 따로 제출 · ' + doneN + ' / ' + parts.length + '단계 제출'
+    + (!all && x.overdue ? ' · ⏰ 밀린 과제' : '') + (!all && x.locked ? ' · 📅 미리 풀 수 있어요' : '') + '</div></div></div>';
+  parts.forEach(function(p){
+    var cls = p.status === 'submitted' ? 'done' : p.status === 'in_progress' ? 'ing' : '';
+    var sub, btn;
+    if(p.status === 'submitted'){
+      sub = '✅ 맞은 문항 ' + (p.correct_count != null ? p.correct_count : 0) + ' / ' + (p.graded != null ? p.graded : p.total) + (p.submitted_at ? ' · ' + snWhen(p.submitted_at) : '');
+      btn = '결과 보기';
+    } else if(p.status === 'in_progress'){
+      sub = '🔵 응시 중 · ' + (p.answered || 0) + ' / ' + p.total + ' 문항 저장됨'; btn = '이어서 풀기';
+    } else { sub = p.total + '문항'; btn = '시작하기'; }
+    html += '<div class="sn-step" style="border-top:none;padding:2px 0 9px 54px">'
+      + '<div style="flex:1;min-width:0"><div class="sn-stname" style="font-size:12.5px">' + snEsc(snDayText([p])) + (p.name ? ' <span style="font-weight:500;color:#6b7280">' + snEsc(p.name) + '</span>' : '') + '</div><div class="sn-stsub">' + sub + '</div></div>'
+      + '<button class="sn-stbtn ' + cls + '" style="padding:8px 12px;font-size:12.5px" onclick="snOpenDay(\'' + x.day_id + '\',' + (+p.step) + ')">' + btn + '</button>'
+      + '</div>';
+  });
+  return html;
+}
+/* 요일 과제를 한 단계로 좁힌다 — 문항·제목·상태를 그 단계 것으로. 단계 정보가 없으면(옛 서버·단계 하나) 하루 통째 */
+function snDayScope(step){
+  _sn.dayStep = null;
+  var p = step ? ((_sn.day && _sn.day.parts) || []).find(function(x){ return x && x.step === step && Array.isArray(x.nums); }) : null;
+  if(!p) return;
+  _sn.dayStep = step;
+  _sn.problems = (_sn.problems || []).filter(function(q){ return p.nums.indexOf(q.no) !== -1; });
+  _sn.stepInfo = { name: snDayText([p]), type: ((_sn.day && _sn.day.label) || '') + '요일 과제' };
+  _sn.status = p.status || 'todo';
+}
+async function snOpenDay(dayId, step){
   try {
     var r = await db.rpc('naje_day_get', { p_student_id: currentUser.id, p_day_id: dayId });
     if(r.error) throw r.error;
@@ -6625,20 +6664,22 @@ async function snOpenDay(dayId){
     _sn.stepInfo = { name: snDayText(_sn.day.parts), type: (_sn.day.label || '') + '요일 과제' };
     _sn.problems = d.problems || [];
     _sn.status = d.status || 'todo';
-    if(d.submitted){ await snOpenDayResult(dayId); return; }
+    snDayScope(step);
+    if(d.submitted || (_sn.dayStep && _sn.status === 'submitted')){ await snOpenDayResult(dayId, _sn.dayStep); return; }
     if(!_sn.problems.length){ alert('이 날에 부여된 문제가 없습니다.'); return; }
     snShowIntro();
   } catch(e){ alert('오류: ' + (e.message || e)); }
 }
-async function snOpenDayResult(dayId){
+async function snOpenDayResult(dayId, step){
   try {
-    if(_sn.dayId !== dayId || !_sn.problems.length){
+    if(_sn.dayId !== dayId || (_sn.dayStep || null) !== (step || null) || !_sn.problems.length){
       var g = await db.rpc('naje_day_get', { p_student_id: currentUser.id, p_day_id: dayId });
       if(g.error) throw g.error;
       var gd = g.data || {};
-      if(gd.ok){ _sn.set = gd.set; _sn.step = null; _sn.dayId = dayId; _sn.day = gd.day || {}; _sn.stepInfo = { name: snDayText(_sn.day.parts), type: (_sn.day.label || '') + '요일 과제' }; _sn.problems = gd.problems || []; }
+      if(gd.ok){ _sn.set = gd.set; _sn.step = null; _sn.dayId = dayId; _sn.day = gd.day || {}; _sn.stepInfo = { name: snDayText(_sn.day.parts), type: (_sn.day.label || '') + '요일 과제' }; _sn.problems = gd.problems || []; snDayScope(step); }
     }
-    var r = await db.rpc('naje_day_get_result', { p_student_id: currentUser.id, p_day_id: dayId });
+    var r = _sn.dayStep ? await db.rpc('naje_day_step_get_result', { p_student_id: currentUser.id, p_day_id: dayId, p_step: _sn.dayStep })
+                        : await db.rpc('naje_day_get_result', { p_student_id: currentUser.id, p_day_id: dayId });
     if(r.error) throw r.error;
     var d = r.data || {};
     if(!d.ok){ alert('결과가 없습니다.'); return; }
@@ -6674,13 +6715,14 @@ async function snStart(){
     var d = r.data || {};
     if(!d.ok){
       snFullscreen(false);
-      if(d.reason === 'already_submitted'){ if(_sn.dayId) await snOpenDayResult(_sn.dayId); else await snOpenResult(_sn.set.id, _sn.step); return; }
+      if(d.reason === 'already_submitted'){ if(_sn.dayId) await snOpenDayResult(_sn.dayId, _sn.dayStep); else await snOpenResult(_sn.set.id, _sn.step); return; }
       alert(d.reason === 'not_eligible' ? '이 단계는 부여되지 않았습니다.' : '시작할 수 없습니다: ' + (d.reason || ''));
       return;
     }
     _sn.answers = {};
     var saved = d.answers || {};
     Object.keys(saved).forEach(function(k){ if(saved[k] != null && String(saved[k]).trim() !== '') _sn.answers[+k] = String(saved[k]); });
+    if(_sn.dayStep){ var mine = {}; _sn.problems.forEach(function(q){ if(_sn.answers[q.no] != null) mine[q.no] = _sn.answers[q.no]; }); _sn.answers = mine; }
     _sn.away = 0; _sn.dirty = false; _sn.cur = 0; _sn.status = 'in_progress';
     snPagedStart();
   } catch(e){ snFullscreen(false); alert('오류: ' + (e.message || e)); }
@@ -6860,11 +6902,12 @@ async function snSaveDraft(flush){
   _sn.dirty = false;
   var payload = {}; Object.keys(_sn.answers).forEach(function(k){ payload[k] = _sn.answers[k]; });
   try {
-    var r = _sn.dayId ? await db.rpc('naje_day_save_draft', { p_student_id: currentUser.id, p_day_id: _sn.dayId, p_answers: payload, p_away: (_sn.away || 0) })
+    var r = (_sn.dayId && _sn.dayStep) ? await db.rpc('naje_day_step_save_draft', { p_student_id: currentUser.id, p_day_id: _sn.dayId, p_step: _sn.dayStep, p_answers: payload, p_away: (_sn.away || 0) })
+          : _sn.dayId ? await db.rpc('naje_day_save_draft', { p_student_id: currentUser.id, p_day_id: _sn.dayId, p_answers: payload, p_away: (_sn.away || 0) })
                       : await db.rpc('naje_save_draft', { p_student_id: currentUser.id, p_set_id: _sn.set.id, p_step: _sn.step, p_answers: payload, p_away: (_sn.away || 0) });
     if(r.error) throw r.error;
     var d = r.data || {};
-    if(!d.ok && d.reason === 'already_submitted'){ _sn.status = 'submitted'; }
+    if(!d.ok && (d.reason === 'already_submitted' || d.reason === 'step_submitted')){ _sn.status = 'submitted'; }
   } catch(e){ _sn.dirty = true; }   /* 못 보냈으면 다음 기회에 */
 }
 /* 다른 앱·탭으로 나간 횟수만 센다 */
@@ -6893,12 +6936,13 @@ async function snSubmit(){
   var btn = document.getElementById('sn-omr-sub'); btn.disabled = true; btn.textContent = '채점 중...';
   try {
     var payload = {}; Object.keys(_sn.answers).forEach(function(k){ payload[k] = _sn.answers[k]; });
-    var r = _sn.dayId ? await db.rpc('naje_day_submit', { p_student_id: currentUser.id, p_day_id: _sn.dayId, p_answers: payload })
+    var r = (_sn.dayId && _sn.dayStep) ? await db.rpc('naje_day_step_submit', { p_student_id: currentUser.id, p_day_id: _sn.dayId, p_step: _sn.dayStep, p_answers: payload })
+          : _sn.dayId ? await db.rpc('naje_day_submit', { p_student_id: currentUser.id, p_day_id: _sn.dayId, p_answers: payload })
                       : await db.rpc('naje_submit', { p_student_id: currentUser.id, p_set_id: _sn.set.id, p_step: _sn.step, p_answers: payload });
     if(r.error) throw r.error;
     var d = r.data || {};
     if(!d.ok){
-      if(d.reason === 'already_submitted'){ alert('이미 제출된 과제입니다. 결과를 보여드릴게요.'); if(_sn.dayId) await snOpenDayResult(_sn.dayId); else await snOpenResult(_sn.set.id, _sn.step); return; }
+      if(d.reason === 'already_submitted' || d.reason === 'step_submitted'){ alert('이미 제출된 과제입니다. 결과를 보여드릴게요.'); if(_sn.dayId) await snOpenDayResult(_sn.dayId, _sn.dayStep); else await snOpenResult(_sn.set.id, _sn.step); return; }
       alert('제출하지 못했습니다: ' + (d.reason || '')); return;
     }
     _sn.status = 'submitted';
@@ -6916,7 +6960,7 @@ async function snOpenResult(setId, step){
       var g = await db.rpc('naje_get_step', { p_student_id: currentUser.id, p_set_id: setId, p_step: step });
       if(g.error) throw g.error;
       var gd = g.data || {};
-      if(gd.ok){ _sn.set = gd.set; _sn.step = step; _sn.dayId = null; _sn.day = null; _sn.stepInfo = gd.step || {}; _sn.problems = gd.problems || []; }
+      if(gd.ok){ _sn.set = gd.set; _sn.step = step; _sn.dayId = null; _sn.dayStep = null; _sn.day = null; _sn.stepInfo = gd.step || {}; _sn.problems = gd.problems || []; }
     }
     var r = await db.rpc('naje_get_result', { p_student_id: currentUser.id, p_set_id: setId, p_step: step });
     if(r.error) throw r.error;
@@ -22487,11 +22531,13 @@ function najeDayAdapt(subs, dailyRows){
       st = +st;
       var pl = plan[st], r = najeStepRange(st), subsOf = pl.days.map(function(d){ return daySubs[d.id] || null; });
       if(!subsOf.some(Boolean)) return;
-      var allDone = subsOf.every(function(x){ return x && x.status === 'submitted'; });
+      /* [단계별 제출 2026-11-20] 하루가 닫혔거나, 그 날 응시의 result.done_steps 에 이 단계가 있으면 제출 */
+      var stepDone = function(x){ return !!x && (x.status === 'submitted' || !!(x.result && Array.isArray(x.result.done_steps) && x.result.done_steps.indexOf(st) !== -1)); };
+      var allDone = subsOf.every(stepDone);
       var answers = {}, items = [], correct = 0, graded = 0, total = 0, subAt = null, startAt = null, seenAt = null, away = 0;
       subsOf.forEach(function(x){
         if(!x) return;
-        if(x.status === 'submitted' && x.result && Array.isArray(x.result.items)){
+        if(stepDone(x) && x.result && Array.isArray(x.result.items)){
           x.result.items.forEach(function(it){
             if(it.no < r.lo || it.no > r.hi) return;
             items.push(it); total++;
@@ -22502,7 +22548,8 @@ function najeDayAdapt(subs, dailyRows){
         } else if(x.answers){
           Object.keys(x.answers).forEach(function(no){ if(+no >= r.lo && +no <= r.hi) answers[no] = x.answers[no]; });
         }
-        if(x.submitted_at && (!subAt || x.submitted_at > subAt)) subAt = x.submitted_at;
+        var xAt = x.submitted_at || (stepDone(x) && x.result && x.result.step_at && x.result.step_at[st]) || null;
+        if(xAt && (!subAt || xAt > subAt)) subAt = xAt;
         if(x.started_at && (!startAt || x.started_at < startAt)) startAt = x.started_at;
         if(x.last_seen_at && (!seenAt || x.last_seen_at > seenAt)) seenAt = x.last_seen_at;
         away += (x.away_count || 0);
@@ -23603,7 +23650,9 @@ async function ndLoad(){
       items.forEach(function(it){ if(it.graded){ graded++; if(it.is_correct) correct++; else wrong.push(it.no); } });
       var answered = sub && sub.status === 'in_progress' ? Object.keys(sub.answers || {}).filter(function(k){ return String(sub.answers[k] || '').trim(); }).length : 0;
       var planned = 0; (d.items || []).forEach(function(it){ if(!it || !it.step) return; var r = najeStepRange(it.step); var all = (pMap[d.set_id] || []).filter(function(n){ return n >= r.lo && n <= r.hi; }); planned += (Array.isArray(it.problems) && it.problems.length) ? it.problems.filter(function(n){ return all.indexOf(n) !== -1; }).length : all.length; });
-      return { day: d, stu: u, set: st, sub: sub, status: status, subDate: subDate, isLate: d.due_date < D, correct: correct, graded: graded, total: items.length || planned, wrong: wrong, answered: answered, planned: planned,
+      return { day: d, stu: u, set: st, sub: sub, status: status, subDate: subDate,
+               doneSteps: (sub && sub.status === 'in_progress' && sub.result && Array.isArray(sub.result.done_steps)) ? sub.result.done_steps.length : 0,
+               stepN: (d.items || []).filter(function(it){ return it && it.step; }).length, isLate: d.due_date < D, correct: correct, graded: graded, total: items.length || planned, wrong: wrong, answered: answered, planned: planned,
                items: items.slice().sort(function(a, b){ return a.no - b.no; }) };
     }).filter(function(r){ return r.stu.id && r.stu.status === 'active' && !r.stu.is_test; });
     // 주간 누적: 같은 학생×세트의 일~목 줄 전부 + 응시 → r.week (기준일 D 이후 날은 '진행 전')
@@ -23645,6 +23694,7 @@ function ndVisibleRows(){
 function ndStatusHtml(r){
   if(r.status === 'ontime') return '<span style="color:#15803d;font-weight:700">✓ 당일 제출</span>';
   if(r.status === 'late') return '<span style="color:#b45309;font-weight:700">⏰ ' + ndLabel(r.subDate) + ' 제출</span><div style="font-size:10px;color:#9ca3af">기한 ' + ndLabel(r.day.due_date) + '</div>';
+  if(r.status === 'ing' && r.doneSteps) return '<span style="color:#0f766e;font-weight:700">부분 제출</span><div style="font-size:10px;color:#9ca3af">' + r.doneSteps + '/' + r.stepN + '단계 제출</div>';
   if(r.status === 'ing') return '<span style="color:#1d4ed8;font-weight:700">응시 중</span><div style="font-size:10px;color:#9ca3af">' + r.answered + '/' + r.planned + ' 저장</div>';
   if(r.status === 'future') return '<span style="color:#9ca3af;font-weight:700">기한 전</span>';
   return '<span style="color:#dc2626;font-weight:700">− 미제출</span>';
