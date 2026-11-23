@@ -24243,6 +24243,29 @@ async function naDaySave(){
     rows.push({ student_id: s.id, template_code: rec.template_code || null, days: days });
   });
   if(!rows.length){ alert('변경사항이 없습니다'); return; }
+  // 같은 날짜에 다른 N제(주차) 과제가 이미 있는 학생 — 막지 않고 확인만 받는다(주차마다 시작일을 안 바꿔 한 주에 겹치는 실수 방지)
+  try {
+    var ovWant = {}, ovSids = [], ovDates = [];
+    rows.forEach(function(r){ r.days.forEach(function(d){ ovWant[r.student_id + '|' + d.due_date] = 1; if(ovSids.indexOf(r.student_id) === -1) ovSids.push(r.student_id); if(ovDates.indexOf(d.due_date) === -1) ovDates.push(d.due_date); }); });
+    if(ovSids.length){
+      var ov = await db.from('naje_daily').select('student_id,set_id,due_date').in('student_id', ovSids).in('due_date', ovDates).neq('set_id', _naDaySt().setId);
+      var ovHits = (ov.data || []).filter(function(x){ return ovWant[x.student_id + '|' + x.due_date]; });
+      if(ovHits.length){
+        var ovSetIds = []; ovHits.forEach(function(x){ if(ovSetIds.indexOf(x.set_id) === -1) ovSetIds.push(x.set_id); });
+        var ovT = await db.from('naje_sets').select('id,title').in('id', ovSetIds);
+        var ovTitle = {}; (ovT.data || []).forEach(function(x){ ovTitle[x.id] = x.title; });
+        var ovBy = {}; ovHits.forEach(function(x){ var o = ovBy[x.student_id] || (ovBy[x.student_id] = { dates:[], sets:[] }); if(o.dates.indexOf(x.due_date) === -1) o.dates.push(x.due_date); if(o.sets.indexOf(x.set_id) === -1) o.sets.push(x.set_id); });
+        var NL = String.fromCharCode(10), ovKeys = Object.keys(ovBy);
+        var ovLines = ovKeys.slice(0, 8).map(function(sid){
+          var o = ovBy[sid]; o.dates.sort();
+          var nm = (students.find(function(s){ return s.id === sid; }) || {}).name || '?';
+          return '· ' + nm + ' — ' + _naDayMD(o.dates[0]) + (o.dates.length > 1 ? '~' + _naDayMD(o.dates[o.dates.length - 1]) : '') + ' (' + o.dates.length + '일): ' + o.sets.map(function(id){ return ovTitle[id] || '다른 N제'; }).join(', ');
+        });
+        if(ovKeys.length > 8) ovLines.push('· 외 ' + (ovKeys.length - 8) + '명');
+        if(!confirm('⚠️ 같은 날짜에 다른 N제 과제가 이미 있는 학생이 ' + ovKeys.length + '명 있습니다.' + NL + NL + ovLines.join(NL) + NL + NL + '이대로 저장하면 그 날 과제가 여러 개가 됩니다. 정말 저장할까요?' + NL + '(다른 주로 넣으려면 [취소] 후 시작일을 바꿔 다시 적용하세요)')) return;
+      }
+    }
+  } catch(e){ console.error('[naDaySave overlap]', e); }
   var btn = _naDayEl('day-save-btn');
   if(btn){ btn.disabled = true; btn.textContent = '💾 저장 중...'; }
   try {
