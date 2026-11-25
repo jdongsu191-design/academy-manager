@@ -23791,12 +23791,19 @@ async function ndLoad(){
           else if(sub && sub.status === 'in_progress') st = (d.due_date > D) ? 'future' : 'ing';
           else if(d.due_date > D) st = 'future';
           var its = (st === 'ontime' || st === 'late') && sub.result && Array.isArray(sub.result.items) ? sub.result.items : [];
-          var c = 0, g = 0; its.forEach(function(it){ if(it.graded){ g++; if(it.is_correct) c++; } });
+          var c = 0, g = 0, wr = []; its.forEach(function(it){ if(it.graded){ g++; if(it.is_correct) c++; else wr.push(it.no); } });
           var planned = 0; (d.items || []).forEach(function(it){ if(!it || !it.step) return; var rg = najeStepRange(it.step); var all = (pMap[d.set_id] || []).filter(function(n){ return n >= rg.lo && n <= rg.hi; }); planned += (Array.isArray(it.problems) && it.problems.length) ? it.problems.filter(function(n){ return all.indexOf(n) !== -1; }).length : all.length; });
-          return { id: d.id, day_no: d.day_no, due_date: d.due_date, items: d.items, status: st, subDate: sd, correct: c, graded: g, planned: planned, focus: d.id === r.day.id };
+          return { id: d.id, day_no: d.day_no, due_date: d.due_date, items: d.items, status: st, subDate: sd, correct: c, graded: g, planned: planned, wrong: wr.sort(function(a, b){ return a - b; }), focus: d.id === r.day.id };
         });
       });
     } catch(e){ console.error('[ndLoad week]', e); }
+    // 같은 학생×N제는 한 줄: 이 날짜가 기한인 줄을 남기고, 이 날 낸 밀린 과제 줄은 요일 칸(⏰)으로만 보인다. 기한 줄이 없으면 가장 최근 밀린 줄 하나
+    var grp = {}; _nd.rows.forEach(function(r){ var k = r.day.student_id + '|' + r.day.set_id; (grp[k] = grp[k] || []).push(r); });
+    _nd.rows = Object.keys(grp).map(function(k){
+      var g = grp[k].slice().sort(function(a, b){ return (a.isLate - b.isLate) || (a.day.due_date < b.day.due_date ? 1 : a.day.due_date > b.day.due_date ? -1 : 0); });
+      var keep = g[0]; keep.lateDays = g.slice(1).filter(function(x){ return x.isLate; }).map(function(x){ return x.day.due_date; }).sort();
+      return keep;
+    });
     _nd.rows.sort(function(a, b){ return (a.isLate - b.isLate) || String(a.stu.name).localeCompare(String(b.stu.name), 'ko'); });
     ndRender();
   } catch(e){ console.error('[ndLoad]', e); wrap.innerHTML = '<div style="padding:30px;text-align:center;color:#dc2626">불러오지 못했습니다: ' + _esc(e.message || e) + '</div>'; }
@@ -23821,35 +23828,98 @@ function ndStatusHtml(r){
   if(r.status === 'future') return '<span style="color:#9ca3af;font-weight:700">기한 전</span>';
   return '<span style="color:#dc2626;font-weight:700">− 미제출</span>';
 }
+/* 그 학생×N제의 한 주(일~목) 줄. 주간 자료를 못 읽었으면 기준일 한 줄만 */
+function ndWeekOf(r){
+  return (r.week && r.week.length) ? r.week : [{ id: r.day.id, day_no: r.day.day_no, due_date: r.day.due_date, items: r.day.items, status: r.status, subDate: r.subDate, correct: r.correct, graded: r.graded, planned: r.planned, wrong: r.wrong, focus: true }];
+}
+function ndWeekStatusHtml(w){
+  if(w.status === 'ontime') return '<span style="color:#15803d;font-weight:700">✓ 당일 제출</span>';
+  if(w.status === 'late') return '<span style="color:#b45309;font-weight:700">⏰ ' + ndLabel(w.subDate) + ' 제출</span>';
+  if(w.status === 'ing') return '<span style="color:#1d4ed8;font-weight:700">응시 중</span>';
+  if(w.status === 'future') return '<span style="color:#9ca3af;font-weight:700">진행 전</span>';
+  return '<span style="color:#dc2626;font-weight:700">− 미제출</span>';
+}
+/* 표의 요일 칸 하나 — 제출 여부만 (정답·정답률·틀린 문항은 [자세히]) */
+function ndDayCell(w){
+  if(!w) return '<span style="color:#d1d5db">·</span>';
+  var m;
+  if(w.status === 'ontime') m = '<span style="color:#15803d;font-weight:800" title="당일 제출">✓</span>';
+  else if(w.status === 'late') m = '<span style="color:#b45309;font-weight:800" title="' + ndLabel(w.subDate) + ' 제출">⏰</span>';
+  else if(w.status === 'ing') m = '<span style="color:#1d4ed8;font-weight:700;font-size:11px">응시 중</span>';
+  else if(w.status === 'future') m = '<span style="color:#b0b7c3;font-size:11px">예정</span>';
+  else m = '<span style="color:#dc2626;font-weight:800" title="미제출">−</span>';
+  return m + '<div style="font-size:10px;color:#9ca3af;font-weight:500;line-height:1.2">' + (+w.due_date.slice(5, 7)) + '/' + (+w.due_date.slice(8, 10)) + '</div>';
+}
 function ndRender(){
   var wrap = document.getElementById('nd-wrap'); if(!wrap) return;
   var rows = ndVisibleRows(), tMap = {}; _nd.teachers.forEach(function(t){ tMap[t.id] = t.name; });
-  var sent = rows.filter(function(r){ return r.day.report_sent_at; }).length, none = rows.filter(function(r){ return r.status === 'none'; }).length, lateN = rows.filter(function(r){ return r.isLate; }).length;
-  document.getElementById('nd-summary').innerHTML = _nd.rows.length ? ('📅 ' + ndLabel(_nd.date) + ' 과제 · <b>' + rows.length + '명</b> (미제출 ' + none + ' · 밀린 제출 ' + lateN + ') · 발송 <b>' + sent + '</b> / ' + rows.length) : '';
+  var sent = rows.filter(function(r){ return r.day.report_sent_at; }).length, none = rows.filter(function(r){ return r.status === 'none'; }).length, lateN = rows.filter(function(r){ return r.isLate || (r.lateDays && r.lateDays.length); }).length;
+  document.getElementById('nd-summary').innerHTML = _nd.rows.length ? ('📅 ' + ndLabel(_nd.date) + ' 과제 · <b>' + rows.length + '명</b> (미제출 ' + none + ' · 밀린 제출 ' + lateN + ') · 발송 <b>' + sent + '</b> / ' + rows.length
+    + ' <span style="color:#9ca3af">· ✓ 당일 제출 &nbsp;⏰ 늦게 제출 &nbsp;− 미제출 &nbsp;· 노란 칸이 이 날짜 과제</span>') : '';
   if(!rows.length){ wrap.innerHTML = '<div style="padding:40px;text-align:center;color:#9ca3af"><div style="font-size:36px;margin-bottom:8px">📭</div>이 날짜에 요일 과제가 없습니다</div>'; return; }
+  var heads = ['#','학교','학년','이름','담당','과제'].concat(ND_DAY.slice(0, 5)).concat(['자세히','리포트','발송']);
   var html = '<table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:900px"><thead><tr style="background:#eff6ff">'
-    + ['#','학교','학년','이름','담당','과제','결과','정답','정답률','틀린 문항','리포트','발송'].map(function(h, i){ return '<th style="padding:8px 8px;border:1px solid #dbeafe;color:#1e40af;font-weight:700;text-align:' + (i === 3 || i === 5 || i === 9 ? 'left' : 'center') + ';white-space:nowrap">' + h + '</th>'; }).join('') + '</tr></thead><tbody>';
+    + heads.map(function(h, i){ return '<th style="padding:8px 8px;border:1px solid #dbeafe;color:#1e40af;font-weight:700;text-align:' + (i === 3 || i === 5 ? 'left' : 'center') + ';white-space:nowrap' + (i >= 6 && i <= 10 ? ';min-width:46px' : '') + '">' + h + '</th>'; }).join('') + '</tr></thead><tbody>';
   rows.forEach(function(r, i){
-    var pct = r.graded ? Math.round(r.correct * 100 / r.graded) : null, col = pct == null ? '#9ca3af' : pct >= 75 ? '#16a34a' : pct >= 50 ? '#f59e0b' : '#dc2626';
     var bg = r.day.report_sent_at ? '#f0fdf4' : (r.isLate ? '#fffbeb' : (i % 2 ? '#f8fafc' : '#fff'));
     var td = 'padding:7px 8px;border:1px solid #e5e7eb;vertical-align:middle;';
+    var byNo = {}; ndWeekOf(r).forEach(function(w){ if(!byNo[w.day_no] || w.focus) byNo[w.day_no] = w; });
+    var dayTds = '';
+    for(var dn = 1; dn <= 5; dn++){
+      var w = byNo[dn];
+      dayTds += '<td style="' + td + 'text-align:center;white-space:nowrap' + (w && w.focus ? ';background:#fef9c3;box-shadow:inset 0 0 0 2px #facc15' : '') + '">' + ndDayCell(w) + '</td>';
+    }
     html += '<tr id="nd-row-' + r.day.id + '" style="background:' + bg + '">'
       + '<td style="' + td + 'text-align:center;color:#9ca3af">' + (i + 1) + '</td>'
       + '<td style="' + td + 'color:#6b7280;white-space:nowrap">' + _esc(r.stu.school || '') + '</td>'
       + '<td style="' + td + 'text-align:center;color:#6b7280">' + _esc(r.stu.grade || '') + '</td>'
-      + '<td style="' + td + 'font-weight:700;white-space:nowrap">' + _esc(r.stu.name) + (r.isLate ? ' <span title="밀린 과제를 이 날 제출" style="font-size:10px;background:#fef3c7;color:#92400e;border-radius:8px;padding:1px 6px">⏰ 밀림</span>' : '') + '</td>'
+      + '<td style="' + td + 'font-weight:700;white-space:nowrap">' + _esc(r.stu.name) + (r.isLate ? ' <span title="밀린 과제를 이 날 제출" style="font-size:10px;background:#fef3c7;color:#92400e;border-radius:8px;padding:1px 6px">⏰ 밀림</span>' : '')
+        + (r.lateDays && r.lateDays.length ? ' <span title="밀린 과제(' + r.lateDays.map(ndLabel).join(', ') + ')를 이 날 제출" style="font-size:10px;background:#fef3c7;color:#92400e;border-radius:8px;padding:1px 6px">⏰ 밀린 ' + r.lateDays.length + '일치 제출</span>' : '') + '</td>'
       + '<td style="' + td + 'text-align:center;color:#6b7280;white-space:nowrap">' + _esc(tMap[r.stu.teacher_id] || '') + '</td>'
       + '<td style="' + td + 'white-space:nowrap"><b>' + _esc(ndPartsText(r.day.items)) + '</b> <span style="color:#9ca3af;font-size:11px">' + _esc(ndStepNames(r.day.items)) + ' · ' + r.planned + '문항</span><div style="font-size:10px;color:#9ca3af">' + _esc(r.set.title || '') + '</div></td>'
-      + '<td style="' + td + 'text-align:center;white-space:nowrap">' + ndStatusHtml(r) + '</td>'
-      + '<td style="' + td + 'text-align:center;font-weight:700">' + (r.status === 'ontime' || r.status === 'late' ? r.correct + '<span style="color:#9ca3af;font-weight:500">/' + r.graded + '</span>' : '-') + '</td>'
-      + '<td style="' + td + 'text-align:center;font-weight:800;color:' + col + '">' + (pct == null ? '-' : pct + '%') + '</td>'
-      + '<td style="' + td + 'font-size:11px;color:#b91c1c">' + (r.wrong.length ? r.wrong.join(', ') + '번' : (r.graded ? '<span style="color:#16a34a">없음</span>' : '')) + '</td>'
+      + dayTds
+      + '<td style="' + td + 'text-align:center"><button onclick="ndDetail(' + "'" + r.day.id + "'" + ')" style="padding:6px 10px;border:1.5px solid #bfdbfe;border-radius:8px;background:#eff6ff;color:#1e40af;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap" title="요일별 정답·정답률·틀린 문항">🔍 자세히</button></td>'
       + '<td style="' + td + 'text-align:center"><button onclick="ndImage(' + "'" + r.day.id + "'" + ',this)" style="padding:6px 10px;border:1.5px solid #dbe4ee;border-radius:8px;background:#fff;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap" title="학생 리포트 이미지를 클립보드로">🖼 복사</button></td>'
       + '<td style="' + td + 'text-align:center;white-space:nowrap"><input type="checkbox" ' + (r.day.report_sent_at ? 'checked' : '') + ' onchange="ndToggleSent(' + "'" + r.day.id + "'" + ',this.checked)" style="width:16px;height:16px;cursor:pointer">'
       + (r.day.report_sent_at ? '<div style="font-size:10px;color:#15803d">' + String(r.day.report_sent_at).slice(5, 16).replace('T', ' ') + '</div>' : '') + '</td>'
       + '</tr>';
   });
   wrap.innerHTML = html + '</tbody></table>';
+}
+/* [자세히] — 그 학생의 한 주를 요일 순으로: 과제·결과·정답·정답률·틀린 문항 */
+function ndDetail(dayId){
+  var r = _nd.rows.find(function(x){ return x.day.id === dayId; }); if(!r) return;
+  var ex = document.getElementById('modal-nd-detail'); if(ex) ex.remove();
+  var E = _esc, sumC = 0, sumG = 0, dueDays = 0, doneDays = 0, trs = '';
+  var colOf = function(p){ return p == null ? '#9ca3af' : p >= 75 ? '#16a34a' : p >= 50 ? '#f59e0b' : '#dc2626'; };
+  var td = 'padding:8px 10px;border:1px solid #e5e7eb;vertical-align:middle;';
+  ndWeekOf(r).forEach(function(w){
+    var done = w.status === 'ontime' || w.status === 'late';
+    var wp = done && w.graded ? Math.round(w.correct * 100 / w.graded) : null, wr = w.wrong || [];
+    if(w.status !== 'future') dueDays++;
+    if(done){ doneDays++; sumC += w.correct; sumG += w.graded; }
+    trs += '<tr style="background:' + (w.focus ? '#fef9c3' : (w.status === 'future' ? '#f8fafc' : '#fff')) + '">'
+      + '<td style="' + td + 'text-align:center;font-weight:800;white-space:nowrap">' + ND_DAY[new Date(w.due_date + 'T00:00:00').getDay()] + '<div style="font-size:10px;color:#9ca3af;font-weight:500">' + (+w.due_date.slice(5, 7)) + '/' + (+w.due_date.slice(8, 10)) + '</div></td>'
+      + '<td style="' + td + 'white-space:nowrap"><b>' + E(ndPartsText(w.items)) + '</b><div style="font-size:10px;color:#9ca3af">' + E(ndStepNames(w.items)) + ' · ' + w.planned + '문항</div></td>'
+      + '<td style="' + td + 'text-align:center;white-space:nowrap">' + (w.focus ? ndStatusHtml(r) : ndWeekStatusHtml(w)) + '</td>'
+      + '<td style="' + td + 'text-align:center;font-weight:700;white-space:nowrap">' + (done ? w.correct + '<span style="color:#9ca3af;font-weight:500">/' + w.graded + '</span>' : '-') + '</td>'
+      + '<td style="' + td + 'text-align:center;font-weight:800;color:' + colOf(wp) + '">' + (wp == null ? '-' : wp + '%') + '</td>'
+      + '<td style="' + td + 'font-size:12px;color:#b91c1c">' + (wr.length ? wr.join(', ') + '번' : (done && w.graded ? '<span style="color:#16a34a">없음</span>' : '<span style="color:#d1d5db">-</span>')) + '</td>'
+      + '</tr>';
+  });
+  var sumP = sumG ? Math.round(sumC * 100 / sumG) : null, tds = 'padding:8px 10px;border:1px solid #e5e7eb;border-top:2px solid #94a3b8;background:#f1f5f9;font-weight:800;';
+  trs += '<tr><td style="' + tds + 'text-align:center">누적</td><td style="' + tds + '" colspan="2">' + dueDays + '일 중 ' + doneDays + '일 제출</td><td style="' + tds + 'text-align:center">' + (sumG ? sumC + '/' + sumG : '-') + '</td><td style="' + tds + 'text-align:center;color:' + colOf(sumP) + '">' + (sumP == null ? '-' : sumP + '%') + '</td><td style="' + tds + '"></td></tr>';
+  var modal = document.createElement('div');
+  modal.id = 'modal-nd-detail'; modal.className = 'modal-backdrop open';
+  modal.onclick = function(ev){ if(ev.target === modal) modal.remove(); };
+  modal.innerHTML = '<div class="modal" style="max-width:720px;width:95vw;max-height:90vh;overflow:auto"><div class="modal-handle"></div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px"><div><h3 style="margin:0">' + E(r.stu.name || '') + ' <span style="font-size:12px;color:#6b7280;font-weight:500">' + E(((r.stu.school || '') + ' ' + (r.stu.grade || '')).trim()) + '</span></h3>'
+    + '<div style="font-size:12px;color:#64748b;margin-top:4px">📘 ' + E(r.set.title || '') + ' · 기준일 ' + ndLabel(_nd.date) + ' (노란 줄이 이 날짜 과제)</div></div>'
+    + '<button onclick="document.getElementById(\'modal-nd-detail\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280">✕</button></div>'
+    + '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#eff6ff">'
+    + ['요일','과제','결과','정답','정답률','틀린 문항'].map(function(h, i){ return '<th style="padding:8px 10px;border:1px solid #dbeafe;color:#1e40af;font-weight:700;white-space:nowrap;text-align:' + (i === 1 || i === 5 ? 'left' : 'center') + '">' + h + '</th>'; }).join('')
+    + '</tr></thead><tbody>' + trs + '</tbody></table></div></div>';
+  document.body.appendChild(modal);
 }
 async function ndToggleSent(dayId, on){
   var r = _nd.rows.find(function(x){ return x.day.id === dayId; }); if(!r) return;
