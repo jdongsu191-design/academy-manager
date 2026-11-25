@@ -25050,25 +25050,98 @@ async function ndImage(dayId, btn){
   } catch(e){ _najeImgBtn(btn, 'err'); alert('이미지 생성 실패: ' + (e.message || e)); }
   finally { wrap.innerHTML = ''; }
 }
-/* 그날 전체 표 한 장 (데스크 확인·출력용) */
+/* 그날 전체 표 한 장 (데스크 확인·출력용) — 중등 주간 결과 이미지와 같은 틀(머리 카드 → 선생님 띠 → N제별 카드 2단), 색은 남보라 계열로 구분 */
+var ND_ALL_COLORS = [
+  { hd:'#3730A3', lite:'#EEF2FF', border:'#C7D2FE', sub:'#E0E7FF' },
+  { hd:'#0E7490', lite:'#ECFEFF', border:'#A5F3FC', sub:'#CFFAFE' },
+  { hd:'#86198F', lite:'#FDF4FF', border:'#F5D0FE', sub:'#FAE8FF' },
+  { hd:'#9A3412', lite:'#FFF7ED', border:'#FED7AA', sub:'#FFEDD5' },
+  { hd:'#065F46', lite:'#ECFDF5', border:'#A7F3D0', sub:'#D1FAE5' },
+  { hd:'#9F1239', lite:'#FFF1F2', border:'#FECDD3', sub:'#FFE4E6' }
+];
+function ndAllCell(w){
+  var bg = 'transparent', col = '#cbd5e1', tx = '-', sub = '';
+  if(w){
+    if(w.status === 'ontime'){ bg = '#ecfdf5'; col = '#047857'; tx = '✓ 제출'; }
+    else if(w.status === 'late'){ bg = '#fffbeb'; col = '#b45309'; tx = '⏰ 늦게'; sub = ndLabel(w.subDate) + ' 제출'; }
+    else if(w.status === 'ing'){ bg = '#eff6ff'; col = '#1d4ed8'; tx = '응시 중'; }
+    else if(w.status === 'future'){ tx = '예정'; }
+    else { bg = '#fff1f2'; col = '#dc2626'; tx = '미제출'; }
+  }
+  return '<td style="padding:10px 6px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:1px solid #f1f5f9;background:' + bg + (w && w.focus ? ';outline:3px solid #4f46e5;outline-offset:-3px' : '') + '">'
+    + '<span style="font-size:16px;font-weight:' + (w && w.status !== 'future' ? 800 : 600) + ';color:' + col + ';white-space:nowrap">' + tx + '</span>'
+    + (sub ? '<div style="font-size:11px;color:#b45309;white-space:nowrap;margin-top:1px">' + sub + '</div>' : '') + '</td>';
+}
+function ndAllImageHtml(rows){
+  var E = _esc, tMap = {}; _nd.teachers.forEach(function(t){ tMap[t.id] = t.name; });
+  var bs = document.getElementById('nd-branch'), ts = document.getElementById('nd-teacher');
+  var scope = [bs && bs.value ? bs.options[bs.selectedIndex].text : '', ts && ts.value ? ts.options[ts.selectedIndex].text + ' T' : ''].filter(Boolean).join(' · ') || '전체';
+  var done = rows.filter(function(r){ return r.status === 'ontime' || r.status === 'late'; }).length, none = rows.filter(function(r){ return r.status === 'none'; }).length, ing = rows.filter(function(r){ return r.status === 'ing'; }).length;
+  var kpi = function(n, l, bg, bd, c){ return '<div style="text-align:center;padding:10px 22px;background:' + bg + ';border-radius:10px;border:1.5px solid ' + bd + '"><div style="font-size:24px;font-weight:900;color:' + c + '">' + n + '</div><div style="font-size:12px;color:' + c + ';margin-top:2px;white-space:nowrap">' + l + '</div></div>'; };
+  var html = '<div style="width:1600px;padding:36px 36px 28px;font-family:Apple SD Gothic Neo,Malgun Gothic,sans-serif;background:#eef0fb;box-sizing:border-box">'
+    + '<div style="background:linear-gradient(135deg,#312e81,#4338ca);border-radius:14px;padding:24px 30px;margin-bottom:20px">'
+      + '<div style="font-size:11px;font-weight:700;color:rgba(255,255,255,.6);letter-spacing:2.5px;margin-bottom:6px">BESTIAN 수학학원 · 고등</div>'
+      + '<div style="display:flex;align-items:flex-end;justify-content:space-between">'
+        + '<div><div style="font-size:28px;font-weight:900;color:#fff;margin-bottom:6px">고등 일일N제 학습 결과 (' + E(scope) + ')</div>'
+          + '<div style="font-size:15px;color:rgba(255,255,255,.85)">과제 날짜 ' + ndLabel(_nd.date) + '&nbsp;&nbsp;|&nbsp;&nbsp;굵은 테두리 칸이 이 날짜 과제</div>'
+          + '<div style="font-size:13px;color:rgba(255,255,255,.6);margin-top:4px">✓ 제출 = 당일 제출 · ⏰ 늦게 = 기한을 넘겨 제출 · 예정 = 기한 전</div></div>'
+        + '<div style="display:flex;gap:12px">' + kpi(rows.length, '대상 학생', '#fff', '#c7d2fe', '#312e81') + kpi(done, '✅ 제출', '#dcfce7', '#bbf7d0', '#15803d') + kpi(ing, '응시 중', '#dbeafe', '#bfdbfe', '#1d4ed8') + kpi(none, '미제출', '#fee2e2', '#fecaca', '#dc2626') + '</div>'
+      + '</div></div>';
+  /* 선생님 → N제(주차) → 학생 */
+  var tOrder = [], tg = {};
+  rows.forEach(function(r){
+    var tid = r.stu.teacher_id || '__none__';
+    if(!tg[tid]){ tg[tid] = { name: tMap[tid] || '미지정', sets: {}, order: [] }; tOrder.push(tid); }
+    var k = r.day.set_id; if(!tg[tid].sets[k]){ tg[tid].sets[k] = { title: r.set.title || 'N제', rows: [] }; tg[tid].order.push(k); }
+    tg[tid].sets[k].rows.push(r);
+  });
+  tOrder.sort(function(a, b){ return String(tg[a].name).localeCompare(String(tg[b].name), 'ko'); });
+  tOrder.forEach(function(tid, ti){
+    var T = tg[tid], col = ND_ALL_COLORS[ti % ND_ALL_COLORS.length], n = 0; T.order.forEach(function(k){ n += T.sets[k].rows.length; });
+    html += '<div style="background:' + col.hd + ';padding:12px 20px;border-radius:12px 12px 0 0;margin-top:' + (ti > 0 ? '20px' : '0') + ';display:flex;align-items:center;gap:10px">'
+      + '<div style="font-size:20px;font-weight:900;color:#fff">' + E(T.name) + ' 선생님</div><div style="font-size:15px;color:rgba(255,255,255,.75);font-weight:600">' + n + '명</div></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;background:#e2e5f4;padding:12px;border-radius:0 0 12px 12px;margin-bottom:4px;align-items:start">';
+    var cards = [];
+    T.order.forEach(function(k){
+      var S0 = T.sets[k], tot = S0.rows.length;
+      if(T.order.length === 1 && tot > 8){ var half = Math.ceil(tot / 2); cards.push({ title: S0.title, rows: S0.rows.slice(0, half), base: 0, total: tot }); cards.push({ title: S0.title, rows: S0.rows.slice(half), base: half, total: tot }); }
+      else cards.push({ title: S0.title, rows: S0.rows, base: 0, total: tot });
+    });
+    cards.forEach(function(S){
+      var th = 'background:' + col.lite + ';padding:9px 8px;text-align:center;font-size:14px;font-weight:700;color:' + col.hd + ';border-bottom:1.5px solid ' + col.border + ';';
+      var first = {}; ndWeekOf(S.rows[0]).forEach(function(w){ first[w.day_no] = w.due_date; });
+      html += '<div style="background:#fff;border-radius:10px;overflow:hidden">'
+        + '<div style="background:' + col.sub + ';padding:10px 14px;border-left:4px solid ' + col.hd + ';display:flex;justify-content:space-between;align-items:center"><div style="font-size:17px;font-weight:800;color:' + col.hd + '">' + E(S.title) + '</div><div style="font-size:14px;font-weight:700;color:' + col.hd + ';opacity:.7">' + (S.base ? '(이어서) ' : '') + S.total + '명</div></div>'
+        + '<table style="width:100%;border-collapse:collapse"><thead><tr><th style="' + th + 'width:30px">#</th><th style="' + th + 'text-align:left">학생</th><th style="' + th + 'text-align:left">과제</th>';
+      for(var dn = 1; dn <= 5; dn++) html += '<th style="' + th + 'border-left:1px solid ' + col.border + ';min-width:74px">' + ND_DAY[dn - 1] + (first[dn] ? '<br><span style="font-size:11px;opacity:.7">' + (+first[dn].slice(5, 7)) + '/' + (+first[dn].slice(8, 10)) + '</span>' : '') + '</th>';
+      html += '<th style="' + th + 'border-left:2px solid ' + col.hd + ';min-width:58px">제출</th></tr></thead><tbody>';
+      S.rows.forEach(function(r, si){
+        var byNo = {}, due = 0, sub = 0;
+        ndWeekOf(r).forEach(function(w){ if(!byNo[w.day_no] || w.focus) byNo[w.day_no] = w; });
+        Object.keys(byNo).forEach(function(dn){ var w = byNo[dn]; if(w.status !== 'future'){ due++; if(w.status === 'ontime' || w.status === 'late') sub++; } });
+        html += '<tr style="background:' + (si % 2 ? col.lite + '88' : '#fff') + '">'
+          + '<td style="padding:10px 8px;font-size:13px;color:#94a3b8;font-weight:600;border-bottom:1px solid #f1f5f9;text-align:center">' + (S.base + si + 1) + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid #f1f5f9"><div style="font-size:18px;font-weight:700;color:#1e293b;white-space:nowrap">' + E(r.stu.name) + '</div><div style="font-size:11px;color:#94a3b8;white-space:nowrap">' + E(((r.stu.school || '') + ' ' + (r.stu.grade || '')).trim()) + '</div></td>'
+          + '<td style="padding:8px 8px;border-bottom:1px solid #f1f5f9;font-size:14px;font-weight:700;color:#334155;white-space:nowrap">' + E(ndPartsText(r.day.items)) + '</td>';
+        for(var dn = 1; dn <= 5; dn++) html += ndAllCell(byNo[dn]);
+        html += '<td style="padding:8px 6px;text-align:center;border-bottom:1px solid #f1f5f9;border-left:2px solid ' + col.hd + ';background:' + col.lite + '"><span style="font-size:17px;font-weight:800;color:' + (!due ? '#94a3b8' : sub === due ? '#15803d' : sub ? '#a16207' : '#dc2626') + ';white-space:nowrap">' + (due ? sub + '/' + due : '-') + '</span></td></tr>';
+      });
+      html += '</tbody></table></div>';
+    });
+    html += '</div>';
+  });
+  return html + '<div style="text-align:center;margin-top:8px;font-size:11px;color:#94a3b8">© BESTIAN 수학학원&nbsp;&nbsp;|&nbsp;&nbsp;과제 날짜 ' + ndLabel(_nd.date) + '</div></div>';
+}
 async function ndAllImage(){
   var rows = ndVisibleRows(); if(!rows.length){ alert('학생이 없습니다'); return; }
   var btn = document.getElementById('nd-all-btn'); btn.disabled = true; btn.textContent = '⏳ 생성 중...';
-  var tMap = {}; _nd.teachers.forEach(function(t){ tMap[t.id] = t.name; });
-  var tmp = document.createElement('div'); tmp.style.cssText = 'position:fixed;left:-9999px;top:0;width:1100px;background:#fff;padding:20px;font-family:"Malgun Gothic",sans-serif';
-  var E = _esc;
-  tmp.innerHTML = '<div style="font-size:18px;font-weight:800;color:#1e3a5f;margin-bottom:10px">📅 ' + ndLabel(_nd.date) + ' 고등 일일N제 결과 (' + rows.length + '명)</div>'
-    + '<div style="font-size:11px;color:#64748b;margin-bottom:8px">✓ 당일 제출 &nbsp; ⏰ 늦게 제출 &nbsp; − 미제출 &nbsp; · 노란 칸이 이 날짜 과제</div>'
-    + '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#eff6ff">' + ['#','학교','학년','이름','담당','과제'].concat(ND_DAY.slice(0, 5)).map(function(h, i){ return '<th style="padding:6px 8px;border:1px solid #bfdbfe;color:#1e40af' + (i >= 6 ? ';width:64px' : '') + '">' + h + '</th>'; }).join('') + '</tr></thead><tbody>'
-    + rows.map(function(r, i){ var td = 'padding:6px 8px;border:1px solid #bfdbfe;';
-        var byNo = {}; ndWeekOf(r).forEach(function(w){ if(!byNo[w.day_no] || w.focus) byNo[w.day_no] = w; });
-        var dayTds = ''; for(var dn = 1; dn <= 5; dn++){ var w = byNo[dn]; dayTds += '<td style="' + td + 'text-align:center;white-space:nowrap' + (w && w.focus ? ';background:#fef9c3' : '') + '">' + ndDayCell(w) + '</td>'; }
-        return '<tr style="background:' + (i % 2 ? '#f8fafc' : '#fff') + '"><td style="' + td + 'text-align:center;color:#9ca3af">' + (i + 1) + '</td><td style="' + td + '">' + E(r.stu.school || '') + '</td><td style="' + td + 'text-align:center">' + E(r.stu.grade || '') + '</td><td style="' + td + 'font-weight:700">' + E(r.stu.name) + (r.isLate ? ' ⏰' : '') + '</td><td style="' + td + 'text-align:center">' + E(tMap[r.stu.teacher_id] || '') + '</td><td style="' + td + '">' + E(ndPartsText(r.day.items)) + '</td>' + dayTds + '</tr>'; }).join('')
-    + '</tbody></table>';
+  var tmp = document.createElement('div'); tmp.style.cssText = 'position:fixed;left:-9999px;top:0;pointer-events:none;background:#eef0fb';
+  tmp.innerHTML = ndAllImageHtml(rows);
   document.body.appendChild(tmp);
   try {
     if(typeof html2canvas === 'undefined') throw new Error('html2canvas 미로드');
-    var canvas = await html2canvas(tmp, { backgroundColor:'#fff', scale:2, useCORS:true, logging:false });
+    await new Promise(function(res){ setTimeout(res, 150); });
+    var canvas = await html2canvas(tmp, { backgroundColor:'#eef0fb', scale:2, useCORS:true, logging:false, width:1600, height:tmp.scrollHeight });
     await shareOrCopyCanvas(canvas, 'N제일일리포트_' + _nd.date + '.png');
   } catch(e){ alert('이미지 생성 실패: ' + (e.message || e)); }
   finally { tmp.remove(); btn.disabled = false; btn.textContent = '🖼 전체 표 이미지'; }
