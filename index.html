@@ -33621,7 +33621,8 @@ function trIsAdmin(){ return !!(currentUser && currentUser.role === 'admin'); }
 /* ============================================================
    [SECTION: TUITION CALC] 수강료 계산기 (관리자·데스크, 2026-11-26)
    - 구글시트 '신입생 입학 수강료 계산기' 의 수식을 그대로 옮겼다(사용자 확인: 아래 규칙은 모두 의도한 것)
-     · 입학: (말일 − 입학일 + 1) × (정규 수강료 ÷ 그달 일수) → 천 원 단위 반올림, 형제할인은 그 뒤에 통째로 뺀다
+     · 입학: (말일 − 입학일 + 1) × (정규 수강료 ÷ 그달 일수) → 천 원 단위 반올림
+       형제할인은 입학월에는 빼지 않고 다음 달부터 적용한다(2026-11-26 사용자 변경 — 시트와 다름). 다음 달 수강료 = 정규 수강료 − 형제할인
      · 퇴원(일할): 형제할인을 먼저 뺀 수강료 ÷ 그달 일수 × 마지막 수강일의 '일' = 납입금액, 나머지가 환불 (반올림 없음, 교재비 제외)
    - 퇴원(법정 기준): 학원법 시행령 별표 4 — 1/3 경과 전 2/3, 1/2 경과 전 1/2, 그 뒤 없음 (교습시간 기준)
    - 수강료 표는 app_settings(key='tuition_calc') 한 줄. 편집은 관리자만, 없으면 TC_DEFAULT
@@ -33660,7 +33661,7 @@ function tcCalcIn(cfg, o){
   var fee = tcFee(cfg, o.grade), dt = tcDate(o.date); if (fee == null || !dt) return null;
   var days = dt.dim - dt.d + 1, pro = Math.round(days * (fee / dt.dim) / 1000) * 1000;
   var book = o.book ? tcBook(cfg, o.book) : null, sib = o.sib ? cfg.sibling : 0;
-  return { fee:fee, dt:dt, days:days, pro:pro, book:book, sib:sib, total: pro + (book || 0) - sib };
+  return { fee:fee, dt:dt, days:days, pro:pro, book:book, sib:sib, total: pro + (book || 0), nextM: dt.m % 12 + 1, next: fee - sib };
 }
 /* 퇴원 환불 · 일할 — 시트 C5~J5 */
 function tcCalcOut(cfg, o){
@@ -33686,9 +33687,11 @@ function tcMsgIn(cfg, r, eum){
   var W = function(n){ return '￦' + Math.round(n).toLocaleString('ko-KR'); }, L = [];
   L.push('안녕하세요 베스티안 수학학원입니다', '입학 수강료 관련하여 안내드립니다', '', '◆ 정규수업료: ' + W(r.fee) + ' (매달 1일 납부일) ◆', '',
          '▶ ' + r.dt.m + '월 [' + r.dt.m + '월 ' + r.dt.d + '일(' + r.dt.dow + ') 입학] 수강료: ' + W(r.pro));
-  if (r.sib) L.push('▶ 형제할인: ' + r.sib.toLocaleString('ko-KR') + '원');
-  L.push('▶ 교재비: ' + (r.book != null ? W(r.book) : TC_NO_BOOK), '', '※ 총 수강료: ' + W(r.total), '',
-         '* 수강료 결제는 학원친구, 데스크 현장 결제, 가상계좌로 가능합니다.', '');
+  L.push('▶ 교재비: ' + (r.book != null ? W(r.book) : TC_NO_BOOK), '', '※ 총 수강료: ' + W(r.total), '');
+  /* 형제할인은 입학월에 빼지 않는다 — 다음 달부터 적용된다는 것과 그 달 수강료를 알린다 */
+  if (r.sib) L.push('※ 형제할인(' + r.sib.toLocaleString('ko-KR') + '원)은 입학월에는 적용되지 않으며, 다음 달인 ' + r.nextM + '월부터 적용됩니다.',
+                    '▶ ' + r.nextM + '월 수강료(형제할인 적용): ' + W(r.next), '');
+  L.push('* 수강료 결제는 학원친구, 데스크 현장 결제, 가상계좌로 가능합니다.', '');
   /* 이음카드(인천 지역화폐) 안내는 마스터와 청라관 데스크만 — 다른 계정은 교재비 결제 방법만 */
   if (eum) L.push(' - 교재비는 학원친구와 데스크 현장결제로 가능하며 이음카드는 결제가 안 됩니다.', ' - 이음카드로 수강료 결제는 가능하나 캐시백이 되지 않는 점 참고바랍니다.');
   else L.push(' - 교재비는 학원친구와 데스크 현장결제로 가능합니다.');
@@ -33803,13 +33806,13 @@ function tcCalc(){
       + R('정규 수강료', tcWon(r.fee))
       + R('수강 일수', r.dt.m + '월 ' + r.dt.d + '일(' + r.dt.dow + ') ~ ' + r.dt.dim + '일 · ' + r.days + '일 / ' + r.dt.dim + '일')
       + R('중도입학 수강료' + SM('천 원 단위 반올림'), tcWon(r.pro))
-      + R('형제할인', r.sib ? '−' + tcWon(r.sib) : '-')
       + R('교재비' + (r.book != null ? SM(tcEsc(_tc.inp.book)) : ''), r.book != null ? tcWon(r.book) : '<span style="font-size:12px;color:#64748b">추후 교재 배부 후 발생</span>')
-      + R('총 수강료', tcWon(r.total), true, '#178EF5')
-      + (r.total < 0 ? '<div style="font-size:12px;color:#dc2626;margin-top:6px">⚠ 형제할인이 수강료보다 커서 음수입니다. 금액을 확인하세요.</div>' : '')
+      + R('총 수강료' + SM(r.dt.m + '월 납부'), tcWon(r.total), true, '#178EF5')
+      + (r.sib ? R('형제할인' + SM('입학월 미적용 · ' + r.nextM + '월부터'), '−' + tcWon(r.sib)) + R(r.nextM + '월 수강료' + SM('형제할인 적용'), tcWon(r.next)) : '')
+      + (r.next < 0 ? '<div style="font-size:12px;color:#dc2626;margin-top:6px">⚠ 형제할인이 수강료보다 커서 음수입니다. 금액을 확인하세요.</div>' : '')
       + '</div><div class="card" style="flex:1.2;min-width:280px;margin-top:0"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:14px;font-weight:700">💬 안내 메시지</div>'
       + '<button onclick="tcCopy(this)" style="padding:7px 14px;border:none;border-radius:8px;background:#0f172a;color:#fff;font-size:13px;font-weight:700;cursor:pointer">복사</button></div>'
-      + '<textarea id="tc-msg" readonly rows="17" style="width:100%;box-sizing:border-box;padding:12px;border:1.5px solid var(--border);border-radius:10px;font-size:13.5px;line-height:1.6;font-family:inherit;resize:vertical;background:#f8fafc;outline:none">' + tcEsc(tcMsgIn(cfg, r, _tc.eum)) + '</textarea></div></div>';
+      + '<textarea id="tc-msg" readonly rows="19" style="width:100%;box-sizing:border-box;padding:12px;border:1.5px solid var(--border);border-radius:10px;font-size:13.5px;line-height:1.6;font-family:inherit;resize:vertical;background:#f8fafc;outline:none">' + tcEsc(tcMsgIn(cfg, r, _tc.eum)) + '</textarea></div></div>';
   } else if (_tc.tab === 'out' && _tc.sub !== 'law') {
     var o = tcCalcOut(cfg, _tc.out); if (!o) return empty('학년과 마지막 수강일을 고르면 계산됩니다');
     box.innerHTML = '<div class="card" style="max-width:560px">'
