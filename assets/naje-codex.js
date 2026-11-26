@@ -145,7 +145,8 @@
   const apply = njeApply;
   njeApply = function () {
     if(reviewed && $('nje-o-ans').checked){
-      const missing=najeExtractedProblems.filter(p=>!najeAnswerMap[p.number]);
+      const part=typeof njePartNos==='function'?njePartNos():null;   // 일부 교체면 고른 번호만 검사한다
+      const missing=najeExtractedProblems.filter(p=>(!part||part.includes(p.number))&&!najeAnswerMap[p.number]);
       if(missing.length){message('정답 확인에서 '+missing.map(p=>p.number).join(', ')+'번 답을 입력하거나 정답 적용을 해제하세요. 이전 정답을 자동으로 재사용하지 않습니다.');return;}
     }
     return apply.apply(this,arguments);
