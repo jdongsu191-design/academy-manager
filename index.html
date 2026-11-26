@@ -5569,6 +5569,8 @@ async function showApp() {
     if (typeof plSetupNav === 'function') plSetupNav();
     // 첫 화면: 질문 (숙제 메뉴 제외됨)
     switchStudentPanel('question', document.getElementById('snav-question'));
+    // 내가 보낸 N제 문항 오류 제보가 처리됐으면 한 번 알려 준다
+    if (typeof snNoticeStart === 'function') snNoticeStart();
     return;
   }
 
@@ -5583,6 +5585,8 @@ async function showApp() {
 
   // 운영 일정 알림 팝업 (직원 전체) — 화면이 자리잡은 뒤, 이후 30분마다
   if (typeof calAlarmCheck === 'function') { setTimeout(calAlarmCheck, 1200); if (!window._calAlarmTimer) window._calAlarmTimer = setInterval(calAlarmCheck, 30 * 60 * 1000); }
+  // N제 문항 오류 제보가 새로 들어오면 관리자에게 한 번 알려 준다
+  if (typeof admNrAlertStart === 'function') admNrAlertStart();
   // 알림 Realtime 구독 시작 (마스터 제외 전체)
   if (typeof initNotifyRealtime === 'function') initNotifyRealtime();
   // 로그인 중 받지 못한 알림 확인 (500ms 지연 — 화면 안정 후)
@@ -7635,6 +7639,82 @@ function snReportToast(msg){
   t.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:10060;background:#1e293b;color:#fff;padding:11px 18px;border-radius:12px;font-size:13px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.25);max-width:86vw;text-align:center';
   t.textContent = msg; document.body.appendChild(t);
   setTimeout(function(){ t.remove(); }, 2400);
+}
+
+/* ── 문항 오류 제보 알림 (2026-11-26) ─────────────────────
+   학생: 내가 보낸 제보가 처리 완료되면 한 번만 팝업 — 서버(naje_report_notices)가 내려 주는 순간 '알렸음' 으로 찍어 다시 안 뜬다
+   관리자: 새 제보가 들어오면 한 번만 팝업 — 어디까지 봤는지는 이 브라우저(localStorage naje_rep_seen_계정)에 기억한다
+   서버: migrations/20261126_naje_report_notice.sql. SQL 적용 전에는 조용히 아무것도 하지 않는다 */
+var NAJE_NOTICE_REASON = { book:'책과 문제가 다름', answer:'해설과 답이 다름', invisible:'문제가 안 보임', custom:'직접 작성' };
+function najeNoticePopup(o){
+  var old = document.getElementById('naje-notice-ov'); if(old) old.remove();
+  var ov = document.createElement('div'); ov.id = 'naje-notice-ov';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10070;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  var E = function(v){ return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+  ov.innerHTML = '<div style="background:#fff;border-radius:16px;width:100%;max-width:400px;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.3)">'
+    + '<div style="font-size:17px;font-weight:800;color:#1e293b;margin-bottom:6px">' + E(o.title) + '</div>'
+    + (o.sub ? '<div style="font-size:13px;color:#64748b;margin-bottom:10px;line-height:1.5">' + E(o.sub) + '</div>' : '')
+    + '<div style="max-height:44vh;overflow:auto;margin-bottom:14px">' + (o.lines || []).map(function(l){
+        return '<div style="padding:9px 11px;margin-bottom:6px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;font-size:13px;color:#334155;line-height:1.45"><b>' + E(l[0]) + '</b>'
+          + (l[1] ? '<div style="font-size:12px;color:#64748b">' + E(l[1]) + '</div>' : '') + '</div>';
+      }).join('') + (o.more ? '<div style="font-size:12px;color:#94a3b8;text-align:center">외 ' + o.more + '건</div>' : '') + '</div>'
+    + '<div style="display:flex;gap:8px">'
+    + (o.goLabel ? '<button id="naje-notice-go" style="flex:1.3;padding:12px;border:none;border-radius:10px;background:var(--primary,#2563eb);color:#fff;font-size:14px;font-weight:800;cursor:pointer">' + E(o.goLabel) + '</button>' : '')
+    + '<button id="naje-notice-ok" style="flex:1;padding:12px;border:1.5px solid #cbd5e1;border-radius:10px;background:#fff;color:#334155;font-size:14px;font-weight:700;cursor:pointer">' + (o.goLabel ? '닫기' : '확인') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(ov);
+  document.getElementById('naje-notice-ok').onclick = function(){ ov.remove(); };
+  var go = document.getElementById('naje-notice-go');
+  if(go) go.onclick = function(){ ov.remove(); try { o.onGo && o.onGo(); } catch(e){ console.error(e); } };
+}
+/* 학생 */
+async function snNoticeCheck(){
+  if(!(currentUser && currentUser.role === 'student') || document.hidden || window._snNoticeBusy) return;
+  window._snNoticeBusy = true;
+  try {
+    var r = await db.rpc('naje_report_notices', { p_student_id: currentUser.id });
+    if(r.error) return;
+    var rows = (r.data && r.data.rows) || [];
+    if(!rows.length) return;
+    najeNoticePopup({ title: '✅ 제보한 문항 오류가 처리됐어요', sub: '알려 준 덕분에 고칠 수 있었어요. 고마워요!',
+      lines: rows.slice(0, 8).map(function(x){ return [(x.set_title || 'N제') + ' · ' + x.no + '번', NAJE_NOTICE_REASON[x.reason] || '']; }),
+      more: Math.max(0, rows.length - 8) });
+  } catch(e){ /* 표·함수가 아직 없으면 조용히 */ }
+  finally { window._snNoticeBusy = false; }
+}
+function snNoticeStart(){
+  setTimeout(snNoticeCheck, 1500);
+  if(!window._snNoticeTimer) window._snNoticeTimer = setInterval(snNoticeCheck, 5 * 60 * 1000);
+}
+/* 관리자 */
+async function admNrAlertCheck(){
+  if(!(currentUser && currentUser.role === 'admin') || document.hidden || window._admNrAlertBusy) return;
+  window._admNrAlertBusy = true;
+  try {
+    var key = 'naje_rep_seen_' + currentUser.id, since = null;
+    try { since = localStorage.getItem(key) || null; } catch(e){}
+    var r = await db.rpc('naje_report_new', { p_actor_id: currentUser.id, p_since: since });
+    if(r.error) return;
+    var d = r.data || {};
+    if(!d.ok || !d.count) return;
+    try { if(d.last) localStorage.setItem(key, d.last); } catch(e){}
+    var rows = d.rows || [];
+    najeNoticePopup({ title: '🚩 N제 문항 오류 제보 ' + d.count + '건', sub: since ? '새 제보가 들어왔습니다.' : '처리하지 않은 제보가 있습니다.',
+      lines: rows.map(function(x){ return [(x.set_title || 'N제') + ' · ' + x.no + '번', (NAJE_NOTICE_REASON[x.reason] || '') + (x.student_name ? ' · ' + x.student_name : '')]; }),
+      more: Math.max(0, d.count - rows.length), goLabel: '제보 보러 가기',
+      onGo: function(){
+        var btn = document.getElementById('amenu-naje');
+        if(typeof switchPanelAdmin === 'function') switchPanelAdmin('admin-naje', btn);
+        setTimeout(function(){ if(typeof switchAdminNajeTab === 'function') switchAdminNajeTab('report'); }, 400);
+      } });
+    if(typeof admNrBadge === 'function') admNrBadge();
+  } catch(e){ /* 함수가 아직 없으면 조용히 */ }
+  finally { window._admNrAlertBusy = false; }
+}
+function admNrAlertStart(){
+  if(!(currentUser && currentUser.role === 'admin')) return;
+  setTimeout(admNrAlertCheck, 2500);
+  if(!window._admNrAlertTimer) window._admNrAlertTimer = setInterval(admNrAlertCheck, 3 * 60 * 1000);
 }
 
 /* ============================================================
@@ -25594,7 +25674,7 @@ async function admNaOnBranchChange(){
   var teacherSel = document.getElementById('adm-na-teacher-select');
   if(!teacherSel) return;
   teacherSel.innerHTML = '<option value="">\uc804\uccb4 \uc120\uc0dd\ub2d8</option>';
-  var q = db.from('users').select('id,name').eq('role','teacher').eq('status','active').is('deleted_at', null);
+  var q = db.from('users').select('id,name').in('role',['teacher','vice_director']).eq('status','active').is('deleted_at', null);
   if(branchId) q = q.eq('branch_id', branchId);
   var {data:teachers} = await q.order('name');
   (teachers||[]).forEach(function(t){ teacherSel.innerHTML += '<option value="'+t.id+'">'+t.name+'T</option>'; });
@@ -26936,7 +27016,7 @@ async function initAdminNajeResult(){
     branchSel.innerHTML += '<option value="'+b.id+'">'+b.name+'</option>';
   });
   var {data: teachers} = await db.from('users')
-    .select('id,name,branch_id').eq('role','teacher').eq('status','active').is('deleted_at', null).order('name');
+    .select('id,name,branch_id').in('role',['teacher','vice_director']).eq('status','active').is('deleted_at', null).order('name');
   _anrAllTeachers = teachers || [];
   var {data: clsList} = await db.from('classes').select('id,name,teacher_id').eq('active', true).order('name');
   _anrAllClasses = clsList || [];
@@ -27693,7 +27773,7 @@ async function npLoadFilters(){
 }
 async function npLoadTeachers(branchId){
   var sel = document.getElementById('np-teacher'); if (!sel) return;
-  var q = db.from('users').select('id,name').eq('role','teacher').eq('status','active').is('deleted_at', null).order('name');
+  var q = db.from('users').select('id,name').in('role',['teacher','vice_director']).eq('status','active').is('deleted_at', null).order('name');
   if (branchId) q = q.eq('branch_id', branchId);
   var { data } = await q;
   _np.teachers = data || [];
@@ -28120,7 +28200,7 @@ async function mncLoadTeachers(branchId) {
   var sel = document.getElementById('mnc-teacher-filter');
   if (!sel) return;
   try {
-    var q = db.from('users').select('id,name').eq('role','teacher').eq('status','active').is('deleted_at',null).order('name');
+    var q = db.from('users').select('id,name').in('role',['teacher','vice_director']).eq('status','active').is('deleted_at',null).order('name');
     if (branchId) q = q.eq('branch_id', branchId);
     var { data } = await q;
     _mncTeachers = data || [];
@@ -28175,7 +28255,7 @@ async function mncLoadStudents() {
       query = query.eq('teacher_id', teacherFilter);
     } else if (branchFilter) {
       var { data: branchTeachers } = await db.from('users').select('id')
-        .eq('role','teacher').eq('status','active').eq('branch_id', branchFilter).is('deleted_at',null);
+        .in('role',['teacher','vice_director']).eq('status','active').eq('branch_id', branchFilter).is('deleted_at',null);
       var btids = (branchTeachers || []).map(function(t){ return t.id; });
       if (btids.length) query = query.in('teacher_id', btids);
       else {
@@ -29008,7 +29088,7 @@ async function mncGenerateSummaryImage() {
     // 선생님 맵
     var teacherNameMap = {};
     (_mncTeachers || []).forEach(function(t){ teacherNameMap[t.id] = t.name; });
-    (allUsers || []).filter(function(u){ return u.role === 'teacher'; }).forEach(function(t) {
+    (allUsers || []).filter(function(u){ return u.role === 'teacher' || u.role === 'vice_director'; }).forEach(function(t) {
       if (!teacherNameMap[t.id]) teacherNameMap[t.id] = t.name;
     });
 
@@ -31856,7 +31936,7 @@ function buildAdmTeacherDropdown(branchId) {
   if (!tf) return;
   const isDeskMode       = currentUser.role === 'desk';
   const allowedBranchIds = isDeskMode ? getDeskAllowedBranchIds() : [];
-  let teachers = allUsers.filter(u => u.role==='teacher' && u.status==='active' && !u.deleted_at);
+  let teachers = allUsers.filter(u => (u.role==='teacher' || u.role==='vice_director') && u.status==='active' && !u.deleted_at);   /* 필터 목록 — 부원장도 학생 담당을 맡는다 */
   if (isDeskMode && allowedBranchIds.length) {
     teachers = teachers.filter(t => allowedBranchIds.includes(t.branch_id));
   }
