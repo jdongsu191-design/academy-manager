@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · N제 등록 [v8.2-levels]</title>
+<title>BMAPS · N제 등록 [v8.3-part]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="assets/boot-retry.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -132,7 +132,7 @@
 <body>
 
 <div class="nje-header">
-  <h1>📄 N제 등록 <span style="font-size:11px;opacity:0.6;font-weight:400">[v8.2-levels]</span></h1>
+  <h1>📄 N제 등록 <span style="font-size:11px;opacity:0.6;font-weight:400">[v8.3-part]</span></h1>
   <div style="display:flex;align-items:center;gap:10px"><div id="nje-auth-status">로그인 확인 중...</div>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3);color:#fff" onclick="location.href='index.html'">← BMAPS</button></div>
 </div>
@@ -239,6 +239,14 @@
             <button class="btn btn-primary" id="admin-naje-save-btn" onclick="njeApply()">💾 N제에 적용</button>
             <span class="msg" id="nje-apply-msg"></span>
           </div>
+          <div class="row" style="margin:-2px 0 10px;padding:10px 12px;border:1.5px solid #fdba74;border-radius:12px;background:#fff7ed">
+            <label style="font-size:12.5px;display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="nje-o-part" onchange="njePartToggle()"><b>선택한 문항만 교체</b></label>
+            <input class="inp" id="nje-part-nos" placeholder="번호 — 예: 3, 17, 24-26" style="width:210px" disabled oninput="njePartPreview()">
+            <button class="btn btn-sm" id="nje-part-fill" onclick="njePartFill()" disabled>정답·QR 이 다른 번호 채우기</button>
+            <label style="font-size:12.5px;display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="nje-o-regrade" checked disabled>이미 제출한 학생 재채점</label>
+            <span class="hint">켜면 적은 번호의 문항만 바꿉니다 — 다른 문항·배정·학생 응시 기록은 그대로 둡니다</span>
+          </div>
+          <div id="nje-part-view" style="display:none;margin:0 0 10px;border:1.5px solid #fdba74;border-radius:12px;background:#fff;overflow:hidden"></div>
           <div id="admin-naje-save-progress" style="display:none;margin:6px 0 10px;padding:12px;background:#f5f6fa;border-radius:10px">
             <div id="admin-naje-save-progress-text" style="font-size:13px;color:#6b7280;margin-bottom:6px">저장 중...</div>
             <div style="background:#e5e7eb;border-radius:100px;height:6px;overflow:hidden">
@@ -316,7 +324,7 @@ const db=createClient(SUPABASE_URL,SUPABASE_KEY);
 if(typeof pdfjsLib !== 'undefined'){
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
-window.NJE_VERSION = "v8.2-levels";
+window.NJE_VERSION = "v8.3-part";
 console.log("NJE build:", window.NJE_VERSION);
 function _esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
@@ -1539,7 +1547,7 @@ async function njeOpenSet(id){
   $id('nje-editor').style.display = '';
   $id('nje-editor-title').textContent = x.title + ' 세팅';
   njeRenderBadge();
-  resetNajeUpload('admin'); njMsg('nje-apply-msg', ''); njMsg('nje-q-msg', '');
+  resetNajeUpload('admin'); njePartReset(); njMsg('nje-apply-msg', ''); njMsg('nje-q-msg', '');
   await njeLoadProblems();
   njeHideSaved();
   njeTab(_nj.tab || 'p');
@@ -1591,8 +1599,179 @@ function njeRenderCheck(){
     var noAns = nums.filter(function(n){ return !najeAnswerMap[n]; });
     add(noAns.length ? 'warn' : 'ok', (noAns.length ? '⚠' : '✔') + ' 정답 ' + ans.length + '개' + (noAns.length ? ' — 못 읽은 문항: ' + noAns.join(', ') : ' 모두 읽었습니다'));
   }
-  if(_nj.problems.length) add('warn', '⚠ 이 N제에 이미 문항 ' + _nj.problems.length + '개가 있습니다 — [문항 이미지] 를 켜고 적용하면 통째로 교체됩니다 (학생 응시 기록은 남습니다)');
+  if(_nj.problems.length) add('warn', '⚠ 이 N제에 이미 문항 ' + _nj.problems.length + '개가 있습니다 — [문항 이미지] 를 켜고 적용하면 통째로 교체됩니다 (학생 응시 기록은 남습니다) · 틀린 문항만 바꾸려면 [선택한 문항만 교체] 를 켜세요');
   box.innerHTML = li.join('');
+  njePartPreview();
+}
+
+/* ── 선택한 문항만 교체 (2026-11-26) ─────────────────────────
+   올린 PDF 에서 적은 번호의 문항만 저장된 문항에 덮어쓴다(이미지·정답·해설 QR — 위 '적용할 항목' 을 따른다).
+   문항 줄을 지우지 않고 고치므로 다른 문항·배정·응시 기록은 그대로다. 바꾼 뒤 naje_regrade RPC 가 이미 제출한 학생의 그 문항만 새 정답으로 다시 채점한다. */
+function njePartOn(){ var c = $id('nje-o-part'); return !!(c && c.checked); }
+function njePartParse(text){
+  var nos = {}, bad = [];
+  String(text || '').split(/[\s,，·]+/).forEach(function(tok){
+    if(!tok) return;
+    var m = tok.replace(/번$/, '').match(/^(\d+)(?:[-~](\d+))?$/);
+    if(!m){ bad.push(tok); return; }
+    var a = +m[1], b = m[2] ? +m[2] : a;
+    if(a < 1 || b < a || b - a > 200){ bad.push(tok); return; }
+    for(var n = a; n <= b; n++) nos[n] = 1;
+  });
+  return { nos: Object.keys(nos).map(Number).sort(function(x, y){ return x - y; }), bad: bad };
+}
+/* 일부 교체가 켜져 있으면 번호 배열, 아니면 null (naje-codex.js 의 정답 누락 검사도 이 함수를 본다) */
+function njePartNos(){ return njePartOn() ? njePartParse($id('nje-part-nos').value).nos : null; }
+function njNormAns(v){ return String(v || '').replace(/\s+/g, '').replace(/[①②③④⑤]/g, function(c){ return String('①②③④⑤'.indexOf(c) + 1); }).toLowerCase(); }
+function njePartToggle(){
+  var on = njePartOn();
+  ['nje-part-nos', 'nje-part-fill', 'nje-o-regrade'].forEach(function(id){ var el = $id(id); if(el) el.disabled = !on; });
+  if(on && !_nj.problems.length){ njMsg('nje-apply-msg', '저장된 문항이 없습니다 — 일부 교체는 이미 등록된 문항만 바꿉니다', true); }
+  njePartPreview();
+}
+function njePartReset(){
+  var c = $id('nje-o-part'); if(c) c.checked = false;
+  var t = $id('nje-part-nos'); if(t) t.value = '';
+  ['nje-part-nos', 'nje-part-fill', 'nje-o-regrade'].forEach(function(id){ var el = $id(id); if(el) el.disabled = true; });
+  var box = $id('nje-part-view'); if(box){ box.style.display = 'none'; box.innerHTML = ''; }
+}
+/* 올린 PDF 와 저장된 문항의 정답·QR 이 다른 번호 (이미지가 달라진 것은 알 수 없다 — 번호를 직접 적는다) */
+function njePartDiff(){
+  var byNo = {}; _nj.problems.forEach(function(p){ byNo[p.problem_number] = p; });
+  var out = [];
+  (najeExtractedProblems || []).forEach(function(p){
+    var o = byNo[p.number]; if(!o) return;
+    var a = najeAnswerMap[p.number];
+    if((a && njNormAns(a) !== njNormAns(o.correct_answer)) || (p.qrUrl && p.qrUrl !== (o.qr_url || ''))) out.push(p.number);
+  });
+  return out;
+}
+function njePartFill(){
+  var d = njePartDiff();
+  if(!d.length){ njMsg('nje-apply-msg', '정답·QR 이 저장된 것과 다른 문항이 없습니다 — 이미지만 바뀐 문항은 번호를 직접 적으세요'); return; }
+  $id('nje-part-nos').value = d.join(', ');
+  njMsg('nje-apply-msg', '');
+  njePartPreview();
+}
+function njePartPreview(){
+  var box = $id('nje-part-view'); if(!box) return;
+  if(!njePartOn()){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  var pr = njePartParse($id('nje-part-nos').value);
+  var byNo = {}, newNo = {};
+  _nj.problems.forEach(function(p){ byNo[p.problem_number] = p; });
+  (najeExtractedProblems || []).forEach(function(p){ newNo[p.number] = p; });
+  box.style.display = '';
+  if(!pr.nos.length && !pr.bad.length){ box.innerHTML = '<div class="hint" style="padding:10px 12px">교체할 문항 번호를 적으면 <b>지금 저장된 문항</b> 과 <b>올린 PDF 의 문항</b> 을 나란히 보여 줍니다</div>'; return; }
+  function side(title, img, ans, qr, miss){
+    if(miss) return '<div style="flex:1;min-width:0;padding:8px"><div class="hint" style="font-weight:800">' + title + '</div><div class="hint" style="color:#dc2626;padding:14px 0">' + miss + '</div></div>';
+    return '<div style="flex:1;min-width:0;padding:8px"><div class="hint" style="font-weight:800;margin-bottom:4px">' + title + ' '
+      + (ans ? '<span class="ex-badge bg-ok">' + _esc(ans) + '</span>' : '<span class="ex-badge bg-warn">정답?</span>')
+      + (qr ? ' <span class="ex-badge bg-blue" title="' + _esc(qr) + '">QR</span>' : ' <span class="ex-badge bg-draft">QR 없음</span>') + '</div>'
+      + '<img src="' + _esc(img) + '" onclick="openImgViewer(this.src)" style="width:100%;display:block;cursor:zoom-in;border:1px solid var(--border);border-radius:6px"></div>';
+  }
+  var html = '<div class="hint" style="padding:8px 12px;background:#fff7ed;border-bottom:1px solid #fed7aa"><b>교체 미리보기</b> — ' + pr.nos.length + '문항'
+    + (pr.bad.length ? ' · <span style="color:#dc2626">읽지 못한 입력: ' + _esc(pr.bad.join(' ')) + '</span>' : '') + '</div>';
+  html += pr.nos.map(function(n){
+    var o = byNo[n], p = newNo[n];
+    var note = [];
+    if(o && p){
+      var a = najeAnswerMap[n];
+      if(a && njNormAns(a) !== njNormAns(o.correct_answer)) note.push('정답 ' + (o.correct_answer || '없음') + ' → ' + a);
+      if(!a) note.push('새 정답을 못 읽음');
+      if(p.qrUrl && p.qrUrl !== (o.qr_url || '')) note.push('QR 바뀜');
+      if(!p.qrUrl && o.qr_url) note.push('새 QR 없음(기존 유지)');
+    }
+    return '<div style="border-bottom:1px solid #f1f5f9"><div style="padding:6px 12px 0;font-size:13px;font-weight:800">' + n + '번 '
+      + (note.length ? '<span class="hint" style="font-weight:600;color:#b45309">' + _esc(note.join(' · ')) + '</span>' : '') + '</div>'
+      + '<div style="display:flex;gap:4px">'
+      + side('지금 저장된 문항', o && o.image_url, o && o.correct_answer, o && o.qr_url, o ? '' : '저장된 문항에 없는 번호입니다')
+      + side('올린 PDF 의 문항', p && p.dataUrl, p && najeAnswerMap[n], p && p.qrUrl, p ? '' : '올린 PDF 에 없는 번호입니다')
+      + '</div></div>';
+  }).join('');
+  box.innerHTML = html;
+}
+async function njeRegrade(nos){
+  return njRpc('naje_regrade', { p_actor_id:_nj.user.id, p_set_id:_nj.set.id, p_nos:nos });
+}
+function njeRegradeText(r){
+  if(!r) return '';
+  return '재채점 ' + (r.subs || 0) + '건' + ((r.subs || 0) ? ' (점수 바뀜 ' + (r.changed || 0) + '건)' : ' — 이 문항을 제출한 학생 없음');
+}
+function njeRegradeBox(r, nos){
+  var box = $id('nje-part-view'); if(!box) return;
+  var rows = (r && r.rows) || [];
+  box.style.display = '';
+  box.innerHTML = '<div class="hint" style="padding:8px 12px;background:#fff7ed;border-bottom:1px solid #fed7aa"><b>재채점 결과</b> — ' + _esc(nos.join(', ')) + '번 · ' + _esc(njeRegradeText(r)) + '</div>'
+    + (rows.length ? '<div class="qt-wrap" style="max-height:260px;overflow:auto"><table class="qt"><thead><tr><th>이름</th><th>맞은 문항(전 → 후)</th><th>채점 문항</th></tr></thead><tbody>'
+        + rows.map(function(x){ return '<tr><td><b>' + _esc(x.name || '') + '</b></td><td>' + (x.before == null ? '?' : x.before) + ' → <b>' + x.after + '</b></td><td>' + (x.graded == null ? '' : x.graded) + '</td></tr>'; }).join('')
+        + '</tbody></table></div>'
+      : '<div class="hint" style="padding:10px 12px">점수가 바뀐 학생이 없습니다</div>');
+}
+async function njeApplyPart(rows, oImg, oAns, oQr){
+  var pr = njePartParse($id('nje-part-nos').value), nos = pr.nos;
+  if(pr.bad.length){ njMsg('nje-apply-msg', '번호를 읽지 못했습니다: ' + pr.bad.join(' ') + ' — 예: 3, 17, 24-26', true); return; }
+  if(!nos.length){ njMsg('nje-apply-msg', '교체할 문항 번호를 적으세요', true); return; }
+  var byNo = {}, newNo = {};
+  _nj.problems.forEach(function(p){ byNo[p.problem_number] = p; });
+  rows.forEach(function(p){ newNo[p.number] = p; });
+  var noOld = nos.filter(function(n){ return !byNo[n]; }), noNew = nos.filter(function(n){ return !newNo[n]; });
+  if(noOld.length){ njMsg('nje-apply-msg', '저장된 문항에 없는 번호: ' + noOld.join(', ') + ' — 일부 교체는 이미 등록된 문항만 바꿉니다', true); return; }
+  if(noNew.length){ njMsg('nje-apply-msg', '올린 PDF 에 없는 번호: ' + noNew.join(', '), true); return; }
+  var regrade = $id('nje-o-regrade').checked;
+  if(!confirm('"' + _nj.set.title + '" 의 ' + nos.join(', ') + '번 문항만 교체합니다.\n\n바꾸는 것: ' + [oImg?'이미지':'', oAns?'정답':'', oQr?'해설 QR':''].filter(Boolean).join('·')
+      + '\n다른 문항·배정·학생 응시 기록은 그대로 둡니다.'
+      + (regrade ? '\n이미 제출한 학생은 이 문항만 새 정답으로 다시 채점합니다(낸 답은 그대로).' : '\n재채점은 하지 않습니다(이미 제출한 학생의 결과는 그대로).')
+      + '\n되돌리려면 원래 PDF 로 다시 교체해야 합니다. 계속할까요?')) return;
+  _nj.busy = true;
+  var btn = $id('admin-naje-save-btn'); btn.disabled = true; btn.textContent = '교체 중...';
+  var prog = $id('admin-naje-save-progress'), bar = $id('admin-naje-save-progress-bar'), txt = $id('admin-naje-save-progress-text');
+  prog.style.display = 'block'; bar.style.width = '0%';
+  var setId = _nj.set.id, keptAns = [], keptQr = [], done = 0, result = null, regradeErr = '';
+  try {
+    for(var i = 0; i < nos.length; i++){
+      var n = nos[i], p = newNo[n], old = byNo[n], upd = {};
+      txt.textContent = n + '번 교체 중... (' + (i + 1) + '/' + nos.length + ')'; bar.style.width = Math.round((i + 1) / nos.length * 80) + '%';
+      if(oImg){
+        var blob = await (await fetch(p.dataUrl)).blob();
+        var fname = NJ.PATH + '/' + setId + '/' + n + '.jpg';
+        var up = await db.storage.from(NJ.BUCKET).upload(fname, blob, { contentType:'image/jpeg', upsert:true });
+        if(up.error) throw new Error('이미지 업로드 실패(' + n + '번): ' + up.error.message);
+        upd.image_url = db.storage.from(NJ.BUCKET).getPublicUrl(fname).data.publicUrl + '?v=' + Date.now();
+        if(p.pageNum != null) upd.page_number = p.pageNum;
+      }
+      if(oAns){ if(najeAnswerMap[n]) upd.correct_answer = najeAnswerMap[n]; else keptAns.push(n); }
+      if(oQr){ if(p.qrUrl) upd.qr_url = p.qrUrl; else if(old.qr_url) keptQr.push(n); }
+      if(Object.keys(upd).length){ var ur = await db.from('naje_problems').update(upd).eq('id', old.id); if(ur.error) throw new Error(n + '번 저장 실패: ' + ur.error.message); }
+      done++;
+    }
+    /* 빠른정답 이미지 — 정답을 바꿨고 올린 PDF 에 정답 페이지가 있으면 그것으로 바꾼다 */
+    if(oAns && najeQuickAnswerDataUrl){
+      txt.textContent = '빠른정답 이미지 교체 중...'; bar.style.width = '86%';
+      var qaBlob = await (await fetch(najeQuickAnswerDataUrl)).blob();
+      var qaName = NJ.PATH + '/quick_answer_' + setId + '.jpg';
+      var qu = await db.storage.from(NJ.BUCKET).upload(qaName, qaBlob, { contentType:'image/jpeg', upsert:true });
+      if(!qu.error) await db.from('naje_sets').update({ quick_answer_image_url: db.storage.from(NJ.BUCKET).getPublicUrl(qaName).data.publicUrl + '?v=' + Date.now() }).eq('id', setId);
+    }
+    if(regrade){
+      txt.textContent = '제출한 학생 재채점 중...'; bar.style.width = '93%';
+      try { result = await njeRegrade(nos); } catch(e2){ console.error(e2); regradeErr = e2.message || String(e2); }
+    }
+    bar.style.width = '100%';
+    var note = '✓ ' + nos.join(', ') + '번 교체 완료'
+      + (keptAns.length ? ' · 새 정답을 못 읽어 기존 정답 유지: ' + keptAns.join(', ') : '')
+      + (keptQr.length ? ' · 새 QR 이 없어 기존 QR 유지: ' + keptQr.join(', ') : '')
+      + (regrade ? (regradeErr ? '' : ' · ' + njeRegradeText(result)) : ' · 재채점 안 함');
+    resetNajeUpload('admin'); njePartReset();
+    await njeLoadSets();
+    await njeLoadProblems();
+    njeShowSaved();
+    if(regradeErr) njMsg('nje-apply-msg', note + ' — ⚠ 재채점 실패: ' + regradeErr + ' ([정답 · 해설] 탭에서 다시 시도할 수 있습니다)', true);
+    else { njMsg('nje-apply-msg', note); if(regrade) njeRegradeBox(result, nos); }
+  } catch(e){
+    console.error(e);
+    njMsg('nje-apply-msg', '교체 실패: ' + (e.message || e) + (done ? ' — 앞의 ' + done + '문항은 이미 바뀌었습니다. 같은 번호로 다시 실행하세요' : ''), true);
+  }
+  finally { _nj.busy = false; btn.disabled = false; btn.textContent = '💾 N제에 적용'; setTimeout(function(){ prog.style.display = 'none'; }, 800); }
 }
 async function njeApply(){
   if(_nj.busy) return;
@@ -1601,6 +1780,7 @@ async function njeApply(){
   if(!rows.length){ njMsg('nje-apply-msg', '먼저 PDF 를 분석하세요', true); return; }
   var oImg = $id('nje-o-img').checked, oAns = $id('nje-o-ans').checked, oQr = $id('nje-o-qr').checked;
   if(!(oImg || oAns || oQr)){ njMsg('nje-apply-msg', '적용할 항목을 하나 이상 고르세요', true); return; }
+  if(njePartOn()) return njeApplyPart(rows, oImg, oAns, oQr);
   if(!oImg && !_nj.problems.length){ njMsg('nje-apply-msg', '저장된 문항이 없습니다 — [문항 이미지] 를 켜고 적용하세요', true); return; }
   if(!confirm('"' + _nj.set.title + '" 에 적용합니다.\n\n문항 ' + rows.length + '개 · ' + [oImg?'이미지':'', oAns?'정답':'', oQr?'해설 QR':''].filter(Boolean).join('·')
       + (oImg && _nj.problems.length ? '\n⚠ 기존 문항 ' + _nj.problems.length + '개를 통째로 교체합니다' : '') + '\n계속할까요?')) return;
@@ -1724,7 +1904,15 @@ async function njeSaveKeys(){
   njMsg('nje-q-msg', '저장 중...');
   try {
     for(var i=0;i<ids.length;i++){ var r = await db.from('naje_problems').update(changes[ids[i]]).eq('id', ids[i]); if(r.error) throw r.error; }
-    njMsg('nje-q-msg', '✓ ' + ids.length + '문항 저장');
+    var note = '✓ ' + ids.length + '문항 저장';
+    njMsg('nje-q-msg', note);
+    /* 정답·해설을 바꾼 문항 — 이미 제출한 학생의 그 문항만 다시 채점할지 묻는다 */
+    var nos = ids.map(function(id){ return byId[id].problem_number; }).sort(function(a, b){ return a - b; });
+    var subN = ((_nj.set._st || {}).done || 0) + ((_nj.set._st || {}).ing || 0);
+    if(subN && confirm(nos.join(', ') + '번의 정답·해설을 바꿨습니다.\n이미 제출한 학생의 이 문항을 새 정답으로 다시 채점할까요?\n(학생이 낸 답은 그대로 두고 O/X 와 점수만 다시 계산합니다)')){
+      try { var rg = await njeRegrade(nos); note += ' · ' + njeRegradeText(rg); njMsg('nje-q-msg', note); }
+      catch(e2){ console.error(e2); njMsg('nje-q-msg', note + ' — ⚠ 재채점 실패: ' + (e2.message || e2), true); }
+    }
     await njeLoadSets(); await njeLoadProblems();
   } catch(e){ njMsg('nje-q-msg', '저장 실패: ' + (e.message||e), true); }
 }
