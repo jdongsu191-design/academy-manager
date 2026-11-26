@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · N제 등록 [v8.3-part]</title>
+<title>BMAPS · N제 등록 [v8.3.1-part]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="assets/boot-retry.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -132,7 +132,7 @@
 <body>
 
 <div class="nje-header">
-  <h1>📄 N제 등록 <span style="font-size:11px;opacity:0.6;font-weight:400">[v8.3-part]</span></h1>
+  <h1>📄 N제 등록 <span style="font-size:11px;opacity:0.6;font-weight:400">[v8.3.1-part]</span></h1>
   <div style="display:flex;align-items:center;gap:10px"><div id="nje-auth-status">로그인 확인 중...</div>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3);color:#fff" onclick="location.href='index.html'">← BMAPS</button></div>
 </div>
@@ -324,7 +324,7 @@ const db=createClient(SUPABASE_URL,SUPABASE_KEY);
 if(typeof pdfjsLib !== 'undefined'){
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
-window.NJE_VERSION = "v8.3-part";
+window.NJE_VERSION = "v8.3.1-part";
 console.log("NJE build:", window.NJE_VERSION);
 function _esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
@@ -1726,17 +1726,18 @@ async function njeApplyPart(rows, oImg, oAns, oQr){
   var btn = $id('admin-naje-save-btn'); btn.disabled = true; btn.textContent = '교체 중...';
   var prog = $id('admin-naje-save-progress'), bar = $id('admin-naje-save-progress-bar'), txt = $id('admin-naje-save-progress-text');
   prog.style.display = 'block'; bar.style.width = '0%';
-  var setId = _nj.set.id, keptAns = [], keptQr = [], done = 0, result = null, regradeErr = '';
+  var setId = _nj.set.id, keptAns = [], keptQr = [], done = 0, result = null, regradeErr = '', qaFail = '';
   try {
     for(var i = 0; i < nos.length; i++){
       var n = nos[i], p = newNo[n], old = byNo[n], upd = {};
       txt.textContent = n + '번 교체 중... (' + (i + 1) + '/' + nos.length + ')'; bar.style.width = Math.round((i + 1) / nos.length * 80) + '%';
       if(oImg){
         var blob = await (await fetch(p.dataUrl)).blob();
-        var fname = NJ.PATH + '/' + setId + '/' + n + '.jpg';
-        var up = await db.storage.from(NJ.BUCKET).upload(fname, blob, { contentType:'image/jpeg', upsert:true });
+        /* 저장소는 이미 있는 파일을 덮어쓰지 못한다(올리기만 허용) — 새 이름으로 올리고 주소를 바꾼다. 옛 파일은 남는다 */
+        var fname = NJ.PATH + '/' + setId + '/' + n + '_r' + Date.now() + '.jpg';
+        var up = await db.storage.from(NJ.BUCKET).upload(fname, blob, { contentType:'image/jpeg', upsert:false });
         if(up.error) throw new Error('이미지 업로드 실패(' + n + '번): ' + up.error.message);
-        upd.image_url = db.storage.from(NJ.BUCKET).getPublicUrl(fname).data.publicUrl + '?v=' + Date.now();
+        upd.image_url = db.storage.from(NJ.BUCKET).getPublicUrl(fname).data.publicUrl;
         if(p.pageNum != null) upd.page_number = p.pageNum;
       }
       if(oAns){ if(najeAnswerMap[n]) upd.correct_answer = najeAnswerMap[n]; else keptAns.push(n); }
@@ -1748,9 +1749,10 @@ async function njeApplyPart(rows, oImg, oAns, oQr){
     if(oAns && najeQuickAnswerDataUrl){
       txt.textContent = '빠른정답 이미지 교체 중...'; bar.style.width = '86%';
       var qaBlob = await (await fetch(najeQuickAnswerDataUrl)).blob();
-      var qaName = NJ.PATH + '/quick_answer_' + setId + '.jpg';
-      var qu = await db.storage.from(NJ.BUCKET).upload(qaName, qaBlob, { contentType:'image/jpeg', upsert:true });
-      if(!qu.error) await db.from('naje_sets').update({ quick_answer_image_url: db.storage.from(NJ.BUCKET).getPublicUrl(qaName).data.publicUrl + '?v=' + Date.now() }).eq('id', setId);
+      var qaName = NJ.PATH + '/quick_answer_' + setId + '_r' + Date.now() + '.jpg';
+      var qu = await db.storage.from(NJ.BUCKET).upload(qaName, qaBlob, { contentType:'image/jpeg', upsert:false });
+      if(!qu.error) await db.from('naje_sets').update({ quick_answer_image_url: db.storage.from(NJ.BUCKET).getPublicUrl(qaName).data.publicUrl }).eq('id', setId);
+      else qaFail = qu.error.message || '오류';
     }
     if(regrade){
       txt.textContent = '제출한 학생 재채점 중...'; bar.style.width = '93%';
@@ -1760,6 +1762,7 @@ async function njeApplyPart(rows, oImg, oAns, oQr){
     var note = '✓ ' + nos.join(', ') + '번 교체 완료'
       + (keptAns.length ? ' · 새 정답을 못 읽어 기존 정답 유지: ' + keptAns.join(', ') : '')
       + (keptQr.length ? ' · 새 QR 이 없어 기존 QR 유지: ' + keptQr.join(', ') : '')
+      + (qaFail ? ' · ⚠ 빠른정답 이미지는 못 바꿈(' + qaFail + ')' : '')
       + (regrade ? (regradeErr ? '' : ' · ' + njeRegradeText(result)) : ' · 재채점 안 함');
     resetNajeUpload('admin'); njePartReset();
     await njeLoadSets();
