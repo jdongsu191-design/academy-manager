@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="BMAPS">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<title>BMAPS · N제 등록 [v8.3.1-part]</title>
+<title>BMAPS · N제 등록 [v8.3.2-part]</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="assets/boot-retry.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -132,7 +132,7 @@
 <body>
 
 <div class="nje-header">
-  <h1>📄 N제 등록 <span style="font-size:11px;opacity:0.6;font-weight:400">[v8.3.1-part]</span></h1>
+  <h1>📄 N제 등록 <span style="font-size:11px;opacity:0.6;font-weight:400">[v8.3.2-part]</span></h1>
   <div style="display:flex;align-items:center;gap:10px"><div id="nje-auth-status">로그인 확인 중...</div>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3);color:#fff" onclick="location.href='index.html'">← BMAPS</button></div>
 </div>
@@ -324,7 +324,7 @@ const db=createClient(SUPABASE_URL,SUPABASE_KEY);
 if(typeof pdfjsLib !== 'undefined'){
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
-window.NJE_VERSION = "v8.3.1-part";
+window.NJE_VERSION = "v8.3.2-part";
 console.log("NJE build:", window.NJE_VERSION);
 function _esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
@@ -1776,6 +1776,17 @@ async function njeApplyPart(rows, oImg, oAns, oQr){
   }
   finally { _nj.busy = false; btn.disabled = false; btn.textContent = '💾 N제에 적용'; setTimeout(function(){ prog.style.display = 'none'; }, 800); }
 }
+/* 저장소(homework-photos)는 새 파일 올리기만 되고 이미 있는 파일 덮어쓰기는 막혀 있다.
+   원래 이름(예: naje/세트/3.jpg)으로 올려 보고, 이미 있어 거부되면 새 이름(3_r시각.jpg)으로 올린다. 옛 파일은 저장소에 남는다 */
+async function njUploadNew(base, blob, stamp){
+  var name = base + '.jpg';
+  var up = await db.storage.from(NJ.BUCKET).upload(name, blob, { contentType:'image/jpeg', upsert:false });
+  if(up.error){
+    name = base + '_r' + (stamp || Date.now()) + '.jpg';
+    up = await db.storage.from(NJ.BUCKET).upload(name, blob, { contentType:'image/jpeg', upsert:false });
+  }
+  return { error: up.error || null, url: up.error ? null : db.storage.from(NJ.BUCKET).getPublicUrl(name).data.publicUrl };
+}
 async function njeApply(){
   if(_nj.busy) return;
   if(!_nj.set){ njMsg('nje-apply-msg', 'N제를 먼저 고르세요', true); return; }
@@ -1801,15 +1812,14 @@ async function njeApply(){
       return k ? { level_name:k.level_name, level_type:k.level_type || p.level_type || null } : { level_name:p.level_name || null, level_type:p.level_type || null };
     }
     if(oImg){
-      var inserts = [];
+      var inserts = [], stamp = Date.now();
       for(var i=0;i<rows.length;i++){
         var p = rows[i];
         txt.textContent = '문항 ' + (i+1) + '/' + rows.length + ' 이미지 올리는 중...'; bar.style.width = Math.round((i+1)/rows.length*80) + '%';
         var blob = await (await fetch(p.dataUrl)).blob();
-        var fname = NJ.PATH + '/' + setId + '/' + p.number + '.jpg';
-        var up = await db.storage.from(NJ.BUCKET).upload(fname, blob, { contentType:'image/jpeg', upsert:true });
+        var up = await njUploadNew(NJ.PATH + '/' + setId + '/' + p.number, blob, stamp);
         if(up.error) throw new Error('이미지 업로드 실패(' + p.number + '번): ' + up.error.message);
-        var url = db.storage.from(NJ.BUCKET).getPublicUrl(fname).data.publicUrl + '?v=' + Date.now();
+        var url = up.url;
         var old = byNo[p.number] || {};
         var lv = keepLevel(p.number, p);
         inserts.push({ set_id:setId, problem_number:p.number, level_name:lv.level_name, level_type:lv.level_type,
@@ -1822,9 +1832,8 @@ async function njeApply(){
       var patch = { total_problems: inserts.length };
       if(najeQuickAnswerDataUrl){
         var qaBlob = await (await fetch(najeQuickAnswerDataUrl)).blob();
-        var qaName = NJ.PATH + '/quick_answer_' + setId + '.jpg';
-        var qu = await db.storage.from(NJ.BUCKET).upload(qaName, qaBlob, { contentType:'image/jpeg', upsert:true });
-        if(!qu.error) patch.quick_answer_image_url = db.storage.from(NJ.BUCKET).getPublicUrl(qaName).data.publicUrl + '?v=' + Date.now();
+        var qu = await njUploadNew(NJ.PATH + '/quick_answer_' + setId, qaBlob, stamp);
+        if(!qu.error) patch.quick_answer_image_url = qu.url;
       }
       var us = await db.from('naje_sets').update(patch).eq('id', setId); if(us.error) throw us.error;
     } else {
