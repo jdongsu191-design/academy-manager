@@ -27727,6 +27727,7 @@ async function anrExportImage(copy){
    · naje_plans(학생별 계획): book_name 은 스냅샷이라 카탈로그가 바뀌어도 그때 정한 이름이 남는다
    · 학생별 탭(한 명씩) · 교재별 지정 탭(교재 하나를 여러 학생에게 같은 기간으로) · 교재 목록 탭(읽기 전용)
    · 중등 일일N제 체크 표(mncRenderTable)에 뱃지(npMncBadges)·칸 윗선(npPlanOn)으로 보인다
+   · 체크 보류(2026-11-27): book_id='__hold__' 인 줄 — 그 기간의 체크 표 칸이 회색으로 잠긴다(npHoldOn). DDL 없음
 ============================================================ */
 var _np = { students:[], teachers:[], books:[], plans:[], tab:'student', studentId:null, editId:null, catalogAt:null };
 /* 재고관리 카탈로그 → 교재 목록. 그룹 제목 '중등부 - 중2 (1학기)' 는 '중2 (1학기)' 로 줄인다 */
@@ -27786,6 +27787,15 @@ function npGradeKey(s){
   var m = String(s.grade || '').match(/\d+/); if (!m) return '';
   var n = parseInt(m[0], 10); return (n >= 4 && n <= 6 && s.school_level !== 'middle') ? 'e' : String(n);
 }
+/* 체크 보류 — 교재 없이 기간만 있는 줄. 표를 늘리지 않고 book_id 에 표시값을 넣는다(book_name 은 '체크 보류').
+   보류 기간의 날짜는 중등 일일N제 체크 표에서 회색 칸이 되고 입력할 수 없다 */
+var NP_HOLD = '__hold__';
+function npIsHold(p){ return !!p && p.book_id === NP_HOLD; }
+function npHoldOn(sid, d){
+  var ps = (window._mncPlans || {})[sid] || [];
+  for (var i = 0; i < ps.length; i++) if (npIsHold(ps[i]) && ps[i].start_date <= d && d <= ps[i].end_date) return ps[i];
+  return null;
+}
 /* 체크 표용 — 이 학생의 이 날짜에 걸친 계획 / 이번 주에 걸친 계획 뱃지 */
 function npPlanOn(sid, d){
   var ps = (window._mncPlans || {})[sid] || [];
@@ -27796,8 +27806,9 @@ function npMncBadges(sid){
   var ps = ((window._mncPlans || {})[sid] || []).slice().sort(function(a,b){ return a.start_date < b.start_date ? -1 : 1; });
   if (!ps.length) return '';
   return ps.map(function(p){
-    return '<span style="display:inline-block;max-width:170px;padding:1px 6px;border-radius:5px;background:#eef2ff;color:#3730a3;font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle" title="' + npEsc(p.note || '') + '">📘 '
-      + npEsc(p.book_name) + ' <span style="font-weight:600;color:#6366f1">' + npMD(p.start_date) + '~' + npMD(p.end_date) + '</span></span>';
+    var hold = npIsHold(p);
+    return '<span style="display:inline-block;max-width:170px;padding:1px 6px;border-radius:5px;background:' + (hold ? '#e5e7eb;color:#4b5563' : '#eef2ff;color:#3730a3') + ';font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle" title="' + npEsc(p.note || '') + '">' + (hold ? '⏸ ' : '📘 ')
+      + npEsc(p.book_name) + ' <span style="font-weight:600;color:' + (hold ? '#6b7280' : '#6366f1') + '">' + npMD(p.start_date) + '~' + npMD(p.end_date) + '</span></span>';
   }).join('');
 }
 
@@ -27907,8 +27918,9 @@ function npTeacherName(tid){ var t = _np.teachers.find(function(x){ return x.id 
 function npPlansOf(sid){ return _np.plans.filter(function(p){ return p.student_id === sid; }); }
 function npChip(p, base){
   var cls = p.end_date < base ? 'background:#f1f5f9;color:#64748b' : (p.start_date <= base ? 'background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe' : 'background:#fff7ed;color:#9a3412;border:1px solid #fed7aa');
+  if (npIsHold(p)) cls = p.end_date < base ? 'background:#f1f5f9;color:#94a3b8' : 'background:#e5e7eb;color:#374151;border:1px solid #9ca3af';
   return '<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 4px 2px 0;padding:2px 4px 2px 8px;border-radius:7px;font-size:12px;font-weight:700;white-space:nowrap;' + cls + '" title="' + npEsc(p.note || '') + '">'
-    + '📘 ' + npEsc(p.book_name) + ' <span style="font-weight:600;opacity:.8">' + npMD(p.start_date) + '~' + npMD(p.end_date) + '</span>'
+    + (npIsHold(p) ? '⏸ ' : '📘 ') + npEsc(p.book_name) + ' <span style="font-weight:600;opacity:.8">' + npMD(p.start_date) + '~' + npMD(p.end_date) + '</span>'
     + '<button onclick="npOpenModal(\'' + p.student_id + '\',\'' + p.id + '\')" title="수정" style="border:none;background:transparent;cursor:pointer;font-size:11px;padding:0 2px">✎</button>'
     + '<button onclick="npDelete(\'' + p.id + '\')" title="삭제" style="border:none;background:transparent;cursor:pointer;font-size:11px;padding:0 2px;color:#b91c1c">✕</button></span>';
 }
@@ -28107,14 +28119,18 @@ function npNextDay(ymd){
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 function npRowHtml(i, st, p, start){
-  var pNew = !!(p && !_np.books.some(function(b){ return b.id === p.book_id; }));
+  var pHold = npIsHold(p);
+  var pNew = !!(p && !pHold && !_np.books.some(function(b){ return b.id === p.book_id; }));
   var pfx = 'npm' + i;
   var picker = npPickerHtml(pfx, p ? (pNew ? '__new__' : p.book_id) : '', npGradeKey(st), true,
     "document.getElementById('" + pfx + "-new').style.display=(this.value==='__new__')?'':'none'");
   var inp = 'width:100%;padding:8px 10px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:13px;box-sizing:border-box;outline:none';
   return '<div data-i="' + i + '" style="border:1.5px solid #e0e7ff;border-radius:10px;padding:10px;background:#fafaff;display:flex;flex-direction:column;gap:8px;position:relative">'
     + (p ? '' : '<button type="button" onclick="npRemoveRow(' + i + ')" title="이 줄 빼기" style="position:absolute;top:6px;right:6px;border:none;background:transparent;color:#94a3b8;font-size:15px;cursor:pointer;line-height:1">✕</button>')
-    + '<div><div style="font-size:11px;font-weight:700;color:#4f46e5;margin-bottom:4px">📘 교재 <span style="font-weight:400;color:#9ca3af">학년·학기 → 레벨 → 주차</span></div>' + picker
+    + '<label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:#374151;cursor:pointer;padding-right:22px"><input type="checkbox" id="' + pfx + '-hold"' + (pHold ? ' checked' : '')
+      + ' onchange="document.getElementById(\'' + pfx + '-bookbox\').style.display=this.checked?\'none\':\'\'" style="width:15px;height:15px;accent-color:#6b7280;cursor:pointer">'
+      + '⏸ 체크 보류 <span style="font-weight:400;color:#9ca3af">교재 없이 기간만 — 이 기간에는 일일N제 체크 표에서 입력이 잠깁니다</span></label>'
+    + '<div id="' + pfx + '-bookbox" style="display:' + (pHold ? 'none' : '') + '"><div style="font-size:11px;font-weight:700;color:#4f46e5;margin-bottom:4px">📘 교재 <span style="font-weight:400;color:#9ca3af">학년·학기 → 레벨 → 주차</span></div>' + picker
     + '<input type="text" id="' + pfx + '-new" value="' + npEsc(pNew ? p.book_name : '') + '" placeholder="교재 이름 직접 입력 (예: 중2B2 4주차)" style="display:' + (pNew ? '' : 'none') + ';margin-top:6px;' + inp + '"></div>'
     + '<div style="display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:8px">'
       + '<div><div style="font-size:11px;font-weight:600;color:var(--text-sub);margin-bottom:3px">시작일</div><input type="date" id="' + pfx + '-start" value="' + npEsc(p ? p.start_date : (start || '')) + '" style="' + inp + '"></div>'
@@ -28168,6 +28184,12 @@ function npReadRow(i){
   var bookSel = g('book'), book = _np.books.find(function(b){ return b.id === bookSel; });
   var name = bookSel === '__new__' ? (g('new') || '').trim() : (book ? book.name : '');
   var start = g('start'), end = g('end'), note = (g('note') || '').trim() || null;
+  var holdEl = document.getElementById('npm' + i + '-hold');
+  if (holdEl && holdEl.checked) {                                   /* 체크 보류 줄 — 교재는 보지 않는다 */
+    if (!start || !end) return { error: '체크 보류 — 시작일과 종료일을 입력하세요.' };
+    if (end < start) return { error: '체크 보류 — 종료일이 시작일보다 빠릅니다.' };
+    return { student_id: _np.studentId, book_id: NP_HOLD, book_name: '체크 보류', start_date: start, end_date: end, note: note };
+  }
   if (!bookSel && !end && !note) return null;                      /* 아무것도 안 건드린 줄 (시작일은 자동으로 채워지니 안 본다) */
   if (!name) return { error: '교재를 고르거나 이름을 입력하세요.' };
   if (!start || !end) return { error: name + ' — 시작일과 종료일을 입력하세요.' };
@@ -28371,7 +28393,7 @@ async function mncLoadStudents() {
     try {
       var _pSids = _mncStudents.map(function(s){ return s.id; });
       if (_pSids.length) {
-        var _pr = await db.from('naje_plans').select('id,student_id,book_name,start_date,end_date,note')
+        var _pr = await db.from('naje_plans').select('id,student_id,book_id,book_name,start_date,end_date,note')
           .in('student_id', _pSids)
           .lte('start_date', weekRange.dates[weekRange.dates.length - 1]).gte('end_date', weekRange.dates[0]);
         (_pr.data || []).forEach(function(p){ (window._mncPlans[p.student_id] = window._mncPlans[p.student_id] || []).push(p); });
@@ -28629,9 +28651,11 @@ function mncRenderTable() {
       var mncIsSent = mncDate ? localStorage.getItem('mnc_sent_' + mncDate + '_' + s.id) === '1' : false;
       var rowBg     = mncIsSent ? '#dcfce7' : (si % 2 === 0 ? '#fff' : '#f8fafc');
       var savedNote = String(s.mnc_note || '').replace(/"/g, '&quot;');
+      var rowHold   = npHoldOn(s.id, _mncResultDate);   /* 결과 날짜가 보류 기간이면 줄 전체를 회색으로 */
+      if (rowHold && !mncIsSent) rowBg = '#f1f5f9';
       html += '<tr id="mnc-row-' + s.id + '" style="background:' + rowBg + '">'
         + '<td style="text-align:left;padding-left:8px;min-width:110px">'
-          + '<div style="font-size:13px;font-weight:700;color:#1e293b;display:flex;align-items:center;flex-wrap:wrap;gap:4px"><span>' + globalIdx + '. ' + s.name + '</span>' + npMncBadges(s.id) + '</div>'
+          + '<div style="font-size:13px;font-weight:700;color:' + (rowHold ? '#94a3b8' : '#1e293b') + ';display:flex;align-items:center;flex-wrap:wrap;gap:4px"><span>' + globalIdx + '. ' + s.name + '</span>' + npMncBadges(s.id) + '</div>'
           + '<div style="font-size:10px;color:#9ca3af">' + (s.school || '') + (s.grade ? ' ' + s.grade + (/^\d+$/.test(s.grade)?'학년':'') : '') + '</div>'
           + '<input type="text" class="mnc-note-inp" data-sid="' + s.id + '" value="' + savedNote + '" placeholder="특이사항" '
           + 'oninput="mncMarkNoteDirty(\'' + s.id + '\')" '
@@ -28655,6 +28679,12 @@ function mncRenderTable() {
         if (status === 'undone') cellBg = '#fef2f2';
         var xActive = (status === 'undone');
 
+        var _hold = npHoldOn(s.id, d);
+        if (_hold) {   /* 체크 보류 — 입력 칸을 만들지 않는다(저장·키보드 이동 대상에서 빠진다). 이미 저장된 값이 있으면 보여 주기만 */
+          html += '<td id="' + cellId + '" title="⏸ 체크 보류 (' + npMD(_hold.start_date) + '~' + npMD(_hold.end_date) + ')' + (_hold.note ? ' ' + npEsc(_hold.note) : '') + '" style="background:#e5e7eb;min-width:' + colW + ';cursor:not-allowed">'
+            + '<div style="font-size:11px;font-weight:700;color:#6b7280;white-space:nowrap">⏸ 보류' + (status === 'done' ? ' <span style="font-weight:500">· ' + npEsc(score) + '점</span>' : (status === 'undone' ? ' <span style="font-weight:500">· ✕</span>' : '')) + '</div></td>';
+          return;
+        }
         var _plan = npPlanOn(s.id, d);
         html += '<td id="' + cellId + '"' + (_plan ? ' title="📘 ' + npEsc(_plan.book_name) + ' (' + npMD(_plan.start_date) + '~' + npMD(_plan.end_date) + ')"' : '')
           + ' style="background:' + cellBg + ';min-width:' + colW + '">'
