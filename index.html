@@ -6164,6 +6164,7 @@ var DESK_PERMISSIONS = [
   {key:'lp_view',      label:'📋 학습 진행표', group:'기타'},
   {key:'consult_log',  label:'🗒️ 상담일지(멘토링)', group:'기타'},
   {key:'naje_report',  label:'🖼️ 고등 N제 일일 리포트', group:'기타'},
+  {key:'middle_naje',  label:'✅ 중등 일일N제 체크', group:'기타'},
 ];
 
 // 권한 키 → 사이드바 메뉴 매핑 (btnId + 부모 아코디언 그룹)
@@ -6182,6 +6183,7 @@ var DESK_PERM_TO_MENUS = {
   'lp_view':       [{btnId:'amenu-lp-view',           parent:null}],
   'consult_log':   [{btnId:'amenu-consult-log',       parent:'amenu-reading-room-group'}],
   'naje_report':   [{btnId:'amenu-naje-daily',        parent:'amenu-naje-accordion'}],
+  'middle_naje':   [{btnId:'amenu-middle-naje',       parent:'amenu-naje-accordion'}],
 };
 
 // 권한 키 → 패널 tabId (탭 접근 차단용)
@@ -6198,6 +6200,7 @@ var DESK_PERM_TO_TABS = {
   'lp_view':       ['admin-lp-view'],
   'consult_log':   ['consult-log'],
   'naje_report':   ['admin-naje-daily'],
+  'middle_naje':   ['admin-middle-naje'],
 };
 
 // 관리자 사이드바 전체 최상위 항목 (필터 시 비허용 항목 숨김용)
@@ -28237,6 +28240,28 @@ async function initMiddleNajeCheck() {
 async function mncLoadBranchAndTeachers() {
   var isAdmin  = currentUser && currentUser.role === 'admin';
   var branchSel = document.getElementById('mnc-branch-filter');
+  /* 데스크(권한 middle_naje): 담당 분원만 고를 수 있다 — '전체 분원' 없음, 1개면 잠금. 담당 분원이 비어 있으면 제한 없음(기존 데스크 규칙) */
+  var _deskIds = (currentUser && currentUser.role === 'desk' && typeof getDeskAllowedBranchIds === 'function') ? getDeskAllowedBranchIds() : [];
+  if (branchSel && _deskIds.length) {
+    var _prev = branchSel.value, _names = {};
+    try {
+      var _br = await db.from('branches').select('id,name').in('id', _deskIds).order('name');
+      (_br.data || []).forEach(function(x){ _names[x.id] = x.name; });
+    } catch(e) { console.error('[mnc] 분원 로드 실패:', e); }
+    var _ids = _deskIds.filter(function(id){ return _names[id]; });
+    if (!_ids.length) _ids = _deskIds.slice();   /* 이름을 못 불러와도 범위는 담당 분원으로 묶는다 */
+    branchSel.innerHTML = '';
+    _ids.forEach(function(id){ var o = document.createElement('option'); o.value = id; o.textContent = _names[id] || '담당 분원'; branchSel.appendChild(o); });
+    if (_prev && _ids.indexOf(_prev) !== -1) branchSel.value = _prev;
+    branchSel.disabled = (_ids.length === 1);
+    branchSel.style.display = '';
+    branchSel.dataset.desk = '1';
+    await mncLoadTeachers(branchSel.value);
+    return;
+  }
+  if (branchSel && branchSel.dataset.desk) {   /* 데스크가 쓰던 화면을 다른 계정이 이어 쓸 때 원래 모양으로 */
+    branchSel.innerHTML = '<option value="">전체 분원</option>'; branchSel.disabled = false; delete branchSel.dataset.desk;
+  }
   if (branchSel) {
     branchSel.style.display = isAdmin ? '' : 'none';
     if (isAdmin && branchSel.options.length <= 1) {
@@ -29094,7 +29119,7 @@ async function mncGenerateSummaryImage() {
 
     var imgTeacherFilter = (document.getElementById('mnc-img-teacher-filter') || {}).value || '';
     var branchSel   = document.getElementById('mnc-branch-filter');
-    var branchLabel = (branchSel && branchSel.selectedIndex > 0)
+    var branchLabel = (branchSel && branchSel.value)
       ? branchSel.options[branchSel.selectedIndex].text : '';
     var DAYS = ['일','월','화','수','목','금','토'];
 
