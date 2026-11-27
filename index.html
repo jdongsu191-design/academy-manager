@@ -22436,6 +22436,17 @@ async function mnrLoad(){
     _mnrCheckData[c.student_id][c.check_date] = c;
   });
 
+  // 체크 보류(중등 N제 계획) — 기록이 없는 날을 '보류' 로 보여 준다
+  window._mnrHolds = {};
+  try {
+    if (_mnrStudents.length) {
+      var _hr = await db.from('naje_plans').select('student_id,book_id,start_date,end_date')
+        .eq('book_id', NP_HOLD).in('student_id', _mnrStudents.map(function(s){ return s.id; }))
+        .lte('start_date', dates[dates.length - 1]).gte('end_date', dates[0]);
+      (_hr.data || []).forEach(function(h){ (window._mnrHolds[h.student_id] = window._mnrHolds[h.student_id] || []).push(h); });
+    }
+  } catch(_he) { console.warn('[mnr] 체크 보류 로드 실패:', _he); }
+
   // 반 이름 미리 조회 (화면 카드뷰 + 이미지 공용)
   window._mnrClassMap = {};
   var _mnrClsIds = Array.from(new Set(_mnrStudents.filter(function(s){return s.class_id;}).map(function(s){return s.class_id;})));
@@ -22552,7 +22563,7 @@ function mnrBuildCardHTML(dates, forImage){
       dates.forEach(function(d){
         var c=_mnrCheckData[s.id]&&_mnrCheckData[s.id][d];
         var cb,cc,ct;
-        if(!c){ cb='transparent'; cc='#cbd5e1'; ct='-'; }
+        if(!c){ if(npHoldIn(window._mnrHolds, s.id, d)){ cb='#e5e7eb'; cc='#6b7280'; ct='보류'; } else { cb='transparent'; cc='#cbd5e1'; ct='-'; } }
         else if(c.score!=null){
           var sc=parseInt(c.score);
           if(sc>=90){cb='#f0fdf4';cc='#15803d';}
@@ -22606,7 +22617,7 @@ function mnrBuildCompactHTML(dates){
     dates.forEach(function(d){
       var c = _mnrCheckData[s.id] && _mnrCheckData[s.id][d];
       var text='', cellBg='', textColor='#94a3b8';
-      if(!c){ text = '-'; }
+      if(!c){ if(npHoldIn(window._mnrHolds, s.id, d)){ text = '보류'; cellBg = '#e5e7eb'; textColor = '#6b7280'; } else { text = '-'; } }
       else if(c.score!==null && c.score!==undefined){
         var sc=c.score; text=sc+'점'; scores.push(sc);
         cellBg = sc>=70?'#f0fdf4':'#fffbeb'; textColor = sc>=70?'#16a34a':'#d97706';
@@ -27796,6 +27807,12 @@ function npHoldOn(sid, d){
   for (var i = 0; i < ps.length; i++) if (npIsHold(ps[i]) && ps[i].start_date <= d && d <= ps[i].end_date) return ps[i];
   return null;
 }
+/* 같은 판정을 다른 목록(선생님 결과 화면의 _mnrHolds 등)에 쓴다 */
+function npHoldIn(map, sid, d){
+  var ps = (map || {})[sid] || [];
+  for (var i = 0; i < ps.length; i++) if (npIsHold(ps[i]) && ps[i].start_date <= d && d <= ps[i].end_date) return ps[i];
+  return null;
+}
 /* 체크 표용 — 이 학생의 이 날짜에 걸친 계획 / 이번 주에 걸친 계획 뱃지 */
 function npPlanOn(sid, d){
   var ps = (window._mncPlans || {})[sid] || [];
@@ -28885,7 +28902,7 @@ function mncGenerateMent(studentName, dateStr, status, score, studentId) {
       var d2  = new Date(Date.UTC(parseInt(dp2[0]), parseInt(dp2[1])-1, parseInt(dp2[2])));
       var dl  = (d2.getUTCMonth()+1) + '/' + d2.getUTCDate() + '(' + DAYS7[d2.getUTCDay()] + ')';
       var c   = dataMap[d];
-      if (!c) return dl + ' : -';
+      if (!c) return dl + (npHoldOn(sid, d) ? ' : 보류' : ' : -');
       if (c.is_completed === false) return dl + ' : 미학습';
       if (c.score !== null && c.score !== undefined) return dl + ' : ' + c.score + '점';
       return dl + ' : -';
@@ -28940,7 +28957,7 @@ var MNC_IMG_CSS = '#mnc-img-render{position:fixed;left:-9999px;top:0;width:800px
   + '#mnc-img-render .wk th{background:#f1f5f9;font-size:12px;color:#475569;padding:7px 4px;border:1px solid #e2e8f0}#mnc-img-render .wk th.avg{background:#e2e8f0}'
   + '#mnc-img-render .wk td{text-align:center;padding:10px 4px;border:1px solid #e2e8f0;font-size:15px;font-weight:800}#mnc-img-render .wk td.sub{font-size:11px;color:#94a3b8;font-weight:600;padding:5px 4px;background:#fafafa}'
   + '#mnc-img-render .wk td.focus{outline:2px solid #16a34a;outline-offset:-2px}#mnc-img-render .wk td.ok{color:#15803d;background:#f0fdf4}#mnc-img-render .wk td.lo{color:#c2410c;background:#fff7ed}#mnc-img-render .wk td.no{color:#dc2626;background:#fff1f2;font-size:13px}'
-  + '#mnc-img-render .wk td.fut{color:#cbd5e1;font-size:12px;font-weight:600}#mnc-img-render .wk td.none{color:#cbd5e1}#mnc-img-render .wk td.avg{background:#f8fafc;color:#1e3a5f}#mnc-img-render .wk td.sub.lo{color:#c2410c;background:#fafafa}'
+  + '#mnc-img-render .wk td.fut{color:#cbd5e1;font-size:12px;font-weight:600}#mnc-img-render .wk td.none{color:#cbd5e1}#mnc-img-render .wk td.hold{color:#6b7280;background:#e5e7eb;font-size:13px}#mnc-img-render .wk td.avg{background:#f8fafc;color:#1e3a5f}#mnc-img-render .wk td.sub.lo{color:#c2410c;background:#fafafa}'
   + '#mnc-img-render .cum{margin:10px 28px 0;display:flex;gap:14px;font-size:13px;color:#475569;align-items:center}#mnc-img-render .cum b{color:#1e293b}'
   + '#mnc-img-render .cum .pill{padding:3px 10px;border-radius:12px;font-size:12px;font-weight:800;background:#fef3c7;color:#92400e;white-space:nowrap}'
   + '#mnc-img-render .bar{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden}#mnc-img-render .bar i{display:block;height:100%;background:#16a34a}'
@@ -28959,8 +28976,10 @@ function mncImageHtml(s, dateStr){
   Object.keys(_mncData || {}).forEach(function(d){ if(_mncData[d] && _mncData[d][s.id]) dmap[d] = _mncData[d][s.id]; });
   /* 하루 판정: {kind: ok|lo|no|none|fut, score} */
   function judge(d){
+    var c = dmap[d];
+    if(!c && npHoldOn(s.id, d)) return { kind:'hold' };   /* 체크 보류 — 기록이 없는 날만. 지난 날·남은 날 모두 '보류' */
     if(d > dateStr) return { kind:'fut' };
-    var c = dmap[d]; if(!c) return { kind:'none' };
+    if(!c) return { kind:'none' };
     if(c.is_completed === false) return { kind:'no' };
     if(c.score != null && c.score !== '') { var sc = parseInt(c.score, 10); return { kind: sc >= 70 ? 'ok' : 'lo', score: sc }; }
     if(c.is_completed === true) return { kind:'ok', score:null };   /* 점수 없이 완료 */
@@ -28968,7 +28987,7 @@ function mncImageHtml(s, dateStr){
   }
   var today = judge(dateStr);
   var studied = 0, passed = 0, low = 0, scSum = 0, scCnt = 0, elapsed = 0;
-  week.forEach(function(d){ var j = judge(d); if(j.kind === 'fut') return; elapsed++; if(j.kind === 'ok' || j.kind === 'lo') studied++; if(j.kind === 'ok') passed++; if(j.kind === 'lo') low++; if(j.score != null){ scSum += j.score; scCnt++; } });
+  week.forEach(function(d){ var j = judge(d); if(j.kind === 'fut' || j.kind === 'hold') return; elapsed++; if(j.kind === 'ok' || j.kind === 'lo') studied++; if(j.kind === 'ok') passed++; if(j.kind === 'lo') low++; if(j.score != null){ scSum += j.score; scCnt++; } });
   var avg = scCnt ? Math.round(scSum / scCnt) : null;
   var nm = s.name || '', cls = (window._mncClassMap || {})[s.class_id], t = (_mncTeachers || []).find(function(x){ return x.id === s.teacher_id; });
   var sg = [((s.school || '') + ' ' + (s.grade ? s.grade + (/^\d+$/.test(s.grade) ? '학년' : '') : '')).trim(), cls ? cls.name : '', t ? '담당 ' + t.name + ' T' : ''].filter(Boolean).join(' · ');
@@ -28979,7 +28998,7 @@ function mncImageHtml(s, dateStr){
   else if(today.kind === 'ok' || today.kind === 'lo'){
     k1 = '<div class="box ' + today.kind + '"><div class="v">' + (today.score == null ? '완료' : today.score + '점') + '</div><div class="l">' + dayL + ' 점수</div></div>';
     k2 = '<div class="box"><div class="v" style="color:' + (today.kind === 'ok' ? '#15803d' : '#c2410c') + '">' + (today.kind === 'ok' ? '통과' : '미통과') + '</div><div class="l">기준 70점</div></div>';
-  } else { k1 = '<div class="box"><div class="v" style="color:#94a3b8">-</div><div class="l">' + dayL + '</div></div>'; k2 = '<div class="box"><div class="v" style="color:#94a3b8">-</div><div class="l">기준 70점</div></div>'; }
+  } else { k1 = '<div class="box"><div class="v" style="color:#94a3b8">' + (today.kind === 'hold' ? '보류' : '-') + '</div><div class="l">' + dayL + '</div></div>'; k2 = '<div class="box"><div class="v" style="color:#94a3b8">-</div><div class="l">기준 70점</div></div>'; }
   var k3 = '<div class="box ' + (low >= 3 ? 'no' : low ? 'lo' : '') + '"><div class="v">' + low + '<span style="font-size:16px;color:#9a3412"> / 3</span></div><div class="l">이번 주 70점 미만</div></div>';
   /* 주간 표 */
   var th = '', r1 = '', r2 = '';
@@ -28987,6 +29006,7 @@ function mncImageHtml(s, dateStr){
     var j = judge(d), f = d === dateStr ? ' focus' : '';
     th += '<th>' + DAYS7[ud(d).getUTCDay()] + ' ' + md(d) + '</th>';
     if(j.kind === 'fut'){ r1 += '<td class="fut">진행 전</td>'; r2 += '<td class="sub">-</td>'; }
+    else if(j.kind === 'hold'){ r1 += '<td class="hold' + f + '">보류</td>'; r2 += '<td class="sub">-</td>'; }
     else if(j.kind === 'none'){ r1 += '<td class="none' + f + '">-</td>'; r2 += '<td class="sub">-</td>'; }
     else if(j.kind === 'no'){ r1 += '<td class="no' + f + '">미학습</td>'; r2 += '<td class="sub">-</td>'; }
     else { r1 += '<td class="' + j.kind + f + '">' + (j.score == null ? '완료' : j.score + '점') + '</td>'; r2 += '<td class="sub' + (j.kind === 'lo' ? ' lo' : '') + '">' + (j.kind === 'ok' ? '통과' : '미통과') + '</td>'; }
@@ -29000,6 +29020,7 @@ function mncImageHtml(s, dateStr){
   if(today.kind === 'no'){ warn = true; msg = nm + ' 학생 ' + dayL + ' 일일N제 학습이 진행되지 않았습니다. 학습은 진행했으나 스터디큐에 미입력한 경우 확인하여 입력해 주시기 바랍니다.'; }
   else if(today.kind === 'lo'){ warn = true; msg = nm + ' 학생 ' + dayL + ' 일일N제 학습 결과는 ' + today.score + '점입니다. 주 3회 70점 미만 시 수업일 여부와 관계없이 학원에 등원하여 N제를 마무리해야 합니다.'; }
   else if(today.kind === 'ok'){ msg = nm + ' 학생 ' + dayL + ' 일일N제 ' + (today.score == null ? '학습을 완료했습니다.' : '학습 결과는 ' + today.score + '점으로 통과했습니다.') + ' 성실히 N제를 학습한 우리 학생에게 응원과 격려를 해주시면 감사드리겠습니다. 😊'; }
+  else if(today.kind === 'hold'){ msg = nm + ' 학생 ' + dayL + ' 일일N제는 체크 보류 기간입니다.'; }
   else { msg = nm + ' 학생 ' + dayL + ' 일일N제 결과가 아직 입력되지 않았습니다.'; }
   var rule = warn ? '<div class="rule"><b>일일N제 운영 기준</b>1. 주 3회 70점 미만 시 학원에 등원하여 일일N제를 완료해야 합니다. &nbsp;2. 레벨 문제로 불통과 시 담당 선생님과 상의 후 레벨을 변경합니다. &nbsp;3. 2회 연속 불통과 시 경고 &nbsp;4. 경고 2회 시 퇴원</div>' : '';
   return '<div class="hd"><div><div class="brand">BESTIAN 수학학원 · BMAPS</div><h1>중등 일일N제 학습 결과</h1></div><div class="dt">' + dayL + '</div></div>'
@@ -29323,7 +29344,9 @@ async function mncGenerateSummaryImage() {
             var isPast = (d < todayStr);
             var c = checkMap[s.id] && checkMap[s.id][d];
             var cb, cc, ct;
-            if (!c) {
+            if (!c && npHoldOn(s.id, d)) {
+              cb = '#e5e7eb'; cc = '#6b7280'; ct = '보류';
+            } else if (!c) {
               cb = 'transparent'; cc = '#cbd5e1'; ct = '-';
             } else if (c.score != null) {
               var sc = parseInt(c.score);
